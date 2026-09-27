@@ -9,27 +9,46 @@ import XCTest
 
 final class RemmichUITests: XCTestCase {
     override func setUpWithError() throws {
-        // Put setup code here. This method is called before the invocation of each test method in the class.
-
-        // In UI tests it is usually best to stop immediately when a failure occurs.
         continueAfterFailure = false
-
-        // In UI tests it’s important to set the initial state - such as interface orientation - required for your tests before they run. The setUp method is a good place to do this.
-    }
-
-    override func tearDownWithError() throws {
-        // Put teardown code here. This method is called after the invocation of each test method in the class.
     }
 
     @MainActor
-    func testExample() {
-        // UI tests must launch the application that they test.
+    func testPrimaryNavigationAndAccountSheet() {
         let app = XCUIApplication()
         app.launch()
 
-        // Use XCTAssert and related functions to verify your tests produce the correct results.
-        // XCUIAutomation Documentation
-        // https://developer.apple.com/documentation/xcuiautomation
+        XCTAssertTrue(app.descendants(matching: .any)["photos-root"].waitForExistence(timeout: 5))
+
+        tabButton("Albums", in: app).tap()
+        XCTAssertTrue(app.descendants(matching: .any)["albums-root"].waitForExistence(timeout: 2))
+
+        tabButton("Library", in: app).tap()
+        XCTAssertTrue(app.descendants(matching: .any)["library-root"].waitForExistence(timeout: 2))
+
+        tabButton("Search", in: app).tap()
+        XCTAssertTrue(app.descendants(matching: .any)["search-root"].waitForExistence(timeout: 2))
+
+        app.buttons["account-button"].firstMatch.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["account-settings"].waitForExistence(timeout: 2))
+        app.buttons["Done"].firstMatch.tap()
+    }
+
+    @MainActor
+    func testAlbumFilterSurvivesTabSwitch() {
+        let app = XCUIApplication()
+        app.launch()
+
+        tabButton("Albums", in: app).tap()
+        app.buttons["Shared"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["Shared"].firstMatch.isSelected)
+
+        tabButton("Photos", in: app).tap()
+        tabButton("Albums", in: app).tap()
+        XCTAssertTrue(app.buttons["Shared"].firstMatch.isSelected)
+    }
+
+    private func tabButton(_ label: String, in app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "label == %@", label)).firstMatch
     }
 
     @MainActor

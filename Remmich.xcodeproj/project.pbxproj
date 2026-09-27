@@ -216,21 +216,24 @@
 		A1B2C3D4E5F60718293A4B5C /* SwiftFormat */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-			);
 			name = SwiftFormat;
-			outputFileListPaths = (
-			);
-			outputPaths = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "if [ -x /opt/homebrew/bin/swiftformat ]; then\n    SWIFTFORMAT=/opt/homebrew/bin/swiftformat\nelif command -v swiftformat >/dev/null 2>&1; then\n    SWIFTFORMAT=\"$(command -v swiftformat)\"\nelse\n    echo \"warning: SwiftFormat not installed; run 'brew install swiftformat'\"\n    exit 0\nfi\n\n\"$SWIFTFORMAT\" --config \"$SRCROOT/.swiftformat\" \\\n    \"$SRCROOT/Remmich\" \\\n    \"$SRCROOT/RemmichTests\" \\\n    \"$SRCROOT/RemmichUITests\"\n";
+			shellScript = (
+				"if [ -x /opt/homebrew/bin/swiftformat ]; then",
+				"    SWIFTFORMAT=/opt/homebrew/bin/swiftformat",
+				"elif command -v swiftformat >/dev/null 2>&1; then",
+				"    SWIFTFORMAT=\"$(command -v swiftformat)\"",
+				"else",
+				"    echo \"warning: SwiftFormat not installed; run 'brew install swiftformat'\"",
+				"    exit 0",
+				"fi",
+				"",
+				"\"$SWIFTFORMAT\" --config \"$SRCROOT/.swiftformat\" \\",
+				"    \"$SRCROOT/Remmich\" \\",
+				"    \"$SRCROOT/RemmichTests\" \\",
+				"    \"$SRCROOT/RemmichUITests\"",
+				"",
+			);
 		};
 /* End PBXShellScriptBuildPhase section */
 
