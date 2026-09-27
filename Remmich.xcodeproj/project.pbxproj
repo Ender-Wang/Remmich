@@ -1,0 +1,589 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 110;
+	objects = {
+
+/* Begin PBXContainerItemProxy section */
+		F84699523066C25F00C68930 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = F846993C3066C25E00C68930 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = F84699433066C25E00C68930;
+			remoteInfo = Remmich;
+		};
+		F846995C3066C25F00C68930 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = F846993C3066C25E00C68930 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = F84699433066C25E00C68930;
+			remoteInfo = Remmich;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		F84699443066C25E00C68930 /* Remmich.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Remmich.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F84699513066C25F00C68930 /* RemmichTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RemmichTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		F846995B3066C25F00C68930 /* RemmichUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RemmichUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		F84699463066C25E00C68930 /* Remmich */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Remmich;
+			sourceTree = "<group>";
+		};
+		F84699543066C25F00C68930 /* RemmichTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = RemmichTests;
+			sourceTree = "<group>";
+		};
+		F846995E3066C25F00C68930 /* RemmichUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = RemmichUITests;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		F84699413066C25E00C68930 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+			);
+		};
+		F846994E3066C25F00C68930 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+			);
+		};
+		F84699583066C25F00C68930 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+			);
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		F846993B3066C25E00C68930 = {
+			isa = PBXGroup;
+			children = (
+				F84699463066C25E00C68930 /* Remmich */,
+				F84699543066C25F00C68930 /* RemmichTests */,
+				F846995E3066C25F00C68930 /* RemmichUITests */,
+				F84699453066C25E00C68930 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		F84699453066C25E00C68930 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				F84699443066C25E00C68930 /* Remmich.app */,
+				F84699513066C25F00C68930 /* RemmichTests.xctest */,
+				F846995B3066C25F00C68930 /* RemmichUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		F84699433066C25E00C68930 /* Remmich */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F84699633066C25F00C68930 /* Build configuration list for PBXNativeTarget "Remmich" */;
+			buildPhases = (
+				A1B2C3D4E5F60718293A4B5C /* SwiftFormat */,
+				F84699403066C25E00C68930 /* Sources */,
+				F84699413066C25E00C68930 /* Frameworks */,
+				F84699423066C25E00C68930 /* Resources */,
+			);
+			buildRules = (
+			);
+			fileSystemSynchronizedGroups = (
+				F84699463066C25E00C68930 /* Remmich */,
+			);
+			name = Remmich;
+			productName = Remmich;
+			productReference = F84699443066C25E00C68930 /* Remmich.app */;
+			productType = "com.apple.product-type.application";
+		};
+		F84699503066C25F00C68930 /* RemmichTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F84699663066C25F00C68930 /* Build configuration list for PBXNativeTarget "RemmichTests" */;
+			buildPhases = (
+				F846994D3066C25F00C68930 /* Sources */,
+				F846994E3066C25F00C68930 /* Frameworks */,
+				F846994F3066C25F00C68930 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				F84699533066C25F00C68930 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				F84699543066C25F00C68930 /* RemmichTests */,
+			);
+			name = RemmichTests;
+			productName = RemmichTests;
+			productReference = F84699513066C25F00C68930 /* RemmichTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		F846995A3066C25F00C68930 /* RemmichUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F84699693066C25F00C68930 /* Build configuration list for PBXNativeTarget "RemmichUITests" */;
+			buildPhases = (
+				F84699573066C25F00C68930 /* Sources */,
+				F84699583066C25F00C68930 /* Frameworks */,
+				F84699593066C25F00C68930 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				F846995D3066C25F00C68930 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				F846995E3066C25F00C68930 /* RemmichUITests */,
+			);
+			name = RemmichUITests;
+			productName = RemmichUITests;
+			productReference = F846995B3066C25F00C68930 /* RemmichUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		F846993C3066C25E00C68930 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2700;
+				LastUpgradeCheck = 2700;
+				TargetAttributes = {
+					F84699433066C25E00C68930 = {
+						CreatedOnToolsVersion = 27.0;
+					};
+					F84699503066C25F00C68930 = {
+						CreatedOnToolsVersion = 27.0;
+						TestTargetID = F84699433066C25E00C68930;
+					};
+					F846995A3066C25F00C68930 = {
+						CreatedOnToolsVersion = 27.0;
+						TestTargetID = F84699433066C25E00C68930;
+					};
+				};
+			};
+			buildConfigurationList = F846993F3066C25E00C68930 /* Build configuration list for PBXProject "Remmich" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = F846993B3066C25E00C68930;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = F84699453066C25E00C68930 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				F84699433066C25E00C68930 /* Remmich */,
+				F84699503066C25F00C68930 /* RemmichTests */,
+				F846995A3066C25F00C68930 /* RemmichUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		F84699423066C25E00C68930 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+			);
+		};
+		F846994F3066C25F00C68930 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+			);
+		};
+		F84699593066C25F00C68930 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+			);
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		A1B2C3D4E5F60718293A4B5C /* SwiftFormat */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = SwiftFormat;
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "if [ -x /opt/homebrew/bin/swiftformat ]; then\n    SWIFTFORMAT=/opt/homebrew/bin/swiftformat\nelif command -v swiftformat >/dev/null 2>&1; then\n    SWIFTFORMAT=\"$(command -v swiftformat)\"\nelse\n    echo \"warning: SwiftFormat not installed; run 'brew install swiftformat'\"\n    exit 0\nfi\n\n\"$SWIFTFORMAT\" --config \"$SRCROOT/.swiftformat\" \\\n    \"$SRCROOT/Remmich\" \\\n    \"$SRCROOT/RemmichTests\" \\\n    \"$SRCROOT/RemmichUITests\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		F84699403066C25E00C68930 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
+		F846994D3066C25F00C68930 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
+		F84699573066C25F00C68930 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		F84699533066C25F00C68930 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = F84699433066C25E00C68930 /* Remmich */;
+			targetProxy = F84699523066C25F00C68930 /* PBXContainerItemProxy */;
+		};
+		F846995D3066C25F00C68930 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = F84699433066C25E00C68930 /* Remmich */;
+			targetProxy = F846995C3066C25F00C68930 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		F84699613066C25F00C68930 /* Debug configuration for PBXProject "Remmich" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = LQS4V6877Y;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		F84699623066C25F00C68930 /* Release configuration for PBXProject "Remmich" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = LQS4V6877Y;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		F84699643066C25F00C68930 /* Debug configuration for PBXNativeTarget "Remmich" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = LQS4V6877Y;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Remmich;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.6;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "io.github.ender-wang.Remmich";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		F84699653066C25F00C68930 /* Release configuration for PBXNativeTarget "Remmich" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = LQS4V6877Y;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Remmich;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.6;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "io.github.ender-wang.Remmich";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		F84699673066C25F00C68930 /* Debug configuration for PBXNativeTarget "RemmichTests" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = LQS4V6877Y;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.6;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "io.github.ender-wang.RemmichTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Remmich.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Remmich";
+			};
+			name = Debug;
+		};
+		F84699683066C25F00C68930 /* Release configuration for PBXNativeTarget "RemmichTests" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = LQS4V6877Y;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.6;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "io.github.ender-wang.RemmichTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Remmich.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Remmich";
+			};
+			name = Release;
+		};
+		F846996A3066C25F00C68930 /* Debug configuration for PBXNativeTarget "RemmichUITests" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = LQS4V6877Y;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.6;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "io.github.ender-wang.RemmichUITests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = Remmich;
+			};
+			name = Debug;
+		};
+		F846996B3066C25F00C68930 /* Release configuration for PBXNativeTarget "RemmichUITests" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = LQS4V6877Y;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.6;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "io.github.ender-wang.RemmichUITests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = Remmich;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		F846993F3066C25E00C68930 /* Build configuration list for PBXProject "Remmich" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F84699613066C25F00C68930 /* Debug configuration for PBXProject "Remmich" */,
+				F84699623066C25F00C68930 /* Release configuration for PBXProject "Remmich" */,
+			);
+			defaultConfigurationName = Release;
+		};
+		F84699633066C25F00C68930 /* Build configuration list for PBXNativeTarget "Remmich" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F84699643066C25F00C68930 /* Debug configuration for PBXNativeTarget "Remmich" */,
+				F84699653066C25F00C68930 /* Release configuration for PBXNativeTarget "Remmich" */,
+			);
+			defaultConfigurationName = Release;
+		};
+		F84699663066C25F00C68930 /* Build configuration list for PBXNativeTarget "RemmichTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F84699673066C25F00C68930 /* Debug configuration for PBXNativeTarget "RemmichTests" */,
+				F84699683066C25F00C68930 /* Release configuration for PBXNativeTarget "RemmichTests" */,
+			);
+			defaultConfigurationName = Release;
+		};
+		F84699693066C25F00C68930 /* Build configuration list for PBXNativeTarget "RemmichUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F846996A3066C25F00C68930 /* Debug configuration for PBXNativeTarget "RemmichUITests" */,
+				F846996B3066C25F00C68930 /* Release configuration for PBXNativeTarget "RemmichUITests" */,
+			);
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = F846993C3066C25E00C68930 /* Project object */;
+	validationLevel = 1;
+}
