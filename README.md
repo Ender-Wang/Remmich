@@ -5,7 +5,7 @@ A native, read-only Immich client for iPhone and iPad. Your library, with the pl
 <p align="center">
   <img src="https://img.shields.io/badge/Swift-6.2-orange?logo=swift" alt="Swift" />
   <img src="https://img.shields.io/badge/iOS-26.6%2B-black?logo=apple" alt="iOS 26.6+" />
-  <img src="https://img.shields.io/badge/Immich-read--only-blue" alt="Read-only Immich" />
+  <img src=".github/assets/immich-read-only-badge.svg" alt="Read-only Immich" />
   <a href="https://github.com/Ender-Wang/Remmich/actions/workflows/build-and-test.yml"><img src="https://github.com/Ender-Wang/Remmich/actions/workflows/build-and-test.yml/badge.svg" alt="Build &amp; Test" /></a>
 </p>
 
