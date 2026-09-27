@@ -6,6 +6,7 @@ A native, read-only Immich client for iPhone and iPad. Your library, with the pl
   <img src="https://img.shields.io/badge/Swift-6.2-orange?logo=swift" alt="Swift" />
   <img src="https://img.shields.io/badge/iOS-26.6%2B-black?logo=apple" alt="iOS 26.6+" />
   <img src="https://img.shields.io/badge/Immich-read--only-blue" alt="Read-only Immich" />
+  <a href="https://github.com/Ender-Wang/Remmich/actions/workflows/build-and-test.yml"><img src="https://github.com/Ender-Wang/Remmich/actions/workflows/build-and-test.yml/badge.svg" alt="Build &amp; Test" /></a>
 </p>
 
 **Why Remmich exists:** Immich is an excellent self-hosted photo library, but its official mobile app is built with Flutter. Remmich explores a focused alternative: native SwiftUI navigation, adaptive iPad layouts, system materials, and Apple-platform interaction patterns while keeping the Immich library strictly read-only.
@@ -68,5 +69,7 @@ Scripts/update-immich-schema.sh path/to/immich-openapi-specs.json
 The updater prints a repository-relative checksum target. Schema provenance and the pinned upstream revision live in `Packages/ImmichAPI/SCHEMA-PROVENANCE.md`.
 
 The project uses SwiftFormat as a pre-build check. Xcode may ask you once to trust the pinned Swift OpenAPI Generator build-tool plugin.
+
+GitHub Actions runs formatting, package tests, app unit tests, and simulator UI tests for every pushed commit and pull request. It can also be started manually from the Actions tab.
 
 True SSID matching requires the `com.apple.developer.networking.wifi-info` entitlement, which Apple does not provision for personal development teams. `Remmich/Remmich.entitlements` records the paid-team capability, but the personal-signing target intentionally does not attach it. When SSID details are unavailable, Remmich follows the safer architecture rule and uses external or manual routes; it never guesses that the device is on the preferred network.
