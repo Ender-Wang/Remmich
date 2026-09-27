@@ -1,6 +1,12 @@
 import SwiftUI
 
 struct AppShellView: View {
+    let session: AccountSession
+    let profile: ConnectionProfile
+    let activeRoute: ActiveConnectionRoute?
+    let saveProfile: (ConnectionProfile) async -> Void
+    let signOut: () async -> Void
+
     @State private var selection: AppDestination = .photos
     @State private var photosPath = NavigationPath()
     @State private var albumsPath = NavigationPath()
@@ -36,7 +42,13 @@ struct AppShellView: View {
         }
         .tabViewStyle(.sidebarAdaptable)
         .sheet(isPresented: $showsAccount) {
-            AccountSettingsView()
+            AccountSettingsView(
+                session: session,
+                profile: profile,
+                activeRoute: activeRoute,
+                saveProfile: saveProfile,
+                signOut: signOut
+            )
         }
     }
 
@@ -59,5 +71,11 @@ struct AccountToolbarButton: ToolbarContent {
 }
 
 #Preview {
-    AppShellView()
+    AppShellView(
+        session: .fixture,
+        profile: .init(),
+        activeRoute: nil,
+        saveProfile: { _ in },
+        signOut: {}
+    )
 }

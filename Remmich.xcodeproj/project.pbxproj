@@ -6,6 +6,10 @@
 	objectVersion = 110;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		A2B3C4D5E6F708192A3B4C5D /* ImmichAPI in Frameworks */ = {isa = PBXBuildFile; productRef = A2B3C4D5E6F708192A3B4C5E /* ImmichAPI */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		F84699523066C25F00C68930 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -51,6 +55,7 @@
 		F84699413066C25E00C68930 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
+				A2B3C4D5E6F708192A3B4C5D /* ImmichAPI in Frameworks */,
 			);
 		};
 		F846994E3066C25F00C68930 /* Frameworks */ = {
@@ -104,6 +109,9 @@
 				F84699463066C25E00C68930 /* Remmich */,
 			);
 			name = Remmich;
+			packageProductDependencies = (
+				A2B3C4D5E6F708192A3B4C5E /* ImmichAPI */,
+			);
 			productName = Remmich;
 			productReference = F84699443066C25E00C68930 /* Remmich.app */;
 			productType = "com.apple.product-type.application";
@@ -184,6 +192,9 @@
 			minimizedProjectReferenceProxies = 1;
 			preferredProjectObjectVersion = 77;
 			productRefGroup = F84699453066C25E00C68930 /* Products */;
+			packageReferences = (
+				A2B3C4D5E6F708192A3B4C5F /* XCLocalSwiftPackageReference "Packages/ImmichAPI" */,
+			);
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -267,6 +278,21 @@
 			targetProxy = F846995C3066C25F00C68930 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		A2B3C4D5E6F708192A3B4C5F /* XCLocalSwiftPackageReference "Packages/ImmichAPI" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/ImmichAPI;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		A2B3C4D5E6F708192A3B4C5E /* ImmichAPI */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A2B3C4D5E6F708192A3B4C5F /* XCLocalSwiftPackageReference "Packages/ImmichAPI" */;
+			productName = ImmichAPI;
+		};
+/* End XCSwiftPackageProductDependency section */
 
 /* Begin XCBuildConfiguration section */
 		F84699613066C25F00C68930 /* Debug configuration for PBXProject "Remmich" */ = {
@@ -403,6 +429,8 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Remmich;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Remmich connects to your Immich server on your local network.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Remmich uses your Wi-Fi name only to choose your local Immich server while the app is open.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -440,6 +468,8 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Remmich;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Remmich connects to your Immich server on your local network.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Remmich uses your Wi-Fi name only to choose your local Immich server while the app is open.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;

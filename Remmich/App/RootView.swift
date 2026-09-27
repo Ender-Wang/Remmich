@@ -1,0 +1,42 @@
+import SwiftUI
+
+struct RootView: View {
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var controller = AppSessionController()
+
+    var body: some View {
+        Group {
+            switch controller.state {
+            case .loading:
+                ProgressView("Restoring session…")
+            case .signedOut:
+                OnboardingView(controller: controller)
+            case .checking:
+                ProgressView("Checking server…")
+            case let .credentials(server):
+                OnboardingView(controller: controller, server: server)
+            case let .signingIn(server):
+                OnboardingView(controller: controller, server: server, isSigningIn: true)
+            case let .signedIn(session):
+                AppShellView(
+                    session: session,
+                    profile: controller.connectionProfile,
+                    activeRoute: controller.activeRoute,
+                    saveProfile: controller.saveConnectionProfile,
+                    signOut: controller.signOut
+                )
+            case let .failed(message, server):
+                OnboardingView(controller: controller, server: server, errorMessage: message)
+            }
+        }
+        .task { await controller.start() }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            Task { await controller.reevaluateRoute() }
+        }
+    }
+}
+
+#Preview {
+    RootView()
+}

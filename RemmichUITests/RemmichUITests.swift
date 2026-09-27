@@ -15,6 +15,7 @@ final class RemmichUITests: XCTestCase {
     @MainActor
     func testPrimaryNavigationAndAccountSheet() {
         let app = XCUIApplication()
+        app.launchArguments = ["-ui-testing-signed-in"]
         app.launch()
 
         XCTAssertTrue(app.descendants(matching: .any)["photos-root"].waitForExistence(timeout: 5))
@@ -36,6 +37,7 @@ final class RemmichUITests: XCTestCase {
     @MainActor
     func testAlbumFilterSurvivesTabSwitch() {
         let app = XCUIApplication()
+        app.launchArguments = ["-ui-testing-signed-in"]
         app.launch()
 
         tabButton("Albums", in: app).tap()
@@ -47,8 +49,32 @@ final class RemmichUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Shared"].firstMatch.isSelected)
     }
 
+    @MainActor
     private func tabButton(_ label: String, in app: XCUIApplication) -> XCUIElement {
         app.buttons.matching(NSPredicate(format: "label == %@", label)).firstMatch
+    }
+
+    @MainActor
+    func testSignedOutLaunchShowsNativeOnboarding() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-ui-testing-signed-out"]
+        app.launch()
+
+        XCTAssertTrue(app.descendants(matching: .any)["onboarding-root"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.textFields["server-address"].exists)
+        XCTAssertTrue(app.staticTexts["Welcome to Remmich"].exists)
+    }
+
+    @MainActor
+    func testSavedSessionRestoresShellOnDevice() throws {
+        #if targetEnvironment(simulator)
+            throw XCTSkip("Uses the manually authenticated physical-device Keychain session")
+        #else
+            let app = XCUIApplication()
+            app.launch()
+
+            XCTAssertTrue(app.descendants(matching: .any)["photos-root"].waitForExistence(timeout: 10))
+        #endif
     }
 
     @MainActor
