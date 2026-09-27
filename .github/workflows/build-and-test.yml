@@ -1,0 +1,56 @@
+name: Build & Test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build and test
+    runs-on: xcode-27
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Report toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+          swiftformat --version
+
+      - name: Check formatting
+        run: |
+          swiftformat --lint --config .swiftformat \
+            Remmich \
+            RemmichTests \
+            RemmichUITests \
+            Packages/ImmichAPI/Sources \
+            Packages/ImmichAPI/Tests
+
+      - name: Test Immich API package
+        run: swift test --package-path Packages/ImmichAPI
+
+      - name: Test app and UI
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -project Remmich.xcodeproj \
+            -scheme Remmich \
+            -configuration Debug \
+            -destination 'platform=iOS Simulator,name=iPhone 17e,OS=27.0' \
+            -derivedDataPath "$RUNNER_TEMP/RemmichDerivedData" \
+            -resultBundlePath "$RUNNER_TEMP/RemmichTests.xcresult" \
+            -skipPackagePluginValidation \
+            -parallel-testing-enabled NO \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            | xcbeautify
