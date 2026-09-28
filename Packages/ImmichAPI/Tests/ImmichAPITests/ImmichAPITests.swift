@@ -138,13 +138,15 @@ struct OnboardingOperationAuditTests {
 
         let info = try await client.validateServer()
         let session = try await client.login(email: "reader@example.com", password: "password")
+        let userID = try await client.authenticatedUserID()
         try await client.logout()
 
         #expect(info.version.description == "v3.2.0")
         #expect(session.userEmail == "reader@example.com")
+        #expect(userID == session.userID)
         let operations = await recorder.operations
         #expect(Set(operations.map(\.id)) == [
-            "pingServer", "getServerVersion", "getServerConfig", "getServerFeatures", "login", "logout",
+            "pingServer", "getServerVersion", "getServerConfig", "getServerFeatures", "login", "getMyUser", "logout",
         ])
         #expect(operations.allSatisfy { operation in
             operation.method == .get ||
@@ -182,6 +184,7 @@ private struct OnboardingTransport: ClientTransport {
         case "getServerConfig": (.ok, #"{"externalDomain":"https://photos.example.com","isInitialized":true,"isOnboarded":true,"loginPageMessage":"","maintenanceMode":false,"mapDarkStyleUrl":"","mapLightStyleUrl":"","minFaces":3,"oauthButtonText":"Login with OAuth","publicUsers":false,"trashDays":30,"userDeleteDelay":7}"#)
         case "getServerFeatures": (.ok, #"{"configFile":true,"duplicateDetection":true,"email":false,"facialRecognition":true,"importFaces":true,"map":true,"oauth":false,"oauthAutoLaunch":false,"ocr":true,"passwordLogin":true,"realtimeTranscoding":true,"reverseGeocoding":true,"search":true,"sidecar":true,"smartSearch":true,"trash":true}"#)
         case "login": (.created, #"{"accessToken":"token","isAdmin":false,"isOnboarded":true,"name":"Reader","profileImagePath":"","shouldChangePassword":false,"userEmail":"reader@example.com","userId":"123e4567-e89b-42d3-a456-426614174000"}"#)
+        case "getMyUser": (.ok, #"{"avatarColor":"primary","clusterGroupId":"223e4567-e89b-42d3-a456-426614174000","createdAt":"2026-01-01T00:00:00Z","deletedAt":null,"email":"reader@example.com","id":"123e4567-e89b-42d3-a456-426614174000","isAdmin":false,"license":null,"name":"Reader","oauthId":"","profileChangedAt":"2026-01-01T00:00:00Z","profileImagePath":"","quotaSizeInBytes":null,"quotaUsageInBytes":0,"shouldChangePassword":false,"status":"active","storageLabel":null,"updatedAt":"2026-01-01T00:00:00Z"}"#)
         case "logout": (.ok, #"{"redirectUri":"/","successful":true}"#)
         default: throw ImmichAPIError.readOnlyPolicyViolation(operationID: operationID)
         }

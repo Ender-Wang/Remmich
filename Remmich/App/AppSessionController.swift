@@ -27,6 +27,7 @@ final class AppSessionController {
     private let locationManager = CLLocationManager()
     private let pathMonitor = NWPathMonitor()
     private var isMonitoringNetwork = false
+    private var currentPathUsesWiFi = false
     private var routeGeneration = 0
 
     init(
@@ -145,7 +146,13 @@ final class AppSessionController {
         let coordinator = NetworkRouteCoordinator(ssidProvider: ssidProvider) { endpoint in
             await service.validateRoute(endpoint: endpoint, session: session)
         }
-        guard let route = await coordinator.evaluate(connectionProfile) else {
+        let entitlementEnabled = Bundle.main.object(
+            forInfoDictionaryKey: "RemmichSSIDEntitlementEnabled"
+        ) as? Bool == true
+        guard let route = await coordinator.evaluate(
+            connectionProfile,
+            allowSSIDlessLocalProbe: currentPathUsesWiFi && !entitlementEnabled
+        ) else {
             guard evaluation == routeGeneration else { return }
             activeRoute = nil
             return
@@ -164,8 +171,9 @@ final class AppSessionController {
     private func startNetworkMonitoring() {
         guard !isMonitoringNetwork else { return }
         isMonitoringNetwork = true
-        pathMonitor.pathUpdateHandler = { [weak self] _ in
+        pathMonitor.pathUpdateHandler = { [weak self] path in
             Task { @MainActor [weak self] in
+                self?.currentPathUsesWiFi = path.usesInterfaceType(.wifi)
                 await self?.reevaluateRoute()
             }
         }

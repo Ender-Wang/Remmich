@@ -48,13 +48,15 @@ actor ImmichServiceAdapter: ServerReading, SessionManaging, RouteValidating {
     func validateRoute(endpoint: URL, session: AccountSession) async -> Bool {
         guard let apiURL = try? await discovery.discover(endpoint.absoluteString) else { return false }
         let candidate = ImmichClient(apiURL: apiURL, credential: .bearer(session.accessToken))
-        return await (try? candidate.validateServer()) != nil
+        return await (try? candidate.authenticatedUserID()) == session.userID
     }
 
     func activateRoute(endpoint: URL, session: AccountSession) async throws {
         let apiURL = try await discovery.discover(endpoint.absoluteString)
         let candidate = ImmichClient(apiURL: apiURL, credential: .bearer(session.accessToken))
-        _ = try await candidate.validateServer()
+        guard try await candidate.authenticatedUserID() == session.userID else {
+            throw ImmichAPIError.unauthorized
+        }
         client = candidate
     }
 

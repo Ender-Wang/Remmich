@@ -104,6 +104,20 @@ public actor ImmichClient {
         }
     }
 
+    public func authenticatedUserID() async throws -> String {
+        guard credential != nil else { throw ImmichAPIError.unauthorized }
+        do {
+            switch try await makeClient().getMyUser(.init()) {
+            case let .ok(response):
+                return try response.body.json.id
+            case let .undocumented(statusCode, _):
+                throw Self.map(status: statusCode)
+            }
+        } catch {
+            throw Self.map(error)
+        }
+    }
+
     private func makeClient() -> Client {
         Client(
             serverURL: apiURL,

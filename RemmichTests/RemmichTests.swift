@@ -61,6 +61,65 @@ struct RemmichTests {
         #expect(route?.endpoint == URL(string: "https://one.example/api"))
     }
 
+    @Test func personalTeamWiFiProbesLocalWhenSSIDIsUnavailable() async throws {
+        let recorder = EndpointRecorder()
+        let coordinator = NetworkRouteCoordinator(
+            ssidProvider: StubSSIDProvider(ssid: nil)
+        ) { endpoint in
+            await recorder.record(endpoint)
+            return endpoint.host() == "one.example"
+        }
+
+        let route = try await coordinator.evaluate(
+            profile(preferredSSID: "Home"),
+            allowSSIDlessLocalProbe: true
+        )
+
+        #expect(route?.kind == .external)
+        #expect(try await recorder.endpoints == [
+            url("http://immich.local/api"),
+            url("https://one.example/api"),
+        ])
+    }
+
+    @Test func cellularPathDoesNotProbeLocalWithoutSSID() async throws {
+        let recorder = EndpointRecorder()
+        let coordinator = NetworkRouteCoordinator(
+            ssidProvider: StubSSIDProvider(ssid: nil)
+        ) { endpoint in
+            await recorder.record(endpoint)
+            return true
+        }
+
+        let route = try await coordinator.evaluate(
+            profile(preferredSSID: "Home"),
+            allowSSIDlessLocalProbe: false
+        )
+
+        #expect(route?.kind == .external)
+        #expect(try await recorder.endpoints == [url("https://one.example/api")])
+    }
+
+    @Test func slowLocalProbeTimesOutBeforeExternalFallback() async throws {
+        let coordinator = NetworkRouteCoordinator(
+            ssidProvider: StubSSIDProvider(ssid: nil),
+            localProbeTimeout: .milliseconds(10)
+        ) { endpoint in
+            if endpoint.host() == "immich.local" {
+                try? await Task.sleep(for: .seconds(1))
+                return true
+            }
+            return true
+        }
+
+        let route = try await coordinator.evaluate(
+            profile(preferredSSID: "Home"),
+            allowSSIDlessLocalProbe: true
+        )
+
+        #expect(route?.kind == .external)
+    }
+
     @Test func unreachableLocalFallsBackInExternalOrder() async throws {
         let recorder = EndpointRecorder()
         let coordinator = NetworkRouteCoordinator(
