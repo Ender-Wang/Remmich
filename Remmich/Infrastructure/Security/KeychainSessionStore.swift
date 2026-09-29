@@ -19,9 +19,13 @@ actor KeychainSessionStore: SessionStoring {
             return nil
         }
         guard status == errSecSuccess, let data = item as? Data else {
-            throw KeychainError(status)
+            throw SessionStoreError.unavailable(message: Self.message(for: status))
         }
-        return try JSONDecoder().decode(AccountSession.self, from: data)
+        do {
+            return try JSONDecoder().decode(AccountSession.self, from: data)
+        } catch {
+            throw SessionStoreError.corruptPayload
+        }
     }
 
     func save(_ session: AccountSession) throws {
@@ -33,16 +37,18 @@ actor KeychainSessionStore: SessionStoring {
             item[kSecValueData as String] = data
             item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
             let addStatus = SecItemAdd(item as CFDictionary, nil)
-            guard addStatus == errSecSuccess else { throw KeychainError(addStatus) }
+            guard addStatus == errSecSuccess else {
+                throw SessionStoreError.unavailable(message: Self.message(for: addStatus))
+            }
         } else if updateStatus != errSecSuccess {
-            throw KeychainError(updateStatus)
+            throw SessionStoreError.unavailable(message: Self.message(for: updateStatus))
         }
     }
 
     func delete() throws {
         let status = SecItemDelete(baseQuery as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
-            throw KeychainError(status)
+            throw SessionStoreError.unavailable(message: Self.message(for: status))
         }
     }
 
@@ -53,16 +59,8 @@ actor KeychainSessionStore: SessionStoring {
             kSecAttrAccount as String: account,
         ]
     }
-}
 
-private struct KeychainError: LocalizedError {
-    let status: OSStatus
-
-    init(_ status: OSStatus) {
-        self.status = status
-    }
-
-    var errorDescription: String? {
+    private nonisolated static func message(for status: OSStatus) -> String {
         SecCopyErrorMessageString(status, nil) as String? ?? "Keychain error \(status)"
     }
 }

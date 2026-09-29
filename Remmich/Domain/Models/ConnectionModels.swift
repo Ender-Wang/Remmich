@@ -53,9 +53,9 @@ nonisolated struct AccountSession: Codable, Hashable, Sendable {
 }
 
 nonisolated enum ConnectionRouteKind: String, Codable, CaseIterable, Sendable {
+    case direct
     case local
     case external
-    case manual
 }
 
 nonisolated struct ActiveConnectionRoute: Codable, Hashable, Sendable {
@@ -63,13 +63,74 @@ nonisolated struct ActiveConnectionRoute: Codable, Hashable, Sendable {
     let endpoint: URL
 }
 
+nonisolated enum ConnectionRouteStatus: Equatable, Sendable {
+    case waitingForNetwork
+    case checking
+    case connected
+    case unavailable
+}
+
+nonisolated enum ConnectionProfileSaveResult: Equatable, Sendable {
+    case saved(profile: ConnectionProfile)
+    case rejected(failures: [EndpointValidationFailure])
+}
+
+nonisolated struct EndpointValidationFailure: Equatable, Sendable {
+    let address: String
+    let message: String
+
+    init(address: String, message: String) {
+        self.address = address
+        self.message = message
+    }
+
+    init(endpoint: URL, message: String) {
+        self.init(address: endpoint.absoluteString, message: message)
+    }
+}
+
+nonisolated enum RouteValidationFailureKind: Equatable, Sendable {
+    case transient
+    case sessionRejected
+    case endpointRejected
+}
+
+nonisolated enum RouteValidationResult: Equatable, Sendable {
+    case reachable
+    case failed(message: String, kind: RouteValidationFailureKind)
+
+    var isReachable: Bool {
+        self == .reachable
+    }
+
+    var isRetryable: Bool {
+        guard case let .failed(_, kind) = self else { return false }
+        return kind == .transient
+    }
+
+    var isSessionRejected: Bool {
+        guard case let .failed(_, kind) = self else { return false }
+        return kind == .sessionRejected
+    }
+}
+
+nonisolated struct ConnectionProfileDraft: Equatable, Sendable {
+    var preferredSSID = ""
+    var localAddress = ""
+    var externalAddresses: [String] = []
+}
+
 nonisolated struct ConnectionProfile: Codable, Equatable, Sendable {
     var preferredSSID = ""
     var localEndpoint: URL?
     var externalEndpoints: [URL] = []
-    var manualEndpoint: URL?
 
     var isAutomaticSwitchingEnabled: Bool {
-        !preferredSSID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && localEndpoint != nil
+        localEndpoint != nil
+    }
+
+    var isSSIDMatchingEnabled: Bool {
+        isAutomaticSwitchingEnabled &&
+            !preferredSSID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 }

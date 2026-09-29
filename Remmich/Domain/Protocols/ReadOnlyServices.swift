@@ -11,8 +11,26 @@ nonisolated protocol SessionManaging: Sendable {
 }
 
 nonisolated protocol RouteValidating: Sendable {
-    func validateRoute(endpoint: URL, session: AccountSession) async -> Bool
+    func validateRoute(endpoint: URL, session: AccountSession) async -> RouteValidationResult
     func activateRoute(endpoint: URL, session: AccountSession) async throws
+}
+
+nonisolated protocol EndpointNormalizing: Sendable {
+    func normalizeEndpoint(_ address: String) throws -> URL
+}
+
+nonisolated enum SessionStoreError: LocalizedError, Equatable, Sendable {
+    case corruptPayload
+    case unavailable(message: String)
+
+    var errorDescription: String? {
+        switch self {
+        case .corruptPayload:
+            "The saved session could not be read. Please sign in again."
+        case let .unavailable(message):
+            message
+        }
+    }
 }
 
 nonisolated protocol SessionStoring: Sendable {

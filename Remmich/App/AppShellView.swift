@@ -4,7 +4,8 @@ struct AppShellView: View {
     let session: AccountSession
     let profile: ConnectionProfile
     let activeRoute: ActiveConnectionRoute?
-    let saveProfile: (ConnectionProfile) async -> Void
+    let routeStatus: ConnectionRouteStatus
+    let saveProfile: (ConnectionProfileDraft) async -> ConnectionProfileSaveResult
     let signOut: () async -> Void
 
     @State private var selection: AppDestination = .photos
@@ -46,6 +47,7 @@ struct AppShellView: View {
                 session: session,
                 profile: profile,
                 activeRoute: activeRoute,
+                routeStatus: routeStatus,
                 saveProfile: saveProfile,
                 signOut: signOut
             )
@@ -75,7 +77,8 @@ struct AccountToolbarButton: ToolbarContent {
         session: .fixture,
         profile: .init(),
         activeRoute: nil,
-        saveProfile: { _ in },
+        routeStatus: .waitingForNetwork,
+        saveProfile: { _ in .saved(profile: .init()) },
         signOut: {}
     )
 }

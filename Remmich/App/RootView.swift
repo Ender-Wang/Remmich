@@ -17,11 +17,14 @@ struct RootView: View {
                 OnboardingView(controller: controller, server: server)
             case let .signingIn(server):
                 OnboardingView(controller: controller, server: server, isSigningIn: true)
+            case .signingOut:
+                ProgressView("Signing out…")
             case let .signedIn(session):
                 AppShellView(
                     session: session,
                     profile: controller.connectionProfile,
                     activeRoute: controller.activeRoute,
+                    routeStatus: controller.routeStatus,
                     saveProfile: controller.saveConnectionProfile,
                     signOut: controller.signOut
                 )

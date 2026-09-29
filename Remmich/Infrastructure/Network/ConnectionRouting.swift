@@ -73,15 +73,11 @@ actor NetworkRouteCoordinator {
         for profile: ConnectionProfile,
         allowSSIDlessLocalProbe: Bool
     ) async -> [ActiveConnectionRoute] {
-        if let endpoint = profile.manualEndpoint {
-            return [.init(kind: .manual, endpoint: endpoint)]
-        }
-
         var candidates: [ActiveConnectionRoute] = []
-        if profile.isAutomaticSwitchingEnabled, let endpoint = profile.localEndpoint {
+        if let endpoint = profile.localEndpoint {
             let currentSSID = await ssidProvider.currentSSID()
-            if currentSSID == profile.preferredSSID ||
-                (currentSSID == nil && allowSSIDlessLocalProbe)
+            if allowSSIDlessLocalProbe ||
+                (profile.isSSIDMatchingEnabled && currentSSID == profile.preferredSSID)
             {
                 candidates.append(.init(kind: .local, endpoint: endpoint))
             }
