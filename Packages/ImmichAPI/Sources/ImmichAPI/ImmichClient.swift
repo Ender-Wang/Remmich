@@ -10,11 +10,11 @@ public actor ImmichClient {
     public init(
         apiURL: URL,
         credential: ImmichCredential? = nil,
-        transport: any ClientTransport = URLSessionTransport()
+        transport: (any ClientTransport)? = nil
     ) {
         self.apiURL = apiURL
         self.credential = credential
-        self.transport = transport
+        self.transport = transport ?? ImmichNetworkSession.transport
     }
 
     public func setCredential(_ credential: ImmichCredential?) {
@@ -140,6 +140,8 @@ public actor ImmichClient {
             case .serverCertificateUntrusted, .serverCertificateHasBadDate,
                  .serverCertificateNotYetValid, .clientCertificateRejected:
                 return .certificateUntrusted
+            case .secureConnectionFailed:
+                return .secureConnectionFailed
             case .notConnectedToInternet, .cannotConnectToHost, .cannotFindHost,
                  .dnsLookupFailed, .networkConnectionLost:
                 return .offline

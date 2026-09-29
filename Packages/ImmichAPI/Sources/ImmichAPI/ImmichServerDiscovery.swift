@@ -13,10 +13,10 @@ public struct ImmichServerDiscovery: Sendable {
 
     private let load: Loader
 
-    public init(load: @escaping Loader = { request in
-        try await URLSession.shared.data(for: request)
-    }) {
-        self.load = load
+    public init(load: Loader? = nil) {
+        self.load = load ?? { request in
+            try await ImmichNetworkSession.shared.data(for: request)
+        }
     }
 
     public func discover(_ input: String) async throws -> URL {

@@ -112,6 +112,7 @@ struct DiscoveryTests {
         (URLError.Code.timedOut, ImmichAPIError.timedOut),
         (.notConnectedToInternet, .offline),
         (.serverCertificateUntrusted, .certificateUntrusted),
+        (.secureConnectionFailed, .secureConnectionFailed),
         (.cancelled, .cancelled),
     ])
     func mapsNetworkErrors(code: URLError.Code, expected: ImmichAPIError) {

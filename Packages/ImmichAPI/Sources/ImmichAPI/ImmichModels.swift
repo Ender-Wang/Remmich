@@ -69,6 +69,7 @@ public enum ImmichAPIError: Error, Equatable, Sendable {
     case timedOut
     case cancelled
     case certificateUntrusted
+    case secureConnectionFailed
     case readOnlyPolicyViolation(operationID: String)
 }
 
@@ -89,6 +90,7 @@ extension ImmichAPIError: LocalizedError {
         case .timedOut: "The connection timed out."
         case .cancelled: "The request was cancelled."
         case .certificateUntrusted: "The server certificate is not trusted by this device."
+        case .secureConnectionFailed: "The secure connection failed before Remmich reached Immich."
         case let .readOnlyPolicyViolation(operationID):
             "Remmich blocked a server-changing operation (\(operationID))."
         }
