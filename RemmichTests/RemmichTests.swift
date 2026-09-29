@@ -434,14 +434,12 @@ struct RemmichTests {
         #expect(result == .saved(profile: expected))
         #expect(controller.connectionProfile == expected)
         #expect(await profileStore.load() == expected)
+        #expect(await service.validateCallCount == 0)
+        #expect(await service.activatedEndpoints.isEmpty)
     }
 
-    @Test @MainActor func profileSaveRetriesTransientValidationBeforeActivating() async throws {
-        let transient = RouteValidationResult.failed(
-            message: "The endpoint could not be reached.",
-            kind: .transient
-        )
-        let service = SequencedRouteService(validationResults: [transient, transient, .reachable])
+    @Test @MainActor func profileSavePromotesMatchingDirectEndpointWithoutRevalidation() async {
+        let service = SequencedRouteService(validationResults: [])
         let profileStore = ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)")
         let controller = AppSessionController(
             service: service,
@@ -453,30 +451,31 @@ struct RemmichTests {
         )
         await controller.start()
         await controller.signIn(email: "ender@example.com", password: "password", server: serverDetails)
-        let endpoint = try url("https://tailnet.example/api")
-        let profile = ConnectionProfile(externalEndpoints: [endpoint])
+        let endpoint = AccountSession.fixture.apiURL
+        let profile = ConnectionProfile(localEndpoint: endpoint)
 
         let result = await controller.saveConnectionProfile(ConnectionProfileDraft(
-            externalAddresses: [endpoint.absoluteString]
+            localAddress: endpoint.absoluteString
         ))
 
         #expect(result == .saved(profile: profile))
         #expect(controller.connectionProfile == profile)
-        #expect(controller.activeRoute == ActiveConnectionRoute(kind: .external, endpoint: endpoint))
-        #expect(await service.validateCallCount == 3)
-        #expect(await service.activatedEndpoints == [endpoint])
+        #expect(controller.activeRoute == ActiveConnectionRoute(kind: .local, endpoint: endpoint))
+        #expect(await service.validateCallCount == 0)
+        #expect(await service.activatedEndpoints.isEmpty)
     }
 
-    @Test @MainActor func profileSaveDoesNotRetryPermanentValidationFailure() async throws {
+    @Test @MainActor func profileSavePersistsUnavailableExternalEndpointForLaterEvaluation() async throws {
         let failure = RouteValidationResult.failed(
-            message: "The saved session is not authorized.",
+            message: "The endpoint is unavailable on this path.",
             kind: .endpointRejected
         )
         let service = SequencedRouteService(validationResults: [failure])
+        let profileStore = ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)")
         let controller = AppSessionController(
             service: service,
             sessionStore: MemorySessionStore(session: nil),
-            profileStore: ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)"),
+            profileStore: profileStore,
             ssidProvider: StubSSIDProvider(ssid: nil),
             networkMonitoringEnabled: false,
             routeRetryDelays: [.zero, .zero]
@@ -489,11 +488,21 @@ struct RemmichTests {
             externalAddresses: [endpoint.absoluteString]
         ))
 
-        #expect(result == .rejected(failures: [
-            .init(endpoint: endpoint, message: "The saved session is not authorized."),
-        ]))
-        #expect(await service.validateCallCount == 1)
+        #expect(result == .saved(profile: ConnectionProfile(externalEndpoints: [endpoint])))
+        #expect(await profileStore.load() == ConnectionProfile(externalEndpoints: [endpoint]))
+        #expect(controller.activeRoute == ActiveConnectionRoute(
+            kind: .direct,
+            endpoint: AccountSession.fixture.apiURL
+        ))
+        #expect(await service.validateCallCount == 0)
         #expect(await service.activatedEndpoints.isEmpty)
+
+        await controller.handleNetworkPathChange(usesWiFi: true)
+        await controller.handleNetworkPathChange(usesWiFi: false)
+
+        #expect(await service.validateCallCount == 1)
+        #expect(controller.activeRoute == nil)
+        #expect(controller.routeStatus == .unavailable)
     }
 
     @Test @MainActor func savedSessionRestoresSignedInState() async {
@@ -606,7 +615,7 @@ struct RemmichTests {
         #expect(controller.routeStatus == .connected)
     }
 
-    @Test @MainActor func connectionProfileRejectsUnreachableEndpoint() async throws {
+    @Test @MainActor func connectionProfileStoresUnreachableCandidateWithoutDroppingActiveRoute() async throws {
         let session = AccountSession.fixture
         let profileStore = ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)")
         let unreachable = try url("http://offline.local/api")
@@ -625,11 +634,15 @@ struct RemmichTests {
             externalAddresses: [session.apiURL.absoluteString]
         ))
 
-        #expect(result == .rejected(failures: [
-            .init(endpoint: unreachable, message: "The endpoint could not be reached."),
-        ]))
-        #expect(controller.connectionProfile == ConnectionProfile())
-        #expect(await profileStore.load() == ConnectionProfile())
+        let expected = ConnectionProfile(
+            preferredSSID: "Home",
+            localEndpoint: unreachable,
+            externalEndpoints: [session.apiURL]
+        )
+        #expect(result == .saved(profile: expected))
+        #expect(controller.connectionProfile == expected)
+        #expect(await profileStore.load() == expected)
+        #expect(controller.activeRoute == ActiveConnectionRoute(kind: .external, endpoint: session.apiURL))
     }
 
     private func profile(preferredSSID: String) throws -> ConnectionProfile {

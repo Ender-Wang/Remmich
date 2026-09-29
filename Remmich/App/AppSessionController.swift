@@ -160,27 +160,36 @@ final class AppSessionController {
         guard !profile.endpoints.isEmpty else {
             return .rejected(failures: [])
         }
-        let failures = await endpointFailures(in: profile, session: session)
-        guard failures.isEmpty else {
-            return .rejected(failures: failures)
-        }
         if Bundle.main.object(forInfoDictionaryKey: "RemmichSSIDEntitlementEnabled") as? Bool == true,
            profile.isSSIDMatchingEnabled,
            locationManager.authorizationStatus == .notDetermined
         {
             locationManager.requestWhenInUseAuthorization()
         }
+        do {
+            try await profileStore.save(profile)
+        } catch {
+            return .rejected(failures: [
+                .init(address: "", message: "The connection profile could not be saved."),
+            ])
+        }
+
+        routeGeneration += 1
         connectionProfile = profile
-        try? await profileStore.save(profile)
-        await reevaluateRoute(assumingValidatedRoutes: true)
+        if let currentEndpoint = activeRoute?.endpoint,
+           let configuredRoute = profile.route(matching: currentEndpoint)
+        {
+            activeRoute = configuredRoute
+            routeStatus = .connected
+        } else if activeRoute == nil {
+            Task { @MainActor [weak self] in
+                await self?.reevaluateRoute()
+            }
+        }
         return .saved(profile: profile)
     }
 
     func reevaluateRoute() async {
-        await reevaluateRoute(assumingValidatedRoutes: false)
-    }
-
-    private func reevaluateRoute(assumingValidatedRoutes: Bool) async {
         guard case let .signedIn(session) = state else { return }
         routeGeneration += 1
         let evaluation = routeGeneration
@@ -195,9 +204,6 @@ final class AppSessionController {
         let routeRetryDelays = routeRetryDelays
         let audit = RouteValidationAudit()
         let coordinator = NetworkRouteCoordinator(ssidProvider: ssidProvider) { endpoint in
-            if assumingValidatedRoutes {
-                return true
-            }
             let result = await Self.validateRoute(
                 endpoint,
                 session: session,
@@ -256,29 +262,6 @@ final class AppSessionController {
             return
         }
         await reevaluateRoute()
-    }
-
-    private func endpointFailures(
-        in profile: ConnectionProfile,
-        session: AccountSession
-    ) async -> [EndpointValidationFailure] {
-        var seen = Set<URL>()
-        let endpoints = profile.endpoints.filter { seen.insert($0).inserted }
-        var failures: [EndpointValidationFailure] = []
-        for endpoint in endpoints {
-            switch await Self.validateRoute(
-                endpoint,
-                session: session,
-                service: service,
-                retryDelays: routeRetryDelays
-            ) {
-            case .reachable:
-                break
-            case let .failed(message, _):
-                failures.append(.init(endpoint: endpoint, message: message))
-            }
-        }
-        return failures
     }
 
     private func restoreDirectRoute(_ session: AccountSession, evaluation: Int) async {
@@ -398,6 +381,16 @@ private extension ConnectionProfile {
     var endpoints: [URL] {
         ([localEndpoint] + externalEndpoints.map(Optional.some))
             .compactMap(\.self)
+    }
+
+    func route(matching endpoint: URL) -> ActiveConnectionRoute? {
+        if localEndpoint == endpoint {
+            return .init(kind: .local, endpoint: endpoint)
+        }
+        if externalEndpoints.contains(endpoint) {
+            return .init(kind: .external, endpoint: endpoint)
+        }
+        return nil
     }
 }
 

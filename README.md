@@ -51,7 +51,12 @@ flowchart TD
     Profile -->|Yes| Route{Authenticate configured routes}
     Direct --> Configure[User enters Local and External endpoints]
     Configure --> Normalize[Canonicalize with shared /api URL rules]
-    Normalize --> Route
+    Normalize --> Persist[Persist syntactically valid route candidates]
+    Persist -->|Current endpoint matches a candidate| Classify[Reclassify current connection without another request]
+    Persist -->|Current endpoint is not a candidate| Keep[Keep the current working connection]
+    Persist -->|No active connection| Route
+    Classify --> Active
+    Keep --> Active
     RestoreDirect --> Active
     Route -->|Exact SSID| LAN[Configured LAN endpoint]
     Route -->|Personal Team| Probe[2-second authenticated LAN probe]

@@ -110,7 +110,7 @@ struct AccountSettingsView: View {
         }
         .presentationDetents([.medium, .large])
         .accessibilityIdentifier("account-settings")
-        .alert("Cannot Save Endpoint", isPresented: Binding(
+        .alert("Cannot Save Profile", isPresented: Binding(
             get: { saveError != nil },
             set: {
                 if !$0 {
@@ -197,9 +197,9 @@ struct AccountSettingsView: View {
 
     private var connectionProfileHelp: String {
         if ssidEntitlementEnabled {
-            "Your sign-in address stays active until you save a profile. On the preferred Wi-Fi network, Remmich then tries the local address before the external addresses."
+            "Remmich saves these addresses as switching candidates. On the preferred Wi-Fi network, it tries the local address before the external addresses."
         } else {
-            "Your sign-in address stays active until you save a profile. Remmich then tries the local address first and the external addresses in order. No Wi-Fi name is required."
+            "Remmich saves these addresses as switching candidates, then tries the local address first and the external addresses in order. No Wi-Fi name is required."
         }
     }
 }
