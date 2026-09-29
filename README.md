@@ -21,8 +21,8 @@ Each milestone is a small, testable step toward a native, read-only Immich clien
 | --- | --- | --- |
 | M0 | ✅ Done | Reproducible Xcode project, formatting, and baseline configuration |
 | M1 | ✅ Done | Adaptive native Photos, Albums, Library, and Search shell using fixtures |
-| M2 | ✅ Done | Secure login, Keychain restoration, connection routing, and typed read-only API boundary |
-| M3 | Planned | Shared image loading, memory management, prefetching, and download infrastructure |
+| M2 | 🧪 Post-M2 fixes implemented — device verification pending | Secure login, Keychain restoration, connection routing, and typed read-only API boundary |
+| M3 | ⏳ Pending | Shared image loading, memory management, prefetching, and download infrastructure |
 | M4 | Planned | Real server-backed Photos timeline |
 | M5 | Planned | Native viewer with Save to Photos, Share, and Download |
 | M6 | Planned | Read-only Albums browsing |
@@ -31,25 +31,45 @@ Each milestone is a small, testable step toward a native, read-only Immich clien
 | M9 | Planned | iPad, Liquid Glass, accessibility, resilience, and performance polish |
 | M10 | Planned | Real-device verification and AltStore release candidate |
 
-# Current state — M2
+# Current state — post-M2 fixes awaiting device verification
 
 This is the single living state diagram for the implemented app. It is updated when each milestone finishes.
 
 ```mermaid
-stateDiagram-v2
-    [*] --> Loading
-    Loading --> SignedOut: no saved session
-    Loading --> SignedIn: Keychain session validates
-    Loading --> Failed: restore or validation fails
-    SignedOut --> Checking: submit server address
-    Checking --> Credentials: discovery + server checks pass
-    Checking --> Failed: invalid URL / offline / incompatible server
-    Credentials --> SigningIn: submit email + password
-    SigningIn --> SignedIn: token saved to Keychain
-    SigningIn --> Failed: authentication fails
-    Failed --> SignedOut: retry connection
-    Failed --> Credentials: retry sign-in
-    SignedIn --> SignedOut: logout + Keychain clear
+flowchart TD
+    Launch([Launch]) --> Session{Readable saved session?}
+    Session -->|No| Onboarding[Native onboarding]
+    Session -->|Corrupt| Purge[Clear credentials and active route]
+    Session -->|Keychain unavailable| StorageError[Show recoverable storage error]
+    Onboarding --> Login[Immich login]
+    Session -->|Yes| Restore[Restore identity from Keychain]
+    Login --> Save[Save account session in Keychain]
+    Save --> Direct[Use authenticated login endpoint as Direct route]
+    Restore --> Profile{Configured routes?}
+
+    Profile -->|No| RestoreDirect[Authenticate saved API endpoint]
+    Profile -->|Yes| Route{Authenticate configured routes}
+    Direct --> Configure[User enters Local and External endpoints]
+    Configure --> Normalize[Canonicalize with shared /api URL rules]
+    Normalize --> Route
+    RestoreDirect --> Active
+    Route -->|Exact SSID| LAN[Configured LAN endpoint]
+    Route -->|Personal Team| Probe[2-second authenticated LAN probe]
+    Probe -->|Same user after bounded transient retries| LAN
+    Probe -->|Unavailable or wrong user| External[Ordered external endpoints with bounded transient retries]
+    Route -->|SSID mismatch| External
+    Route -->|Transiently unreachable| Offline[Retain session and retry]
+    Route -->|All routes reject credential| Purge
+    RestoreDirect -->|Credential rejected| Purge
+
+    Direct --> Active[Server displays active endpoint]
+    LAN --> Active
+    External --> Active
+    Active -->|Path change or app activation| Profile
+    Offline -->|Path change or app activation| Profile
+
+    Active -->|Logout cancels in-flight routing| Purge
+    Purge --> Onboarding
 ```
 
 # Development
@@ -72,4 +92,4 @@ The project uses SwiftFormat as a pre-build check. Xcode may ask you once to tru
 
 GitHub Actions runs formatting, package tests, app unit tests, and simulator UI tests for every pushed commit and pull request. It can also be started manually from the Actions tab.
 
-True SSID matching requires the `com.apple.developer.networking.wifi-info` entitlement, which Apple does not provision for personal development teams. `Remmich/Remmich.entitlements` records the paid-team capability, but the personal-signing target intentionally does not attach it. When SSID details are unavailable, Remmich only considers the configured LAN endpoint while iOS reports an active Wi-Fi path: it performs a short authenticated probe, verifies the same saved Immich user, and otherwise falls back to the ordered external endpoints. Cellular paths never probe LAN, and Remmich never substitutes `localhost`.
+True SSID matching requires the `com.apple.developer.networking.wifi-info` entitlement, which Apple does not provision for personal development teams. `Remmich/Remmich.entitlements` records the paid-team capability, but the personal-signing target intentionally does not attach it. After a connection profile is saved, Personal Team builds therefore perform a short authenticated probe of the configured local endpoint on every route evaluation, verify the same saved Immich user, and otherwise try the ordered external endpoints. Remmich never substitutes `localhost`.
