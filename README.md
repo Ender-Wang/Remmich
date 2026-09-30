@@ -22,7 +22,7 @@ Each milestone is a small, testable step toward a native, read-only Immich clien
 | M0 | ✅ Done | Reproducible Xcode project, formatting, and baseline configuration |
 | M1 | ✅ Done | Adaptive native Photos, Albums, Library, and Search shell using fixtures |
 | M2 | ✅ Done | Secure login, Keychain restoration, verified endpoint failover, and typed read-only API boundary |
-| M3 | ⏳ Pending | Shared image loading, memory management, prefetching, and download infrastructure |
+| M3 | ✅ Done | Shared image loading, memory management, prefetching, and download infrastructure |
 | M4 | Planned | Real server-backed Photos timeline |
 | M5 | Planned | Native viewer with Save to Photos, Share, and Download |
 | M6 | Planned | Read-only Albums browsing |
@@ -31,7 +31,7 @@ Each milestone is a small, testable step toward a native, read-only Immich clien
 | M9 | Planned | iPad, Liquid Glass, accessibility, resilience, and performance polish |
 | M10 | Planned | Real-device verification and AltStore release candidate |
 
-# Current state — M2 complete
+# Current state — M3 complete
 
 This is the single living state diagram for the implemented app. It is updated when each milestone finishes.
 
@@ -39,7 +39,7 @@ This is the single living state diagram for the implemented app. It is updated w
 flowchart TD
     Launch([Launch]) --> Session{Readable saved session?}
     Session -->|No| Onboarding[Native onboarding]
-    Session -->|Corrupt| Purge[Clear credentials and active route]
+    Session -->|Corrupt| Purge[Clear credentials, routes, media caches, and temporary files]
     Session -->|Keychain unavailable| StorageError[Show recoverable storage error]
     Onboarding --> Login[Immich login]
     Session -->|Yes| Restore[Restore identity from Keychain]
@@ -73,6 +73,13 @@ flowchart TD
     Active -->|Path change| Debounce[Debounce bursty callbacks]
     Offline -->|Path change| Debounce
     Debounce --> Evaluate
+
+    Active --> Media[Account-scoped media controller]
+    Media --> Identity[Stable asset + derivative + update + target-size identity]
+    Identity --> Nuke[Nuke 13 memory/disk cache, coalescing, and downsampling]
+    Media --> Download[Authenticated streaming temporary-file downloads]
+    Download --> Player[Local AVKit playback item]
+    Media --> Lifecycle[Stop prefetching in background; purge decoded memory on warning]
 
     Active -->|Logout cancels in-flight routing| Purge
     Purge --> Onboarding
