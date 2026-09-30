@@ -50,6 +50,52 @@ final class RemmichUITests: XCTestCase {
     }
 
     @MainActor
+    func testAdaptivePhotoGridUsesAvailableWidth() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-ui-testing-signed-in"]
+        app.launch()
+
+        let photos = app.descendants(matching: .any)["photos-root"]
+        XCTAssertTrue(photos.waitForExistence(timeout: 5))
+
+        let compactGrid = app.descendants(matching: .any)
+            .matching(identifier: "asset-grid-compact").firstMatch
+        let regularGrid = app.descendants(matching: .any)
+            .matching(identifier: "asset-grid-regular").firstMatch
+        XCTAssertTrue(
+            compactGrid.waitForExistence(timeout: 2) || regularGrid.waitForExistence(timeout: 2),
+            "The Photos timeline should expose its adaptive grid size class"
+        )
+        XCTAssertNotEqual(compactGrid.exists, regularGrid.exists)
+
+        let assets = (0 ..< 8).map { index in
+            app.descendants(matching: .any)["asset-asset-\(index)"]
+        }
+        XCTAssertTrue(assets[0].waitForExistence(timeout: 2))
+        XCTAssertTrue(assets[7].waitForExistence(timeout: 2))
+
+        let frames = assets.map(\.frame)
+        let firstRowY = frames.map(\.midY).min() ?? 0
+        let firstRowCount = frames.count { abs($0.midY - firstRowY) < 2 }
+        let gridFrame = (regularGrid.exists ? regularGrid : compactGrid).frame
+
+        for frame in frames {
+            XCTAssertGreaterThan(frame.width, 0)
+            XCTAssertEqual(frame.width, frame.height, accuracy: 2)
+            XCTAssertGreaterThanOrEqual(frame.minX, gridFrame.minX - 1)
+            XCTAssertLessThanOrEqual(frame.maxX, gridFrame.maxX + 1)
+        }
+
+        if regularGrid.exists {
+            XCTAssertGreaterThanOrEqual(frames[0].width, 118)
+            XCTAssertGreaterThanOrEqual(firstRowCount, 4)
+        } else {
+            XCTAssertGreaterThanOrEqual(frames[0].width, 86)
+            XCTAssertGreaterThanOrEqual(firstRowCount, 3)
+        }
+    }
+
+    @MainActor
     private func tabButton(_ label: String, in app: XCUIApplication) -> XCUIElement {
         app.buttons.matching(NSPredicate(format: "label == %@", label)).firstMatch
     }

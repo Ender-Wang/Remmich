@@ -18,6 +18,7 @@ struct AssetGrid: View {
                 .buttonStyle(.plain)
             }
         }
+        .accessibilityIdentifier(horizontalSizeClass == .regular ? "asset-grid-regular" : "asset-grid-compact")
     }
 }
 

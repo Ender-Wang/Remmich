@@ -54,3 +54,19 @@ jobs:
             -parallel-testing-enabled NO \
             COMPILER_INDEX_STORE_ENABLE=NO \
             | xcbeautify
+
+      - name: Test adaptive iPad layout
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -project Remmich.xcodeproj \
+            -scheme Remmich \
+            -configuration Debug \
+            -destination 'platform=iOS Simulator,name=iPad Air 13-inch (M4),OS=27.0' \
+            -derivedDataPath "$RUNNER_TEMP/RemmichDerivedData" \
+            -resultBundlePath "$RUNNER_TEMP/RemmichIPadLayoutTests.xcresult" \
+            -skipPackagePluginValidation \
+            -parallel-testing-enabled NO \
+            -only-testing:RemmichUITests/RemmichUITests/testAdaptivePhotoGridUsesAvailableWidth \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            | xcbeautify
