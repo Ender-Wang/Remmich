@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import Nuke
 import Testing
 @testable import Remmich
 
@@ -690,6 +691,36 @@ struct RemmichTests {
         #expect(controller.routeStatus == .connected)
     }
 
+    @Test @MainActor func restoredSessionWaitsForAnAuthenticatedRouteBeforeServingMedia() async {
+        let service = SuspendedValidationService()
+        let controller = AppSessionController(
+            service: service,
+            sessionStore: MemorySessionStore(session: .fixture),
+            profileStore: ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)"),
+            ssidProvider: StubSSIDProvider(ssid: nil),
+            networkMonitoringEnabled: false,
+            pathChangeDebounce: .zero
+        )
+        let descriptor = MediaRequestDescriptor(
+            assetID: "asset-1",
+            updatedAt: .now,
+            derivative: .thumbnail,
+            targetPixels: .init(width: 300, height: 200)
+        )
+
+        let restoration = Task { await controller.start() }
+        await service.waitUntilValidationStarts()
+
+        #expect(controller.media.activeAPIURL == nil)
+        #expect(controller.media.imageRequest(for: descriptor) == nil)
+
+        await service.resumeValidation(with: .reachable)
+        await restoration.value
+
+        #expect(controller.media.activeAPIURL == AccountSession.fixture.apiURL)
+        #expect(controller.media.imageRequest(for: descriptor) != nil)
+    }
+
     @Test @MainActor func savedSessionRestoresThroughLocalRouteWhenLoginEndpointIsUnavailable() async throws {
         let session = AccountSession.fixture
         let sessionStore = MemorySessionStore(session: session)
@@ -718,6 +749,7 @@ struct RemmichTests {
         }
         #expect(restored == session)
         #expect(controller.activeRoute == ActiveConnectionRoute(kind: .local, endpoint: local))
+        #expect(controller.media.activeAPIURL == local)
         #expect(controller.routeStatus == .connected)
         #expect(await service.restoreCallCount == 0)
         #expect(await sessionStore.storedSession() == session)
@@ -745,6 +777,7 @@ struct RemmichTests {
 
         await controller.start()
         #expect(controller.activeRoute == ActiveConnectionRoute(kind: .local, endpoint: local))
+        #expect(controller.media.activeAPIURL == local)
         #expect(controller.routeStatus == .connected)
         #expect(await sessionStore.storedSession() == session)
     }
@@ -780,6 +813,7 @@ struct RemmichTests {
         await controller.handleNetworkPathChange(usesWiFi: false)
 
         #expect(controller.activeRoute == ActiveConnectionRoute(kind: .external, endpoint: external))
+        #expect(controller.media.activeAPIURL == external)
         #expect(controller.routeStatus == .connected)
         #expect(await service.validatedEndpoints == [local, external])
     }
@@ -813,6 +847,232 @@ struct RemmichTests {
         #expect(controller.connectionProfile == expected)
         #expect(await profileStore.load() == expected)
         #expect(controller.activeRoute == ActiveConnectionRoute(kind: .external, endpoint: session.apiURL))
+    }
+
+    @Test @MainActor func mediaIdentitySurvivesRouteSwitchAndExcludesCredential() throws {
+        let media = MediaLibraryController()
+        try media.configure(session: .fixture, activeEndpoint: url("http://immich.local/api"))
+        let descriptor = MediaRequestDescriptor(
+            assetID: "asset-1",
+            updatedAt: Date(timeIntervalSince1970: 1000),
+            derivative: .thumbnail,
+            targetPixels: .init(width: 400, height: 300)
+        )
+        let local = try #require(media.imageRequest(for: descriptor))
+
+        try media.updateRoute(url("https://photos.example.com/api"))
+        let external = try #require(media.imageRequest(for: descriptor))
+
+        #expect(local.imageID == external.imageID)
+        #expect(local.url != external.url)
+        #expect(local.imageID?.contains(AccountSession.fixture.accessToken) == false)
+        #expect(local.urlRequest?.value(forHTTPHeaderField: "Authorization") == "Bearer ui-test-token")
+    }
+
+    @Test func mediaIdentityPartitionsAccountsAndDerivatives() {
+        let first = AccountSession.fixture
+        let second = AccountSession(
+            apiURL: first.apiURL,
+            accessToken: "other-token",
+            userID: "other-user",
+            userEmail: "other@example.com",
+            name: "Other",
+            isAdmin: false,
+            serverVersion: first.serverVersion
+        )
+        let descriptor = MediaRequestDescriptor(
+            assetID: "asset-1",
+            updatedAt: Date(timeIntervalSince1970: 1000),
+            derivative: .thumbnail,
+            targetPixels: .init(width: 400, height: 300)
+        )
+        let preview = MediaRequestDescriptor(
+            assetID: descriptor.assetID,
+            updatedAt: descriptor.updatedAt,
+            derivative: .preview,
+            targetPixels: descriptor.targetPixels
+        )
+
+        #expect(descriptor.cacheKey(in: .init(session: first)) != descriptor.cacheKey(in: .init(session: second)))
+        #expect(descriptor.cacheKey(in: .init(session: first)) != preview.cacheKey(in: .init(session: first)))
+    }
+
+    @Test @MainActor func reusedThumbnailRequestHasDistinctIdentityAndBoundedDecode() throws {
+        let media = MediaLibraryController()
+        media.configure(session: .fixture, activeEndpoint: AccountSession.fixture.apiURL)
+        let first = MediaRequestDescriptor(
+            assetID: "first",
+            updatedAt: .now,
+            derivative: .thumbnail,
+            targetPixels: .init(width: 300, height: 200)
+        )
+        let second = MediaRequestDescriptor(
+            assetID: "second",
+            updatedAt: .now,
+            derivative: .thumbnail,
+            targetPixels: .init(width: 300, height: 200)
+        )
+        let firstRequest = try #require(media.imageRequest(for: first))
+        let secondRequest = try #require(media.imageRequest(for: second))
+
+        #expect(firstRequest.imageID != secondRequest.imageID)
+        #expect(firstRequest.thumbnail != nil)
+        #expect(secondRequest.thumbnail != nil)
+    }
+
+    @Test func identicalNukeRequestsCoalesceIntoOneTransportLoad() async throws {
+        let loader = CountingDataLoader()
+        let pipeline = ImagePipeline {
+            $0.dataLoader = loader
+            $0.imageCache = nil
+            $0.dataCache = nil
+            $0.isTaskCoalescingEnabled = true
+        }
+        let request = try ImageRequest(url: url("https://photos.example.com/media.jpg"))
+
+        async let first = pipeline.data(for: request)
+        async let second = pipeline.data(for: request)
+        _ = try await (first, second)
+
+        #expect(loader.loadCount == 1)
+    }
+
+    @Test func timelineWorkingSetExpiresWarmEntriesAndKeepsNewest() async {
+        let workingSet = TimelineWorkingSet<String>(
+            limits: .init(byteBudget: 20, hardByteCap: 30, warmLifetime: 10)
+        )
+        await workingSet.insert("warm", for: "warm", byteCost: 10, tier: .warm, now: 0)
+        await workingSet.insert("new", for: "new", byteCost: 10, tier: .newest, now: 0)
+
+        await workingSet.expire(now: 11)
+
+        #expect(await workingSet.value(for: "warm", now: 11) == nil)
+        #expect(await workingSet.value(for: "new", now: 11) == "new")
+    }
+
+    @Test func timelineWorkingSetTouchExtendsWarmExpiry() async {
+        let workingSet = TimelineWorkingSet<String>(
+            limits: .init(byteBudget: 20, hardByteCap: 30, warmLifetime: 10)
+        )
+        await workingSet.insert("warm", for: "warm", byteCost: 10, tier: .warm, now: 0)
+        _ = await workingSet.value(for: "warm", now: 8)
+        await workingSet.expire(now: 15)
+
+        #expect(await workingSet.value(for: "warm", now: 15) == "warm")
+    }
+
+    @Test func timelineWorkingSetRejectsSupersededViewportGeneration() async {
+        let workingSet = TimelineWorkingSet<String>()
+        let stale = await workingSet.beginViewportGeneration()
+        _ = await workingSet.beginViewportGeneration()
+
+        await workingSet.insert(
+            "stale",
+            for: "asset",
+            byteCost: 1,
+            tier: .viewport,
+            generation: stale,
+            now: 0
+        )
+
+        #expect(await workingSet.isEmpty)
+    }
+
+    @Test func timelineWorkingSetHonorsByteCapAndMemoryPressure() async {
+        let workingSet = TimelineWorkingSet<String>(
+            limits: .init(byteBudget: 10, hardByteCap: 20, warmLifetime: 100)
+        )
+        let generation = await workingSet.beginViewportGeneration()
+        await workingSet.insert("visible", for: "visible", byteCost: 10, tier: .viewport, generation: generation, now: 0)
+        await workingSet.insert("older", for: "older", byteCost: 15, tier: .warm, now: 1)
+
+        #expect(await workingSet.value(for: "visible", now: 2) == "visible")
+        #expect(await workingSet.value(for: "older", now: 2) == nil)
+
+        await workingSet.insert("warm", for: "warm", byteCost: 5, tier: .warm, now: 3)
+        await workingSet.handleMemoryPressure()
+        #expect(await workingSet.count == 1)
+    }
+
+    @Test func timelineWorkingSetHardCapAlsoBoundsViewportEntries() async {
+        let workingSet = TimelineWorkingSet<String>(
+            limits: .init(byteBudget: 20, hardByteCap: 20, warmLifetime: 100)
+        )
+        let generation = await workingSet.beginViewportGeneration()
+        await workingSet.insert("older", for: "older", byteCost: 15, tier: .viewport, generation: generation, now: 0)
+        await workingSet.insert("newer", for: "newer", byteCost: 15, tier: .viewport, generation: generation, now: 1)
+
+        #expect(await workingSet.value(for: "older", now: 2) == nil)
+        #expect(await workingSet.value(for: "newer", now: 2) == "newer")
+        #expect(await workingSet.byteCount == 15)
+    }
+
+    @Test func mediaDownloadStreamsToOwnedTemporaryFileWithAuthentication() async throws {
+        let recorder = RequestRecorder()
+        let source = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try Data("media".utf8).write(to: source)
+        let transport = MediaDownloadTransport { request in
+            await recorder.record(request)
+            let response = try #require(HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "image/jpeg"]
+            ))
+            return (source, response)
+        }
+        let service = MediaDownloadService(
+            token: "secret",
+            namespace: UUID().uuidString,
+            transport: transport
+        )
+
+        let result = try await service.download(
+            from: url("https://photos.example.com/api/assets/id/original"),
+            fallbackFilename: "photo.jpg"
+        )
+
+        #expect(try Data(contentsOf: result.fileURL) == Data("media".utf8))
+        #expect(await recorder.authorization == "Bearer secret")
+        await service.removeTemporaryDownloads()
+    }
+
+    @Test func mediaDownloadPropagatesCancellation() async throws {
+        let service = MediaDownloadService(
+            token: "secret",
+            namespace: UUID().uuidString,
+            transport: .init { _ in
+                try await Task.sleep(for: .seconds(10))
+                throw CancellationError()
+            }
+        )
+        let task = Task {
+            try await service.download(
+                from: url("https://photos.example.com/api/assets/id/original"),
+                fallbackFilename: "photo.jpg"
+            )
+        }
+        task.cancel()
+        do {
+            _ = try await task.value
+            Issue.record("Expected download cancellation")
+        } catch is CancellationError {
+            // Expected.
+        }
+        await service.removeTemporaryDownloads()
+    }
+
+    @Test func multiThousandItemMediaIdentityBaseline() {
+        let scope = MediaAccountScope(session: .fixture)
+        let keys = (0 ..< 5000).map { index in
+            MediaRequestDescriptor(
+                assetID: "asset-\(index)",
+                updatedAt: Date(timeIntervalSince1970: TimeInterval(index)),
+                derivative: .thumbnail,
+                targetPixels: .init(width: 400, height: 400)
+            ).cacheKey(in: scope)
+        }
+        #expect(Set(keys).count == 5000)
     }
 
     private func profile(preferredSSID: String) throws -> ConnectionProfile {
@@ -907,6 +1167,59 @@ private actor EndpointRecorder {
 
     func record(_ endpoint: URL) {
         endpoints.append(endpoint)
+    }
+}
+
+private actor RequestRecorder {
+    private(set) var authorization: String?
+
+    func record(_ request: URLRequest) {
+        authorization = request.value(forHTTPHeaderField: "Authorization")
+    }
+}
+
+private final class CountingDataLoader: DataLoading, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _loadCount = 0
+
+    var loadCount: Int {
+        lock.withLock { _loadCount }
+    }
+
+    func loadData(
+        with request: URLRequest,
+        didReceiveData: @escaping @Sendable (Data, URLResponse) -> Void,
+        completion: @escaping @Sendable (Error?) -> Void
+    ) -> any Cancellable {
+        lock.withLock { _loadCount += 1 }
+        let work = Task {
+            try? await Task.sleep(for: .milliseconds(30))
+            guard !Task.isCancelled else {
+                completion(CancellationError())
+                return
+            }
+            let response = URLResponse(
+                url: request.url!,
+                mimeType: "image/jpeg",
+                expectedContentLength: 4,
+                textEncodingName: nil
+            )
+            didReceiveData(Data([0, 1, 2, 3]), response)
+            completion(nil)
+        }
+        return TaskCancellable(task: work)
+    }
+}
+
+private final class TaskCancellable: Cancellable, @unchecked Sendable {
+    private let task: Task<Void, Never>
+
+    init(task: Task<Void, Never>) {
+        self.task = task
+    }
+
+    func cancel() {
+        task.cancel()
     }
 }
 
