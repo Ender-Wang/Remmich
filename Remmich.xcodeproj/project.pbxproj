@@ -8,6 +8,8 @@
 
 /* Begin PBXBuildFile section */
 		A2B3C4D5E6F708192A3B4C5D /* ImmichAPI in Frameworks */ = {isa = PBXBuildFile; productRef = A2B3C4D5E6F708192A3B4C5E /* ImmichAPI */; };
+		B3C4D5E6F708192A3B4C5D6E /* Nuke in Frameworks */ = {isa = PBXBuildFile; productRef = B6C7D8E9F001122334455667 /* Nuke */; };
+		B4C5D6E7F8091A2B3C4D5E6F /* NukeUI in Frameworks */ = {isa = PBXBuildFile; productRef = B7C8D9E0F112233445566778 /* NukeUI */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -55,6 +57,8 @@
 		F84699413066C25E00C68930 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
+				B4C5D6E7F8091A2B3C4D5E6F /* NukeUI in Frameworks */,
+				B3C4D5E6F708192A3B4C5D6E /* Nuke in Frameworks */,
 				A2B3C4D5E6F708192A3B4C5D /* ImmichAPI in Frameworks */,
 			);
 		};
@@ -111,6 +115,8 @@
 			name = Remmich;
 			packageProductDependencies = (
 				A2B3C4D5E6F708192A3B4C5E /* ImmichAPI */,
+				B6C7D8E9F001122334455667 /* Nuke */,
+				B7C8D9E0F112233445566778 /* NukeUI */,
 			);
 			productName = Remmich;
 			productReference = F84699443066C25E00C68930 /* Remmich.app */;
@@ -190,11 +196,12 @@
 			);
 			mainGroup = F846993B3066C25E00C68930;
 			minimizedProjectReferenceProxies = 1;
-			preferredProjectObjectVersion = 77;
-			productRefGroup = F84699453066C25E00C68930 /* Products */;
 			packageReferences = (
 				A2B3C4D5E6F708192A3B4C5F /* XCLocalSwiftPackageReference "Packages/ImmichAPI" */,
+				B5C6D7E8F901A2B3C4D5E6F7 /* XCRemoteSwiftPackageReference "Nuke" */,
 			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = F84699453066C25E00C68930 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -286,11 +293,32 @@
 		};
 /* End XCLocalSwiftPackageReference section */
 
+/* Begin XCRemoteSwiftPackageReference section */
+		B5C6D7E8F901A2B3C4D5E6F7 /* XCRemoteSwiftPackageReference "Nuke" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/kean/Nuke.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 13.0.6;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
 /* Begin XCSwiftPackageProductDependency section */
 		A2B3C4D5E6F708192A3B4C5E /* ImmichAPI */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = A2B3C4D5E6F708192A3B4C5F /* XCLocalSwiftPackageReference "Packages/ImmichAPI" */;
 			productName = ImmichAPI;
+		};
+		B6C7D8E9F001122334455667 /* Nuke */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = B5C6D7E8F901A2B3C4D5E6F7 /* XCRemoteSwiftPackageReference "Nuke" */;
+			productName = Nuke;
+		};
+		B7C8D9E0F112233445566778 /* NukeUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = B5C6D7E8F901A2B3C4D5E6F7 /* XCRemoteSwiftPackageReference "Nuke" */;
+			productName = NukeUI;
 		};
 /* End XCSwiftPackageProductDependency section */
 
@@ -616,6 +644,7 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
 	};
 	rootObject = F846993C3066C25E00C68930 /* Project object */;
 	validationLevel = 1;
