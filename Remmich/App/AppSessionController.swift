@@ -27,6 +27,7 @@ final class AppSessionController {
     private(set) var activeRoute: ActiveConnectionRoute?
     private(set) var routeStatus: ConnectionRouteStatus = .waitingForNetwork
     private(set) var connectionProfile = ConnectionProfile()
+    let media = MediaLibraryController()
 
     private let service: any ServerReading & SessionManaging & RouteValidating
     private let sessionStore: any SessionStoring
@@ -64,7 +65,9 @@ final class AppSessionController {
     func start() async {
         startNetworkMonitoring()
         if ProcessInfo.processInfo.arguments.contains("-ui-testing-signed-in") {
-            state = .signedIn(.fixture)
+            let session = AccountSession.fixture
+            media.configure(session: session, activeEndpoint: session.apiURL)
+            state = .signedIn(session)
             return
         }
         if ProcessInfo.processInfo.arguments.contains("-ui-testing-signed-out") {
@@ -78,6 +81,7 @@ final class AppSessionController {
                 state = .signedOut
                 return
             }
+            media.configure(session: session, activeEndpoint: nil)
             state = .signedIn(session)
             await reevaluateRoute()
         } catch SessionStoreError.corruptPayload {
@@ -120,6 +124,7 @@ final class AppSessionController {
             routeGeneration += 1
             activeRoute = .init(kind: .direct, endpoint: session.apiURL)
             routeStatus = .connected
+            media.configure(session: session, activeEndpoint: session.apiURL)
             Self.routeLogger.info("Connected directly to \(session.apiURL.absoluteString, privacy: .public)")
             state = .signedIn(session)
         } catch {
@@ -131,6 +136,7 @@ final class AppSessionController {
         routeGeneration += 1
         activeRoute = nil
         routeStatus = .waitingForNetwork
+        media.clearAll()
         guard case let .signedIn(session) = state else {
             try? await sessionStore.delete()
             state = .signedOut
@@ -255,6 +261,7 @@ final class AppSessionController {
             guard evaluation == routeGeneration else { return }
             activeRoute = route
             routeStatus = .connected
+            media.updateRoute(route.endpoint)
             Self.routeLogger.info(
                 "Activated \(route.kind.rawValue, privacy: .public) endpoint \(route.endpoint.absoluteString, privacy: .public)"
             )
@@ -331,6 +338,7 @@ final class AppSessionController {
             guard evaluation == routeGeneration else { return }
             activeRoute = .init(kind: .direct, endpoint: session.apiURL)
             routeStatus = .connected
+            media.updateRoute(session.apiURL)
             Self.routeLogger.info(
                 "Restored direct endpoint \(session.apiURL.absoluteString, privacy: .public)"
             )
@@ -399,10 +407,19 @@ final class AppSessionController {
         routeGeneration += 1
         activeRoute = nil
         routeStatus = .waitingForNetwork
+        media.clearAll()
         state = .signingOut
         try? await sessionStore.delete()
         await service.signOut(session)
         state = .signedOut
+    }
+
+    func handleMemoryPressure() {
+        media.handleMemoryPressure()
+    }
+
+    func handleBackgroundTransition() {
+        media.handleBackgroundTransition()
     }
 
     private static func message(for error: Error) -> String {

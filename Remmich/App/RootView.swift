@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
@@ -34,8 +35,16 @@ struct RootView: View {
         }
         .task { await controller.start() }
         .onChange(of: scenePhase) { _, phase in
-            guard phase == .active else { return }
-            Task { await controller.reevaluateRoute() }
+            if phase == .active {
+                Task { await controller.reevaluateRoute() }
+            } else if phase == .background {
+                controller.handleBackgroundTransition()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(
+            for: UIApplication.didReceiveMemoryWarningNotification
+        )) { _ in
+            controller.handleMemoryPressure()
         }
     }
 }
