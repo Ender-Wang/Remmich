@@ -3,9 +3,14 @@ import OpenAPIRuntime
 import OpenAPIURLSession
 
 public actor ImmichClient {
+    private struct RouteIdentity: Decodable {
+        let id: String
+    }
+
     public let apiURL: URL
     private var credential: ImmichCredential?
     private let transport: any ClientTransport
+    private let routeCheckSession: URLSession?
 
     public init(
         apiURL: URL,
@@ -15,6 +20,31 @@ public actor ImmichClient {
         self.apiURL = apiURL
         self.credential = credential
         self.transport = transport ?? ImmichNetworkSession.transport
+        routeCheckSession = nil
+    }
+
+    private init(
+        apiURL: URL,
+        credential: ImmichCredential?,
+        transport: any ClientTransport,
+        routeCheckSession: URLSession
+    ) {
+        self.apiURL = apiURL
+        self.credential = credential
+        self.transport = transport
+        self.routeCheckSession = routeCheckSession
+    }
+
+    /// A client for background route-health checks. Uses a short (~5s) request timeout so a
+    /// stuck candidate fails fast instead of riding the longer timeout used for interactive
+    /// login/browsing traffic on `shared`.
+    public static func routeCheckClient(apiURL: URL, credential: ImmichCredential?) -> ImmichClient {
+        ImmichClient(
+            apiURL: apiURL,
+            credential: credential,
+            transport: ImmichNetworkSession.routeCheckTransport,
+            routeCheckSession: ImmichNetworkSession.routeCheck
+        )
     }
 
     public func setCredential(_ credential: ImmichCredential?) {
@@ -106,6 +136,13 @@ public actor ImmichClient {
 
     public func authenticatedUserID() async throws -> String {
         guard credential != nil else { throw ImmichAPIError.unauthorized }
+        if let routeCheckSession {
+            return try await Self.routeAuthenticatedUserID(
+                apiURL: apiURL,
+                credential: credential,
+                session: routeCheckSession
+            )
+        }
         do {
             switch try await makeClient().getMyUser(.init()) {
             case let .ok(response):
@@ -115,6 +152,50 @@ public actor ImmichClient {
             }
         } catch {
             throw Self.map(error)
+        }
+    }
+
+    /// Route validation intentionally decodes only the stable identity field it needs. Decoding
+    /// the complete generated `UserAdminResponseDto` makes a healthy endpoint look unreachable
+    /// whenever an Immich server version adds, removes, or omits an unrelated user property.
+    static func routeAuthenticatedUserID(
+        apiURL: URL,
+        credential: ImmichCredential?,
+        session: URLSession
+    ) async throws -> String {
+        guard let credential else { throw ImmichAPIError.unauthorized }
+
+        let endpoint = apiURL
+            .appendingPathComponent("users")
+            .appendingPathComponent("me")
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "GET"
+        switch credential {
+        case let .bearer(token):
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        case let .apiKey(key):
+            request.setValue(key, forHTTPHeaderField: "x-api-key")
+        }
+
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let response = response as? HTTPURLResponse else {
+                throw ImmichAPIError.invalidResponse
+            }
+            guard response.statusCode == 200 else {
+                throw Self.map(status: response.statusCode)
+            }
+            return try Self.routeUserID(from: data)
+        } catch {
+            throw Self.map(error)
+        }
+    }
+
+    static func routeUserID(from data: Data) throws -> String {
+        do {
+            return try JSONDecoder().decode(RouteIdentity.self, from: data).id
+        } catch {
+            throw ImmichAPIError.invalidResponse
         }
     }
 
@@ -132,6 +213,9 @@ public actor ImmichClient {
         }
         if error is CancellationError {
             return .cancelled
+        }
+        if let clientError = error as? ClientError {
+            return map(clientError.underlyingError)
         }
         if let error = error as? URLError {
             switch error.code {

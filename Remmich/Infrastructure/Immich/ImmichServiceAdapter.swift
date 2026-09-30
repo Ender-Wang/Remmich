@@ -2,10 +2,6 @@ import Foundation
 import ImmichAPI
 
 actor ImmichServiceAdapter: ServerReading, SessionManaging, RouteValidating {
-    private struct PreparedRoute {
-        let client: ImmichClient
-    }
-
     private struct RouteKey: Hashable {
         let endpoint: URL
         let userID: String
@@ -13,7 +9,7 @@ actor ImmichServiceAdapter: ServerReading, SessionManaging, RouteValidating {
 
     private let discovery: ImmichServerDiscovery
     private var client: ImmichClient?
-    private var preparedRoutes: [RouteKey: PreparedRoute] = [:]
+    private var validatedRoutes: Set<RouteKey> = []
 
     init(discovery: ImmichServerDiscovery = .init()) {
         self.discovery = discovery
@@ -31,7 +27,7 @@ actor ImmichServiceAdapter: ServerReading, SessionManaging, RouteValidating {
         let client = client ?? ImmichClient(apiURL: server.apiURL)
         let session = try await client.login(email: email, password: password)
         self.client = client
-        preparedRoutes.removeAll()
+        validatedRoutes.removeAll()
         return AccountSession(
             apiURL: session.apiURL,
             accessToken: session.accessToken,
@@ -54,22 +50,21 @@ actor ImmichServiceAdapter: ServerReading, SessionManaging, RouteValidating {
         let client = client ?? ImmichClient(apiURL: session.apiURL, credential: .bearer(session.accessToken))
         try? await client.logout()
         self.client = nil
-        preparedRoutes.removeAll()
+        validatedRoutes.removeAll()
     }
 
     func validateRoute(endpoint: URL, session: AccountSession) async -> RouteValidationResult {
         let key = RouteKey(endpoint: endpoint, userID: session.userID)
-        preparedRoutes[key] = nil
+        validatedRoutes.remove(key)
+        let candidate = ImmichClient.routeCheckClient(apiURL: endpoint, credential: .bearer(session.accessToken))
         do {
-            let apiURL = try await discovery.discover(endpoint.absoluteString)
-            let candidate = ImmichClient(apiURL: apiURL, credential: .bearer(session.accessToken))
             guard try await candidate.authenticatedUserID() == session.userID else {
                 return .failed(
                     message: "This endpoint belongs to a different Immich account.",
                     kind: .endpointRejected
                 )
             }
-            preparedRoutes[key] = .init(client: candidate)
+            validatedRoutes.insert(key)
             return .reachable
         } catch {
             let message = (error as? LocalizedError)?.errorDescription
@@ -80,14 +75,18 @@ actor ImmichServiceAdapter: ServerReading, SessionManaging, RouteValidating {
 
     func activateRoute(endpoint: URL, session: AccountSession) async throws {
         let key = RouteKey(endpoint: endpoint, userID: session.userID)
-        if preparedRoutes[key] == nil {
+        if !validatedRoutes.contains(key) {
             guard await validateRoute(endpoint: endpoint, session: session).isReachable else {
                 throw ImmichAPIError.offline
             }
         }
-        guard let prepared = preparedRoutes[key] else { throw ImmichAPIError.offline }
-        preparedRoutes.removeAll()
-        client = prepared.client
+        guard validatedRoutes.contains(key) else { throw ImmichAPIError.offline }
+        validatedRoutes.removeAll()
+        // Activation reuses the just-confirmed reachability/identity without a third network
+        // round trip, but builds the long-lived client on the normal-timeout transport — the
+        // short route-check timeout is only appropriate for the health probe itself, not for
+        // ongoing app traffic (login-adjacent calls, and future browsing/media requests).
+        client = ImmichClient(apiURL: endpoint, credential: .bearer(session.accessToken))
     }
 
     private nonisolated static func failureKind(for error: Error) -> RouteValidationFailureKind {
@@ -97,14 +96,18 @@ actor ImmichServiceAdapter: ServerReading, SessionManaging, RouteValidating {
                 return .transient
             case .unauthorized, .forbidden:
                 return .sessionRejected
+            case .cancelled:
+                return .cancelled
             case .invalidServerURL, .unsupportedScheme, .discoveryFailed, .invalidResponse,
-                 .notFound, .httpStatus, .cancelled,
+                 .notFound, .httpStatus,
                  .certificateUntrusted, .secureConnectionFailed, .readOnlyPolicyViolation:
                 return .endpointRejected
             }
         }
         if let error = error as? URLError {
             switch error.code {
+            case .cancelled:
+                return .cancelled
             case .notConnectedToInternet, .cannotConnectToHost, .cannotFindHost,
                  .dnsLookupFailed, .networkConnectionLost, .timedOut:
                 return .transient

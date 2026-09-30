@@ -20,53 +20,51 @@ actor NetworkRouteCoordinator {
 
     private let ssidProvider: any SSIDProviding
     private let validate: Validator
-    private let localProbeTimeout: Duration
     private var generation = 0
     private(set) var activeRoute: ActiveConnectionRoute?
 
     init(
         ssidProvider: any SSIDProviding,
-        localProbeTimeout: Duration = .seconds(2),
         validate: @escaping Validator
     ) {
         self.ssidProvider = ssidProvider
-        self.localProbeTimeout = localProbeTimeout
         self.validate = validate
     }
 
     func evaluate(
         _ profile: ConnectionProfile,
+        preferredEndpoint: URL? = nil,
         allowSSIDlessLocalProbe: Bool = false
     ) async -> ActiveConnectionRoute? {
         generation += 1
         let evaluation = generation
-        let candidates = await candidates(
+        var candidates = await candidates(
             for: profile,
             allowSSIDlessLocalProbe: allowSSIDlessLocalProbe
         )
+        if let preferredEndpoint,
+           let index = candidates.firstIndex(where: { $0.endpoint == preferredEndpoint })
+        {
+            candidates.insert(candidates.remove(at: index), at: 0)
+        }
 
-        for candidate in candidates where await isReachable(candidate) {
-            guard evaluation == generation else { return activeRoute }
+        for candidate in candidates {
+            // A cancelled or superseded evaluation must stop before probing another candidate,
+            // not just before writing its result — otherwise a stale evaluation keeps making
+            // network requests after the replacement evaluation has already started.
+            guard !Task.isCancelled, evaluation == generation else { return activeRoute }
+            let isReachable = await validate(candidate.endpoint)
+            // Re-check immediately after the await, not only before it: cancellation can arrive
+            // while `validate` is in flight, and a stale success must not be accepted just
+            // because nothing else has raced ahead to bump `generation` yet.
+            guard !Task.isCancelled, evaluation == generation else { return activeRoute }
+            guard isReachable else { continue }
             activeRoute = candidate
             return candidate
         }
-        guard evaluation == generation else { return activeRoute }
+        guard !Task.isCancelled, evaluation == generation else { return activeRoute }
         activeRoute = nil
         return nil
-    }
-
-    private func isReachable(_ candidate: ActiveConnectionRoute) async -> Bool {
-        guard candidate.kind == .local else { return await validate(candidate.endpoint) }
-        return await withTaskGroup(of: Bool.self) { group in
-            group.addTask { await self.validate(candidate.endpoint) }
-            group.addTask {
-                try? await Task.sleep(for: self.localProbeTimeout)
-                return false
-            }
-            let result = await group.next() ?? false
-            group.cancelAll()
-            return result
-        }
     }
 
     private func candidates(
@@ -75,11 +73,15 @@ actor NetworkRouteCoordinator {
     ) async -> [ActiveConnectionRoute] {
         var candidates: [ActiveConnectionRoute] = []
         if let endpoint = profile.localEndpoint {
-            let currentSSID = await ssidProvider.currentSSID()
-            if allowSSIDlessLocalProbe ||
-                (profile.isSSIDMatchingEnabled && currentSSID == profile.preferredSSID)
-            {
+            if allowSSIDlessLocalProbe {
                 candidates.append(.init(kind: .local, endpoint: endpoint))
+            } else if profile.isSSIDMatchingEnabled {
+                // Only consult the SSID API when exact-SSID matching is actually in effect;
+                // the entitlement-free (Personal Team) path this bypasses must not depend on it.
+                let currentSSID = await ssidProvider.currentSSID()
+                if currentSSID == profile.preferredSSID {
+                    candidates.append(.init(kind: .local, endpoint: endpoint))
+                }
             }
         }
         candidates.append(contentsOf: profile.externalEndpoints.map {

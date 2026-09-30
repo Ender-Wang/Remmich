@@ -2,10 +2,16 @@ import CoreLocation
 import Foundation
 import Network
 import Observation
+import OSLog
 
 @MainActor
 @Observable
 final class AppSessionController {
+    private nonisolated static let routeLogger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "Remmich",
+        category: "Routing"
+    )
+
     enum State {
         case loading
         case signedOut
@@ -28,12 +34,14 @@ final class AppSessionController {
     private let endpointNormalizer: any EndpointNormalizing
     private let ssidProvider: any SSIDProviding
     private let networkMonitoringEnabled: Bool
-    private let routeRetryDelays: [Duration]
+    private let pathChangeDebounce: Duration
     private let locationManager = CLLocationManager()
     private let pathMonitor = NWPathMonitor()
+    private let routeEvaluationGate = RouteEvaluationGate()
     private var isMonitoringNetwork = false
     private var hasReceivedNetworkPath = false
     private var routeGeneration = 0
+    private var pendingPathChangeTask: Task<Void, Never>?
 
     init(
         service: any ServerReading & SessionManaging & RouteValidating = ImmichServiceAdapter(),
@@ -42,7 +50,7 @@ final class AppSessionController {
         endpointNormalizer: any EndpointNormalizing = ImmichEndpointNormalizer(),
         ssidProvider: any SSIDProviding = CurrentSSIDProvider(),
         networkMonitoringEnabled: Bool = true,
-        routeRetryDelays: [Duration] = [.milliseconds(250), .milliseconds(500)]
+        pathChangeDebounce: Duration = .milliseconds(400)
     ) {
         self.service = service
         self.sessionStore = sessionStore
@@ -50,7 +58,7 @@ final class AppSessionController {
         self.endpointNormalizer = endpointNormalizer
         self.ssidProvider = ssidProvider
         self.networkMonitoringEnabled = networkMonitoringEnabled
-        self.routeRetryDelays = routeRetryDelays
+        self.pathChangeDebounce = pathChangeDebounce
     }
 
     func start() async {
@@ -112,6 +120,7 @@ final class AppSessionController {
             routeGeneration += 1
             activeRoute = .init(kind: .direct, endpoint: session.apiURL)
             routeStatus = .connected
+            Self.routeLogger.info("Connected directly to \(session.apiURL.absoluteString, privacy: .public)")
             state = .signedIn(session)
         } catch {
             state = .failed(message: Self.message(for: error), server: server)
@@ -142,7 +151,7 @@ final class AppSessionController {
     }
 
     func saveConnectionProfile(_ draft: ConnectionProfileDraft) async -> ConnectionProfileSaveResult {
-        guard case let .signedIn(session) = state else {
+        guard case .signedIn = state else {
             return .rejected(failures: draft.addresses.map {
                 .init(address: $0, message: "No signed-in session is available.")
             })
@@ -190,10 +199,17 @@ final class AppSessionController {
     }
 
     func reevaluateRoute() async {
+        await routeEvaluationGate.submit { [weak self] in
+            await self?.performRouteEvaluation()
+        }
+    }
+
+    private func performRouteEvaluation() async {
         guard case let .signedIn(session) = state else { return }
         routeGeneration += 1
         let evaluation = routeGeneration
         routeStatus = .checking
+        Self.routeLogger.info("Evaluating saved connection routes")
 
         if connectionProfile.endpoints.isEmpty {
             await restoreDirectRoute(session, evaluation: evaluation)
@@ -201,15 +217,9 @@ final class AppSessionController {
         }
 
         let service = service
-        let routeRetryDelays = routeRetryDelays
         let audit = RouteValidationAudit()
         let coordinator = NetworkRouteCoordinator(ssidProvider: ssidProvider) { endpoint in
-            let result = await Self.validateRoute(
-                endpoint,
-                session: session,
-                service: service,
-                retryDelays: routeRetryDelays
-            )
+            let result = await Self.validateRoute(endpoint, session: session, service: service)
             await audit.record(result)
             return result.isReachable
         }
@@ -218,6 +228,7 @@ final class AppSessionController {
         ) as? Bool == true
         guard let route = await coordinator.evaluate(
             connectionProfile,
+            preferredEndpoint: activeRoute?.endpoint,
             allowSSIDlessLocalProbe: !entitlementEnabled
         ) else {
             guard evaluation == routeGeneration else { return }
@@ -228,8 +239,14 @@ final class AppSessionController {
                 await invalidateSession(session, evaluation: evaluation)
                 return
             }
-            activeRoute = nil
             routeStatus = hasReceivedNetworkPath ? .unavailable : .waitingForNetwork
+            if let activeRoute {
+                Self.routeLogger.error(
+                    "No candidate validated; retaining current \(activeRoute.kind.rawValue, privacy: .public) endpoint \(activeRoute.endpoint.absoluteString, privacy: .public)"
+                )
+            } else {
+                Self.routeLogger.error("No saved connection route is currently reachable")
+            }
             return
         }
         guard evaluation == routeGeneration else { return }
@@ -238,10 +255,15 @@ final class AppSessionController {
             guard evaluation == routeGeneration else { return }
             activeRoute = route
             routeStatus = .connected
+            Self.routeLogger.info(
+                "Activated \(route.kind.rawValue, privacy: .public) endpoint \(route.endpoint.absoluteString, privacy: .public)"
+            )
         } catch {
             guard evaluation == routeGeneration else { return }
-            activeRoute = nil
             routeStatus = hasReceivedNetworkPath ? .unavailable : .waitingForNetwork
+            Self.routeLogger.error(
+                "Could not activate \(route.endpoint.absoluteString, privacy: .public): \(Self.message(for: error), privacy: .public)"
+            )
         }
     }
 
@@ -257,28 +279,51 @@ final class AppSessionController {
     }
 
     func handleNetworkPathChange(usesWiFi _: Bool) async {
-        guard hasReceivedNetworkPath else {
-            hasReceivedNetworkPath = true
+        let isFirstCallback = !hasReceivedNetworkPath
+        hasReceivedNetworkPath = true
+        // NWPathMonitor always delivers one callback immediately on `.start()`, whether or not
+        // anything changed. Discarding that noise avoids redundantly revalidating a route that
+        // just connected a moment earlier (e.g., right after a fresh login). But when the route
+        // is not already resolved, that first callback may be the only nudge the app gets before
+        // the next real path change or foreground activation — it must not be discarded then.
+        if isFirstCallback, routeStatus == .connected {
             return
         }
-        await reevaluateRoute()
+        // An interface actually transitioning (Wi-Fi associating, a VPN/proxy tunnel
+        // re-establishing, link-quality assessment) fires a burst of raw path callbacks, not
+        // one clean event. Cancel-and-replace correctly stops a stale evaluation from ever
+        // writing wrong state, but on its own it doesn't guarantee any evaluation survives long
+        // enough to finish if callbacks keep arriving faster than one round trip — the app can
+        // livelock, restarting forever instead of converging. Debouncing collapses a burst into
+        // exactly one evaluation of the settled state, the same way `RouteEvaluationGate`
+        // collapses overlapping triggers into one *task* — this collapses the triggers before
+        // they ever become tasks.
+        pendingPathChangeTask?.cancel()
+        let task = Task { [weak self, pathChangeDebounce] in
+            try? await Task.sleep(for: pathChangeDebounce)
+            guard !Task.isCancelled else { return }
+            await self?.reevaluateRoute()
+        }
+        pendingPathChangeTask = task
+        await task.value
     }
 
     private func restoreDirectRoute(_ session: AccountSession, evaluation: Int) async {
-        let result = await Self.validateRoute(
-            session.apiURL,
-            session: session,
-            service: service,
-            retryDelays: routeRetryDelays
-        )
+        let result = await Self.validateRoute(session.apiURL, session: session, service: service)
         guard evaluation == routeGeneration else { return }
         if result.isSessionRejected {
             await invalidateSession(session, evaluation: evaluation)
             return
         }
         guard result.isReachable else {
-            activeRoute = nil
             routeStatus = hasReceivedNetworkPath ? .unavailable : .waitingForNetwork
+            if let activeRoute {
+                Self.routeLogger.error(
+                    "Direct route validation failed; retaining current \(activeRoute.endpoint.absoluteString, privacy: .public)"
+                )
+            } else {
+                Self.routeLogger.error("Saved direct route is currently unreachable")
+            }
             return
         }
         do {
@@ -286,28 +331,31 @@ final class AppSessionController {
             guard evaluation == routeGeneration else { return }
             activeRoute = .init(kind: .direct, endpoint: session.apiURL)
             routeStatus = .connected
+            Self.routeLogger.info(
+                "Restored direct endpoint \(session.apiURL.absoluteString, privacy: .public)"
+            )
         } catch {
             guard evaluation == routeGeneration else { return }
-            activeRoute = nil
             routeStatus = hasReceivedNetworkPath ? .unavailable : .waitingForNetwork
+            Self.routeLogger.error(
+                "Could not restore direct endpoint \(session.apiURL.absoluteString, privacy: .public): \(Self.message(for: error), privacy: .public)"
+            )
         }
     }
 
     private nonisolated static func validateRoute(
         _ endpoint: URL,
         session: AccountSession,
-        service: any RouteValidating,
-        retryDelays: [Duration]
+        service: any RouteValidating
     ) async -> RouteValidationResult {
-        var result = await service.validateRoute(endpoint: endpoint, session: session)
-        for delay in retryDelays {
-            guard result.isRetryable else { return result }
-            do {
-                try await Task.sleep(for: delay)
-            } catch {
-                return result
-            }
-            result = await service.validateRoute(endpoint: endpoint, session: session)
+        let result = await service.validateRoute(endpoint: endpoint, session: session)
+        switch result {
+        case .reachable:
+            routeLogger.info("Validated endpoint \(endpoint.absoluteString, privacy: .public)")
+        case let .failed(message, kind):
+            routeLogger.error(
+                "Rejected endpoint \(endpoint.absoluteString, privacy: .public) [\(String(describing: kind), privacy: .public)]: \(message, privacy: .public)"
+            )
         }
         return result
     }
@@ -374,6 +422,22 @@ private actor RouteValidationAudit {
 
     func record(_ result: RouteValidationResult) {
         results.append(result)
+    }
+}
+
+private actor RouteEvaluationGate {
+    private var currentTask: Task<Void, Never>?
+
+    /// Cancels any in-flight evaluation and starts a fresh one, so a newer trigger (e.g. the
+    /// network path returning) is never left waiting behind a stale, still-running evaluation.
+    /// `await`s the newest task's completion, so a caller whose own evaluation got superseded
+    /// observes the result of whichever evaluation is currently latest, not a queued rerun of
+    /// its own.
+    func submit(_ operation: @escaping @Sendable () async -> Void) async {
+        currentTask?.cancel()
+        let task = Task { await operation() }
+        currentTask = task
+        await task.value
     }
 }
 

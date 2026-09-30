@@ -93,6 +93,10 @@ nonisolated enum RouteValidationFailureKind: Equatable, Sendable {
     case transient
     case sessionRejected
     case endpointRejected
+    /// The check was aborted (usually because a newer evaluation superseded it) before it could
+    /// answer at all. This says nothing about the endpoint itself and must not be treated as a
+    /// rejection of it.
+    case cancelled
 }
 
 nonisolated enum RouteValidationResult: Equatable, Sendable {
@@ -111,6 +115,11 @@ nonisolated enum RouteValidationResult: Equatable, Sendable {
     var isSessionRejected: Bool {
         guard case let .failed(_, kind) = self else { return false }
         return kind == .sessionRejected
+    }
+
+    var isCancelled: Bool {
+        guard case let .failed(_, kind) = self else { return false }
+        return kind == .cancelled
     }
 }
 

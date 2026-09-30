@@ -98,6 +98,61 @@ struct RemmichTests {
         #expect(route?.endpoint == URL(string: "http://immich.local/api"))
     }
 
+    @Test func personalTeamLocalProbeNeverConsultsSSIDProvider() async throws {
+        let coordinator = NetworkRouteCoordinator(
+            ssidProvider: TrappingSSIDProvider(),
+            validate: { _ in true }
+        )
+        let configured = try profile(preferredSSID: "Home")
+
+        let route = await coordinator.evaluate(configured, allowSSIDlessLocalProbe: true)
+
+        #expect(route?.kind == .local)
+    }
+
+    @Test func cancelledEvaluationDoesNotProbeAnotherCandidate() async throws {
+        let recorder = EndpointRecorder()
+        let gate = ValidationGate()
+        let coordinator = NetworkRouteCoordinator(
+            ssidProvider: StubSSIDProvider(ssid: "Home")
+        ) { endpoint in
+            await recorder.record(endpoint)
+            return await gate.waitForAnswer()
+        }
+        let configured = try profile(preferredSSID: "Home")
+
+        let task = Task { await coordinator.evaluate(configured) }
+        await gate.waitUntilAsked()
+        task.cancel()
+        await gate.answer(false)
+        _ = await task.value
+
+        #expect(try await recorder.endpoints == [url("http://immich.local/api")])
+    }
+
+    @Test func cancelledEvaluationDoesNotAcceptALateSuccessfulValidation() async throws {
+        let recorder = EndpointRecorder()
+        let gate = ValidationGate()
+        let coordinator = NetworkRouteCoordinator(
+            ssidProvider: StubSSIDProvider(ssid: "Home")
+        ) { endpoint in
+            await recorder.record(endpoint)
+            return await gate.waitForAnswer()
+        }
+        let configured = try profile(preferredSSID: "Home")
+
+        let task = Task { await coordinator.evaluate(configured) }
+        await gate.waitUntilAsked()
+        task.cancel()
+        // The validator succeeds *after* cancellation — this must not be accepted as the
+        // active route just because nothing else has raced ahead to bump the generation yet.
+        await gate.answer(true)
+
+        let route = await task.value
+        #expect(route == nil)
+        #expect(try await recorder.endpoints == [url("http://immich.local/api")])
+    }
+
     @Test func exactSSIDModeDoesNotProbeLocalWhenSSIDIsUnavailable() async throws {
         let recorder = EndpointRecorder()
         let coordinator = NetworkRouteCoordinator(
@@ -114,26 +169,6 @@ struct RemmichTests {
 
         #expect(route?.kind == .external)
         #expect(try await recorder.endpoints == [url("https://one.example/api")])
-    }
-
-    @Test func slowLocalProbeTimesOutBeforeExternalFallback() async throws {
-        let coordinator = NetworkRouteCoordinator(
-            ssidProvider: StubSSIDProvider(ssid: nil),
-            localProbeTimeout: .milliseconds(10)
-        ) { endpoint in
-            if endpoint.host() == "immich.local" {
-                try? await Task.sleep(for: .seconds(1))
-                return true
-            }
-            return true
-        }
-
-        let route = try await coordinator.evaluate(
-            profile(preferredSSID: "Home"),
-            allowSSIDlessLocalProbe: true
-        )
-
-        #expect(route?.kind == .external)
     }
 
     @Test func unreachableLocalFallsBackInExternalOrder() async throws {
@@ -153,6 +188,26 @@ struct RemmichTests {
         ]
         #expect(route?.endpoint == URL(string: "https://two.example/api"))
         #expect(await recorder.endpoints == expected)
+    }
+
+    @Test func currentExternalEndpointIsCheckedBeforeLocalFallback() async throws {
+        let recorder = EndpointRecorder()
+        let coordinator = NetworkRouteCoordinator(
+            ssidProvider: StubSSIDProvider(ssid: nil)
+        ) { endpoint in
+            await recorder.record(endpoint)
+            return true
+        }
+        let external = try url("https://one.example/api")
+
+        let route = try await coordinator.evaluate(
+            profile(preferredSSID: "Home"),
+            preferredEndpoint: external,
+            allowSSIDlessLocalProbe: true
+        )
+
+        #expect(route == ActiveConnectionRoute(kind: .external, endpoint: external))
+        #expect(await recorder.endpoints == [external])
     }
 
     @Test func newerRouteEvaluationSupersedesSlowResult() async throws {
@@ -206,7 +261,7 @@ struct RemmichTests {
             profileStore: profileStore,
             ssidProvider: StubSSIDProvider(ssid: nil),
             networkMonitoringEnabled: false,
-            routeRetryDelays: []
+            pathChangeDebounce: .zero
         )
         await controller.start()
 
@@ -238,7 +293,7 @@ struct RemmichTests {
             profileStore: ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)"),
             ssidProvider: StubSSIDProvider(ssid: nil),
             networkMonitoringEnabled: false,
-            routeRetryDelays: []
+            pathChangeDebounce: .zero
         )
         await controller.start()
         await controller.signIn(email: "ender@example.com", password: "password", server: serverDetails)
@@ -255,6 +310,75 @@ struct RemmichTests {
         #expect(controller.routeStatus == .connected)
     }
 
+    @Test @MainActor func rapidPathChangeBurstDebouncesToOneEvaluation() async {
+        let service = SequencedRouteService(validationResults: [])
+        let controller = AppSessionController(
+            service: service,
+            sessionStore: MemorySessionStore(session: nil),
+            profileStore: ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)"),
+            ssidProvider: StubSSIDProvider(ssid: nil),
+            networkMonitoringEnabled: false,
+            pathChangeDebounce: .milliseconds(50)
+        )
+        await controller.start()
+        await controller.signIn(email: "ender@example.com", password: "password", server: serverDetails)
+        await controller.handleNetworkPathChange(usesWiFi: true)
+
+        // A real interface transition (Wi-Fi associating, a VPN/proxy tunnel re-establishing)
+        // fires a burst of raw path callbacks, not one clean event. Without debouncing,
+        // cancel-and-replace only guarantees a stale evaluation can't win — it does not
+        // guarantee any evaluation survives long enough to finish if callbacks keep arriving
+        // faster than one round trip, which can livelock the selector indefinitely. The burst
+        // below must collapse into exactly one evaluation of the settled state.
+        await withTaskGroup(of: Void.self) { group in
+            for usesWiFi in [false, true, false, true, false, true, false] {
+                group.addTask { await controller.handleNetworkPathChange(usesWiFi: usesWiFi) }
+            }
+        }
+
+        #expect(controller.routeStatus == .connected)
+        #expect(controller.activeRoute == ActiveConnectionRoute(
+            kind: .direct,
+            endpoint: AccountSession.fixture.apiURL
+        ))
+        #expect(await service.validateCallCount == 1)
+    }
+
+    @Test @MainActor func staleRouteEvaluationIsSupersededNotQueuedBehindIt() async {
+        let service = SequentiallyStuckValidationService()
+        let controller = AppSessionController(
+            service: service,
+            sessionStore: MemorySessionStore(session: nil),
+            profileStore: ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)"),
+            ssidProvider: StubSSIDProvider(ssid: nil),
+            networkMonitoringEnabled: false,
+            pathChangeDebounce: .zero
+        )
+        await controller.start()
+        await controller.signIn(email: "ender@example.com", password: "password", server: serverDetails)
+        await controller.handleNetworkPathChange(usesWiFi: true)
+
+        let stuck = Task { await controller.handleNetworkPathChange(usesWiFi: false) }
+        await service.waitUntilFirstValidationStarts()
+
+        // A later trigger must run its own evaluation to a terminal state rather than wait
+        // behind the still-suspended first one — this is the difference between cancelling
+        // a stale evaluation and merely queueing a rerun after it eventually finishes.
+        await controller.handleNetworkPathChange(usesWiFi: true)
+
+        #expect(controller.routeStatus == .connected)
+        #expect(controller.activeRoute == ActiveConnectionRoute(
+            kind: .direct,
+            endpoint: AccountSession.fixture.apiURL
+        ))
+
+        // Resuming the abandoned first validation must not clobber the settled state above,
+        // since its evaluation generation was superseded before it ever returned.
+        await service.resumeFirstValidation()
+        await stuck.value
+        #expect(controller.routeStatus == .connected)
+    }
+
     @Test @MainActor func signOutCancelsSuspendedRouteEvaluation() async {
         let service = SuspendedValidationService()
         let sessionStore = MemorySessionStore(session: nil)
@@ -264,7 +388,7 @@ struct RemmichTests {
             profileStore: ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)"),
             ssidProvider: StubSSIDProvider(ssid: nil),
             networkMonitoringEnabled: false,
-            routeRetryDelays: []
+            pathChangeDebounce: .zero
         )
         await controller.start()
         await controller.signIn(email: "ender@example.com", password: "password", server: serverDetails)
@@ -297,7 +421,7 @@ struct RemmichTests {
             profileStore: ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)"),
             ssidProvider: StubSSIDProvider(ssid: nil),
             networkMonitoringEnabled: false,
-            routeRetryDelays: []
+            pathChangeDebounce: .zero
         )
 
         await controller.start()
@@ -322,7 +446,7 @@ struct RemmichTests {
             profileStore: ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)"),
             ssidProvider: StubSSIDProvider(ssid: nil),
             networkMonitoringEnabled: false,
-            routeRetryDelays: []
+            pathChangeDebounce: .zero
         )
 
         await controller.start()
@@ -334,6 +458,40 @@ struct RemmichTests {
         #expect(controller.activeRoute == nil)
         #expect(controller.routeStatus == .waitingForNetwork)
         #expect(await sessionStore.storedSession() == AccountSession.fixture)
+    }
+
+    @Test @MainActor func firstNetworkCallbackTriggersEvaluationWhenRouteIsUnresolved() async {
+        let transient = RouteValidationResult.failed(
+            message: "The endpoint could not be reached.",
+            kind: .transient
+        )
+        let service = SequencedRouteService(validationResults: [transient])
+        let sessionStore = MemorySessionStore(session: AccountSession.fixture)
+        let controller = AppSessionController(
+            service: service,
+            sessionStore: sessionStore,
+            profileStore: ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)"),
+            ssidProvider: StubSSIDProvider(ssid: nil),
+            networkMonitoringEnabled: false,
+            pathChangeDebounce: .zero
+        )
+
+        await controller.start()
+        #expect(controller.routeStatus == .waitingForNetwork)
+        #expect(await service.validateCallCount == 1)
+
+        // The very first network-path callback must not be discarded as redundant noise while
+        // the route is still unresolved — unlike the already-connected case, there is nothing
+        // to protect here, and it may be the only signal the app gets before the next path
+        // change or foreground activation.
+        await controller.handleNetworkPathChange(usesWiFi: true)
+
+        #expect(controller.routeStatus == .connected)
+        #expect(controller.activeRoute == ActiveConnectionRoute(
+            kind: .direct,
+            endpoint: AccountSession.fixture.apiURL
+        ))
+        #expect(await service.validateCallCount == 2)
     }
 
     @Test @MainActor func allConfiguredRoutesRejectingSessionReturnsToOnboarding() async throws {
@@ -353,7 +511,7 @@ struct RemmichTests {
             profileStore: profileStore,
             ssidProvider: StubSSIDProvider(ssid: nil),
             networkMonitoringEnabled: false,
-            routeRetryDelays: []
+            pathChangeDebounce: .zero
         )
 
         await controller.start()
@@ -372,7 +530,8 @@ struct RemmichTests {
             sessionStore: sessionStore,
             profileStore: ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)"),
             ssidProvider: StubSSIDProvider(ssid: nil),
-            networkMonitoringEnabled: false
+            networkMonitoringEnabled: false,
+            pathChangeDebounce: .zero
         )
 
         await controller.start()
@@ -394,7 +553,8 @@ struct RemmichTests {
             sessionStore: sessionStore,
             profileStore: ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)"),
             ssidProvider: StubSSIDProvider(ssid: nil),
-            networkMonitoringEnabled: false
+            networkMonitoringEnabled: false,
+            pathChangeDebounce: .zero
         )
 
         await controller.start()
@@ -417,7 +577,7 @@ struct RemmichTests {
             profileStore: profileStore,
             ssidProvider: StubSSIDProvider(ssid: nil),
             networkMonitoringEnabled: false,
-            routeRetryDelays: []
+            pathChangeDebounce: .zero
         )
         await controller.start()
         await controller.signIn(email: "ender@example.com", password: "password", server: serverDetails)
@@ -447,7 +607,7 @@ struct RemmichTests {
             profileStore: profileStore,
             ssidProvider: StubSSIDProvider(ssid: nil),
             networkMonitoringEnabled: false,
-            routeRetryDelays: [.zero, .zero]
+            pathChangeDebounce: .zero
         )
         await controller.start()
         await controller.signIn(email: "ender@example.com", password: "password", server: serverDetails)
@@ -478,7 +638,7 @@ struct RemmichTests {
             profileStore: profileStore,
             ssidProvider: StubSSIDProvider(ssid: nil),
             networkMonitoringEnabled: false,
-            routeRetryDelays: [.zero, .zero]
+            pathChangeDebounce: .zero
         )
         await controller.start()
         await controller.signIn(email: "ender@example.com", password: "password", server: serverDetails)
@@ -501,7 +661,10 @@ struct RemmichTests {
         await controller.handleNetworkPathChange(usesWiFi: false)
 
         #expect(await service.validateCallCount == 1)
-        #expect(controller.activeRoute == nil)
+        #expect(controller.activeRoute == ActiveConnectionRoute(
+            kind: .direct,
+            endpoint: AccountSession.fixture.apiURL
+        ))
         #expect(controller.routeStatus == .unavailable)
     }
 
@@ -512,7 +675,8 @@ struct RemmichTests {
             sessionStore: MemorySessionStore(session: session),
             profileStore: ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)"),
             ssidProvider: StubSSIDProvider(ssid: nil),
-            networkMonitoringEnabled: false
+            networkMonitoringEnabled: false,
+            pathChangeDebounce: .zero
         )
 
         await controller.start()
@@ -542,7 +706,8 @@ struct RemmichTests {
             sessionStore: sessionStore,
             profileStore: profileStore,
             ssidProvider: StubSSIDProvider(ssid: "Home"),
-            networkMonitoringEnabled: false
+            networkMonitoringEnabled: false,
+            pathChangeDebounce: .zero
         )
 
         await controller.start()
@@ -574,7 +739,8 @@ struct RemmichTests {
             sessionStore: sessionStore,
             profileStore: profileStore,
             ssidProvider: StubSSIDProvider(ssid: nil),
-            networkMonitoringEnabled: false
+            networkMonitoringEnabled: false,
+            pathChangeDebounce: .zero
         )
 
         await controller.start()
@@ -600,19 +766,22 @@ struct RemmichTests {
             sessionStore: MemorySessionStore(session: session),
             profileStore: profileStore,
             ssidProvider: ssid,
-            networkMonitoringEnabled: false
+            networkMonitoringEnabled: false,
+            pathChangeDebounce: .zero
         )
 
         await controller.start()
         #expect(controller.activeRoute == ActiveConnectionRoute(kind: .local, endpoint: local))
 
         await controller.handleNetworkPathChange(usesWiFi: true)
+        await service.resetValidatedEndpoints()
         await service.setReachableEndpoints([external])
         await ssid.setSSID(nil)
         await controller.handleNetworkPathChange(usesWiFi: false)
 
         #expect(controller.activeRoute == ActiveConnectionRoute(kind: .external, endpoint: external))
         #expect(controller.routeStatus == .connected)
+        #expect(await service.validatedEndpoints == [local, external])
     }
 
     @Test @MainActor func connectionProfileStoresUnreachableCandidateWithoutDroppingActiveRoute() async throws {
@@ -624,7 +793,8 @@ struct RemmichTests {
             sessionStore: MemorySessionStore(session: session),
             profileStore: profileStore,
             ssidProvider: StubSSIDProvider(ssid: nil),
-            networkMonitoringEnabled: false
+            networkMonitoringEnabled: false,
+            pathChangeDebounce: .zero
         )
         await controller.start()
 
@@ -685,6 +855,34 @@ private struct StubSSIDProvider: SSIDProviding {
 
     func currentSSID() async -> String? {
         ssid
+    }
+}
+
+private struct TrappingSSIDProvider: SSIDProviding {
+    func currentSSID() async -> String? {
+        Issue.record("SSID provider must not be consulted when allowSSIDlessLocalProbe is true")
+        return nil
+    }
+}
+
+private actor ValidationGate {
+    private var continuation: CheckedContinuation<Bool, Never>?
+    private var wasAsked = false
+
+    func waitForAnswer() async -> Bool {
+        wasAsked = true
+        return await withCheckedContinuation { continuation = $0 }
+    }
+
+    func waitUntilAsked() async {
+        while !wasAsked {
+            await Task.yield()
+        }
+    }
+
+    func answer(_ value: Bool) {
+        continuation?.resume(returning: value)
+        continuation = nil
     }
 }
 
@@ -780,6 +978,44 @@ private actor SuspendedValidationService: ServerReading, SessionManaging, RouteV
     }
 }
 
+private actor SequentiallyStuckValidationService: ServerReading, SessionManaging, RouteValidating {
+    private var callCount = 0
+    private var continuation: CheckedContinuation<RouteValidationResult, Never>?
+
+    func connect(to _: String) async throws -> ServerDetails {
+        fatalError("Not used by this test")
+    }
+
+    func signIn(email _: String, password _: String, server _: ServerDetails) async throws -> AccountSession {
+        .fixture
+    }
+
+    func restore(_: AccountSession) async throws -> ServerDetails {
+        fatalError("Not used by this test")
+    }
+
+    func signOut(_: AccountSession) async {}
+
+    func validateRoute(endpoint _: URL, session _: AccountSession) async -> RouteValidationResult {
+        callCount += 1
+        guard callCount == 1 else { return .reachable }
+        return await withCheckedContinuation { continuation = $0 }
+    }
+
+    func activateRoute(endpoint _: URL, session _: AccountSession) async throws {}
+
+    func waitUntilFirstValidationStarts() async {
+        while continuation == nil {
+            await Task.yield()
+        }
+    }
+
+    func resumeFirstValidation() {
+        continuation?.resume(returning: .reachable)
+        continuation = nil
+    }
+}
+
 private actor RestoreService: ServerReading, SessionManaging, RouteValidating {
     func connect(to _: String) async throws -> ServerDetails {
         details
@@ -824,6 +1060,7 @@ private actor RestoreService: ServerReading, SessionManaging, RouteValidating {
 private actor RouteRestoreService: ServerReading, SessionManaging, RouteValidating {
     private var reachableEndpoints: Set<URL>
     private(set) var restoreCallCount = 0
+    private(set) var validatedEndpoints: [URL] = []
 
     init(reachableEndpoints: Set<URL>) {
         self.reachableEndpoints = reachableEndpoints
@@ -831,6 +1068,10 @@ private actor RouteRestoreService: ServerReading, SessionManaging, RouteValidati
 
     func setReachableEndpoints(_ endpoints: Set<URL>) {
         reachableEndpoints = endpoints
+    }
+
+    func resetValidatedEndpoints() {
+        validatedEndpoints = []
     }
 
     func connect(to _: String) async throws -> ServerDetails {
@@ -849,7 +1090,8 @@ private actor RouteRestoreService: ServerReading, SessionManaging, RouteValidati
     func signOut(_: AccountSession) async {}
 
     func validateRoute(endpoint: URL, session _: AccountSession) async -> RouteValidationResult {
-        reachableEndpoints.contains(endpoint)
+        validatedEndpoints.append(endpoint)
+        return reachableEndpoints.contains(endpoint)
             ? .reachable
             : .failed(message: "The endpoint could not be reached.", kind: .endpointRejected)
     }

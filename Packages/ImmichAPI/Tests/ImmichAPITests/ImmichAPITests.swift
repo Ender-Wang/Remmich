@@ -119,12 +119,53 @@ struct DiscoveryTests {
         #expect(ImmichClient.map(URLError(code)) == expected)
     }
 
+    @Test(arguments: [
+        (URLError.Code.timedOut, ImmichAPIError.timedOut),
+        (.notConnectedToInternet, .offline),
+        (.serverCertificateUntrusted, .certificateUntrusted),
+        (.secureConnectionFailed, .secureConnectionFailed),
+        (.cancelled, .cancelled),
+    ])
+    func mapsClientErrorWrappedNetworkErrors(code: URLError.Code, expected: ImmichAPIError) {
+        // OpenAPI-generated operations (getMyUser, pingServer, ...) throw OpenAPIRuntime.ClientError,
+        // wrapping the real transport failure in `underlyingError` rather than throwing a bare
+        // URLError directly. If this isn't unwrapped, every one of these collapses to the generic
+        // `.invalidResponse` ("could not understand the response") regardless of the real cause.
+        let clientError = ClientError(
+            operationID: "getMyUser",
+            operationInput: "unused",
+            causeDescription: "transport failure",
+            underlyingError: URLError(code)
+        )
+        #expect(ImmichClient.map(clientError) == expected)
+    }
+
     @Test func malformedDiscoveryDocumentFallsBackToEnteredAddress() async throws {
         let discovery = ImmichServerDiscovery { request in
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
             return (Data("not-json".utf8), response)
         }
         #expect(try await discovery.discover("photos.example.com") == URL(string: "https://photos.example.com/api")!)
+    }
+}
+
+@Suite("Route identity validation")
+struct RouteIdentityValidationTests {
+    @Test func acceptsMinimalIdentityFromVersionVariantUserResponse() throws {
+        let response = Data(
+            #"{"id":"123e4567-e89b-42d3-a456-426614174000","futureServerField":true}"#.utf8
+        )
+
+        #expect(
+            try ImmichClient.routeUserID(from: response) ==
+                "123e4567-e89b-42d3-a456-426614174000"
+        )
+    }
+
+    @Test func rejectsResponseWithoutIdentity() {
+        #expect(throws: ImmichAPIError.invalidResponse) {
+            try ImmichClient.routeUserID(from: Data(#"{"email":"reader@example.com"}"#.utf8))
+        }
     }
 }
 

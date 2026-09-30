@@ -44,10 +44,12 @@ struct AccountSettingsView: View {
                 }
 
                 Section("Active connection") {
-                    if let activeRoute {
-                        LabeledContent("Route", value: activeRoute.kind.rawValue.capitalized)
-                    } else {
-                        LabeledContent("Route", value: routeStatusLabel)
+                    LabeledContent(
+                        "Route",
+                        value: activeRoute?.kind.rawValue.capitalized ?? "None"
+                    )
+                    LabeledContent("Status", value: routeStatusLabel)
+                    if routeStatus != .connected {
                         Text(routeStatusDetail)
                             .font(.footnote)
                             .foregroundStyle(.secondary)
