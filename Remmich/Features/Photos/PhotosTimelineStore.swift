@@ -40,7 +40,7 @@ final class PhotosTimelineStore {
             await initialTask.value
             return
         }
-        guard loadState == .idle || isTerminalInitialFailure else { return }
+        guard loadState == .idle else { return }
 
         generation &+= 1
         let requestGeneration = generation
@@ -59,6 +59,7 @@ final class PhotosTimelineStore {
 
     func retryInitialLoad() async {
         guard isTerminalInitialFailure else { return }
+        loadState = .idle
         await load()
     }
 
@@ -215,6 +216,8 @@ final class PhotosTimelineStore {
 
     func foregrounded() {
         guard !bucketSummaries.isEmpty else {
+            guard isTerminalInitialFailure else { return }
+            loadState = .idle
             Task { [weak self] in await self?.load() }
             return
         }

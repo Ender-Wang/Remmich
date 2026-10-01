@@ -1,10 +1,19 @@
 import Foundation
 
 actor PreviewTimelineReader: TimelineReading {
+    enum Mode: Sendable {
+        case loaded
+        case empty
+        case retryableInitialFailure
+    }
+
+    private let mode: Mode
     private let buckets: [(TimelineBucketSummary, [TimelineAssetSummary])]
     private let memoryValues: [TimelineMemorySummary]
+    private var hasFailedInitialLoad = false
 
-    @MainActor init() {
+    @MainActor init(mode: Mode = .loaded) {
+        self.mode = mode
         let calendar = Calendar(identifier: .gregorian)
         let referenceDate = PreviewFixtures.assets.map(\.capturedAt).max() ?? .now
         buckets = PreviewFixtures.photoSections.enumerated().map { index, section in
@@ -32,7 +41,14 @@ actor PreviewTimelineReader: TimelineReading {
     }
 
     func bucketSummaries(query _: TimelineQuery) async throws -> [TimelineBucketSummary] {
-        buckets.map(\.0)
+        if mode == .empty {
+            return []
+        }
+        if mode == .retryableInitialFailure, !hasFailedInitialLoad {
+            hasFailedInitialLoad = true
+            throw TimelineReadError.invalidResponse
+        }
+        return buckets.map(\.0)
     }
 
     func assets(

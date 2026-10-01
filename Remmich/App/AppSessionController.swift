@@ -38,6 +38,7 @@ final class AppSessionController {
     private let ssidProvider: any SSIDProviding
     private let networkMonitoringEnabled: Bool
     private let pathChangeDebounce: Duration
+    private let photosForegroundRetryEnabled: Bool
     private let locationManager = CLLocationManager()
     private let pathMonitor = NWPathMonitor()
     private let routeEvaluationGate = RouteEvaluationGate()
@@ -57,8 +58,17 @@ final class AppSessionController {
         timeline: ImmichTimelineRepository = .init()
     ) {
         self.timeline = timeline
-        let photosReader: any TimelineReading = if ProcessInfo.processInfo.arguments.contains("-ui-testing-signed-in") {
-            PreviewTimelineReader()
+        let arguments = ProcessInfo.processInfo.arguments
+        photosForegroundRetryEnabled = !arguments.contains("-ui-testing-photos-retry")
+        let previewMode: PreviewTimelineReader.Mode = if arguments.contains("-ui-testing-photos-empty") {
+            .empty
+        } else if arguments.contains("-ui-testing-photos-retry") {
+            .retryableInitialFailure
+        } else {
+            .loaded
+        }
+        let photosReader: any TimelineReading = if arguments.contains("-ui-testing-signed-in") {
+            PreviewTimelineReader(mode: previewMode)
         } else {
             timeline
         }
@@ -452,7 +462,9 @@ final class AppSessionController {
 
     func handleForegroundTransition() async {
         await reevaluateRoute()
-        photos.foregrounded()
+        if photosForegroundRetryEnabled {
+            photos.foregrounded()
+        }
         media.handleForegroundTransition()
     }
 

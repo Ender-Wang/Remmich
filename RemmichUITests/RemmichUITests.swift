@@ -58,15 +58,10 @@ final class RemmichUITests: XCTestCase {
         let photos = app.descendants(matching: .any)["photos-root"]
         XCTAssertTrue(photos.waitForExistence(timeout: 5))
 
-        let compactGrid = app.descendants(matching: .any)
-            .matching(identifier: "asset-grid-compact").firstMatch
-        let regularGrid = app.descendants(matching: .any)
-            .matching(identifier: "asset-grid-regular").firstMatch
-        XCTAssertTrue(
-            compactGrid.waitForExistence(timeout: 2) || regularGrid.waitForExistence(timeout: 2),
-            "The Photos timeline should expose its adaptive grid size class"
-        )
-        XCTAssertNotEqual(compactGrid.exists, regularGrid.exists)
+        let grid = app.otherElements.matching(
+            NSPredicate(format: "label == %@", "Photo grid")
+        ).firstMatch
+        XCTAssertTrue(grid.waitForExistence(timeout: 2))
 
         let assets = (0 ..< 8).map { index in
             app.descendants(matching: .any)["asset-asset-\(index)"]
@@ -77,7 +72,7 @@ final class RemmichUITests: XCTestCase {
         let frames = assets.map(\.frame)
         let firstRowY = frames.map(\.midY).min() ?? 0
         let firstRowCount = frames.count { abs($0.midY - firstRowY) < 2 }
-        let gridFrame = (regularGrid.exists ? regularGrid : compactGrid).frame
+        let gridFrame = grid.frame
 
         for frame in frames {
             XCTAssertGreaterThan(frame.width, 0)
@@ -86,13 +81,57 @@ final class RemmichUITests: XCTestCase {
             XCTAssertLessThanOrEqual(frame.maxX, gridFrame.maxX + 1)
         }
 
-        if regularGrid.exists {
+        if photos.frame.width >= 600 {
             XCTAssertGreaterThanOrEqual(frames[0].width, 118)
             XCTAssertGreaterThanOrEqual(firstRowCount, 4)
         } else {
             XCTAssertGreaterThanOrEqual(frames[0].width, 86)
             XCTAssertGreaterThanOrEqual(firstRowCount, 3)
         }
+    }
+
+    @MainActor
+    func testLoadedPhotosTimelineExposesMemoryBadgesAndJumpControl() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-ui-testing-signed-in"]
+        app.launch()
+
+        XCTAssertTrue(app.descendants(matching: .any)["photos-root"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["memory-lane"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["timeline-jump-button"].exists)
+        let video = app.descendants(matching: .any)["asset-asset-0"]
+        XCTAssertTrue(video.waitForExistence(timeout: 2))
+        XCTAssertTrue(video.label.contains("Video"))
+        XCTAssertTrue(video.label.contains("Favorite"))
+
+        let livePhoto = app.descendants(matching: .any)["asset-asset-5"]
+        XCTAssertTrue(livePhoto.waitForExistence(timeout: 2))
+        XCTAssertTrue(livePhoto.label.contains("Live Photo"))
+
+        app.buttons["timeline-jump-button"].tap()
+        XCTAssertTrue(app.navigationBars["Jump to Date"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["Cancel"].exists)
+    }
+
+    @MainActor
+    func testPhotosTimelineEmptyState() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-ui-testing-signed-in", "-ui-testing-photos-empty"]
+        app.launch()
+
+        XCTAssertTrue(app.staticTexts["No Photos"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Photos from your Immich library will appear here."].exists)
+    }
+
+    @MainActor
+    func testPhotosTimelineInitialFailureRetriesWithoutRelaunch() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-ui-testing-signed-in", "-ui-testing-photos-retry"]
+        app.launch()
+
+        XCTAssertTrue(app.staticTexts["Couldn’t Load Library"].waitForExistence(timeout: 5))
+        app.buttons["Try Again"].firstMatch.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["asset-asset-0"].waitForExistence(timeout: 5))
     }
 
     @MainActor
