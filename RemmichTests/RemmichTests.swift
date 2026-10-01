@@ -713,6 +713,9 @@ struct RemmichTests {
 
         #expect(controller.media.activeAPIURL == nil)
         #expect(controller.media.imageRequest(for: descriptor) == nil)
+        await #expect(throws: TimelineReadError.routeUnavailable) {
+            try await controller.timeline.bucketSummaries(query: .init())
+        }
 
         await service.resumeValidation(with: .reachable)
         await restoration.value
@@ -847,6 +850,31 @@ struct RemmichTests {
         #expect(controller.connectionProfile == expected)
         #expect(await profileStore.load() == expected)
         #expect(controller.activeRoute == ActiveConnectionRoute(kind: .external, endpoint: session.apiURL))
+    }
+
+    @Test @MainActor func newerVisibleBucketRefreshSupersedesDelayedMembershipChange() async {
+        let reader = RefreshSupersessionTimelineReader()
+        let store = PhotosTimelineStore(reader: reader)
+        let bucketID = TimelineBucketID(rawValue: "2026-09-01T00:00:00.000Z")
+
+        await store.load()
+        let initialRevision = store.sectionsByID[bucketID]?.contentRevision
+        #expect(store.sectionsByID[bucketID]?.assets.map(\.id) == ["original"])
+
+        let delayed = Task { await store.loadBucket(bucketID, force: true) }
+        await reader.waitUntilDelayedRefreshStarts()
+        let replacement = Task { await store.loadBucket(bucketID, force: true) }
+        await replacement.value
+
+        #expect(store.sectionsByID[bucketID]?.assets.map(\.id) == ["replacement", "inserted"])
+        let winningRevision = store.sectionsByID[bucketID]?.contentRevision
+        #expect(winningRevision != initialRevision)
+
+        await reader.resumeDelayedRefresh()
+        await delayed.value
+
+        #expect(store.sectionsByID[bucketID]?.assets.map(\.id) == ["replacement", "inserted"])
+        #expect(store.sectionsByID[bucketID]?.contentRevision == winningRevision)
     }
 
     @Test @MainActor func mediaIdentitySurvivesRouteSwitchAndExcludesCredential() throws {
@@ -1220,6 +1248,70 @@ private final class TaskCancellable: Cancellable, @unchecked Sendable {
 
     func cancel() {
         task.cancel()
+    }
+}
+
+private actor RefreshSupersessionTimelineReader: TimelineReading {
+    private let bucketID = TimelineBucketID(rawValue: "2026-09-01T00:00:00.000Z")
+    private var assetCallCount = 0
+    private var delayedRefreshStarted = false
+    private var delayedContinuation: CheckedContinuation<[TimelineAssetSummary], Never>?
+
+    func bucketSummaries(query _: TimelineQuery) async throws -> [TimelineBucketSummary] {
+        [.init(id: bucketID, assetCount: 2)]
+    }
+
+    func assets(
+        in _: TimelineBucketID,
+        query _: TimelineQuery
+    ) async throws -> [TimelineAssetSummary] {
+        assetCallCount += 1
+        switch assetCallCount {
+        case 1:
+            return [Self.asset(id: "original")]
+        case 2:
+            return await withCheckedContinuation { continuation in
+                delayedRefreshStarted = true
+                delayedContinuation = continuation
+            }
+        default:
+            return [Self.asset(id: "replacement"), Self.asset(id: "inserted")]
+        }
+    }
+
+    func memories() async throws -> [TimelineMemorySummary] {
+        []
+    }
+
+    func waitUntilDelayedRefreshStarts() async {
+        while !delayedRefreshStarted {
+            await Task.yield()
+        }
+    }
+
+    func resumeDelayedRefresh() {
+        delayedContinuation?.resume(returning: [Self.asset(id: "obsolete")])
+        delayedContinuation = nil
+    }
+
+    private nonisolated static func asset(id: String) -> TimelineAssetSummary {
+        TimelineAssetSummary(
+            id: id,
+            ownerID: "owner",
+            capturedAt: .distantPast,
+            uploadedAt: .distantPast,
+            localOffsetHours: 0,
+            mediaKind: .image,
+            durationMilliseconds: nil,
+            aspectRatio: 1,
+            isFavorite: false,
+            visibility: .timeline,
+            livePhotoVideoID: nil,
+            stack: nil,
+            projectionType: nil,
+            thumbhash: nil,
+            thumbnailRevision: .distantPast
+        )
     }
 }
 

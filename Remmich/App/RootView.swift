@@ -36,7 +36,7 @@ struct RootView: View {
         .task { await controller.start() }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
-                Task { await controller.reevaluateRoute() }
+                Task { await controller.handleForegroundTransition() }
             } else if phase == .background {
                 controller.handleBackgroundTransition()
             }

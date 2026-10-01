@@ -39,18 +39,15 @@ nonisolated protocol SessionStoring: Sendable {
     func delete() async throws
 }
 
-struct AssetQuery: Hashable, Sendable {
-    var page = 1
-    var limit = 100
-}
-
 struct ReadAsset: Identifiable, Hashable, Sendable {
     let id: String
     let createdAt: Date
 }
 
 nonisolated protocol TimelineReading: Sendable {
-    func timeline(query: AssetQuery) async throws -> [ReadAsset]
+    func bucketSummaries(query: TimelineQuery) async throws -> [TimelineBucketSummary]
+    func assets(in bucketID: TimelineBucketID, query: TimelineQuery) async throws -> [TimelineAssetSummary]
+    func memories() async throws -> [TimelineMemorySummary]
 }
 
 nonisolated protocol AssetReading: Sendable {

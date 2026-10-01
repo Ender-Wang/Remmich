@@ -28,6 +28,8 @@ final class AppSessionController {
     private(set) var routeStatus: ConnectionRouteStatus = .waitingForNetwork
     private(set) var connectionProfile = ConnectionProfile()
     let media = MediaLibraryController()
+    let timeline: ImmichTimelineRepository
+    let photos: PhotosTimelineStore
 
     private let service: any ServerReading & SessionManaging & RouteValidating
     private let sessionStore: any SessionStoring
@@ -51,8 +53,11 @@ final class AppSessionController {
         endpointNormalizer: any EndpointNormalizing = ImmichEndpointNormalizer(),
         ssidProvider: any SSIDProviding = CurrentSSIDProvider(),
         networkMonitoringEnabled: Bool = true,
-        pathChangeDebounce: Duration = .milliseconds(400)
+        pathChangeDebounce: Duration = .milliseconds(400),
+        timeline: ImmichTimelineRepository = .init()
     ) {
+        self.timeline = timeline
+        photos = PhotosTimelineStore(reader: timeline)
         self.service = service
         self.sessionStore = sessionStore
         self.profileStore = profileStore
@@ -67,6 +72,9 @@ final class AppSessionController {
         if ProcessInfo.processInfo.arguments.contains("-ui-testing-signed-in") {
             let session = AccountSession.fixture
             media.configure(session: session, activeEndpoint: session.apiURL)
+            if await timeline.configure(session: session, activeEndpoint: session.apiURL) {
+                photos.routeDidChange(isReachable: true)
+            }
             state = .signedIn(session)
             return
         }
@@ -82,6 +90,7 @@ final class AppSessionController {
                 return
             }
             media.configure(session: session, activeEndpoint: nil)
+            await timeline.configure(session: session, activeEndpoint: nil)
             state = .signedIn(session)
             await reevaluateRoute()
         } catch SessionStoreError.corruptPayload {
@@ -125,6 +134,9 @@ final class AppSessionController {
             activeRoute = .init(kind: .direct, endpoint: session.apiURL)
             routeStatus = .connected
             media.configure(session: session, activeEndpoint: session.apiURL)
+            if await timeline.configure(session: session, activeEndpoint: session.apiURL) {
+                photos.routeDidChange(isReachable: true)
+            }
             Self.routeLogger.info("Connected directly to \(session.apiURL.absoluteString, privacy: .public)")
             state = .signedIn(session)
         } catch {
@@ -137,6 +149,8 @@ final class AppSessionController {
         activeRoute = nil
         routeStatus = .waitingForNetwork
         media.clearAll()
+        await timeline.clear()
+        photos.reset()
         guard case let .signedIn(session) = state else {
             try? await sessionStore.delete()
             state = .signedOut
@@ -262,6 +276,9 @@ final class AppSessionController {
             activeRoute = route
             routeStatus = .connected
             media.updateRoute(route.endpoint)
+            if await timeline.updateRoute(route.endpoint) {
+                photos.routeDidChange(isReachable: true)
+            }
             Self.routeLogger.info(
                 "Activated \(route.kind.rawValue, privacy: .public) endpoint \(route.endpoint.absoluteString, privacy: .public)"
             )
@@ -339,6 +356,9 @@ final class AppSessionController {
             activeRoute = .init(kind: .direct, endpoint: session.apiURL)
             routeStatus = .connected
             media.updateRoute(session.apiURL)
+            if await timeline.updateRoute(session.apiURL) {
+                photos.routeDidChange(isReachable: true)
+            }
             Self.routeLogger.info(
                 "Restored direct endpoint \(session.apiURL.absoluteString, privacy: .public)"
             )
@@ -408,6 +428,8 @@ final class AppSessionController {
         activeRoute = nil
         routeStatus = .waitingForNetwork
         media.clearAll()
+        await timeline.clear()
+        photos.reset()
         state = .signingOut
         try? await sessionStore.delete()
         await service.signOut(session)
@@ -420,6 +442,11 @@ final class AppSessionController {
 
     func handleBackgroundTransition() {
         media.handleBackgroundTransition()
+    }
+
+    func handleForegroundTransition() async {
+        await reevaluateRoute()
+        photos.foregrounded()
     }
 
     private static func message(for error: Error) -> String {
