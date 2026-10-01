@@ -155,6 +155,75 @@ public actor ImmichClient {
         }
     }
 
+    public func timelineBuckets(
+        query: ImmichTimelineQuery = .init()
+    ) async throws -> [ImmichTimelineBucket] {
+        guard credential != nil else { throw ImmichAPIError.unauthorized }
+        do {
+            let output = try await makeClient().getTimeBuckets(
+                .init(query: Self.timelineBucketsQuery(from: query))
+            )
+            switch output {
+            case let .ok(response):
+                return try response.body.json.map {
+                    guard $0.count >= 0, !$0.timeBucket.isEmpty else {
+                        throw ImmichAPIError.invalidResponse
+                    }
+                    return ImmichTimelineBucket(id: $0.timeBucket, assetCount: $0.count)
+                }
+            case let .undocumented(statusCode, _):
+                throw Self.map(status: statusCode)
+            }
+        } catch {
+            throw Self.map(error)
+        }
+    }
+
+    public func timelineAssets(
+        in bucketID: String,
+        query: ImmichTimelineQuery = .init()
+    ) async throws -> [ImmichTimelineAsset] {
+        guard credential != nil else { throw ImmichAPIError.unauthorized }
+        guard !bucketID.isEmpty else { throw ImmichAPIError.invalidResponse }
+        do {
+            let output = try await makeClient().getTimeBucket(
+                .init(query: Self.timelineBucketQuery(bucketID: bucketID, from: query))
+            )
+            switch output {
+            case let .ok(response):
+                return try Self.timelineAssets(from: response.body.json)
+            case let .undocumented(statusCode, _):
+                throw Self.map(status: statusCode)
+            }
+        } catch {
+            throw Self.map(error)
+        }
+    }
+
+    public func memories(query: ImmichMemoryQuery = .init()) async throws -> [ImmichMemory] {
+        guard credential != nil else { throw ImmichAPIError.unauthorized }
+        guard query.page > 0, query.size > 0 else { throw ImmichAPIError.invalidResponse }
+        do {
+            let output = try await makeClient().searchMemories(
+                .init(query: .init(
+                    _for: query.date,
+                    isTrashed: false,
+                    order: .desc,
+                    page: query.page,
+                    size: query.size
+                ))
+            )
+            switch output {
+            case let .ok(response):
+                return try response.body.json.map(Self.memory(from:))
+            case let .undocumented(statusCode, _):
+                throw Self.map(status: statusCode)
+            }
+        } catch {
+            throw Self.map(error)
+        }
+    }
+
     /// Route validation intentionally decodes only the stable identity field it needs. Decoding
     /// the complete generated `UserAdminResponseDto` makes a healthy endpoint look unreachable
     /// whenever an Immich server version adds, removes, or omits an unrelated user property.
@@ -197,6 +266,174 @@ public actor ImmichClient {
         } catch {
             throw ImmichAPIError.invalidResponse
         }
+    }
+
+    static func timelineAssets(
+        from response: Components.Schemas.TimeBucketAssetResponseDto
+    ) throws -> [ImmichTimelineAsset] {
+        let count = response.id.count
+        let requiredCounts = [
+            response.createdAt.count,
+            response.duration.count,
+            response.fileCreatedAt.count,
+            response.isFavorite.count,
+            response.isImage.count,
+            response.isTrashed.count,
+            response.livePhotoVideoId.count,
+            response.localOffsetHours.count,
+            response.ownerId.count,
+            response.projectionType.count,
+            response.ratio.count,
+            response.thumbhash.count,
+            response.visibility.count,
+        ]
+        guard requiredCounts.allSatisfy({ $0 == count }) else {
+            throw ImmichAPIError.invalidResponse
+        }
+
+        return try response.id.indices.map { index in
+            guard let createdAt = parseTimelineDate(response.createdAt[index]),
+                  let fileCreatedAt = parseTimelineDate(response.fileCreatedAt[index]),
+                  response.ratio[index].isFinite,
+                  response.ratio[index] > 0,
+                  response.localOffsetHours[index].isFinite
+            else {
+                throw ImmichAPIError.invalidResponse
+            }
+
+            return ImmichTimelineAsset(
+                id: response.id[index],
+                ownerID: response.ownerId[index],
+                createdAt: createdAt,
+                fileCreatedAt: fileCreatedAt,
+                localOffsetHours: response.localOffsetHours[index],
+                mediaKind: response.isImage[index] ? .image : .video,
+                durationMilliseconds: response.duration[index],
+                aspectRatio: response.ratio[index],
+                isFavorite: response.isFavorite[index],
+                isTrashed: response.isTrashed[index],
+                visibility: .init(serverValue: response.visibility[index].rawValue),
+                livePhotoVideoID: response.livePhotoVideoId[index],
+                stack: stack(at: index, in: response.stack),
+                projectionType: response.projectionType[index],
+                thumbhash: response.thumbhash[index],
+                city: optionalValue(at: index, in: response.city),
+                country: optionalValue(at: index, in: response.country),
+                latitude: optionalValue(at: index, in: response.latitude),
+                longitude: optionalValue(at: index, in: response.longitude),
+                thumbnailRevision: max(createdAt, fileCreatedAt)
+            )
+        }
+    }
+
+    private static func timelineBucketsQuery(
+        from query: ImmichTimelineQuery
+    ) throws -> Operations.getTimeBuckets.Input.Query {
+        try .init(
+            isTrashed: query.includesTrashed,
+            order: timelineOrder(from: query.order),
+            orderBy: timelineOrderBy(from: query.orderBy),
+            visibility: timelineVisibility(from: query.visibility),
+            withCoordinates: true,
+            withPartners: query.includesPartners,
+            withStacked: query.includesStacks
+        )
+    }
+
+    private static func timelineBucketQuery(
+        bucketID: String,
+        from query: ImmichTimelineQuery
+    ) throws -> Operations.getTimeBucket.Input.Query {
+        try .init(
+            isTrashed: query.includesTrashed,
+            order: timelineOrder(from: query.order),
+            orderBy: timelineOrderBy(from: query.orderBy),
+            timeBucket: bucketID,
+            visibility: timelineVisibility(from: query.visibility),
+            withCoordinates: true,
+            withPartners: query.includesPartners,
+            withStacked: query.includesStacks
+        )
+    }
+
+    private static func timelineOrder(
+        from order: ImmichTimelineOrder
+    ) -> Components.Schemas.AssetOrder {
+        switch order {
+        case .ascending: .asc
+        case .descending: .desc
+        }
+    }
+
+    private static func timelineOrderBy(
+        from orderBy: ImmichTimelineOrderBy
+    ) -> Components.Schemas.AssetOrderBy {
+        switch orderBy {
+        case .takenAt: .takenAt
+        case .createdAt: .createdAt
+        }
+    }
+
+    private static func timelineVisibility(
+        from visibility: ImmichAssetVisibility
+    ) throws -> Components.Schemas.AssetVisibility {
+        switch visibility {
+        case .archive: .archive
+        case .timeline: .timeline
+        case .hidden: .hidden
+        case .locked: .locked
+        case .unknown: throw ImmichAPIError.invalidResponse
+        }
+    }
+
+    private static func memory(from response: Components.Schemas.MemoryResponseDto) throws -> ImmichMemory {
+        guard !response.id.isEmpty, !response.ownerId.isEmpty else {
+            throw ImmichAPIError.invalidResponse
+        }
+        let kind: ImmichMemoryKind = switch response._type {
+        case .on_this_day: .onThisDay
+        case .birthday: .birthday
+        }
+        return ImmichMemory(
+            id: response.id,
+            ownerID: response.ownerId,
+            memoryAt: response.memoryAt,
+            kind: kind,
+            assets: response.assets.map { asset in
+                let mediaKind: ImmichTimelineMediaKind = switch asset._type {
+                case .IMAGE: .image
+                case .VIDEO: .video
+                case .AUDIO: .audio
+                case .OTHER: .other
+                }
+                return ImmichMemoryAsset(
+                    id: asset.id,
+                    updatedAt: asset.updatedAt,
+                    mediaKind: mediaKind
+                )
+            }
+        )
+    }
+
+    private static func parseTimelineDate(_ value: String) -> Date? {
+        try? Date(value, strategy: .iso8601)
+    }
+
+    private static func optionalValue<Value>(at index: Int, in values: [Value?]?) -> Value? {
+        guard let values, values.indices.contains(index) else { return nil }
+        return values[index]
+    }
+
+    private static func stack(at index: Int, in stacks: [[String]?]?) -> ImmichTimelineStack? {
+        guard let values = optionalValue(at: index, in: stacks),
+              values.count == 2,
+              !values[0].isEmpty,
+              let count = Int(values[1]),
+              count > 0
+        else {
+            return nil
+        }
+        return ImmichTimelineStack(id: values[0], assetCount: count)
     }
 
     private func makeClient() -> Client {

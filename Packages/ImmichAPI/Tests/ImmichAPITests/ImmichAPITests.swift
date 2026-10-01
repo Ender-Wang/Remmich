@@ -169,6 +169,132 @@ struct RouteIdentityValidationTests {
     }
 }
 
+@Suite("Timeline read contract")
+struct TimelineReadContractTests {
+    @Test func readsBucketsAndAssetsThroughApprovedGetOperations() async throws {
+        let recorder = TimelineOperationRecorder()
+        let client = try ImmichClient(
+            apiURL: #require(URL(string: "https://photos.example.com/api")),
+            credential: .bearer("reader-token"),
+            transport: TimelineTransport(recorder: recorder)
+        )
+
+        let buckets = try await client.timelineBuckets()
+        let assets = try await client.timelineAssets(in: buckets[0].id)
+        let memories = try await client.memories()
+
+        #expect(buckets == [.init(id: "2026-09-01T00:00:00.000Z", assetCount: 1)])
+        #expect(assets.count == 1)
+        #expect(assets[0].id == "asset-1")
+        #expect(assets[0].mediaKind == .image)
+        #expect(try memories == [
+            .init(
+                id: "memory-1",
+                ownerID: "owner-1",
+                memoryAt: #require(ISO8601DateFormatter().date(from: "2026-09-01T00:00:00Z")),
+                kind: .onThisDay,
+                assets: []
+            ),
+        ])
+        let operations = await recorder.operations
+        #expect(operations.map(\.id) == ["getTimeBuckets", "getTimeBucket", "searchMemories"])
+        #expect(operations.allSatisfy { $0.method == .get })
+        #expect(operations.allSatisfy { $0.authorization == "Bearer reader-token" })
+        #expect(operations[0].path.contains("order=desc"))
+        #expect(operations[0].path.contains("orderBy=takenAt"))
+        #expect(operations[0].path.contains("visibility=timeline"))
+        #expect(operations[0].path.contains("isTrashed=false"))
+        #expect(operations[0].path.contains("withPartners=true"))
+        #expect(operations[0].path.contains("withStacked=true"))
+        #expect(operations[1].path.contains("timeBucket=2026-09-01T00%3A00%3A00.000Z"))
+        #expect(operations[2].path.contains("isTrashed=false"))
+        #expect(operations[2].path.contains("order=desc"))
+        #expect(operations[2].path.contains("page=1"))
+        #expect(operations[2].path.contains("size=20"))
+    }
+
+    @Test func preservesFractionalOffsetsAndMediaMetadata() throws {
+        let response = timelineResponse(
+            count: 2,
+            createdAt: ["2026-03-08T01:59:59-05:00", "2026-03-08T03:00:00.125-04:00"],
+            fileCreatedAt: ["2026-03-08T01:59:59.500-05:00", "2026-03-08T03:00:00-04:00"],
+            duration: [nil, 12345],
+            isImage: [true, false],
+            localOffsetHours: [5.5, -9.75],
+            livePhotoVideoID: ["live-video", nil],
+            stack: [["stack-1", "4"], nil]
+        )
+
+        let assets = try ImmichClient.timelineAssets(from: response)
+
+        #expect(assets.count == 2)
+        #expect(assets[0].localOffsetHours == 5.5)
+        #expect(assets[0].livePhotoVideoID == "live-video")
+        #expect(assets[0].stack == .init(id: "stack-1", assetCount: 4))
+        #expect(assets[1].localOffsetHours == -9.75)
+        #expect(assets[1].mediaKind == .video)
+        #expect(assets[1].durationMilliseconds == 12345)
+    }
+
+    @Test func toleratesMissingAndShortOptionalColumns() throws {
+        var response = timelineResponse(count: 3)
+        response.city = ["Shanghai"]
+        response.country = nil
+        response.latitude = [31.23, nil]
+        response.longitude = []
+        response.stack = [["stack-1", "2"]]
+
+        let assets = try ImmichClient.timelineAssets(from: response)
+
+        #expect(assets[0].city == "Shanghai")
+        #expect(assets[1].city == nil)
+        #expect(assets[2].latitude == nil)
+        #expect(assets.allSatisfy { $0.country == nil && $0.longitude == nil })
+    }
+
+    @Test func rejectsMismatchedRequiredColumns() {
+        var response = timelineResponse(count: 2)
+        response.ownerId.removeLast()
+
+        #expect(throws: ImmichAPIError.invalidResponse) {
+            try ImmichClient.timelineAssets(from: response)
+        }
+    }
+
+    @Test func rejectsInvalidDatesAndAspectRatios() {
+        var response = timelineResponse(count: 1)
+        response.fileCreatedAt[0] = "not-a-date"
+        #expect(throws: ImmichAPIError.invalidResponse) {
+            try ImmichClient.timelineAssets(from: response)
+        }
+
+        response = timelineResponse(count: 1)
+        response.ratio[0] = 0
+        #expect(throws: ImmichAPIError.invalidResponse) {
+            try ImmichClient.timelineAssets(from: response)
+        }
+    }
+
+    @Test func decodesLargeBucketWithoutChangingOrder() throws {
+        let assets = try ImmichClient.timelineAssets(from: timelineResponse(count: 5000))
+
+        #expect(assets.count == 5000)
+        #expect(assets.first?.id == "asset-0")
+        #expect(assets.last?.id == "asset-4999")
+    }
+
+    @Test func retainsUnknownFutureVisibilityAtStableBoundary() throws {
+        let visibility = try JSONDecoder().decode(
+            ImmichAssetVisibility.self,
+            from: Data(#""future-scope""#.utf8)
+        )
+
+        #expect(visibility == .unknown("future-scope"))
+        #expect(visibility.serverValue == "future-scope")
+        #expect(try JSONEncoder().encode(visibility) == Data(#""future-scope""#.utf8))
+    }
+}
+
 @Suite("Onboarding operation audit")
 struct OnboardingOperationAuditTests {
     @Test func recordsOnlyApprovedOperations() async throws {
@@ -208,6 +334,81 @@ private actor OperationRecorder {
     func record(id: String, method: HTTPRequest.Method) {
         operations.append(.init(id: id, method: method))
     }
+}
+
+private actor TimelineOperationRecorder {
+    struct Operation: Sendable {
+        let id: String
+        let method: HTTPRequest.Method
+        let path: String
+        let authorization: String?
+    }
+
+    private(set) var operations: [Operation] = []
+
+    func record(_ request: HTTPRequest, operationID: String) {
+        operations.append(.init(
+            id: operationID,
+            method: request.method,
+            path: request.path ?? "",
+            authorization: request.headerFields[.authorization]
+        ))
+    }
+}
+
+private struct TimelineTransport: ClientTransport {
+    let recorder: TimelineOperationRecorder
+
+    func send(
+        _ request: HTTPRequest,
+        body _: HTTPBody?,
+        baseURL _: URL,
+        operationID: String
+    ) async throws -> (HTTPResponse, HTTPBody?) {
+        await recorder.record(request, operationID: operationID)
+        let json: String = switch operationID {
+        case "getTimeBuckets":
+            #"[{"count":1,"timeBucket":"2026-09-01T00:00:00.000Z"}]"#
+        case "getTimeBucket":
+            #"{"createdAt":["2026-09-01T00:00:01Z"],"duration":[null],"fileCreatedAt":["2026-09-01T00:00:00.125Z"],"id":["asset-1"],"isFavorite":[false],"isImage":[true],"isTrashed":[false],"livePhotoVideoId":[null],"localOffsetHours":[5.5],"ownerId":["owner-1"],"projectionType":[null],"ratio":[1.5],"thumbhash":[null],"visibility":["timeline"]}"#
+        case "searchMemories":
+            #"[{"assets":[],"createdAt":"2026-09-01T00:00:00Z","data":{"year":2025},"id":"memory-1","isSaved":false,"memoryAt":"2026-09-01T00:00:00Z","ownerId":"owner-1","type":"on_this_day","updatedAt":"2026-09-01T00:00:00Z"}]"#
+        default:
+            throw ImmichAPIError.readOnlyPolicyViolation(operationID: operationID)
+        }
+        var response = HTTPResponse(status: .ok)
+        response.headerFields[.contentType] = "application/json"
+        return (response, HTTPBody(json))
+    }
+}
+
+private func timelineResponse(
+    count: Int,
+    createdAt: [String]? = nil,
+    fileCreatedAt: [String]? = nil,
+    duration: [Int?]? = nil,
+    isImage: [Bool]? = nil,
+    localOffsetHours: [Double]? = nil,
+    livePhotoVideoID: [String?]? = nil,
+    stack: [[String]?]? = nil
+) -> Components.Schemas.TimeBucketAssetResponseDto {
+    Components.Schemas.TimeBucketAssetResponseDto(
+        createdAt: createdAt ?? Array(repeating: "2026-09-01T00:00:01Z", count: count),
+        duration: duration ?? Array(repeating: nil, count: count),
+        fileCreatedAt: fileCreatedAt ?? Array(repeating: "2026-09-01T00:00:00.125Z", count: count),
+        id: (0 ..< count).map { "asset-\($0)" },
+        isFavorite: Array(repeating: false, count: count),
+        isImage: isImage ?? Array(repeating: true, count: count),
+        isTrashed: Array(repeating: false, count: count),
+        livePhotoVideoId: livePhotoVideoID ?? Array(repeating: nil, count: count),
+        localOffsetHours: localOffsetHours ?? Array(repeating: 0, count: count),
+        ownerId: Array(repeating: "owner-1", count: count),
+        projectionType: Array(repeating: nil, count: count),
+        ratio: Array(repeating: 1.5, count: count),
+        stack: stack,
+        thumbhash: Array(repeating: nil, count: count),
+        visibility: Array(repeating: .timeline, count: count)
+    )
 }
 
 private struct OnboardingTransport: ClientTransport {
