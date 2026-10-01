@@ -1,10 +1,15 @@
 import Foundation
 import Observation
+import OSLog
 
 @MainActor
 @Observable
 final class PhotosTimelineStore {
     static let metadataWindowSize = 5
+    private nonisolated static let logger = Logger(
+        subsystem: "io.github.ender-wang.Remmich",
+        category: "PhotosTimeline"
+    )
 
     private(set) var loadState: PhotosTimelineLoadState = .idle
     private(set) var refreshState: PhotosTimelineRefreshState = .idle
@@ -45,6 +50,7 @@ final class PhotosTimelineStore {
         generation &+= 1
         let requestGeneration = generation
         loadState = .loading
+        Self.logger.info("Initial load started generation=\(requestGeneration)")
         startMemoryLoad(generation: requestGeneration)
         let task = Task { [weak self] in
             guard let self else { return }
@@ -266,8 +272,12 @@ final class PhotosTimelineStore {
             let summaries = try await reader.bucketSummaries(query: query)
             guard requestGeneration == generation else { return }
             publishSummaries(summaries)
+            Self.logger.info(
+                "Initial summaries published generation=\(requestGeneration) count=\(summaries.count)"
+            )
             guard let newest = summaries.first else {
                 loadState = .empty
+                Self.logger.info("Initial load finished empty generation=\(requestGeneration)")
                 return
             }
             applyMetadataWindow(centeredOn: newest.id)
@@ -280,16 +290,26 @@ final class PhotosTimelineStore {
                     "The newest Immich timeline section could not be loaded."
                 }
                 loadState = .failed(message: message)
+                Self.logger.error(
+                    "Initial load failed at newest bucket generation=\(requestGeneration) bucket=\(newest.id.rawValue, privacy: .public) message=\(message, privacy: .public)"
+                )
                 return
             }
             loadState = .loaded
+            Self.logger.info(
+                "Initial load finished generation=\(requestGeneration) newestBucket=\(newest.id.rawValue, privacy: .public)"
+            )
             if summaries.count > 1 {
                 let next = summaries[1].id
                 Task { [weak self] in await self?.loadBucket(next) }
             }
         } catch {
             guard requestGeneration == generation else { return }
-            loadState = .failed(message: Self.message(for: error))
+            let message = Self.message(for: error)
+            loadState = .failed(message: message)
+            Self.logger.error(
+                "Initial load failed at summaries generation=\(requestGeneration) error=\(Self.errorSummary(error), privacy: .public) message=\(message, privacy: .public)"
+            )
         }
     }
 
@@ -311,7 +331,11 @@ final class PhotosTimelineStore {
             guard requestGeneration == generation,
                   bucketRequestRevisions[bucketID] == requestRevision
             else { return }
-            sectionsByID[bucketID]?.loadState = .failed(message: Self.message(for: error))
+            let message = Self.message(for: error)
+            sectionsByID[bucketID]?.loadState = .failed(message: message)
+            Self.logger.error(
+                "Bucket publication failed generation=\(requestGeneration) bucket=\(bucketID.rawValue, privacy: .public) revision=\(requestRevision) error=\(Self.errorSummary(error), privacy: .public) message=\(message, privacy: .public)"
+            )
         }
         if bucketRequestRevisions[bucketID] == requestRevision {
             bucketTasks[bucketID] = nil
@@ -394,6 +418,9 @@ final class PhotosTimelineStore {
                 guard requestGeneration == generation else { return }
                 memories = []
                 memoryLaneState = .hidden
+                Self.logger.notice(
+                    "Memory lane hidden after failure generation=\(requestGeneration) error=\(Self.errorSummary(error), privacy: .public)"
+                )
             }
         }
     }
@@ -498,5 +525,14 @@ final class PhotosTimelineStore {
             return message
         }
         return "The Immich timeline could not be loaded."
+    }
+
+    private nonisolated static func errorSummary(_ error: Error) -> String {
+        if let localizedError = error as? LocalizedError,
+           let description = localizedError.errorDescription
+        {
+            return "\(String(reflecting: type(of: error))): \(description)"
+        }
+        return String(reflecting: type(of: error))
     }
 }

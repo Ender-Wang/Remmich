@@ -1,8 +1,14 @@
 import Foundation
 import OpenAPIRuntime
 import OpenAPIURLSession
+import OSLog
 
 public actor ImmichClient {
+    private nonisolated static let logger = Logger(
+        subsystem: "io.github.ender-wang.Remmich",
+        category: "ImmichAPI"
+    )
+
     private struct RouteIdentity: Decodable {
         let id: String
     }
@@ -134,6 +140,43 @@ public actor ImmichClient {
         }
     }
 
+    private nonisolated static func logTimelineFailure(operation: String, error: Error) {
+        let mapped = map(error)
+        let detail = diagnosticSummary(error)
+        logger.error(
+            "Timeline API \(operation, privacy: .public) failed: mapped=\(String(describing: mapped), privacy: .public), detail=\(detail, privacy: .public)"
+        )
+    }
+
+    private nonisolated static func diagnosticSummary(_ error: Error) -> String {
+        if let clientError = error as? ClientError {
+            return "ClientError -> \(diagnosticSummary(clientError.underlyingError))"
+        }
+        if let decodingError = error as? DecodingError {
+            switch decodingError {
+            case let .dataCorrupted(context):
+                return "DecodingError.dataCorrupted at \(codingPath(context.codingPath)): \(context.debugDescription)"
+            case let .keyNotFound(key, context):
+                return "DecodingError.keyNotFound(\(key.stringValue)) at \(codingPath(context.codingPath)): \(context.debugDescription)"
+            case let .typeMismatch(type, context):
+                return "DecodingError.typeMismatch(\(type)) at \(codingPath(context.codingPath)): \(context.debugDescription)"
+            case let .valueNotFound(type, context):
+                return "DecodingError.valueNotFound(\(type)) at \(codingPath(context.codingPath)): \(context.debugDescription)"
+            @unknown default:
+                return "DecodingError"
+            }
+        }
+        if let urlError = error as? URLError {
+            return "URLError(\(urlError.code.rawValue): \(urlError.code))"
+        }
+        return String(reflecting: type(of: error))
+    }
+
+    private nonisolated static func codingPath(_ path: [any CodingKey]) -> String {
+        let value = path.map(\.stringValue).joined(separator: ".")
+        return value.isEmpty ? "<root>" : value
+    }
+
     public func authenticatedUserID() async throws -> String {
         guard credential != nil else { throw ImmichAPIError.unauthorized }
         if let routeCheckSession {
@@ -175,6 +218,7 @@ public actor ImmichClient {
                 throw Self.map(status: statusCode)
             }
         } catch {
+            Self.logTimelineFailure(operation: "bucket summaries", error: error)
             throw Self.map(error)
         }
     }
@@ -196,6 +240,7 @@ public actor ImmichClient {
                 throw Self.map(status: statusCode)
             }
         } catch {
+            Self.logTimelineFailure(operation: "bucket assets", error: error)
             throw Self.map(error)
         }
     }
@@ -220,6 +265,7 @@ public actor ImmichClient {
                 throw Self.map(status: statusCode)
             }
         } catch {
+            Self.logTimelineFailure(operation: "memories", error: error)
             throw Self.map(error)
         }
     }

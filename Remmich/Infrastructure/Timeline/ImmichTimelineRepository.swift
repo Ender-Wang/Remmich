@@ -1,7 +1,13 @@
 import Foundation
 import ImmichAPI
+import OSLog
 
 actor ImmichTimelineRepository: TimelineReading {
+    private nonisolated static let logger = Logger(
+        subsystem: "io.github.ender-wang.Remmich",
+        category: "TimelineRepository"
+    )
+
     private struct AccountIdentity: Equatable {
         let server: URL
         let userID: String
@@ -53,9 +59,14 @@ actor ImmichTimelineRepository: TimelineReading {
 
     func bucketSummaries(query: TimelineQuery) async throws -> [TimelineBucketSummary] {
         let (client, requestGeneration) = try requestContext()
+        let startedAt = Date()
+        Self.logger.info("Bucket summaries started generation=\(requestGeneration)")
         do {
             let buckets = try await client.timelineBuckets(query: Self.map(query))
             try requireCurrent(requestGeneration)
+            Self.logger.info(
+                "Bucket summaries finished generation=\(requestGeneration) count=\(buckets.count) elapsedMs=\(Self.elapsedMilliseconds(since: startedAt))"
+            )
             return buckets.map {
                 TimelineBucketSummary(
                     id: .init(rawValue: $0.id),
@@ -63,6 +74,9 @@ actor ImmichTimelineRepository: TimelineReading {
                 )
             }
         } catch {
+            Self.logger.error(
+                "Bucket summaries failed generation=\(requestGeneration) elapsedMs=\(Self.elapsedMilliseconds(since: startedAt)) error=\(Self.errorSummary(error), privacy: .public)"
+            )
             try requireCurrent(requestGeneration)
             throw Self.map(error)
         }
@@ -73,14 +87,24 @@ actor ImmichTimelineRepository: TimelineReading {
         query: TimelineQuery
     ) async throws -> [TimelineAssetSummary] {
         let (client, requestGeneration) = try requestContext()
+        let startedAt = Date()
+        Self.logger.info(
+            "Bucket assets started generation=\(requestGeneration) bucket=\(bucketID.rawValue, privacy: .public)"
+        )
         do {
             let assets = try await client.timelineAssets(
                 in: bucketID.rawValue,
                 query: Self.map(query)
             )
             try requireCurrent(requestGeneration)
+            Self.logger.info(
+                "Bucket assets finished generation=\(requestGeneration) bucket=\(bucketID.rawValue, privacy: .public) count=\(assets.count) elapsedMs=\(Self.elapsedMilliseconds(since: startedAt))"
+            )
             return assets.map(Self.map)
         } catch {
+            Self.logger.error(
+                "Bucket assets failed generation=\(requestGeneration) bucket=\(bucketID.rawValue, privacy: .public) elapsedMs=\(Self.elapsedMilliseconds(since: startedAt)) error=\(Self.errorSummary(error), privacy: .public)"
+            )
             try requireCurrent(requestGeneration)
             throw Self.map(error)
         }
@@ -88,9 +112,14 @@ actor ImmichTimelineRepository: TimelineReading {
 
     func memories() async throws -> [TimelineMemorySummary] {
         let (client, requestGeneration) = try requestContext()
+        let startedAt = Date()
+        Self.logger.info("Memories started generation=\(requestGeneration)")
         do {
             let memories = try await client.memories()
             try requireCurrent(requestGeneration)
+            Self.logger.info(
+                "Memories finished generation=\(requestGeneration) count=\(memories.count) elapsedMs=\(Self.elapsedMilliseconds(since: startedAt))"
+            )
             return memories.map { memory in
                 TimelineMemorySummary(
                     id: memory.id,
@@ -105,6 +134,9 @@ actor ImmichTimelineRepository: TimelineReading {
                 )
             }
         } catch {
+            Self.logger.error(
+                "Memories failed generation=\(requestGeneration) elapsedMs=\(Self.elapsedMilliseconds(since: startedAt)) error=\(Self.errorSummary(error), privacy: .public)"
+            )
             try requireCurrent(requestGeneration)
             throw Self.map(error)
         }
@@ -191,5 +223,18 @@ actor ImmichTimelineRepository: TimelineReading {
             return TimelineReadError.invalidResponse
         }
         return error
+    }
+
+    private nonisolated static func elapsedMilliseconds(since start: Date) -> Int {
+        Int(Date().timeIntervalSince(start) * 1000)
+    }
+
+    private nonisolated static func errorSummary(_ error: Error) -> String {
+        if let localizedError = error as? LocalizedError,
+           let description = localizedError.errorDescription
+        {
+            return "\(String(reflecting: type(of: error))): \(description)"
+        }
+        return String(reflecting: type(of: error))
     }
 }
