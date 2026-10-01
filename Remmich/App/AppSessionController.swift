@@ -57,7 +57,12 @@ final class AppSessionController {
         timeline: ImmichTimelineRepository = .init()
     ) {
         self.timeline = timeline
-        photos = PhotosTimelineStore(reader: timeline)
+        let photosReader: any TimelineReading = if ProcessInfo.processInfo.arguments.contains("-ui-testing-signed-in") {
+            PreviewTimelineReader()
+        } else {
+            timeline
+        }
+        photos = PhotosTimelineStore(reader: photosReader)
         self.service = service
         self.sessionStore = sessionStore
         self.profileStore = profileStore
@@ -75,6 +80,7 @@ final class AppSessionController {
             if await timeline.configure(session: session, activeEndpoint: session.apiURL) {
                 photos.routeDidChange(isReachable: true)
             }
+            await photos.load()
             state = .signedIn(session)
             return
         }

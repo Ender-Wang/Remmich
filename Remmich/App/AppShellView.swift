@@ -5,6 +5,8 @@ struct AppShellView: View {
     let profile: ConnectionProfile
     let activeRoute: ActiveConnectionRoute?
     let routeStatus: ConnectionRouteStatus
+    let photos: PhotosTimelineStore
+    let media: MediaLibraryController
     let saveProfile: (ConnectionProfileDraft) async -> ConnectionProfileSaveResult
     let signOut: () async -> Void
 
@@ -19,7 +21,7 @@ struct AppShellView: View {
         TabView(selection: $selection) {
             Tab(AppDestination.photos.title, systemImage: AppDestination.photos.systemImage, value: .photos) {
                 NavigationStack(path: $photosPath) {
-                    PhotosView(showAccount: showAccount)
+                    PhotosView(store: photos, media: media, showAccount: showAccount)
                 }
             }
 
@@ -73,11 +75,14 @@ struct AccountToolbarButton: ToolbarContent {
 }
 
 #Preview {
+    let store = PhotosTimelineStore(reader: PreviewTimelineReader())
     AppShellView(
         session: .fixture,
         profile: .init(),
         activeRoute: nil,
         routeStatus: .waitingForNetwork,
+        photos: store,
+        media: .init(),
         saveProfile: { _ in .saved(profile: .init()) },
         signOut: {}
     )

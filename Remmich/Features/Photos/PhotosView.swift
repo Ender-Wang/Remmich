@@ -1,37 +1,17 @@
 import SwiftUI
 
 struct PhotosView: View {
-    let state: FixtureContentState
-    let sections: [FixtureAssetSection]
-    let memories: [FixtureMemory]
+    let store: PhotosTimelineStore
+    let media: MediaLibraryController
     let showAccount: () -> Void
 
-    init(
-        state: FixtureContentState = .loaded,
-        sections: [FixtureAssetSection] = PreviewFixtures.photoSections,
-        memories: [FixtureMemory] = PreviewFixtures.memories,
-        showAccount: @escaping () -> Void
-    ) {
-        self.state = state
-        self.sections = sections
-        self.memories = memories
-        self.showAccount = showAccount
-    }
+    @State private var showsJumpPicker = false
+    @State private var pendingScrollID: TimelineBucketID?
 
     var body: some View {
         Group {
-            switch state {
-            case .loaded:
-                if sections.isEmpty {
-                    EmptyStateView(
-                        title: "No Photos",
-                        message: "Photos from your Immich library will appear here.",
-                        systemImage: "photo.on.rectangle"
-                    )
-                } else {
-                    timeline
-                }
-            case .loading:
+            switch store.loadState {
+            case .idle, .loading:
                 LoadingStateView()
             case .empty:
                 EmptyStateView(
@@ -39,74 +19,270 @@ struct PhotosView: View {
                     message: "Photos from your Immich library will appear here.",
                     systemImage: "photo.on.rectangle"
                 )
-            case .failed:
-                ErrorStateView {}
+            case let .failed(message):
+                ErrorStateView {
+                    Task { await store.retryInitialLoad() }
+                }
+                .accessibilityHint(message)
+            case .loaded:
+                timeline
             }
         }
         .navigationTitle("Photos")
-        .toolbar { AccountToolbarButton(action: showAccount) }
-        .navigationDestination(for: FixtureAsset.self) { asset in
-            FixtureAssetDetailView(asset: asset)
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button {
+                    showsJumpPicker = true
+                } label: {
+                    Label("Jump to Date", systemImage: "calendar")
+                }
+                .disabled(store.bucketSummaries.isEmpty)
+                .accessibilityIdentifier("timeline-jump-button")
+            }
+            AccountToolbarButton(action: showAccount)
         }
+        .sheet(isPresented: $showsJumpPicker) {
+            TimelineJumpPicker(store: store) { bucketID in
+                pendingScrollID = bucketID
+                showsJumpPicker = false
+            }
+        }
+        .task { await store.load() }
         .accessibilityIdentifier("photos-root")
     }
 
     private var timeline: some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                if !memories.isEmpty {
-                    memoryLane
-                        .padding(.bottom, 12)
-                }
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    if case let .failed(message) = store.refreshState {
+                        TimelineRefreshError(message: message) {
+                            Task { await store.refresh() }
+                        }
+                    }
 
-                ForEach(sections) { section in
-                    AssetSectionHeader(title: section.title, subtitle: section.subtitle)
-                    AssetGrid(assets: section.assets)
+                    if store.memoryLaneState == .loaded, !store.memories.isEmpty {
+                        TimelineMemoryLane(memories: store.memories, media: media)
+                            .padding(.bottom, 12)
+                    }
+
+                    ForEach(store.sections) { section in
+                        TimelineSectionView(section: section, store: store, media: media)
+                            .id(section.id)
+                            .onAppear {
+                                store.updateVisibleAnchor(
+                                    .init(bucketID: section.id, assetID: section.assets.first?.id)
+                                )
+                            }
+                    }
                 }
+            }
+            .refreshable { await store.refresh() }
+            .onChange(of: pendingScrollID) { _, bucketID in
+                guard let bucketID else { return }
+                withAnimation(.snappy) {
+                    proxy.scrollTo(bucketID, anchor: .top)
+                }
+                pendingScrollID = nil
+                store.completeJump()
             }
         }
     }
+}
 
-    private var memoryLane: some View {
+private struct TimelineSectionView: View {
+    let section: TimelineSection
+    let store: PhotosTimelineStore
+    let media: MediaLibraryController
+
+    var body: some View {
+        VStack(spacing: 0) {
+            AssetSectionHeader(
+                title: title,
+                subtitle: section.summary.assetCount.formatted() + " items"
+            )
+
+            switch section.loadState {
+            case .unloaded, .loading:
+                ProgressView()
+                    .frame(maxWidth: .infinity, minHeight: 88)
+                    .task { await store.loadBucket(section.id) }
+            case .loaded:
+                if section.assets.isEmpty {
+                    Text("No photos in this section")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, minHeight: 64)
+                } else {
+                    TimelineAssetGrid(assets: section.assets, media: media)
+                }
+            case let .failed(message):
+                VStack(spacing: 8) {
+                    Text(message)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                    Button("Retry") {
+                        Task { await store.retryBucket(section.id) }
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .frame(maxWidth: .infinity, minHeight: 88)
+                .padding(.horizontal)
+            }
+        }
+        .accessibilityIdentifier("timeline-section-\(section.id.rawValue)")
+    }
+
+    private var title: String {
+        section.id.displayDate?.formatted(date: .long, time: .omitted) ?? section.id.rawValue
+    }
+}
+
+private struct TimelineMemoryLane: View {
+    @Environment(\.displayScale) private var displayScale
+    let memories: [TimelineMemorySummary]
+    let media: MediaLibraryController
+
+    var body: some View {
         ScrollView(.horizontal) {
             LazyHStack(spacing: 12) {
                 ForEach(memories) { memory in
-                    NavigationLink(value: memory.asset) {
+                    if let asset = memory.assets.first {
                         ZStack(alignment: .bottomLeading) {
-                            FixtureArtwork(palette: memory.asset.palette)
-                            LinearGradient(colors: [.clear, .black.opacity(0.65)], startPoint: .center, endPoint: .bottom)
+                            ImmichThumbnail(
+                                descriptor: .init(
+                                    assetID: asset.id,
+                                    updatedAt: asset.revision,
+                                    derivative: .thumbnail,
+                                    targetPixels: .init(
+                                        width: Int(190 * displayScale),
+                                        height: Int(120 * displayScale)
+                                    )
+                                ),
+                                media: media
+                            )
+                            LinearGradient(
+                                colors: [.clear, .black.opacity(0.65)],
+                                startPoint: .center,
+                                endPoint: .bottom
+                            )
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(memory.title).font(.headline)
-                                Text(memory.subtitle).font(.caption)
+                                Text("Memory")
+                                    .font(.headline)
+                                Text(memory.memoryAt.formatted(date: .abbreviated, time: .omitted))
+                                    .font(.caption)
                             }
                             .foregroundStyle(.white)
                             .padding(12)
                         }
                         .frame(width: 190, height: 120)
                         .clipShape(.rect(cornerRadius: 18))
+                        .accessibilityElement(children: .combine)
+                        .accessibilityIdentifier("memory-\(memory.id)")
                     }
-                    .buttonStyle(.plain)
                 }
             }
             .padding(.horizontal)
         }
         .scrollIndicators(.hidden)
+        .accessibilityIdentifier("memory-lane")
+    }
+}
+
+private struct TimelineRefreshError: View {
+    let message: String
+    let retry: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button("Retry", action: retry)
+                .font(.caption.weight(.semibold))
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 10)
+        .background(.orange.opacity(0.08))
+        .accessibilityIdentifier("timeline-refresh-error")
+    }
+}
+
+private struct TimelineJumpPicker: View {
+    @Environment(\.dismiss) private var dismiss
+    let store: PhotosTimelineStore
+    let onReady: (TimelineBucketID) -> Void
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(groupedBuckets, id: \.year) { group in
+                    Section(group.year) {
+                        ForEach(group.buckets) { bucket in
+                            Button {
+                                Task {
+                                    if await store.prepareJump(to: bucket.id) {
+                                        onReady(bucket.id)
+                                    }
+                                }
+                            } label: {
+                                HStack {
+                                    Text(bucketTitle(bucket))
+                                    Spacer()
+                                    Text(bucket.assetCount, format: .number)
+                                        .foregroundStyle(.secondary)
+                                    if store.jumpTarget == bucket.id {
+                                        ProgressView()
+                                    }
+                                }
+                            }
+                            .disabled(store.jumpTarget != nil)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Jump to Date")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        store.completeJump()
+                        dismiss()
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private var groupedBuckets: [(year: String, buckets: [TimelineBucketSummary])] {
+        let values = Dictionary(grouping: store.bucketSummaries) { bucket in
+            bucket.id.displayDate?.formatted(.dateTime.year()) ?? "Other"
+        }
+        return values.map { (year: $0.key, buckets: $0.value) }
+            .sorted { $0.year > $1.year }
+    }
+
+    private func bucketTitle(_ bucket: TimelineBucketSummary) -> String {
+        bucket.id.displayDate?.formatted(.dateTime.month(.wide).day()) ?? bucket.id.rawValue
     }
 }
 
 #Preview("Loaded") {
-    NavigationStack { PhotosView(showAccount: {}) }
-}
-
-#Preview("Empty") {
-    NavigationStack { PhotosView(state: .empty, showAccount: {}) }
-}
-
-#Preview("Error") {
-    NavigationStack { PhotosView(state: .failed, showAccount: {}) }
+    let store = PhotosTimelineStore(reader: PreviewTimelineReader())
+    NavigationStack {
+        PhotosView(store: store, media: .init(), showAccount: {})
+    }
 }
 
 #Preview("Large Text") {
-    NavigationStack { PhotosView(showAccount: {}) }
-        .environment(\.dynamicTypeSize, .accessibility3)
+    let store = PhotosTimelineStore(reader: PreviewTimelineReader())
+    NavigationStack {
+        PhotosView(store: store, media: .init(), showAccount: {})
+    }
+    .environment(\.dynamicTypeSize, .accessibility3)
 }

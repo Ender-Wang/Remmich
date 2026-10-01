@@ -72,3 +72,108 @@ struct AssetSectionHeader: View {
         .padding(.bottom, 4)
     }
 }
+
+struct TimelineAssetGrid: View {
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    let assets: [TimelineAssetSummary]
+    let media: MediaLibraryController
+
+    private var columns: [GridItem] {
+        let minimum: CGFloat = horizontalSizeClass == .regular ? 120 : 88
+        return [GridItem(.adaptive(minimum: minimum, maximum: 180), spacing: 2)]
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            LazyVGrid(columns: columns, spacing: 2) {
+                ForEach(assets) { asset in
+                    TimelineAssetThumbnail(asset: asset, media: media)
+                }
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Photo grid")
+        .accessibilityIdentifier(horizontalSizeClass == .regular ? "asset-grid-regular" : "asset-grid-compact")
+    }
+}
+
+private struct TimelineAssetThumbnail: View {
+    @Environment(\.displayScale) private var displayScale
+    let asset: TimelineAssetSummary
+    let media: MediaLibraryController
+
+    var body: some View {
+        GeometryReader { proxy in
+            let pixels = max(1, Int((proxy.size.width * displayScale).rounded(.up)))
+            ImmichThumbnail(
+                descriptor: .init(
+                    assetID: asset.id,
+                    updatedAt: asset.thumbnailRevision,
+                    derivative: .thumbnail,
+                    targetPixels: .init(width: pixels, height: pixels)
+                ),
+                media: media
+            )
+            .overlay(alignment: .topTrailing) {
+                if asset.isFavorite {
+                    Image(systemName: "heart.fill")
+                        .foregroundStyle(.white)
+                        .padding(7)
+                        .shadow(radius: 2)
+                }
+            }
+            .overlay(alignment: .bottomLeading) {
+                HStack(spacing: 5) {
+                    if asset.livePhotoVideoID != nil {
+                        Image(systemName: "livephoto")
+                    }
+                    if asset.projectionType != nil {
+                        Image(systemName: "view.360")
+                    }
+                    if let stack = asset.stack, stack.assetCount > 1 {
+                        Label("\(stack.assetCount)", systemImage: "square.stack.3d.up.fill")
+                    }
+                }
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.white)
+                .padding(6)
+                .shadow(radius: 3)
+            }
+            .overlay(alignment: .bottomTrailing) {
+                if asset.mediaKind == .video {
+                    Label(Self.duration(asset.durationMilliseconds), systemImage: "play.fill")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(6)
+                        .shadow(radius: 3)
+                }
+            }
+        }
+        .aspectRatio(1, contentMode: .fit)
+        .contentShape(.rect)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityIdentifier("asset-\(asset.id)")
+    }
+
+    private var accessibilityLabel: String {
+        var values = [asset.capturedAt.formatted(date: .abbreviated, time: .shortened)]
+        values.append(asset.mediaKind == .video ? "Video" : "Photo")
+        if asset.isFavorite {
+            values.append("Favorite")
+        }
+        if asset.livePhotoVideoID != nil {
+            values.append("Live Photo")
+        }
+        if let stack = asset.stack {
+            values.append("Stack of \(stack.assetCount)")
+        }
+        return values.joined(separator: ", ")
+    }
+
+    private static func duration(_ milliseconds: Int?) -> String {
+        guard let milliseconds else { return "" }
+        let seconds = max(0, milliseconds / 1000)
+        return String(format: "%d:%02d", seconds / 60, seconds % 60)
+    }
+}

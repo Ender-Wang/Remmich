@@ -26,6 +26,8 @@ struct RootView: View {
                     profile: controller.connectionProfile,
                     activeRoute: controller.activeRoute,
                     routeStatus: controller.routeStatus,
+                    photos: controller.photos,
+                    media: controller.media,
                     saveProfile: controller.saveConnectionProfile,
                     signOut: controller.signOut
                 )
