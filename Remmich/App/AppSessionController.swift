@@ -453,6 +453,7 @@ final class AppSessionController {
     func handleForegroundTransition() async {
         await reevaluateRoute()
         photos.foregrounded()
+        media.handleForegroundTransition()
     }
 
     private static func message(for error: Error) -> String {

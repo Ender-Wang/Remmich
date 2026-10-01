@@ -77,6 +77,7 @@ struct TimelineAssetGrid: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     let assets: [TimelineAssetSummary]
     let media: MediaLibraryController
+    var visibilityChanged: (String, MediaRequestDescriptor?) -> Void = { _, _ in }
 
     private var columns: [GridItem] {
         let minimum: CGFloat = horizontalSizeClass == .regular ? 120 : 88
@@ -87,7 +88,11 @@ struct TimelineAssetGrid: View {
         VStack(spacing: 0) {
             LazyVGrid(columns: columns, spacing: 2) {
                 ForEach(assets) { asset in
-                    TimelineAssetThumbnail(asset: asset, media: media)
+                    TimelineAssetThumbnail(
+                        asset: asset,
+                        media: media,
+                        visibilityChanged: visibilityChanged
+                    )
                 }
             }
         }
@@ -101,18 +106,21 @@ private struct TimelineAssetThumbnail: View {
     @Environment(\.displayScale) private var displayScale
     let asset: TimelineAssetSummary
     let media: MediaLibraryController
+    let visibilityChanged: (String, MediaRequestDescriptor?) -> Void
 
     var body: some View {
         GeometryReader { proxy in
             let pixels = max(1, Int((proxy.size.width * displayScale).rounded(.up)))
+            let descriptor = MediaRequestDescriptor(
+                assetID: asset.id,
+                updatedAt: asset.thumbnailRevision,
+                derivative: .thumbnail,
+                targetPixels: .init(width: pixels, height: pixels)
+            )
             ImmichThumbnail(
-                descriptor: .init(
-                    assetID: asset.id,
-                    updatedAt: asset.thumbnailRevision,
-                    derivative: .thumbnail,
-                    targetPixels: .init(width: pixels, height: pixels)
-                ),
-                media: media
+                descriptor: descriptor,
+                media: media,
+                didLoad: { media.retainTimelineThumbnail($0, descriptor: descriptor) }
             )
             .overlay(alignment: .topTrailing) {
                 if asset.isFavorite {
@@ -148,6 +156,8 @@ private struct TimelineAssetThumbnail: View {
                         .shadow(radius: 3)
                 }
             }
+            .onAppear { visibilityChanged(asset.id, descriptor) }
+            .onDisappear { visibilityChanged(asset.id, nil) }
         }
         .aspectRatio(1, contentMode: .fit)
         .contentShape(.rect)

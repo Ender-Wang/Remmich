@@ -128,6 +128,55 @@ final class PhotosTimelineStore {
         }
     }
 
+    func residencyPlan(visibleAssetIDs: Set<String>) -> TimelineResidencyPlan {
+        let loadedSections = sections.filter {
+            if case .loaded = $0.loadState {
+                return true
+            }
+            return false
+        }
+        let assetsByID = Dictionary(
+            loadedSections.flatMap(\.assets).map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let orderedPages = loadedSections.flatMap(\.logicalPages)
+        guard !orderedPages.isEmpty else { return .empty }
+
+        var visiblePageIndexes = Set(orderedPages.indices.filter { index in
+            !visibleAssetIDs.isDisjoint(with: orderedPages[index].assetIDs)
+        })
+        if visiblePageIndexes.isEmpty,
+           let anchorID = visibleAnchor?.assetID,
+           let index = orderedPages.firstIndex(where: { $0.assetIDs.contains(anchorID) })
+        {
+            visiblePageIndexes.insert(index)
+        }
+        if visiblePageIndexes.isEmpty {
+            visiblePageIndexes.insert(orderedPages.startIndex)
+        }
+
+        var neighborhoodIndexes = visiblePageIndexes
+        for index in visiblePageIndexes {
+            if index > orderedPages.startIndex {
+                neighborhoodIndexes.insert(index - 1)
+            }
+            if index + 1 < orderedPages.endIndex {
+                neighborhoodIndexes.insert(index + 1)
+            }
+        }
+
+        let newestIDs = orderedPages.prefix(2).flatMap(\.assetIDs)
+        let viewportIDs = neighborhoodIndexes.sorted().flatMap { orderedPages[$0].assetIDs }
+        let visibleIDs = visiblePageIndexes.sorted().flatMap { orderedPages[$0].assetIDs }
+        let upcomingIDs = viewportIDs.filter { !visibleIDs.contains($0) }
+
+        return TimelineResidencyPlan(
+            newestAssets: Self.assets(for: newestIDs, from: assetsByID),
+            viewportAssets: Self.assets(for: viewportIDs, from: assetsByID),
+            prefetchAssets: Self.assets(for: upcomingIDs, from: assetsByID)
+        )
+    }
+
     func prepareJump(to bucketID: TimelineBucketID) async -> Bool {
         guard sectionsByID[bucketID] != nil else { return false }
         jumpTarget = bucketID
@@ -419,6 +468,17 @@ final class PhotosTimelineStore {
     private static func deduplicate(_ assets: [TimelineAssetSummary]) -> [TimelineAssetSummary] {
         var seen = Set<String>()
         return assets.filter { seen.insert($0.id).inserted }
+    }
+
+    private static func assets(
+        for ids: [String],
+        from assetsByID: [String: TimelineAssetSummary]
+    ) -> [TimelineAssetSummary] {
+        var seen = Set<String>()
+        return ids.compactMap { id in
+            guard seen.insert(id).inserted else { return nil }
+            return assetsByID[id]
+        }
     }
 
     private static func deduplicateSummaries(

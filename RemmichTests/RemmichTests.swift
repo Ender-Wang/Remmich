@@ -8,6 +8,7 @@
 import Foundation
 import Nuke
 import Testing
+import UIKit
 @testable import Remmich
 
 struct RemmichTests {
@@ -1035,6 +1036,146 @@ struct RemmichTests {
         #expect(await workingSet.byteCount == 15)
     }
 
+    @Test func timelineResidencyAcceptsOnlyBoundedFinalThumbnails() async {
+        let asset = Self.timelineAsset(id: "asset")
+        let residency = TimelineThumbnailResidency(
+            limits: .init(byteBudget: 10000, hardByteCap: 10000, warmLifetime: 45)
+        )
+        await residency.updatePlan(.init(
+            newestAssets: [asset],
+            viewportAssets: [],
+            prefetchAssets: []
+        ))
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let image = UIGraphicsImageRenderer(size: .init(width: 10, height: 10), format: format).image { context in
+            UIColor.white.setFill()
+            context.fill(.init(x: 0, y: 0, width: 10, height: 10))
+        }
+        let container = ImageContainer(image: image)
+        let previewContainer = ImageContainer(image: image, isPreview: true)
+        let valid = MediaRequestDescriptor(
+            assetID: asset.id,
+            updatedAt: asset.thumbnailRevision,
+            derivative: .thumbnail,
+            targetPixels: .init(width: 300, height: 300)
+        )
+
+        #expect(await residency.retain(container, for: .init(
+            assetID: asset.id,
+            updatedAt: asset.thumbnailRevision,
+            derivative: .preview,
+            targetPixels: .init(width: 300, height: 300)
+        )) == false)
+        #expect(await residency.retain(container, for: .init(
+            assetID: asset.id,
+            updatedAt: asset.thumbnailRevision,
+            derivative: .thumbnail,
+            targetPixels: nil
+        )) == false)
+        #expect(await residency.retain(container, for: .init(
+            assetID: asset.id,
+            updatedAt: asset.thumbnailRevision,
+            derivative: .thumbnail,
+            targetPixels: .init(width: TimelineThumbnailResidency.maximumThumbnailDimension + 1, height: 300)
+        )) == false)
+        #expect(await residency.retain(previewContainer, for: valid) == false)
+        #expect(await residency.retain(container, for: valid))
+        #expect(await residency.count == 1)
+        #expect(await residency.byteCount == 400)
+    }
+
+    @Test func timelineResidencyReplacesStaleThumbnailRevisions() async {
+        let oldRevision = Date(timeIntervalSince1970: 1)
+        let newRevision = Date(timeIntervalSince1970: 2)
+        let oldAsset = Self.timelineAsset(id: "asset", thumbnailRevision: oldRevision)
+        let newAsset = Self.timelineAsset(id: "asset", thumbnailRevision: newRevision)
+        let residency = TimelineThumbnailResidency(
+            limits: .init(byteBudget: 10000, hardByteCap: 10000, warmLifetime: 45)
+        )
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let image = UIGraphicsImageRenderer(size: .init(width: 10, height: 10), format: format).image { context in
+            UIColor.white.setFill()
+            context.fill(.init(x: 0, y: 0, width: 10, height: 10))
+        }
+        let container = ImageContainer(image: image)
+        let oldDescriptor = MediaRequestDescriptor(
+            assetID: oldAsset.id,
+            updatedAt: oldRevision,
+            derivative: .thumbnail,
+            targetPixels: .init(width: 300, height: 300)
+        )
+        let newDescriptor = MediaRequestDescriptor(
+            assetID: newAsset.id,
+            updatedAt: newRevision,
+            derivative: .thumbnail,
+            targetPixels: .init(width: 300, height: 300)
+        )
+
+        await residency.updatePlan(.init(
+            newestAssets: [oldAsset],
+            viewportAssets: [],
+            prefetchAssets: []
+        ))
+        #expect(await residency.retain(container, for: oldDescriptor))
+
+        await residency.updatePlan(.init(
+            newestAssets: [newAsset],
+            viewportAssets: [],
+            prefetchAssets: []
+        ))
+        #expect(await residency.isEmpty)
+        #expect(await residency.retain(container, for: oldDescriptor) == false)
+        #expect(await residency.retain(container, for: newDescriptor))
+    }
+
+    @Test func timelineResidencyRejectsStaleAccountGenerationWork() async {
+        let asset = Self.timelineAsset(id: "shared-id")
+        let residency = TimelineThumbnailResidency(
+            limits: .init(byteBudget: 10000, hardByteCap: 10000, warmLifetime: 45)
+        )
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let image = UIGraphicsImageRenderer(size: .init(width: 10, height: 10), format: format).image { context in
+            UIColor.white.setFill()
+            context.fill(.init(x: 0, y: 0, width: 10, height: 10))
+        }
+        let descriptor = MediaRequestDescriptor(
+            assetID: asset.id,
+            updatedAt: asset.thumbnailRevision,
+            derivative: .thumbnail,
+            targetPixels: .init(width: 300, height: 300)
+        )
+        let plan = TimelineResidencyPlan(
+            newestAssets: [asset],
+            viewportAssets: [],
+            prefetchAssets: []
+        )
+
+        await residency.updatePlan(plan, scopeGeneration: 1)
+        await residency.updatePlan(plan, scopeGeneration: 2)
+        await residency.advance(to: 1)
+
+        #expect(await residency.retain(ImageContainer(image: image), for: descriptor, scopeGeneration: 1) == false)
+        #expect(await residency.retain(ImageContainer(image: image), for: descriptor, scopeGeneration: 2))
+    }
+
+    @Test @MainActor func residencyPlanUsesBucketLocalPagesAndCrossBucketNeighbors() async {
+        let reader = PagingTimelineReader()
+        let store = PhotosTimelineStore(reader: reader)
+        await store.load()
+        await store.loadBucket(reader.olderBucketID)
+
+        let plan = store.residencyPlan(visibleAssetIDs: ["new-64", "old-0"])
+
+        #expect(plan.newestAssets.count == 65)
+        #expect(plan.viewportAssets.count == 67)
+        #expect(plan.viewportAssets.first?.id == "new-0")
+        #expect(plan.viewportAssets.last?.id == "old-1")
+        #expect(plan.prefetchAssets.map(\.id) == (0 ..< 64).map { "new-\($0)" })
+    }
+
     @Test func mediaDownloadStreamsToOwnedTemporaryFileWithAuthentication() async throws {
         let recorder = RequestRecorder()
         let source = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
@@ -1134,6 +1275,29 @@ struct RemmichTests {
             isOnboarded: true,
             maintenanceMode: false,
             loginPageMessage: ""
+        )
+    }
+
+    private nonisolated static func timelineAsset(
+        id: String,
+        thumbnailRevision: Date = .distantPast
+    ) -> TimelineAssetSummary {
+        TimelineAssetSummary(
+            id: id,
+            ownerID: "owner",
+            capturedAt: .distantPast,
+            uploadedAt: .distantPast,
+            localOffsetHours: 0,
+            mediaKind: .image,
+            durationMilliseconds: nil,
+            aspectRatio: 1,
+            isFavorite: false,
+            visibility: .timeline,
+            livePhotoVideoID: nil,
+            stack: nil,
+            projectionType: nil,
+            thumbhash: nil,
+            thumbnailRevision: thumbnailRevision
         )
     }
 }
@@ -1248,6 +1412,52 @@ private final class TaskCancellable: Cancellable, @unchecked Sendable {
 
     func cancel() {
         task.cancel()
+    }
+}
+
+private actor PagingTimelineReader: TimelineReading {
+    nonisolated let newerBucketID = TimelineBucketID(rawValue: "2026-10-01T00:00:00.000Z")
+    nonisolated let olderBucketID = TimelineBucketID(rawValue: "2026-09-30T00:00:00.000Z")
+
+    func bucketSummaries(query _: TimelineQuery) async throws -> [TimelineBucketSummary] {
+        [
+            .init(id: newerBucketID, assetCount: 65),
+            .init(id: olderBucketID, assetCount: 2),
+        ]
+    }
+
+    func assets(
+        in bucketID: TimelineBucketID,
+        query _: TimelineQuery
+    ) async throws -> [TimelineAssetSummary] {
+        if bucketID == newerBucketID {
+            return (0 ..< 65).map { Self.asset(id: "new-\($0)") }
+        }
+        return (0 ..< 2).map { Self.asset(id: "old-\($0)") }
+    }
+
+    func memories() async throws -> [TimelineMemorySummary] {
+        []
+    }
+
+    private nonisolated static func asset(id: String) -> TimelineAssetSummary {
+        TimelineAssetSummary(
+            id: id,
+            ownerID: "owner",
+            capturedAt: .distantPast,
+            uploadedAt: .distantPast,
+            localOffsetHours: 0,
+            mediaKind: .image,
+            durationMilliseconds: nil,
+            aspectRatio: 1,
+            isFavorite: false,
+            visibility: .timeline,
+            livePhotoVideoID: nil,
+            stack: nil,
+            projectionType: nil,
+            thumbhash: nil,
+            thumbnailRevision: .distantPast
+        )
     }
 }
 

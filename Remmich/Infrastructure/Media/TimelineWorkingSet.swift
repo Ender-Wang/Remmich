@@ -83,6 +83,21 @@ actor TimelineWorkingSet<Value: Sendable> {
         return entry.value
     }
 
+    func setTier(
+        _ tier: Tier,
+        for key: String,
+        now: TimeInterval = Date.timeIntervalSinceReferenceDate
+    ) {
+        guard var entry = entries[key] else { return }
+        guard tier != .cold else {
+            entries[key] = nil
+            return
+        }
+        entry.tier = tier
+        entry.lastTouched = now
+        entries[key] = entry
+    }
+
     func expire(now: TimeInterval = Date.timeIntervalSinceReferenceDate) {
         entries = entries.filter { _, entry in
             entry.tier == .viewport || entry.tier == .newest ||

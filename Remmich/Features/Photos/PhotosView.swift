@@ -7,6 +7,8 @@ struct PhotosView: View {
 
     @State private var showsJumpPicker = false
     @State private var pendingScrollID: TimelineBucketID?
+    @State private var visibleDescriptors: [String: MediaRequestDescriptor] = [:]
+    @State private var viewportUpdateTask: Task<Void, Never>?
 
     var body: some View {
         Group {
@@ -48,6 +50,12 @@ struct PhotosView: View {
             }
         }
         .task { await store.load() }
+        .onChange(of: store.sections.map { "\($0.id.rawValue):\($0.contentRevision)" }) {
+            scheduleViewportUpdate()
+        }
+        .onDisappear {
+            viewportUpdateTask?.cancel()
+        }
         .accessibilityIdentifier("photos-root")
     }
 
@@ -67,13 +75,18 @@ struct PhotosView: View {
                     }
 
                     ForEach(store.sections) { section in
-                        TimelineSectionView(section: section, store: store, media: media)
-                            .id(section.id)
-                            .onAppear {
-                                store.updateVisibleAnchor(
-                                    .init(bucketID: section.id, assetID: section.assets.first?.id)
-                                )
-                            }
+                        TimelineSectionView(
+                            section: section,
+                            store: store,
+                            media: media,
+                            visibilityChanged: updateVisibility
+                        )
+                        .id(section.id)
+                        .onAppear {
+                            store.updateVisibleAnchor(
+                                .init(bucketID: section.id, assetID: section.assets.first?.id)
+                            )
+                        }
                     }
                 }
             }
@@ -88,12 +101,35 @@ struct PhotosView: View {
             }
         }
     }
+
+    private func updateVisibility(
+        assetID: String,
+        descriptor: MediaRequestDescriptor?
+    ) {
+        visibleDescriptors[assetID] = descriptor
+        scheduleViewportUpdate()
+    }
+
+    private func scheduleViewportUpdate() {
+        viewportUpdateTask?.cancel()
+        viewportUpdateTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(120))
+            guard !Task.isCancelled,
+                  let target = visibleDescriptors.values.compactMap(\.targetPixels).max(by: {
+                      $0.width * $0.height < $1.width * $1.height
+                  })
+            else { return }
+            let plan = store.residencyPlan(visibleAssetIDs: Set(visibleDescriptors.keys))
+            media.updateTimelineResidency(plan, targetPixels: target)
+        }
+    }
 }
 
 private struct TimelineSectionView: View {
     let section: TimelineSection
     let store: PhotosTimelineStore
     let media: MediaLibraryController
+    let visibilityChanged: (String, MediaRequestDescriptor?) -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -114,7 +150,11 @@ private struct TimelineSectionView: View {
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, minHeight: 64)
                 } else {
-                    TimelineAssetGrid(assets: section.assets, media: media)
+                    TimelineAssetGrid(
+                        assets: section.assets,
+                        media: media,
+                        visibilityChanged: visibilityChanged
+                    )
                 }
             case let .failed(message):
                 VStack(spacing: 8) {

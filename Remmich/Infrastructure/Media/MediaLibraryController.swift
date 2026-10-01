@@ -11,8 +11,14 @@ final class MediaLibraryController {
     private(set) var pipeline: ImagePipeline?
     private(set) var downloadService: MediaDownloadService?
 
+    let timelineResidency = TimelineThumbnailResidency()
+
     private var session: AccountSession?
     private var prefetcher: ImagePrefetcher?
+    private var residencyLoadTask: Task<Void, Never>?
+    private var lastTimelinePlan = TimelineResidencyPlan.empty
+    private var lastTimelineTargetPixels: MediaPixelSize?
+    private var residencyScopeGeneration = 0
 
     func configure(session: AccountSession, activeEndpoint: URL?) {
         let nextScope = MediaAccountScope(session: session)
@@ -82,6 +88,49 @@ final class MediaLibraryController {
         prefetcher?.stopPrefetching()
     }
 
+    func updateTimelineResidency(
+        _ plan: TimelineResidencyPlan,
+        targetPixels: MediaPixelSize
+    ) {
+        lastTimelinePlan = plan
+        lastTimelineTargetPixels = targetPixels
+        residencyLoadTask?.cancel()
+
+        let work = Self.preloadAssets(in: plan).compactMap { asset -> (MediaRequestDescriptor, ImageRequest)? in
+            let descriptor = Self.thumbnailDescriptor(for: asset, targetPixels: targetPixels)
+            guard let request = imageRequest(for: descriptor) else { return nil }
+            return (descriptor, request)
+        }
+        let pipeline = pipeline
+        let residency = timelineResidency
+        let scopeGeneration = residencyScopeGeneration
+        residencyLoadTask = Task {
+            await residency.updatePlan(plan, scopeGeneration: scopeGeneration)
+            guard let pipeline, !Task.isCancelled else { return }
+            await Self.preload(
+                work,
+                pipeline: pipeline,
+                residency: residency,
+                scopeGeneration: scopeGeneration
+            )
+        }
+    }
+
+    func retainTimelineThumbnail(
+        _ container: ImageContainer,
+        descriptor: MediaRequestDescriptor
+    ) {
+        let residency = timelineResidency
+        let scopeGeneration = residencyScopeGeneration
+        Task {
+            await residency.retain(
+                container,
+                for: descriptor,
+                scopeGeneration: scopeGeneration
+            )
+        }
+    }
+
     func downloadURL(assetID: String, derivative: MediaDerivative) -> URL? {
         guard let activeAPIURL else { return nil }
         let descriptor = MediaRequestDescriptor(
@@ -104,14 +153,26 @@ final class MediaLibraryController {
     func handleMemoryPressure() {
         pipeline?.cache.removeAll(caches: .memory)
         prefetcher?.stopPrefetching()
+        residencyLoadTask?.cancel()
+        let residency = timelineResidency
+        Task { await residency.handleMemoryPressure() }
     }
 
     func handleBackgroundTransition() {
         prefetcher?.stopPrefetching()
+        residencyLoadTask?.cancel()
+        let residency = timelineResidency
+        Task { await residency.handleBackgroundTransition() }
+    }
+
+    func handleForegroundTransition() {
+        guard let targetPixels = lastTimelineTargetPixels else { return }
+        updateTimelineResidency(lastTimelinePlan, targetPixels: targetPixels)
     }
 
     func clearAll() {
         prefetcher?.stopPrefetching()
+        residencyLoadTask?.cancel()
         pipeline?.cache.removeAll()
         if let downloadService {
             Task { await downloadService.removeTemporaryDownloads() }
@@ -122,6 +183,12 @@ final class MediaLibraryController {
         session = nil
         scope = nil
         activeAPIURL = nil
+        lastTimelinePlan = .empty
+        lastTimelineTargetPixels = nil
+        residencyScopeGeneration += 1
+        let residency = timelineResidency
+        let scopeGeneration = residencyScopeGeneration
+        Task { await residency.advance(to: scopeGeneration) }
     }
 
     private static func makePipeline(scope: MediaAccountScope) -> ImagePipeline {
@@ -165,5 +232,83 @@ final class MediaLibraryController {
             break
         }
         return components?.url
+    }
+
+    private nonisolated static func thumbnailDescriptor(
+        for asset: TimelineAssetSummary,
+        targetPixels: MediaPixelSize
+    ) -> MediaRequestDescriptor {
+        MediaRequestDescriptor(
+            assetID: asset.id,
+            updatedAt: asset.thumbnailRevision,
+            derivative: .thumbnail,
+            targetPixels: targetPixels
+        )
+    }
+
+    private nonisolated static func preloadAssets(
+        in plan: TimelineResidencyPlan
+    ) -> [TimelineAssetSummary] {
+        var seen = Set<String>()
+        return (plan.viewportAssets + plan.prefetchAssets + plan.newestAssets)
+            .filter { seen.insert($0.id).inserted }
+            .prefix(24)
+            .map(\.self)
+    }
+
+    private nonisolated static func preload(
+        _ work: [(MediaRequestDescriptor, ImageRequest)],
+        pipeline: ImagePipeline,
+        residency: TimelineThumbnailResidency,
+        scopeGeneration: Int
+    ) async {
+        await withTaskGroup(of: Void.self) { group in
+            var iterator = work.makeIterator()
+            for _ in 0 ..< 3 {
+                guard let item = iterator.next() else { break }
+                group.addTask {
+                    await load(
+                        item,
+                        pipeline: pipeline,
+                        residency: residency,
+                        scopeGeneration: scopeGeneration
+                    )
+                }
+            }
+            while await group.next() != nil {
+                guard !Task.isCancelled, let item = iterator.next() else {
+                    group.cancelAll()
+                    break
+                }
+                group.addTask {
+                    await load(
+                        item,
+                        pipeline: pipeline,
+                        residency: residency,
+                        scopeGeneration: scopeGeneration
+                    )
+                }
+            }
+        }
+    }
+
+    private nonisolated static func load(
+        _ item: (MediaRequestDescriptor, ImageRequest),
+        pipeline: ImagePipeline,
+        residency: TimelineThumbnailResidency,
+        scopeGeneration: Int
+    ) async {
+        guard !Task.isCancelled else { return }
+        do {
+            let response = try await pipeline.imageTask(with: item.1).response
+            guard !Task.isCancelled else { return }
+            await residency.retain(
+                response.container,
+                for: item.0,
+                scopeGeneration: scopeGeneration
+            )
+        } catch {
+            // Visible cells own retry UI; prefetch failure is intentionally silent.
+        }
     }
 }

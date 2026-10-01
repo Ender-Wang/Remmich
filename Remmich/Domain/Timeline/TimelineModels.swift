@@ -172,6 +172,18 @@ nonisolated struct TimelineVisibleAnchor: Equatable, Sendable {
     let assetID: String?
 }
 
+nonisolated struct TimelineResidencyPlan: Equatable, Sendable {
+    let newestAssets: [TimelineAssetSummary]
+    let viewportAssets: [TimelineAssetSummary]
+    let prefetchAssets: [TimelineAssetSummary]
+
+    static let empty = TimelineResidencyPlan(
+        newestAssets: [],
+        viewportAssets: [],
+        prefetchAssets: []
+    )
+}
+
 nonisolated enum TimelineReadError: LocalizedError, Equatable, Sendable {
     case routeUnavailable
     case staleGeneration
