@@ -17,6 +17,9 @@ jobs:
     name: Build and test
     runs-on: xcode-27
     timeout-minutes: 45
+    env:
+      IPHONE_DESTINATION: platform=iOS Simulator,name=iPhone 17e,OS=27.0
+      IPAD_DESTINATION: platform=iOS Simulator,name=iPad Air 13-inch (M4),OS=27.0
 
     steps:
       - name: Check out repository
@@ -40,29 +43,93 @@ jobs:
       - name: Test Immich API package
         run: swift test --package-path Packages/ImmichAPI
 
-      - name: Test app and UI
+      - name: Boot iPhone simulator
+        run: |
+          xcrun simctl boot "iPhone 17e" || true
+          xcrun simctl bootstatus "iPhone 17e" -b
+
+      - name: Build app and test bundles
         run: |
           set -o pipefail
-          xcodebuild test \
+          xcodebuild build-for-testing \
             -project Remmich.xcodeproj \
             -scheme Remmich \
             -configuration Debug \
-            -destination 'platform=iOS Simulator,name=iPhone 17e,OS=27.0' \
+            -destination "$IPHONE_DESTINATION" \
             -derivedDataPath "$RUNNER_TEMP/RemmichDerivedData" \
-            -resultBundlePath "$RUNNER_TEMP/RemmichTests.xcresult" \
             -skipPackagePluginValidation \
-            -parallel-testing-enabled NO \
             COMPILER_INDEX_STORE_ENABLE=NO \
             | xcbeautify
+
+      - name: Test app logic
+        run: |
+          set -o pipefail
+          xcodebuild test-without-building \
+            -project Remmich.xcodeproj \
+            -scheme Remmich \
+            -configuration Debug \
+            -destination "$IPHONE_DESTINATION" \
+            -derivedDataPath "$RUNNER_TEMP/RemmichDerivedData" \
+            -resultBundlePath "$RUNNER_TEMP/RemmichUnitTests.xcresult" \
+            -skipPackagePluginValidation \
+            -parallel-testing-enabled NO \
+            -only-testing:RemmichTests \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            | xcbeautify
+
+      - name: Test iPhone UI
+        run: |
+          set -o pipefail
+
+          run_ui_tests() {
+            local result_bundle="$1"
+            xcodebuild test-without-building \
+              -project Remmich.xcodeproj \
+              -scheme Remmich \
+              -configuration Debug \
+              -destination "$IPHONE_DESTINATION" \
+              -derivedDataPath "$RUNNER_TEMP/RemmichDerivedData" \
+              -resultBundlePath "$result_bundle" \
+              -skipPackagePluginValidation \
+              -parallel-testing-enabled NO \
+              -only-testing:RemmichUITests \
+              COMPILER_INDEX_STORE_ENABLE=NO \
+              2>&1 | tee "$RUNNER_TEMP/RemmichUITests.log" | xcbeautify
+            return "${PIPESTATUS[0]}"
+          }
+
+          set +e
+          run_ui_tests "$RUNNER_TEMP/RemmichUITests.xcresult"
+          status=$?
+          set -e
+
+          if [[ "$status" -eq 0 ]]; then
+            exit 0
+          fi
+          if ! grep -q "Timed out while launching application via Xcode" "$RUNNER_TEMP/RemmichUITests.log"; then
+            exit "$status"
+          fi
+
+          echo "Simulator launch timed out; rebooting once before retrying the UI suite."
+          xcrun simctl shutdown "iPhone 17e" || true
+          xcrun simctl boot "iPhone 17e"
+          xcrun simctl bootstatus "iPhone 17e" -b
+          run_ui_tests "$RUNNER_TEMP/RemmichUITests-Retry.xcresult"
+
+      - name: Boot iPad simulator
+        run: |
+          xcrun simctl shutdown "iPhone 17e" || true
+          xcrun simctl boot "iPad Air 13-inch (M4)" || true
+          xcrun simctl bootstatus "iPad Air 13-inch (M4)" -b
 
       - name: Test adaptive iPad layout
         run: |
           set -o pipefail
-          xcodebuild test \
+          xcodebuild test-without-building \
             -project Remmich.xcodeproj \
             -scheme Remmich \
             -configuration Debug \
-            -destination 'platform=iOS Simulator,name=iPad Air 13-inch (M4),OS=27.0' \
+            -destination "$IPAD_DESTINATION" \
             -derivedDataPath "$RUNNER_TEMP/RemmichDerivedData" \
             -resultBundlePath "$RUNNER_TEMP/RemmichIPadLayoutTests.xcresult" \
             -skipPackagePluginValidation \
@@ -70,3 +137,18 @@ jobs:
             -only-testing:RemmichUITests/RemmichUITests/testAdaptivePhotoGridUsesAvailableWidth \
             COMPILER_INDEX_STORE_ENABLE=NO \
             | xcbeautify
+
+      - name: Shut down simulators
+        if: ${{ always() }}
+        run: xcrun simctl shutdown all || true
+
+      - name: Upload test results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: remmich-test-results-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/Remmich*.xcresult
+            ${{ runner.temp }}/Remmich*.log
+          if-no-files-found: ignore
+          retention-days: 7
