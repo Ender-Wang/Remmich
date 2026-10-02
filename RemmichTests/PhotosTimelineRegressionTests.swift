@@ -106,11 +106,14 @@ struct PhotosTimelineRegressionTests {
     }
 
     @Test @MainActor func routeRecoveryRetriesAFailedVisibleBucket() async {
-        let failingID = Self.bucketID(1)
+        // Initial loading prefetches the immediate neighbor. Use the following bucket so this
+        // scenario controls exactly when its first (failing) request begins.
+        let failingID = Self.bucketID(2)
         let reader = ScenarioTimelineReader(
-            buckets: Self.buckets(count: 2),
+            buckets: Self.buckets(count: 3),
             assets: [
                 Self.bucketID(0): [Self.asset("newest")],
+                Self.bucketID(1): [Self.asset("neighbor")],
                 failingID: [Self.asset("recovered")],
             ],
             failuresRemaining: [failingID: 1]
