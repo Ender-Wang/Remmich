@@ -55,6 +55,26 @@ struct PhotosTimelineRegressionTests {
         #expect(await reader.summaryRequestCount == 2)
     }
 
+    @Test @MainActor func unavailableStartupRouteRemainsLoadingAndRecoversAutomatically() async {
+        let bucket = Self.buckets(count: 1)[0]
+        let reader = InitialRouteUnavailableTimelineReader(
+            buckets: [bucket],
+            assets: [bucket.id: [Self.asset("recovered")]]
+        )
+        let store = PhotosTimelineStore(reader: reader)
+
+        await store.load()
+
+        #expect(store.loadState == .loading)
+        #expect(store.memoryLaneState == .loading)
+
+        store.routeDidChange(isReachable: true)
+
+        await Self.eventually { store.loadState == .loaded }
+        #expect(store.sections.first?.assets.map(\.id) == ["recovered"])
+        #expect(await reader.summaryRequestCount == 2)
+    }
+
     @Test @MainActor func foregroundRetriesATerminalInitialFailure() async {
         let reader = InitialRetryTimelineReader(
             buckets: Self.buckets(count: 1),
@@ -460,5 +480,43 @@ private actor InitialRetryTimelineReader: TimelineReading {
 
     func memories() async throws -> [TimelineMemorySummary] {
         []
+    }
+}
+
+private actor InitialRouteUnavailableTimelineReader: TimelineReading {
+    private let buckets: [TimelineBucketSummary]
+    private let assetsByBucket: [TimelineBucketID: [TimelineAssetSummary]]
+    private(set) var summaryRequestCount = 0
+    private var memoryRequestCount = 0
+
+    init(
+        buckets: [TimelineBucketSummary],
+        assets: [TimelineBucketID: [TimelineAssetSummary]]
+    ) {
+        self.buckets = buckets
+        assetsByBucket = assets
+    }
+
+    func bucketSummaries(query _: TimelineQuery) async throws -> [TimelineBucketSummary] {
+        summaryRequestCount += 1
+        if summaryRequestCount == 1 {
+            throw TimelineReadError.routeUnavailable
+        }
+        return buckets
+    }
+
+    func assets(
+        in bucketID: TimelineBucketID,
+        query _: TimelineQuery
+    ) async throws -> [TimelineAssetSummary] {
+        assetsByBucket[bucketID] ?? []
+    }
+
+    func memories() async throws -> [TimelineMemorySummary] {
+        memoryRequestCount += 1
+        if memoryRequestCount == 1 {
+            throw TimelineReadError.routeUnavailable
+        }
+        return []
     }
 }

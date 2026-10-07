@@ -725,6 +725,32 @@ struct RemmichTests {
         #expect(controller.media.imageRequest(for: descriptor) != nil)
     }
 
+    @Test @MainActor func savedSessionRestorationIgnoresDuplicateInitialLifecycleTriggers() async {
+        let service = SuspendedValidationService()
+        let controller = AppSessionController(
+            service: service,
+            sessionStore: MemorySessionStore(session: .fixture),
+            profileStore: ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)"),
+            ssidProvider: StubSSIDProvider(ssid: nil),
+            networkMonitoringEnabled: false,
+            pathChangeDebounce: .zero
+        )
+
+        let restoration = Task { await controller.start() }
+        await service.waitUntilValidationStarts()
+
+        await controller.handleForegroundTransition()
+        await controller.handleNetworkPathChange(usesWiFi: true)
+
+        #expect(await service.validateCallCount == 1)
+
+        await service.resumeValidation(with: .reachable)
+        await restoration.value
+
+        #expect(controller.routeStatus == .connected)
+        #expect(await service.validateCallCount == 1)
+    }
+
     @Test @MainActor func savedSessionRestoresThroughLocalRouteWhenLoginEndpointIsUnavailable() async throws {
         let session = AccountSession.fixture
         let sessionStore = MemorySessionStore(session: session)
@@ -1558,6 +1584,7 @@ private actor MemorySessionStore: SessionStoring {
 
 private actor SuspendedValidationService: ServerReading, SessionManaging, RouteValidating {
     private var validationStarted = false
+    private(set) var validateCallCount = 0
     private var continuation: CheckedContinuation<RouteValidationResult, Never>?
 
     func connect(to _: String) async throws -> ServerDetails {
@@ -1575,6 +1602,7 @@ private actor SuspendedValidationService: ServerReading, SessionManaging, RouteV
     func signOut(_: AccountSession) async {}
 
     func validateRoute(endpoint _: URL, session _: AccountSession) async -> RouteValidationResult {
+        validateCallCount += 1
         validationStarted = true
         return await withCheckedContinuation { continuation = $0 }
     }

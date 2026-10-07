@@ -305,6 +305,13 @@ final class PhotosTimelineStore {
             }
         } catch {
             guard requestGeneration == generation else { return }
+            if Self.isRouteUnavailable(error) {
+                loadState = .loading
+                Self.logger.info(
+                    "Initial load deferred until a route is available generation=\(requestGeneration)"
+                )
+                return
+            }
             let message = Self.message(for: error)
             loadState = .failed(message: message)
             Self.logger.error(
@@ -416,6 +423,13 @@ final class PhotosTimelineStore {
                 memoryLaneState = memories.isEmpty ? .hidden : .loaded
             } catch {
                 guard requestGeneration == generation else { return }
+                if Self.isRouteUnavailable(error) {
+                    memoryLaneState = .loading
+                    Self.logger.info(
+                        "Memory lane deferred until a route is available generation=\(requestGeneration)"
+                    )
+                    return
+                }
                 memories = []
                 memoryLaneState = .hidden
                 Self.logger.notice(
@@ -498,6 +512,10 @@ final class PhotosTimelineStore {
     private static func deduplicate(_ assets: [TimelineAssetSummary]) -> [TimelineAssetSummary] {
         var seen = Set<String>()
         return assets.filter { seen.insert($0.id).inserted }
+    }
+
+    private static func isRouteUnavailable(_ error: Error) -> Bool {
+        (error as? TimelineReadError) == .routeUnavailable
     }
 
     private static func assets(

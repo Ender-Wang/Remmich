@@ -44,6 +44,7 @@ final class AppSessionController {
     private let routeEvaluationGate = RouteEvaluationGate()
     private var isMonitoringNetwork = false
     private var hasReceivedNetworkPath = false
+    private var isRestoringSession = false
     private var routeGeneration = 0
     private var pendingPathChangeTask: Task<Void, Never>?
 
@@ -105,6 +106,8 @@ final class AppSessionController {
                 state = .signedOut
                 return
             }
+            isRestoringSession = true
+            defer { isRestoringSession = false }
             media.configure(session: session, activeEndpoint: nil)
             await timeline.configure(session: session, activeEndpoint: nil)
             state = .signedIn(session)
@@ -323,10 +326,10 @@ final class AppSessionController {
         hasReceivedNetworkPath = true
         // NWPathMonitor always delivers one callback immediately on `.start()`, whether or not
         // anything changed. Discarding that noise avoids redundantly revalidating a route that
-        // just connected a moment earlier (e.g., right after a fresh login). But when the route
-        // is not already resolved, that first callback may be the only nudge the app gets before
-        // the next real path change or foreground activation — it must not be discarded then.
-        if isFirstCallback, routeStatus == .connected {
+        // just connected a moment earlier (e.g., right after a fresh login). Saved-session
+        // restoration also performs its own evaluation, so the initial path snapshot must not
+        // restart it. Outside those cases, an unresolved route still needs this first nudge.
+        if isFirstCallback, isRestoringSession || routeStatus == .connected {
             return
         }
         // An interface actually transitioning (Wi-Fi associating, a VPN/proxy tunnel
@@ -341,8 +344,11 @@ final class AppSessionController {
         pendingPathChangeTask?.cancel()
         let task = Task { [weak self, pathChangeDebounce] in
             try? await Task.sleep(for: pathChangeDebounce)
-            guard !Task.isCancelled else { return }
-            await self?.reevaluateRoute()
+            guard !Task.isCancelled, let self else { return }
+            if isFirstCallback, isRestoringSession || routeStatus == .connected {
+                return
+            }
+            await reevaluateRoute()
         }
         pendingPathChangeTask = task
         await task.value
@@ -461,7 +467,9 @@ final class AppSessionController {
     }
 
     func handleForegroundTransition() async {
-        await reevaluateRoute()
+        if !isRestoringSession {
+            await reevaluateRoute()
+        }
         if photosForegroundRetryEnabled {
             photos.foregrounded()
         }
