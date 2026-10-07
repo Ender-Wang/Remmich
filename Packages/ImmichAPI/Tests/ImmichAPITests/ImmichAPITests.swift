@@ -183,7 +183,7 @@ struct TimelineReadContractTests {
         let assets = try await client.timelineAssets(in: buckets[0].id)
         let memories = try await client.memories()
 
-        #expect(buckets == [.init(id: "2026-09-01T00:00:00.000Z", assetCount: 1)])
+        #expect(buckets == [.init(id: "2026-09-01", assetCount: 1)])
         #expect(assets.count == 1)
         #expect(assets[0].id == "asset-1")
         #expect(assets[0].mediaKind == .image)
@@ -206,7 +206,7 @@ struct TimelineReadContractTests {
         #expect(operations[0].path.contains("isTrashed=false"))
         #expect(operations[0].path.contains("withPartners=true"))
         #expect(operations[0].path.contains("withStacked=true"))
-        #expect(operations[1].path.contains("timeBucket=2026-09-01T00%3A00%3A00.000Z"))
+        #expect(operations[1].path.contains("timeBucket=2026-09-01"))
         #expect(operations[2].path.contains("isTrashed=false"))
         #expect(operations[2].path.contains("order=desc"))
         #expect(operations[2].path.contains("page=1"))
@@ -234,6 +234,28 @@ struct TimelineReadContractTests {
         #expect(assets[1].localOffsetHours == -9.75)
         #expect(assets[1].mediaKind == .video)
         #expect(assets[1].durationMilliseconds == 12345)
+    }
+
+    @Test func acceptsImmichDateVariantsAndTreatsTimezoneLessTimelineDatesAsUTC() throws {
+        let transcoder = ImmichDateTranscoder()
+        let wholeSeconds = try transcoder.decode("2026-09-01T00:00:00Z")
+        let fractional = try transcoder.decode("2026-09-01T00:00:00.125Z")
+        let timezoneLess = try transcoder.decode("2026-09-01T08:00:00.125")
+        let shanghaiOffset = try transcoder.decode("2026-09-01T16:00:00.125+08:00")
+
+        #expect(fractional.timeIntervalSince(wholeSeconds) == 0.125)
+        #expect(timezoneLess == shanghaiOffset)
+
+        let response = timelineResponse(
+            count: 1,
+            createdAt: ["2026-09-01T08:00:01.250"],
+            fileCreatedAt: ["2026-09-01T08:00:00.125"]
+        )
+        let asset = try #require(ImmichClient.timelineAssets(from: response).first)
+        let expectedCreatedAt = try transcoder.decode("2026-09-01T08:00:01.250Z")
+
+        #expect(asset.createdAt == expectedCreatedAt)
+        #expect(asset.fileCreatedAt == timezoneLess)
     }
 
     @Test func toleratesMissingAndShortOptionalColumns() throws {
@@ -368,11 +390,11 @@ private struct TimelineTransport: ClientTransport {
         await recorder.record(request, operationID: operationID)
         let json: String = switch operationID {
         case "getTimeBuckets":
-            #"[{"count":1,"timeBucket":"2026-09-01T00:00:00.000Z"}]"#
+            #"[{"count":1,"timeBucket":"2026-09-01"}]"#
         case "getTimeBucket":
-            #"{"createdAt":["2026-09-01T00:00:01Z"],"duration":[null],"fileCreatedAt":["2026-09-01T00:00:00.125Z"],"id":["asset-1"],"isFavorite":[false],"isImage":[true],"isTrashed":[false],"livePhotoVideoId":[null],"localOffsetHours":[5.5],"ownerId":["owner-1"],"projectionType":[null],"ratio":[1.5],"thumbhash":[null],"visibility":["timeline"]}"#
+            #"{"createdAt":["2026-09-01T00:00:01.250"],"duration":[null],"fileCreatedAt":["2026-09-01T00:00:00.125"],"id":["asset-1"],"isFavorite":[false],"isImage":[true],"isTrashed":[false],"livePhotoVideoId":[null],"localOffsetHours":[5.5],"ownerId":["owner-1"],"projectionType":[null],"ratio":[1.5],"thumbhash":[null],"visibility":["timeline"]}"#
         case "searchMemories":
-            #"[{"assets":[],"createdAt":"2026-09-01T00:00:00Z","data":{"year":2025},"id":"memory-1","isSaved":false,"memoryAt":"2026-09-01T00:00:00Z","ownerId":"owner-1","type":"on_this_day","updatedAt":"2026-09-01T00:00:00Z"}]"#
+            #"[{"assets":[],"createdAt":"2026-09-01T00:00:00.125Z","data":{"year":2025},"id":"memory-1","isSaved":false,"memoryAt":"2026-09-01T00:00:00.000Z","ownerId":"owner-1","type":"on_this_day","updatedAt":"2026-09-01T00:00:00.375Z"}]"#
         default:
             throw ImmichAPIError.readOnlyPolicyViolation(operationID: operationID)
         }

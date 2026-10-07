@@ -8,6 +8,7 @@ public actor ImmichClient {
         subsystem: "io.github.ender-wang.Remmich",
         category: "ImmichAPI"
     )
+    private nonisolated static let dateTranscoder = ImmichDateTranscoder()
 
     private struct RouteIdentity: Decodable {
         let id: String
@@ -462,7 +463,7 @@ public actor ImmichClient {
     }
 
     private static func parseTimelineDate(_ value: String) -> Date? {
-        try? Date(value, strategy: .iso8601)
+        try? dateTranscoder.decode(value)
     }
 
     private static func optionalValue<Value>(at index: Int, in values: [Value?]?) -> Value? {
@@ -485,6 +486,7 @@ public actor ImmichClient {
     private func makeClient() -> Client {
         Client(
             serverURL: apiURL,
+            configuration: .init(dateTranscoder: Self.dateTranscoder),
             transport: transport,
             middlewares: [AuthenticationMiddleware(credential: credential)]
         )
