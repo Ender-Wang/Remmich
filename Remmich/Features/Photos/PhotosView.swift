@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct PhotosView: View {
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     let store: PhotosTimelineStore
     let media: MediaLibraryController
     let showAccount: () -> Void
@@ -31,6 +32,7 @@ struct PhotosView: View {
             }
         }
         .navigationTitle("Photos")
+        .navigationBarTitleDisplayMode(horizontalSizeClass == .regular ? .inline : .large)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Button {
