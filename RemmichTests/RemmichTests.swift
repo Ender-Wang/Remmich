@@ -303,6 +303,9 @@ struct RemmichTests {
         await controller.handleNetworkPathChange(usesWiFi: true)
         #expect(await service.validateCallCount == 0)
 
+        await controller.handleNetworkPathChange(usesWiFi: true)
+        #expect(await service.validateCallCount == 0)
+
         await controller.handleNetworkPathChange(usesWiFi: false)
         #expect(await service.validateCallCount == 1)
         #expect(controller.activeRoute == ActiveConnectionRoute(
@@ -310,6 +313,7 @@ struct RemmichTests {
             endpoint: AccountSession.fixture.apiURL
         ))
         #expect(controller.routeStatus == .connected)
+        #expect(await service.activatedEndpoints.isEmpty)
     }
 
     @Test @MainActor func rapidPathChangeBurstDebouncesToOneEvaluation() async {

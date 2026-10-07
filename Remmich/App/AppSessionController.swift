@@ -44,6 +44,7 @@ final class AppSessionController {
     private let routeEvaluationGate = RouteEvaluationGate()
     private var isMonitoringNetwork = false
     private var hasReceivedNetworkPath = false
+    private var lastNetworkPathSignature: NetworkPathSignature?
     private var isRestoringSession = false
     private var routeGeneration = 0
     private var pendingPathChangeTask: Task<Void, Never>?
@@ -111,7 +112,7 @@ final class AppSessionController {
             media.configure(session: session, activeEndpoint: nil)
             await timeline.configure(session: session, activeEndpoint: nil)
             state = .signedIn(session)
-            await reevaluateRoute()
+            await reevaluateRoute(trigger: .startup)
         } catch SessionStoreError.corruptPayload {
             try? await sessionStore.delete()
             activeRoute = nil
@@ -231,24 +232,26 @@ final class AppSessionController {
             routeStatus = .connected
         } else if activeRoute == nil {
             Task { @MainActor [weak self] in
-                await self?.reevaluateRoute()
+                await self?.reevaluateRoute(trigger: .profileSave)
             }
         }
         return .saved(profile: profile)
     }
 
-    func reevaluateRoute() async {
+    private func reevaluateRoute(trigger: RouteEvaluationTrigger) async {
         await routeEvaluationGate.submit { [weak self] in
-            await self?.performRouteEvaluation()
+            await self?.performRouteEvaluation(trigger: trigger)
         }
     }
 
-    private func performRouteEvaluation() async {
+    private func performRouteEvaluation(trigger: RouteEvaluationTrigger) async {
         guard case let .signedIn(session) = state else { return }
         routeGeneration += 1
         let evaluation = routeGeneration
         routeStatus = .checking
-        Self.routeLogger.info("Evaluating saved connection routes")
+        Self.routeLogger.info(
+            "Evaluating saved connection routes trigger=\(trigger.rawValue, privacy: .public)"
+        )
 
         if connectionProfile.endpoints.isEmpty {
             await restoreDirectRoute(session, evaluation: evaluation)
@@ -289,6 +292,13 @@ final class AppSessionController {
             return
         }
         guard evaluation == routeGeneration else { return }
+        if activeRoute == route {
+            routeStatus = .connected
+            Self.routeLogger.info(
+                "Retained active \(route.kind.rawValue, privacy: .public) endpoint \(route.endpoint.absoluteString, privacy: .public)"
+            )
+            return
+        }
         do {
             try await service.activateRoute(endpoint: route.endpoint, session: session)
             guard evaluation == routeGeneration else { return }
@@ -314,15 +324,22 @@ final class AppSessionController {
         guard networkMonitoringEnabled, !isMonitoringNetwork else { return }
         isMonitoringNetwork = true
         pathMonitor.pathUpdateHandler = { [weak self] path in
+            let signature = NetworkPathSignature(path)
             Task { @MainActor [weak self] in
-                await self?.handleNetworkPathChange(usesWiFi: path.usesInterfaceType(.wifi))
+                await self?.handleNetworkPathChange(signature)
             }
         }
         pathMonitor.start(queue: DispatchQueue(label: "Remmich.NetworkPath"))
     }
 
-    func handleNetworkPathChange(usesWiFi _: Bool) async {
+    func handleNetworkPathChange(usesWiFi: Bool) async {
+        await handleNetworkPathChange(.test(usesWiFi: usesWiFi))
+    }
+
+    private func handleNetworkPathChange(_ signature: NetworkPathSignature) async {
         let isFirstCallback = !hasReceivedNetworkPath
+        guard lastNetworkPathSignature != signature else { return }
+        lastNetworkPathSignature = signature
         hasReceivedNetworkPath = true
         // NWPathMonitor always delivers one callback immediately on `.start()`, whether or not
         // anything changed. Discarding that noise avoids redundantly revalidating a route that
@@ -348,7 +365,7 @@ final class AppSessionController {
             if isFirstCallback, isRestoringSession || routeStatus == .connected {
                 return
             }
-            await reevaluateRoute()
+            await reevaluateRoute(trigger: .networkPath)
         }
         pendingPathChangeTask = task
         await task.value
@@ -370,6 +387,14 @@ final class AppSessionController {
             } else {
                 Self.routeLogger.error("Saved direct route is currently unreachable")
             }
+            return
+        }
+        let directRoute = ActiveConnectionRoute(kind: .direct, endpoint: session.apiURL)
+        if activeRoute == directRoute {
+            routeStatus = .connected
+            Self.routeLogger.info(
+                "Retained active direct endpoint \(session.apiURL.absoluteString, privacy: .public)"
+            )
             return
         }
         do {
@@ -468,7 +493,7 @@ final class AppSessionController {
 
     func handleForegroundTransition() async {
         if !isRestoringSession {
-            await reevaluateRoute()
+            await reevaluateRoute(trigger: .foreground)
         }
         if photosForegroundRetryEnabled {
             photos.foregrounded()
@@ -486,6 +511,13 @@ final class AppSessionController {
 
 private struct EndpointValidationFailureError: Error {
     let failure: EndpointValidationFailure
+}
+
+private nonisolated enum RouteEvaluationTrigger: String, Sendable {
+    case startup
+    case profileSave = "profile-save"
+    case networkPath = "network-path"
+    case foreground
 }
 
 private actor RouteValidationAudit {
@@ -509,6 +541,63 @@ private actor RouteEvaluationGate {
         let task = Task { await operation() }
         currentTask = task
         await task.value
+    }
+}
+
+private nonisolated struct NetworkPathSignature: Equatable, Sendable {
+    let status: String
+    let interfaces: [String]
+    let gateways: [String]
+    let isExpensive: Bool
+    let isConstrained: Bool
+    let supportsDNS: Bool
+    let supportsIPv4: Bool
+    let supportsIPv6: Bool
+
+    init(_ path: NWPath) {
+        status = String(describing: path.status)
+        interfaces = path.availableInterfaces
+            .map { "\($0.type):\($0.name)" }
+            .sorted()
+        gateways = path.gateways.map(String.init(describing:)).sorted()
+        isExpensive = path.isExpensive
+        isConstrained = path.isConstrained
+        supportsDNS = path.supportsDNS
+        supportsIPv4 = path.supportsIPv4
+        supportsIPv6 = path.supportsIPv6
+    }
+
+    static func test(usesWiFi: Bool) -> NetworkPathSignature {
+        NetworkPathSignature(
+            status: "satisfied",
+            interfaces: [usesWiFi ? "wifi:test" : "cellular:test"],
+            gateways: [],
+            isExpensive: !usesWiFi,
+            isConstrained: false,
+            supportsDNS: true,
+            supportsIPv4: true,
+            supportsIPv6: true
+        )
+    }
+
+    private init(
+        status: String,
+        interfaces: [String],
+        gateways: [String],
+        isExpensive: Bool,
+        isConstrained: Bool,
+        supportsDNS: Bool,
+        supportsIPv4: Bool,
+        supportsIPv6: Bool
+    ) {
+        self.status = status
+        self.interfaces = interfaces
+        self.gateways = gateways
+        self.isExpensive = isExpensive
+        self.isConstrained = isConstrained
+        self.supportsDNS = supportsDNS
+        self.supportsIPv4 = supportsIPv4
+        self.supportsIPv6 = supportsIPv6
     }
 }
 
