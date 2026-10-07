@@ -58,16 +58,19 @@ final class RemmichUITests: XCTestCase {
         let photos = app.descendants(matching: .any)["photos-root"]
         XCTAssertTrue(photos.waitForExistence(timeout: 5))
 
-        let grid = app.otherElements.matching(
+        let grids = app.otherElements.matching(
             NSPredicate(format: "label == %@", "Photo grid")
-        ).firstMatch
+        )
+        let grid = grids.element(boundBy: 1)
         XCTAssertTrue(grid.waitForExistence(timeout: 2))
 
-        let assets = (0 ..< 8).map { index in
+        // The preview timeline's first capture day has one asset. Exercise the
+        // following multi-asset day so every frame belongs to the same grid.
+        let assets = (1 ... 5).map { index in
             app.descendants(matching: .any)["asset-asset-\(index)"]
         }
         XCTAssertTrue(assets[0].waitForExistence(timeout: 2))
-        XCTAssertTrue(assets[7].waitForExistence(timeout: 2))
+        XCTAssertTrue(assets[4].waitForExistence(timeout: 2))
 
         let frames = assets.map(\.frame)
         let firstRowY = frames.map(\.midY).min() ?? 0
