@@ -122,6 +122,7 @@ private struct TimelineAssetThumbnail: View {
                 media: media,
                 didLoad: { media.retainTimelineThumbnail($0, descriptor: descriptor) }
             )
+            .frame(width: proxy.size.width, height: proxy.size.height)
             .overlay(alignment: .topTrailing) {
                 if asset.isFavorite {
                     Image(systemName: "heart.fill")
@@ -160,6 +161,7 @@ private struct TimelineAssetThumbnail: View {
             .onDisappear { visibilityChanged(asset.id, nil) }
         }
         .aspectRatio(1, contentMode: .fit)
+        .clipped()
         .contentShape(.rect)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityLabel)

@@ -255,6 +255,48 @@ struct PhotosTimelineRegressionTests {
         }
     }
 
+    @Test func visibleDayUsesNewestAssetCaptureDateInsteadOfMonthlyBucketStart() {
+        let bucket = TimelineBucketSummary(
+            id: .init(rawValue: "2026-10-01T00:00:00.000Z"),
+            assetCount: 1
+        )
+        let section = TimelineSection(
+            summary: bucket,
+            assets: [Self.asset("newest", capturedAt: Self.date("2026-10-07T18:45:00Z"))],
+            loadState: .loaded,
+            contentRevision: 1
+        )
+
+        #expect(section.id == bucket.id)
+        #expect(section.dayGroups.map(\.id.id) == ["2026-10-07"])
+        #expect(section.dayGroups.first?.assets.map(\.id) == ["newest"])
+    }
+
+    @Test func visibleDaysSplitAtCaptureDateBoundariesWithoutChangingBucketPages() {
+        let bucket = TimelineBucketSummary(
+            id: .init(rawValue: "2026-10-01T00:00:00.000Z"),
+            assetCount: 3
+        )
+        let section = TimelineSection(
+            summary: bucket,
+            assets: [
+                Self.asset("late", capturedAt: Self.date("2026-10-07T23:59:59Z")),
+                Self.asset("same-day", capturedAt: Self.date("2026-10-07T00:00:00Z")),
+                Self.asset("previous-day", capturedAt: Self.date("2026-10-06T23:59:59Z")),
+            ],
+            loadState: .loaded,
+            contentRevision: 1
+        )
+
+        #expect(section.dayGroups.map(\.id.id) == ["2026-10-07", "2026-10-06"])
+        #expect(section.dayGroups.map { $0.assets.map(\.id) } == [
+            ["late", "same-day"],
+            ["previous-day"],
+        ])
+        #expect(section.logicalPages.flatMap(\.assetIDs) == ["late", "same-day", "previous-day"])
+        #expect(section.logicalPages.allSatisfy { $0.id.bucketID == bucket.id })
+    }
+
     @Test func residencyReleasesPinsForBackgroundAndMemoryPressure() async {
         let newest = Self.asset("newest")
         let visible = Self.asset("visible")
@@ -285,11 +327,14 @@ struct PhotosTimelineRegressionTests {
         (0 ..< count).map { .init(id: bucketID($0), assetCount: 1) }
     }
 
-    private nonisolated static func asset(_ id: String) -> TimelineAssetSummary {
+    private nonisolated static func asset(
+        _ id: String,
+        capturedAt: Date = .distantPast
+    ) -> TimelineAssetSummary {
         TimelineAssetSummary(
             id: id,
             ownerID: "owner",
-            capturedAt: .distantPast,
+            capturedAt: capturedAt,
             uploadedAt: .distantPast,
             localOffsetHours: 0,
             mediaKind: .image,
@@ -303,6 +348,10 @@ struct PhotosTimelineRegressionTests {
             thumbhash: nil,
             thumbnailRevision: .distantPast
         )
+    }
+
+    private nonisolated static func date(_ value: String) -> Date {
+        ISO8601DateFormatter().date(from: value)!
     }
 
     private nonisolated static func descriptor(_ asset: TimelineAssetSummary) -> MediaRequestDescriptor {

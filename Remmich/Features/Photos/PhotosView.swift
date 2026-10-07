@@ -133,13 +133,9 @@ private struct TimelineSectionView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            AssetSectionHeader(
-                title: title,
-                subtitle: section.summary.assetCount.formatted() + " items"
-            )
-
             switch section.loadState {
             case .unloaded, .loading:
+                bucketHeader
                 ProgressView()
                     .frame(maxWidth: .infinity, minHeight: 88)
                     .task { await store.loadBucket(section.id) }
@@ -150,13 +146,23 @@ private struct TimelineSectionView: View {
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, minHeight: 64)
                 } else {
-                    TimelineAssetGrid(
-                        assets: section.assets,
-                        media: media,
-                        visibilityChanged: visibilityChanged
-                    )
+                    ForEach(section.dayGroups) { group in
+                        VStack(spacing: 0) {
+                            AssetSectionHeader(
+                                title: title(for: group.id),
+                                subtitle: group.assets.count.formatted() + " items"
+                            )
+                            TimelineAssetGrid(
+                                assets: group.assets,
+                                media: media,
+                                visibilityChanged: visibilityChanged
+                            )
+                        }
+                        .accessibilityIdentifier("timeline-day-\(group.id.id)")
+                    }
                 }
             case let .failed(message):
+                bucketHeader
                 VStack(spacing: 8) {
                     Text(message)
                         .font(.caption)
@@ -174,8 +180,26 @@ private struct TimelineSectionView: View {
         .accessibilityIdentifier("timeline-section-\(section.id.rawValue)")
     }
 
-    private var title: String {
+    private var bucketHeader: some View {
+        AssetSectionHeader(
+            title: bucketTitle,
+            subtitle: section.summary.assetCount.formatted() + " items"
+        )
+    }
+
+    private var bucketTitle: String {
         section.id.displayDate?.formatted(date: .long, time: .omitted) ?? section.id.rawValue
+    }
+
+    private func title(for day: TimelineCaptureDay) -> String {
+        guard let date = day.displayDate else { return day.id }
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = .autoupdatingCurrent
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateStyle = .long
+        formatter.timeStyle = .none
+        return formatter.string(from: date)
     }
 }
 

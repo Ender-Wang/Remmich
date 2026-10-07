@@ -90,6 +90,41 @@ nonisolated struct TimelineAssetSummary: Hashable, Identifiable, Sendable {
     let thumbnailRevision: Date
 }
 
+nonisolated struct TimelineCaptureDay: Hashable, Identifiable, Sendable {
+    let year: Int
+    let month: Int
+    let day: Int
+
+    init(capturedAt: Date) {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let components = calendar.dateComponents([.year, .month, .day], from: capturedAt)
+        year = components.year ?? 1
+        month = components.month ?? 1
+        day = components.day ?? 1
+    }
+
+    var id: String {
+        String(format: "%04d-%02d-%02d", year, month, day)
+    }
+
+    var displayDate: Date? {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        return calendar.date(from: DateComponents(
+            timeZone: calendar.timeZone,
+            year: year,
+            month: month,
+            day: day
+        ))
+    }
+}
+
+nonisolated struct TimelineDayGroup: Identifiable, Sendable {
+    let id: TimelineCaptureDay
+    var assets: [TimelineAssetSummary]
+}
+
 nonisolated struct TimelineMemoryAssetSummary: Hashable, Identifiable, Sendable {
     let id: String
     let revision: Date
@@ -133,6 +168,19 @@ nonisolated struct TimelineSection: Identifiable, Sendable {
 
     var id: TimelineBucketID {
         summary.id
+    }
+
+    var dayGroups: [TimelineDayGroup] {
+        var groups: [TimelineDayGroup] = []
+        for asset in assets {
+            let day = TimelineCaptureDay(capturedAt: asset.capturedAt)
+            if groups.last?.id == day {
+                groups[groups.count - 1].assets.append(asset)
+            } else {
+                groups.append(.init(id: day, assets: [asset]))
+            }
+        }
+        return groups
     }
 
     var logicalPages: [TimelineLogicalPage] {
