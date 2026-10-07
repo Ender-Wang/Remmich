@@ -248,7 +248,6 @@ private struct TimelineMemoryLane: View {
                     }
                 }
             }
-            .padding(.horizontal)
         }
         .scrollIndicators(.hidden)
         .accessibilityIdentifier("memory-lane")
