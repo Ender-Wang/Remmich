@@ -91,6 +91,8 @@ struct PhotosView: View {
                     }
                 }
             }
+            .ignoresSafeArea(.container, edges: .horizontal)
+            .contentMargins(.horizontal, 0, for: .scrollContent)
             .refreshable { await store.refresh() }
             .onChange(of: pendingScrollID) { _, bucketID in
                 guard let bucketID else { return }

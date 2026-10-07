@@ -94,6 +94,31 @@ final class RemmichUITests: XCTestCase {
     }
 
     @MainActor
+    func testPhotoTimelineUsesFullLandscapeWidth() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        addTeardownBlock {
+            XCUIDevice.shared.orientation = .portrait
+        }
+
+        let app = XCUIApplication()
+        app.launchArguments = ["-ui-testing-signed-in"]
+        app.launch()
+
+        let photos = app.descendants(matching: .any)["photos-root"]
+        XCTAssertTrue(photos.waitForExistence(timeout: 5))
+        XCTAssertGreaterThan(photos.frame.width, photos.frame.height)
+
+        let firstAsset = app.descendants(matching: .any)["asset-asset-0"]
+        XCTAssertTrue(firstAsset.waitForExistence(timeout: 2))
+        XCTAssertLessThanOrEqual(firstAsset.frame.minX, app.frame.minX + 1)
+
+        let spacing: CGFloat = 2
+        let columnCount = floor((app.frame.width + spacing) / (firstAsset.frame.width + spacing))
+        let gridWidth = columnCount * firstAsset.frame.width + max(0, columnCount - 1) * spacing
+        XCTAssertGreaterThanOrEqual(gridWidth, app.frame.width - 1)
+    }
+
+    @MainActor
     func testLoadedPhotosTimelineExposesMemoryBadgesAndJumpControl() {
         let app = XCUIApplication()
         app.launchArguments = ["-ui-testing-signed-in"]
