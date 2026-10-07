@@ -39,7 +39,8 @@ struct SearchView: View {
             }
             .padding(.top, 8)
         }
-        .navigationTitle("Search")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(.hidden, for: .navigationBar)
         .searchable(text: $query, prompt: "Photos, places, and more")
         .toolbar { AccountToolbarButton(action: showAccount) }
         .navigationDestination(for: FixtureAsset.self) { asset in

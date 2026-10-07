@@ -55,7 +55,8 @@ struct AlbumsView: View {
             .padding(.horizontal)
             .padding(.bottom, 8)
         }
-        .navigationTitle("Albums")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(.hidden, for: .navigationBar)
         .searchable(text: $query, prompt: "Albums")
         .toolbar { AccountToolbarButton(action: showAccount) }
         .navigationDestination(for: FixtureAlbum.self) { album in

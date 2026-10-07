@@ -18,7 +18,8 @@ struct LibraryView: View {
             }
             .padding()
         }
-        .navigationTitle("Library")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(.hidden, for: .navigationBar)
         .toolbar { AccountToolbarButton(action: showAccount) }
         .navigationDestination(for: FixtureCollection.self) { collection in
             CollectionDetailView(collection: collection)
