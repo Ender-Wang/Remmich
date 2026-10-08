@@ -339,17 +339,19 @@ final class MediaLibraryController {
             }
             while let outcome = await group.next() {
                 summary.record(outcome)
-                guard !Task.isCancelled, let item = iterator.next() else {
+                guard !Task.isCancelled else {
                     group.cancelAll()
-                    break
+                    continue
                 }
-                group.addTask {
-                    await load(
-                        item,
-                        pipeline: pipeline,
-                        residency: residency,
-                        scopeGeneration: scopeGeneration
-                    )
+                if let item = iterator.next() {
+                    group.addTask {
+                        await load(
+                            item,
+                            pipeline: pipeline,
+                            residency: residency,
+                            scopeGeneration: scopeGeneration
+                        )
+                    }
                 }
             }
             if Task.isCancelled {
