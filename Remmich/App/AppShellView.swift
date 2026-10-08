@@ -1,6 +1,9 @@
 import SwiftUI
+import UIKit
 
 struct AppShellView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     let session: AccountSession
     let profile: ConnectionProfile
     let activeRoute: ActiveConnectionRoute?
@@ -44,16 +47,35 @@ struct AppShellView: View {
             }
         }
         .tabViewStyle(.sidebarAdaptable)
-        .sheet(isPresented: $showsAccount) {
-            AccountSettingsView(
-                session: session,
-                profile: profile,
-                activeRoute: activeRoute,
-                routeStatus: routeStatus,
-                saveProfile: saveProfile,
-                signOut: signOut
-            )
+        .overlay {
+            if showsAccount {
+                GeometryReader { geometry in
+                    ZStack {
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .onTapGesture { showsAccount = false }
+                        AccountSettingsView(
+                            session: session,
+                            profile: profile,
+                            activeRoute: activeRoute,
+                            routeStatus: routeStatus,
+                            saveProfile: saveProfile,
+                            signOut: signOut,
+                            close: { showsAccount = false }
+                        )
+                        .frame(
+                            width: min(geometry.size.width - 32, 620),
+                            height: UIDevice.current.userInterfaceIdiom == .pad
+                                ? min(geometry.size.height - 40, 680)
+                                : min(geometry.size.height * 0.8, 620)
+                        )
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                .transition(reduceMotion ? .opacity : .move(edge: .bottom))
+            }
         }
+        .animation(.smooth(duration: 0.35), value: showsAccount)
     }
 
     private func showAccount() {

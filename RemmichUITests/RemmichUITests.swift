@@ -5,6 +5,7 @@
 //  Created by Ender Wang on 9/25/26.
 //
 
+import UIKit
 import XCTest
 
 final class RemmichUITests: XCTestCase {
@@ -30,8 +31,42 @@ final class RemmichUITests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["search-root"].waitForExistence(timeout: 2))
 
         app.buttons["account-button"].firstMatch.tap()
-        XCTAssertTrue(app.descendants(matching: .any)["account-settings"].waitForExistence(timeout: 2))
-        app.buttons["Done"].firstMatch.tap()
+        let accountSettings = app.descendants(matching: .any)["account-settings"]
+        XCTAssertTrue(accountSettings.waitForExistence(timeout: 2))
+        let initialSheetFrame = accountSettings.frame
+        accountSettings.swipeUp()
+        XCTAssertEqual(accountSettings.frame.minY, initialSheetFrame.minY, accuracy: 4)
+        XCTAssertEqual(accountSettings.frame.height, initialSheetFrame.height, accuracy: 4)
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.5)).tap()
+            XCTAssertFalse(accountSettings.waitForExistence(timeout: 1))
+        } else {
+            app.buttons["Done"].firstMatch.tap()
+        }
+    }
+
+    @MainActor
+    func testCaptureAccountSheetAppearanceOnDevice() throws {
+        #if targetEnvironment(simulator)
+            throw XCTSkip("Captures the account panel over a manually authenticated physical-device library")
+        #else
+            let app = XCUIApplication()
+            app.launch()
+            let accountButton = app.buttons["account-button"].firstMatch
+            XCTAssertTrue(accountButton.waitForExistence(timeout: 15))
+            accountButton.tap()
+            let settings = app.descendants(matching: .any)["account-settings"]
+            XCTAssertTrue(settings.waitForExistence(timeout: 5))
+            let opened = XCTAttachment(screenshot: app.screenshot())
+            opened.name = "Account panel opened"
+            opened.lifetime = .keepAlways
+            add(opened)
+            settings.swipeUp()
+            let scrolled = XCTAttachment(screenshot: app.screenshot())
+            scrolled.name = "Account panel after scrolling"
+            scrolled.lifetime = .keepAlways
+            add(scrolled)
+        #endif
     }
 
     @MainActor

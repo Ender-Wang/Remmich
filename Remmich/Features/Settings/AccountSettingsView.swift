@@ -8,6 +8,7 @@ struct AccountSettingsView: View {
     let routeStatus: ConnectionRouteStatus
     let saveProfile: (ConnectionProfileDraft) async -> ConnectionProfileSaveResult
     let signOut: () async -> Void
+    let close: (() -> Void)?
 
     @State private var profile: ConnectionProfile
     @State private var localAddress: String
@@ -21,96 +22,105 @@ struct AccountSettingsView: View {
         activeRoute: ActiveConnectionRoute?,
         routeStatus: ConnectionRouteStatus,
         saveProfile: @escaping (ConnectionProfileDraft) async -> ConnectionProfileSaveResult,
-        signOut: @escaping () async -> Void
+        signOut: @escaping () async -> Void,
+        close: (() -> Void)? = nil
     ) {
         self.session = session
         self.activeRoute = activeRoute
         self.routeStatus = routeStatus
         self.saveProfile = saveProfile
         self.signOut = signOut
+        self.close = close
         _profile = State(initialValue: profile)
         _localAddress = State(initialValue: profile.localEndpoint?.absoluteString ?? "")
         _externalAddresses = State(initialValue: profile.externalEndpoints.map(\.absoluteString).joined(separator: "\n"))
     }
 
     var body: some View {
-        NavigationStack {
-            Form {
-                Section("Account") {
-                    LabeledContent("User", value: session.userEmail)
-                    LabeledContent("Server", value: activeRoute?.endpoint.absoluteString ?? routeStatusLabel)
-                    LabeledContent("Immich version", value: session.serverVersion.description)
-                    LabeledContent("Access", value: "Read only")
-                }
+        VStack(spacing: 0) {
+            HStack {
+                Text("Remmich")
+                    .font(.title.bold())
+                Spacer()
+                Button("Done") { closePanel() }
+                    .buttonStyle(.glass)
+            }
+            .padding(24)
 
-                Section("Active connection") {
-                    LabeledContent(
-                        "Route",
-                        value: activeRoute?.kind.rawValue.capitalized ?? "None"
-                    )
-                    LabeledContent("Status", value: routeStatusLabel)
-                    if routeStatus != .connected {
-                        Text(routeStatusDetail)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 28) {
+                    accountSection("Account") {
+                        LabeledContent("User", value: session.userEmail)
+                        LabeledContent("Server", value: activeRoute?.endpoint.absoluteString ?? routeStatusLabel)
+                        LabeledContent("Immich version", value: session.serverVersion.description)
+                        LabeledContent("Access", value: "Read only")
+                    }
+
+                    accountSection("Active connection") {
+                        LabeledContent(
+                            "Route",
+                            value: activeRoute?.kind.rawValue.capitalized ?? "None"
+                        )
+                        LabeledContent("Status", value: routeStatusLabel)
+                        if routeStatus != .connected {
+                            Text(routeStatusDetail)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    accountSection("Application") {
+                        LabeledContent("Remmich version", value: appVersion)
+                        LabeledContent("Build", value: appBuild)
+                    }
+
+                    accountSection("Automatic switching") {
+                        if ssidEntitlementEnabled {
+                            TextField("Preferred Wi-Fi name", text: $profile.preferredSSID)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                        }
+                        TextField("Local server address", text: $localAddress)
+                            .textContentType(.URL)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                        TextField("External addresses, one per line", text: $externalAddresses, axis: .vertical)
+                            .textContentType(.URL)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .lineLimit(2 ... 5)
+                        Button {
+                            validateAndSaveProfile()
+                        } label: {
+                            if isSaving {
+                                ProgressView()
+                            } else {
+                                Text("Save Connection Profile")
+                            }
+                        }
+                        .disabled(isSaving)
+                        Text(connectionProfileHelp)
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
-                }
 
-                Section("Application") {
-                    LabeledContent("Remmich version", value: appVersion)
-                    LabeledContent("Build", value: appBuild)
-                }
-
-                Section {
-                    if ssidEntitlementEnabled {
-                        TextField("Preferred Wi-Fi name", text: $profile.preferredSSID)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                    }
-                    TextField("Local server address", text: $localAddress)
-                        .textContentType(.URL)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                    TextField("External addresses, one per line", text: $externalAddresses, axis: .vertical)
-                        .textContentType(.URL)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .lineLimit(2 ... 5)
-                    Button {
-                        validateAndSaveProfile()
-                    } label: {
-                        if isSaving {
-                            ProgressView()
-                        } else {
-                            Text("Save Connection Profile")
-                        }
-                    }
-                    .disabled(isSaving)
-                } header: {
-                    Text("Automatic switching")
-                } footer: {
-                    Text(connectionProfileHelp)
-                }
-
-                Section {
-                    Label("Remmich never changes data on your Immich server.", systemImage: "lock.shield")
-                        .foregroundStyle(.secondary)
-                    Button("Sign Out", role: .destructive) {
-                        Task {
-                            await signOut()
-                            dismiss()
+                    VStack(alignment: .leading, spacing: 18) {
+                        Label("Remmich never changes data on your Immich server.", systemImage: "lock.shield")
+                            .foregroundStyle(.secondary)
+                        Button("Sign Out", role: .destructive) {
+                            Task {
+                                await signOut()
+                                closePanel()
+                            }
                         }
                     }
                 }
-            }
-            .navigationTitle("Remmich")
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                }
+                .padding(.horizontal, 24)
+                .padding(.bottom, 24)
             }
         }
-        .presentationDetents([.medium, .large])
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 32))
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("account-settings")
         .alert("Cannot Save Profile", isPresented: Binding(
             get: { saveError != nil },
@@ -123,6 +133,26 @@ struct AccountSettingsView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(saveError ?? "")
+        }
+    }
+
+    private func closePanel() {
+        if let close {
+            close()
+        } else {
+            dismiss()
+        }
+    }
+
+    private func accountSection(
+        _ title: String,
+        @ViewBuilder content: () -> some View
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text(title)
+                .font(.headline)
+                .foregroundStyle(.secondary)
+            content()
         }
     }
 
