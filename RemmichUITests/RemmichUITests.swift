@@ -70,6 +70,74 @@ final class RemmichUITests: XCTestCase {
     }
 
     @MainActor
+    func testCaptureInitialTimelineOnDevice() throws {
+        #if targetEnvironment(simulator)
+            throw XCTSkip("Captures the authenticated timeline on physical devices")
+        #else
+            let app = XCUIApplication()
+            app.launch()
+            XCTAssertTrue(app.descendants(matching: .any)["photos-root"].waitForExistence(timeout: 20))
+            sleep(5)
+            attachLayoutScreenshot(app, name: "Photos initial position")
+
+            let start = app.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.4))
+            let end = app.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.75))
+            start.press(forDuration: 0.1, thenDragTo: end)
+            attachLayoutScreenshot(app, name: "Photos after browsing older items")
+            tabButton("Albums", in: app).tap()
+            tabButton("Photos", in: app).tap()
+            attachLayoutScreenshot(app, name: "Photos after returning from Albums")
+
+            tabButton("Photos", in: app).tap()
+            attachLayoutScreenshot(app, name: "Photos after reselect")
+        #endif
+    }
+
+    @MainActor
+    func testCaptureTabAndTimelineLayoutOnDevice() throws {
+        #if targetEnvironment(simulator)
+            throw XCTSkip("Captures the authenticated layout on physical devices")
+        #else
+            XCUIDevice.shared.orientation = .portrait
+            addTeardownBlock { XCUIDevice.shared.orientation = .portrait }
+
+            let app = XCUIApplication()
+            app.launch()
+            let photos = app.descendants(matching: .any)["photos-root"].firstMatch
+            XCTAssertTrue(photos.waitForExistence(timeout: 20))
+            sleep(3)
+            attachLayoutScreenshot(app, name: "Photos initial portrait")
+
+            let start = app.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.4))
+            let end = app.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.75))
+            start.press(forDuration: 0.1, thenDragTo: end)
+            attachLayoutScreenshot(app, name: "Photos after scrolling toward older photos")
+
+            XCUIDevice.shared.orientation = .landscapeLeft
+            sleep(5)
+            attachLayoutScreenshot(app, name: "Photos landscape after rotation")
+            XCUIDevice.shared.orientation = .portrait
+            sleep(5)
+            attachLayoutScreenshot(app, name: "Photos portrait after rotation back")
+
+            tabButton("Photos", in: app).tap()
+            attachLayoutScreenshot(app, name: "Photos after tab reselect")
+
+            tabButton("Albums", in: app).tap()
+            attachLayoutScreenshot(app, name: "Albums portrait")
+            tabButton("Photos", in: app).tap()
+        #endif
+    }
+
+    @MainActor
+    private func attachLayoutScreenshot(_ app: XCUIApplication, name: String) {
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    @MainActor
     func testAlbumFilterSurvivesTabSwitch() {
         let app = XCUIApplication()
         app.launchArguments = ["-ui-testing-signed-in"]
@@ -90,17 +158,16 @@ final class RemmichUITests: XCTestCase {
         app.launchArguments = ["-ui-testing-signed-in"]
         app.launch()
 
-        let photos = app.descendants(matching: .any)["photos-root"]
+        let photos = app.descendants(matching: .any)["photos-root"].firstMatch
         XCTAssertTrue(photos.waitForExistence(timeout: 5))
 
         let grids = app.otherElements.matching(
             NSPredicate(format: "label == %@", "Photo grid")
         )
-        let grid = grids.element(boundBy: 1)
-        XCTAssertTrue(grid.waitForExistence(timeout: 2))
+        XCTAssertTrue(grids.firstMatch.waitForExistence(timeout: 2))
 
-        // The preview timeline's first capture day has one asset. Exercise the
-        // following multi-asset day so every frame belongs to the same grid.
+        // Exercise a multi-asset capture day. Its position in the timeline
+        // changes when the presentation order changes.
         let assets = (1 ... 5).map { index in
             app.descendants(matching: .any)["asset-asset-\(index)"]
         }
@@ -110,13 +177,11 @@ final class RemmichUITests: XCTestCase {
         let frames = assets.map(\.frame)
         let firstRowY = frames.map(\.midY).min() ?? 0
         let firstRowCount = frames.count { abs($0.midY - firstRowY) < 2 }
-        let gridFrame = grid.frame
-
         for frame in frames {
             XCTAssertGreaterThan(frame.width, 0)
             XCTAssertEqual(frame.width, frame.height, accuracy: 2)
-            XCTAssertGreaterThanOrEqual(frame.minX, gridFrame.minX - 1)
-            XCTAssertLessThanOrEqual(frame.maxX, gridFrame.maxX + 1)
+            XCTAssertGreaterThanOrEqual(frame.minX, photos.frame.minX - 1)
+            XCTAssertLessThanOrEqual(frame.maxX, photos.frame.maxX + 1)
         }
 
         if photos.frame.width >= 600 {
@@ -139,14 +204,13 @@ final class RemmichUITests: XCTestCase {
         app.launchArguments = ["-ui-testing-signed-in"]
         app.launch()
 
-        let photos = app.descendants(matching: .any)["photos-root"]
+        let photos = app.descendants(matching: .any)["photos-root"].firstMatch
         XCTAssertTrue(photos.waitForExistence(timeout: 5))
         XCTAssertGreaterThan(photos.frame.width, photos.frame.height)
 
-        let firstAsset = app.descendants(matching: .any)["asset-asset-0"]
+        let firstAsset = app.descendants(matching: .any)["asset-asset-0"].firstMatch
         XCTAssertTrue(firstAsset.waitForExistence(timeout: 2))
         XCTAssertLessThanOrEqual(firstAsset.frame.minX, app.frame.minX + 1)
-
         let spacing: CGFloat = 2
         let columnCount = floor((app.frame.width + spacing) / (firstAsset.frame.width + spacing))
         let gridWidth = columnCount * firstAsset.frame.width + max(0, columnCount - 1) * spacing
@@ -160,7 +224,9 @@ final class RemmichUITests: XCTestCase {
         app.launch()
 
         XCTAssertTrue(app.descendants(matching: .any)["photos-root"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.descendants(matching: .any)["memory-lane"].waitForExistence(timeout: 2))
+        let memory = app.buttons["memory-memory-1"].firstMatch
+        XCTAssertTrue(memory.waitForExistence(timeout: 5))
+        XCTAssertTrue(memory.label.contains("Memory"))
         XCTAssertTrue(app.buttons["timeline-jump-button"].exists)
         let video = app.descendants(matching: .any)["asset-asset-0"]
         XCTAssertTrue(video.waitForExistence(timeout: 2))

@@ -127,6 +127,7 @@ final class PhotosTimelineStore {
     }
 
     func updateVisibleAnchor(_ anchor: TimelineVisibleAnchor) {
+        guard visibleAnchor?.bucketID != anchor.bucketID else { return }
         visibleAnchor = anchor
         applyMetadataWindow(centeredOn: anchor.bucketID)
         Task { [weak self] in

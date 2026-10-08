@@ -3,12 +3,17 @@ import SwiftUI
 struct PhotosView: View {
     let store: PhotosTimelineStore
     let media: MediaLibraryController
+    var scrollToLatestRequest = 0
     let showAccount: () -> Void
 
     @State private var showsJumpPicker = false
     @State private var pendingScrollID: TimelineBucketID?
     @State private var visibleDescriptors: [String: MediaRequestDescriptor] = [:]
+    @State private var visibleAssets: [String: Date] = [:]
     @State private var viewportUpdateTask: Task<Void, Never>?
+    @State private var rotationRestoreTask: Task<Void, Never>?
+    @State private var rotationAnchorID: String?
+    @State private var didPositionInitially = false
 
     var body: some View {
         Group {
@@ -57,53 +62,109 @@ struct PhotosView: View {
         }
         .onDisappear {
             viewportUpdateTask?.cancel()
+            rotationRestoreTask?.cancel()
         }
         .accessibilityIdentifier("photos-root")
     }
 
     private var timeline: some View {
         ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    if case let .failed(message) = store.refreshState {
-                        TimelineRefreshError(message: message) {
-                            Task { await store.refresh() }
-                        }
+            VStack(spacing: 0) {
+                if case let .failed(message) = store.refreshState {
+                    TimelineRefreshError(message: message) {
+                        Task { await store.refresh() }
                     }
-
-                    if store.memoryLaneState == .loaded, !store.memories.isEmpty {
-                        TimelineMemoryLane(memories: store.memories, media: media)
-                            .padding(.bottom, 12)
-                    }
-
-                    ForEach(store.sections) { section in
-                        TimelineSectionView(
-                            section: section,
-                            store: store,
-                            media: media,
-                            visibilityChanged: updateVisibility
-                        )
-                        .id(section.id)
-                        .onAppear {
-                            store.updateVisibleAnchor(
-                                .init(bucketID: section.id, assetID: section.assets.first?.id)
+                }
+                if store.memoryLaneState == .loaded, !store.memories.isEmpty {
+                    TimelineMemoryLane(memories: store.memories, media: media)
+                        .frame(height: 120)
+                        .padding(.bottom, 12)
+                        .ignoresSafeArea(.container, edges: .horizontal)
+                }
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(Array(store.sections.reversed())) { section in
+                            TimelineSectionView(
+                                section: section,
+                                store: store,
+                                media: media,
+                                visibilityChanged: updateVisibility,
+                                viewportChanged: updateViewport
                             )
+                            .id(section.id)
+                            .onScrollVisibilityChange(threshold: 0.01) { visible in
+                                guard visible else { return }
+                                store.updateVisibleAnchor(.init(
+                                    bucketID: section.id,
+                                    assetID: section.assets.first?.id
+                                ))
+                            }
                         }
                     }
                 }
+                .defaultScrollAnchor(.bottom)
+                .ignoresSafeArea(.container, edges: .horizontal)
+                .ignoresSafeArea(
+                    .container,
+                    edges: UIDevice.current.userInterfaceIdiom == .pad ? .bottom : []
+                )
+                .contentMargins(.horizontal, 0, for: .scrollContent)
+                .contentMargins(
+                    .bottom,
+                    UIDevice.current.userInterfaceIdiom == .phone ? 20 : 0,
+                    for: .scrollContent
+                )
+                .refreshable { await store.refresh() }
+                .onGeometryChange(for: CGSize.self) { $0.size } action: { oldSize, newSize in
+                    guard abs(oldSize.width - newSize.width) > 20 else { return }
+                    if rotationRestoreTask == nil {
+                        rotationAnchorID = visibleAssets.max(by: { $0.value < $1.value })?.key
+                    }
+                    rotationRestoreTask?.cancel()
+                    rotationRestoreTask = Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(350))
+                        guard !Task.isCancelled else { return }
+                        if let rotationAnchorID {
+                            proxy.scrollTo(rotationAnchorID, anchor: .center)
+                        }
+                        rotationAnchorID = nil
+                        rotationRestoreTask = nil
+                    }
+                }
             }
-            .ignoresSafeArea(.container, edges: .horizontal)
-            .contentMargins(.horizontal, 0, for: .scrollContent)
-            .refreshable { await store.refresh() }
             .onChange(of: pendingScrollID) { _, bucketID in
                 guard let bucketID else { return }
                 withAnimation(.snappy) {
-                    proxy.scrollTo(bucketID, anchor: .top)
+                    proxy.scrollTo(bucketID, anchor: .bottom)
                 }
                 pendingScrollID = nil
                 store.completeJump()
             }
+            .onChange(of: scrollToLatestRequest) {
+                guard let latest = latestScrollTarget else { return }
+                withAnimation(.snappy) {
+                    proxy.scrollTo(latest, anchor: .bottom)
+                }
+            }
+            .task {
+                guard !didPositionInitially else { return }
+                didPositionInitially = true
+                if let latest = latestScrollTarget {
+                    proxy.scrollTo(latest, anchor: .bottom)
+                }
+                if store.sections.count > 1 {
+                    await store.loadBucket(store.sections[1].id)
+                }
+                guard !Task.isCancelled else { return }
+                if let latest = latestScrollTarget {
+                    proxy.scrollTo(latest, anchor: .bottom)
+                }
+            }
         }
+    }
+
+    private var latestScrollTarget: TimelineBucketID? {
+        store.sections.first?.id
     }
 
     private func updateVisibility(
@@ -112,6 +173,14 @@ struct PhotosView: View {
     ) {
         visibleDescriptors[assetID] = descriptor
         scheduleViewportUpdate()
+    }
+
+    private func updateViewport(_ asset: TimelineAssetSummary, visible: Bool) {
+        if visible {
+            visibleAssets[asset.id] = asset.capturedAt
+        } else {
+            visibleAssets.removeValue(forKey: asset.id)
+        }
     }
 
     private func scheduleViewportUpdate() {
@@ -134,6 +203,7 @@ private struct TimelineSectionView: View {
     let store: PhotosTimelineStore
     let media: MediaLibraryController
     let visibilityChanged: (String, MediaRequestDescriptor?) -> Void
+    let viewportChanged: (TimelineAssetSummary, Bool) -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -150,18 +220,20 @@ private struct TimelineSectionView: View {
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, minHeight: 64)
                 } else {
-                    ForEach(section.dayGroups) { group in
+                    ForEach(Array(section.dayGroups.reversed())) { group in
                         VStack(spacing: 0) {
                             AssetSectionHeader(
                                 title: title(for: group.id),
                                 subtitle: group.assets.count.formatted() + " items"
                             )
                             TimelineAssetGrid(
-                                assets: group.assets,
+                                assets: Array(group.assets.reversed()),
                                 media: media,
-                                visibilityChanged: visibilityChanged
+                                visibilityChanged: visibilityChanged,
+                                viewportChanged: viewportChanged
                             )
                         }
+                        .id(group.id.id)
                         .accessibilityIdentifier("timeline-day-\(group.id.id)")
                     }
                 }

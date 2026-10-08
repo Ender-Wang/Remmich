@@ -16,6 +16,7 @@ struct AppShellView: View {
     let signOut: () async -> Void
 
     @State private var selection: AppDestination = .photos
+    @State private var photosScrollRequest = 0
     @State private var photosPath = NavigationPath()
     @State private var albumsPath = NavigationPath()
     @State private var libraryPath = NavigationPath()
@@ -23,10 +24,23 @@ struct AppShellView: View {
     @State private var showsAccount = false
 
     var body: some View {
-        TabView(selection: $selection) {
+        TabView(selection: Binding(
+            get: { selection },
+            set: { destination in
+                if destination == .photos, selection == .photos {
+                    photosScrollRequest &+= 1
+                }
+                selection = destination
+            }
+        )) {
             Tab(AppDestination.photos.title, systemImage: AppDestination.photos.systemImage, value: .photos) {
                 NavigationStack(path: $photosPath) {
-                    PhotosView(store: photos, media: media, showAccount: showAccount)
+                    PhotosView(
+                        store: photos,
+                        media: media,
+                        scrollToLatestRequest: photosScrollRequest,
+                        showAccount: showAccount
+                    )
                 }
             }
 
@@ -48,7 +62,7 @@ struct AppShellView: View {
                 }
             }
         }
-        .tabViewStyle(.sidebarAdaptable)
+        .tabViewStyle(.tabBarOnly)
         .environment(\.accountAvatarMedia, media)
         .overlay {
             if showsAccount {

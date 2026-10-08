@@ -78,6 +78,7 @@ struct TimelineAssetGrid: View {
     let assets: [TimelineAssetSummary]
     let media: MediaLibraryController
     var visibilityChanged: (String, MediaRequestDescriptor?) -> Void = { _, _ in }
+    var viewportChanged: (TimelineAssetSummary, Bool) -> Void = { _, _ in }
 
     private var columns: [GridItem] {
         let minimum: CGFloat = horizontalSizeClass == .regular ? 120 : 88
@@ -91,7 +92,8 @@ struct TimelineAssetGrid: View {
                     TimelineAssetThumbnail(
                         asset: asset,
                         media: media,
-                        visibilityChanged: visibilityChanged
+                        visibilityChanged: visibilityChanged,
+                        viewportChanged: viewportChanged
                     )
                 }
             }
@@ -107,6 +109,7 @@ private struct TimelineAssetThumbnail: View {
     let asset: TimelineAssetSummary
     let media: MediaLibraryController
     let visibilityChanged: (String, MediaRequestDescriptor?) -> Void
+    let viewportChanged: (TimelineAssetSummary, Bool) -> Void
 
     var body: some View {
         GeometryReader { proxy in
@@ -159,6 +162,9 @@ private struct TimelineAssetThumbnail: View {
             }
             .onAppear { visibilityChanged(asset.id, descriptor) }
             .onDisappear { visibilityChanged(asset.id, nil) }
+            .onScrollVisibilityChange(threshold: 0.5) { visible in
+                viewportChanged(asset, visible)
+            }
         }
         .aspectRatio(1, contentMode: .fit)
         .clipped()
@@ -166,6 +172,7 @@ private struct TimelineAssetThumbnail: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityLabel)
         .accessibilityIdentifier("asset-\(asset.id)")
+        .id(asset.id)
     }
 
     private var accessibilityLabel: String {
