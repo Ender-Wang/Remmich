@@ -2,10 +2,16 @@ import AVKit
 import Foundation
 import Nuke
 import Observation
+import OSLog
 
 @MainActor
 @Observable
 final class MediaLibraryController {
+    private nonisolated static let logger = Logger(
+        subsystem: "io.github.ender-wang.Remmich",
+        category: "MediaPerformance"
+    )
+
     private(set) var scope: MediaAccountScope?
     private(set) var activeAPIURL: URL?
     private(set) var pipeline: ImagePipeline?
@@ -19,6 +25,11 @@ final class MediaLibraryController {
     private var lastTimelinePlan = TimelineResidencyPlan.empty
     private var lastTimelineTargetPixels: MediaPixelSize?
     private var residencyScopeGeneration = 0
+    private var residencyPreloadGeneration = 0
+    private var activeResidencyPreloadGeneration: Int?
+    private var cumulativePreloadCancellationCount = 0
+    private var timelinePresentationStartedAt: Date?
+    private var didLogFirstTimelineThumbnail = false
 
     func configure(session: AccountSession, activeEndpoint: URL?) {
         let nextScope = MediaAccountScope(session: session)
@@ -40,6 +51,13 @@ final class MediaLibraryController {
 
     func updateRoute(_ endpoint: URL?) {
         activeAPIURL = endpoint
+    }
+
+    func beginTimelinePresentation() {
+        guard timelinePresentationStartedAt == nil else { return }
+        timelinePresentationStartedAt = Date()
+        didLogFirstTimelineThumbnail = false
+        Self.logger.info("Timeline presentation started")
     }
 
     func imageRequest(for descriptor: MediaRequestDescriptor) -> ImageRequest? {
@@ -94,7 +112,17 @@ final class MediaLibraryController {
     ) {
         lastTimelinePlan = plan
         lastTimelineTargetPixels = targetPixels
+        if activeResidencyPreloadGeneration != nil {
+            cumulativePreloadCancellationCount += 1
+            let cancellationCount = cumulativePreloadCancellationCount
+            Self.logger.info(
+                "Timeline preload superseded totalCancellations=\(cancellationCount)"
+            )
+        }
         residencyLoadTask?.cancel()
+        residencyPreloadGeneration += 1
+        let preloadGeneration = residencyPreloadGeneration
+        activeResidencyPreloadGeneration = preloadGeneration
 
         let work = Self.preloadAssets(in: plan).compactMap { asset -> (MediaRequestDescriptor, ImageRequest)? in
             let descriptor = Self.thumbnailDescriptor(for: asset, targetPixels: targetPixels)
@@ -104,14 +132,32 @@ final class MediaLibraryController {
         let pipeline = pipeline
         let residency = timelineResidency
         let scopeGeneration = residencyScopeGeneration
-        residencyLoadTask = Task {
+        let startedAt = Date()
+        Self.logger.info(
+            "Timeline preload started generation=\(preloadGeneration) requested=\(work.count) targetWidth=\(targetPixels.width) targetHeight=\(targetPixels.height)"
+        )
+        residencyLoadTask = Task { [weak self] in
             await residency.updatePlan(plan, scopeGeneration: scopeGeneration)
-            guard let pipeline, !Task.isCancelled else { return }
-            await Self.preload(
-                work,
-                pipeline: pipeline,
-                residency: residency,
-                scopeGeneration: scopeGeneration
+            let summary: PreloadSummary = if let pipeline, !Task.isCancelled {
+                await Self.preload(
+                    work,
+                    pipeline: pipeline,
+                    residency: residency,
+                    scopeGeneration: scopeGeneration
+                )
+            } else {
+                .cancelled(requested: work.count)
+            }
+            guard let self,
+                  activeResidencyPreloadGeneration == preloadGeneration
+            else { return }
+            let residencyEntries = await residency.count
+            let residencyDecodedBytes = await residency.byteCount
+            activeResidencyPreloadGeneration = nil
+            residencyLoadTask = nil
+            let cancellationCount = cumulativePreloadCancellationCount
+            Self.logger.info(
+                "Timeline preload finished generation=\(preloadGeneration) requested=\(summary.requested) memoryHits=\(summary.memoryHits) diskHits=\(summary.diskHits) networkLoads=\(summary.networkLoads) failures=\(summary.failures) cancelled=\(summary.cancelled) residencyEntries=\(residencyEntries) residencyDecodedBytes=\(residencyDecodedBytes) elapsedMs=\(Self.elapsedMilliseconds(since: startedAt)) totalCancellations=\(cancellationCount)"
             )
         }
     }
@@ -120,6 +166,15 @@ final class MediaLibraryController {
         _ container: ImageContainer,
         descriptor: MediaRequestDescriptor
     ) {
+        if !didLogFirstTimelineThumbnail,
+           let timelinePresentationStartedAt
+        {
+            didLogFirstTimelineThumbnail = true
+            let dimensions = container.image.cgImage.map { "\($0.width)x\($0.height)" } ?? "unknown"
+            Self.logger.info(
+                "First timeline thumbnail rendered elapsedMs=\(Self.elapsedMilliseconds(since: timelinePresentationStartedAt)) decodedPixels=\(dimensions, privacy: .public)"
+            )
+        }
         let residency = timelineResidency
         let scopeGeneration = residencyScopeGeneration
         Task {
@@ -151,6 +206,7 @@ final class MediaLibraryController {
     }
 
     func handleMemoryPressure() {
+        Self.logger.notice("Memory warning received; purging decoded media caches")
         pipeline?.cache.removeAll(caches: .memory)
         prefetcher?.stopPrefetching()
         residencyLoadTask?.cancel()
@@ -159,6 +215,7 @@ final class MediaLibraryController {
     }
 
     func handleBackgroundTransition() {
+        Self.logger.info("App backgrounded; cancelling preload and releasing timeline pins")
         prefetcher?.stopPrefetching()
         residencyLoadTask?.cancel()
         let residency = timelineResidency
@@ -167,6 +224,7 @@ final class MediaLibraryController {
 
     func handleForegroundTransition() {
         guard let targetPixels = lastTimelineTargetPixels else { return }
+        Self.logger.info("App foregrounded; rebuilding timeline residency")
         updateTimelineResidency(lastTimelinePlan, targetPixels: targetPixels)
     }
 
@@ -185,6 +243,9 @@ final class MediaLibraryController {
         activeAPIURL = nil
         lastTimelinePlan = .empty
         lastTimelineTargetPixels = nil
+        activeResidencyPreloadGeneration = nil
+        timelinePresentationStartedAt = nil
+        didLogFirstTimelineThumbnail = false
         residencyScopeGeneration += 1
         let residency = timelineResidency
         let scopeGeneration = residencyScopeGeneration
@@ -261,9 +322,10 @@ final class MediaLibraryController {
         pipeline: ImagePipeline,
         residency: TimelineThumbnailResidency,
         scopeGeneration: Int
-    ) async {
-        await withTaskGroup(of: Void.self) { group in
+    ) async -> PreloadSummary {
+        await withTaskGroup(of: PreloadOutcome.self, returning: PreloadSummary.self) { group in
             var iterator = work.makeIterator()
+            var summary = PreloadSummary(requested: work.count)
             for _ in 0 ..< 3 {
                 guard let item = iterator.next() else { break }
                 group.addTask {
@@ -275,7 +337,8 @@ final class MediaLibraryController {
                     )
                 }
             }
-            while await group.next() != nil {
+            while let outcome = await group.next() {
+                summary.record(outcome)
                 guard !Task.isCancelled, let item = iterator.next() else {
                     group.cancelAll()
                     break
@@ -289,6 +352,11 @@ final class MediaLibraryController {
                     )
                 }
             }
+            if Task.isCancelled {
+                group.cancelAll()
+            }
+            summary.cancelled += max(0, summary.requested - summary.completed)
+            return summary
         }
     }
 
@@ -297,18 +365,64 @@ final class MediaLibraryController {
         pipeline: ImagePipeline,
         residency: TimelineThumbnailResidency,
         scopeGeneration: Int
-    ) async {
-        guard !Task.isCancelled else { return }
+    ) async -> PreloadOutcome {
+        guard !Task.isCancelled else { return .cancelled }
         do {
             let response = try await pipeline.imageTask(with: item.1).response
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled else { return .cancelled }
             await residency.retain(
                 response.container,
                 for: item.0,
                 scopeGeneration: scopeGeneration
             )
+            return switch response.cacheType {
+            case .memory: .memory
+            case .disk: .disk
+            case nil: .network
+            }
         } catch {
-            // Visible cells own retry UI; prefetch failure is intentionally silent.
+            return Task.isCancelled ? .cancelled : .failed
+        }
+    }
+
+    private nonisolated static func elapsedMilliseconds(since start: Date) -> Int {
+        Int(Date().timeIntervalSince(start) * 1000)
+    }
+
+    private nonisolated enum PreloadOutcome: Sendable {
+        case memory
+        case disk
+        case network
+        case failed
+        case cancelled
+    }
+
+    private nonisolated struct PreloadSummary: Sendable {
+        let requested: Int
+        var memoryHits = 0
+        var diskHits = 0
+        var networkLoads = 0
+        var failures = 0
+        var cancelled = 0
+
+        static func cancelled(requested: Int) -> Self {
+            var value = Self(requested: requested)
+            value.cancelled = requested
+            return value
+        }
+
+        var completed: Int {
+            memoryHits + diskHits + networkLoads + failures + cancelled
+        }
+
+        mutating func record(_ outcome: PreloadOutcome) {
+            switch outcome {
+            case .memory: memoryHits += 1
+            case .disk: diskHits += 1
+            case .network: networkLoads += 1
+            case .failed: failures += 1
+            case .cancelled: cancelled += 1
+            }
         }
     }
 }

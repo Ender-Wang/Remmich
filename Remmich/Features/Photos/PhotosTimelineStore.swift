@@ -113,6 +113,7 @@ final class PhotosTimelineStore {
         }
         let requestGeneration = generation
         refreshState = .refreshing
+        Self.logger.info("Refresh started generation=\(requestGeneration)")
         startMemoryLoad(generation: requestGeneration)
         let task = Task { [weak self] in
             guard let self else { return }
@@ -350,6 +351,7 @@ final class PhotosTimelineStore {
     }
 
     private func performRefresh(generation requestGeneration: UInt64) async {
+        let startedAt = Date()
         do {
             let refreshed = try await reader.bucketSummaries(query: query)
             guard requestGeneration == generation else { return }
@@ -358,6 +360,9 @@ final class PhotosTimelineStore {
             if refreshed.isEmpty {
                 loadState = .empty
                 refreshState = .idle
+                Self.logger.info(
+                    "Refresh finished empty generation=\(requestGeneration) elapsedMs=\(Self.elapsedMilliseconds(since: startedAt))"
+                )
                 return
             }
 
@@ -378,9 +383,15 @@ final class PhotosTimelineStore {
             guard requestGeneration == generation else { return }
             loadState = .loaded
             refreshState = .idle
+            Self.logger.info(
+                "Refresh finished generation=\(requestGeneration) summaries=\(refreshed.count) reloadedBuckets=\(reloadIDs.count) elapsedMs=\(Self.elapsedMilliseconds(since: startedAt))"
+            )
         } catch {
             guard requestGeneration == generation else { return }
             refreshState = .failed(message: Self.message(for: error))
+            Self.logger.error(
+                "Refresh failed generation=\(requestGeneration) elapsedMs=\(Self.elapsedMilliseconds(since: startedAt)) error=\(Self.errorSummary(error), privacy: .public)"
+            )
         }
     }
 
@@ -552,5 +563,9 @@ final class PhotosTimelineStore {
             return "\(String(reflecting: type(of: error))): \(description)"
         }
         return String(reflecting: type(of: error))
+    }
+
+    private nonisolated static func elapsedMilliseconds(since start: Date) -> Int {
+        Int(Date().timeIntervalSince(start) * 1000)
     }
 }

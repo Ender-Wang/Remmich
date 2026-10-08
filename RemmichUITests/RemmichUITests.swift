@@ -191,10 +191,92 @@ final class RemmichUITests: XCTestCase {
     }
 
     @MainActor
+    func testPhysicalDeviceMediaPerformanceScenario() throws {
+        #if targetEnvironment(simulator)
+            throw XCTSkip("Exercises the real authenticated library on a physical device")
+        #else
+            let app = XCUIApplication()
+            app.launch()
+
+            let photos = app.descendants(matching: .any)["photos-root"]
+            XCTAssertTrue(photos.waitForExistence(timeout: 20))
+            sleep(5)
+
+            XCTContext.runActivity(named: "Revisit inside the warm window") { _ in
+                scroll(photos, direction: .awayFromNewest, count: 4)
+                scroll(photos, direction: .towardNewest, count: 4)
+            }
+
+            XCTContext.runActivity(named: "Revisit after warm expiry") { _ in
+                scroll(photos, direction: .awayFromNewest, count: 8)
+                sleep(55)
+                photos.swipeUp()
+                photos.swipeDown()
+                scroll(photos, direction: .towardNewest, count: 8)
+            }
+
+            XCTContext.runActivity(named: "Refresh without blanking") { _ in
+                scroll(photos, direction: .towardNewest, count: 4)
+                let start = photos.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.2))
+                let end = photos.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.8))
+                start.press(forDuration: 0.1, thenDragTo: end)
+                sleep(5)
+                XCTAssertTrue(photos.exists)
+            }
+
+            XCTContext.runActivity(named: "Background and foreground") { _ in
+                XCUIDevice.shared.press(.home)
+                sleep(3)
+                app.activate()
+                XCTAssertTrue(photos.waitForExistence(timeout: 10))
+            }
+
+            XCTContext.runActivity(named: "Orientation relayout") { _ in
+                XCUIDevice.shared.orientation = .landscapeLeft
+                XCTAssertTrue(photos.waitForExistence(timeout: 10))
+                photos.swipeUp()
+                photos.swipeDown()
+
+                XCUIDevice.shared.orientation = .portrait
+                XCTAssertTrue(photos.waitForExistence(timeout: 10))
+            }
+
+            XCTContext.runActivity(named: "Rapid direction reversal") { _ in
+                for _ in 0 ..< 4 {
+                    photos.swipeUp()
+                    photos.swipeDown()
+                }
+                XCTAssertTrue(photos.exists)
+            }
+        #endif
+    }
+
+    @MainActor
     func testLaunchPerformance() {
         // This measures how long it takes to launch your application.
         measure(metrics: [XCTApplicationLaunchMetric()]) {
             XCUIApplication().launch()
         }
     }
+
+    @MainActor
+    private func scroll(
+        _ element: XCUIElement,
+        direction: TimelineScrollDirection,
+        count: Int
+    ) {
+        for _ in 0 ..< count {
+            switch direction {
+            case .awayFromNewest:
+                element.swipeUp()
+            case .towardNewest:
+                element.swipeDown()
+            }
+        }
+    }
+}
+
+private enum TimelineScrollDirection {
+    case awayFromNewest
+    case towardNewest
 }

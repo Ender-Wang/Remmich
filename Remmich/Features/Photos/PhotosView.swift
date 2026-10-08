@@ -50,6 +50,7 @@ struct PhotosView: View {
                 showsJumpPicker = false
             }
         }
+        .onAppear { media.beginTimelinePresentation() }
         .task { await store.load() }
         .onChange(of: store.sections.map { "\($0.id.rawValue):\($0.contentRevision)" }) {
             scheduleViewportUpdate()

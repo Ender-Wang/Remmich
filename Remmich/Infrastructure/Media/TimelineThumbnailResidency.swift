@@ -1,10 +1,15 @@
 import CoreGraphics
 import Foundation
 import Nuke
+import OSLog
 import UIKit
 
 actor TimelineThumbnailResidency {
     static let maximumThumbnailDimension = 2048
+    private nonisolated static let logger = Logger(
+        subsystem: "io.github.ender-wang.Remmich",
+        category: "MediaPerformance"
+    )
 
     private let workingSet: TimelineWorkingSet<ImageContainer>
     private var newestAssetIDs = Set<String>()
@@ -26,6 +31,7 @@ actor TimelineThumbnailResidency {
         if requestedScopeGeneration > scopeGeneration {
             await reset(for: requestedScopeGeneration)
         }
+        let previousCount = await workingSet.count
         newestAssetIDs = Set(plan.newestAssets.map(\.id))
         viewportAssetIDs = Set(plan.viewportAssets.map(\.id))
         desiredRevisionByAssetID = Dictionary(
@@ -46,6 +52,11 @@ actor TimelineThumbnailResidency {
             trackedDescriptorByKey[key] = nil
         }
         await workingSet.expire()
+        let entryCount = await workingSet.count
+        let decodedBytes = await workingSet.byteCount
+        Self.logger.info(
+            "Residency updated newest=\(plan.newestAssets.count) viewport=\(plan.viewportAssets.count) prefetch=\(plan.prefetchAssets.count) entries=\(entryCount) decodedBytes=\(decodedBytes) released=\(max(0, previousCount - entryCount))"
+        )
     }
 
     @discardableResult
@@ -79,15 +90,27 @@ actor TimelineThumbnailResidency {
     }
 
     func handleBackgroundTransition() async {
+        let previousCount = await workingSet.count
+        let previousBytes = await workingSet.byteCount
         trackedDescriptorByKey = [:]
         await workingSet.removeAll()
+        Self.logger.info(
+            "Residency cleared for background releasedEntries=\(previousCount) releasedDecodedBytes=\(previousBytes)"
+        )
     }
 
     func handleMemoryPressure() async {
+        let previousCount = await workingSet.count
+        let previousBytes = await workingSet.byteCount
         await workingSet.handleMemoryPressure()
         trackedDescriptorByKey = trackedDescriptorByKey.filter {
             desiredTier(for: $0.value) == .viewport
         }
+        let entryCount = await workingSet.count
+        let decodedBytes = await workingSet.byteCount
+        Self.logger.notice(
+            "Residency reduced for memory pressure entries=\(entryCount) decodedBytes=\(decodedBytes) releasedEntries=\(max(0, previousCount - entryCount)) releasedDecodedBytes=\(max(0, previousBytes - decodedBytes))"
+        )
     }
 
     func removeAll() async {
