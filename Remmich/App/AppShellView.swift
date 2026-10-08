@@ -1,3 +1,5 @@
+import Nuke
+import NukeUI
 import SwiftUI
 import UIKit
 
@@ -47,6 +49,7 @@ struct AppShellView: View {
             }
         }
         .tabViewStyle(.sidebarAdaptable)
+        .environment(\.accountAvatarMedia, media)
         .overlay {
             if showsAccount {
                 GeometryReader { geometry in
@@ -84,16 +87,47 @@ struct AppShellView: View {
 }
 
 struct AccountToolbarButton: ToolbarContent {
+    @Environment(\.accountAvatarMedia) private var media
+    @Environment(\.displayScale) private var displayScale
+
     let action: () -> Void
 
     var body: some ToolbarContent {
         ToolbarItem(placement: .topBarTrailing) {
             Button(action: action) {
-                Label("Account", systemImage: "person.crop.circle")
+                Group {
+                    if let media {
+                        LazyImage(request: media.profileImageRequest(targetPixels: Int(32 * displayScale))) { state in
+                            if let image = state.image {
+                                image.resizable().scaledToFill()
+                            } else {
+                                Image(systemName: "person.crop.circle")
+                                    .resizable()
+                                    .scaledToFit()
+                            }
+                        }
+                        .pipeline(media.pipeline ?? .shared)
+                        .onDisappear(.cancel)
+                    } else {
+                        Image(systemName: "person.crop.circle")
+                            .resizable()
+                            .scaledToFit()
+                    }
+                }
+                .frame(width: 32, height: 32)
+                .clipShape(Circle())
+                .background(Circle().fill(.regularMaterial))
+                .contentShape(Circle())
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Account")
             .accessibilityIdentifier("account-button")
         }
     }
+}
+
+extension EnvironmentValues {
+    @Entry var accountAvatarMedia: MediaLibraryController? = nil
 }
 
 #Preview {

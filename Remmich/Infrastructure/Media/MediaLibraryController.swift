@@ -78,6 +78,24 @@ final class MediaLibraryController {
         return request
     }
 
+    func profileImageRequest(targetPixels: Int) -> ImageRequest? {
+        guard let scope, let session, let activeAPIURL else { return nil }
+        let url = activeAPIURL
+            .appending(path: "users")
+            .appending(path: session.userID)
+            .appending(path: "profile-image")
+        var urlRequest = URLRequest(url: url)
+        urlRequest.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+        var request = ImageRequest(urlRequest: urlRequest)
+        request.imageID = "\(scope.cacheNamespace):profile:\(session.userID)"
+        request.thumbnail = .init(
+            size: .init(width: targetPixels, height: targetPixels),
+            unit: .pixels,
+            contentMode: .aspectFill
+        )
+        return request
+    }
+
     func updatePrefetch(_ descriptors: [MediaRequestDescriptor]) {
         prefetcher?.stopPrefetching()
         let requests = descriptors.compactMap(imageRequest)
