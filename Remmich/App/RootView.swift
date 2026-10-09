@@ -4,6 +4,7 @@ import UIKit
 struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var controller = AppSessionController()
+    @State private var presentation = PhotosPresentationState()
 
     var body: some View {
         Group {
@@ -27,6 +28,7 @@ struct RootView: View {
                     activeRoute: controller.activeRoute,
                     routeStatus: controller.routeStatus,
                     photos: controller.photos,
+                    presentation: presentation,
                     media: controller.media,
                     saveProfile: controller.saveConnectionProfile,
                     signOut: controller.signOut

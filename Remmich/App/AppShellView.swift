@@ -11,6 +11,7 @@ struct AppShellView: View {
     let activeRoute: ActiveConnectionRoute?
     let routeStatus: ConnectionRouteStatus
     let photos: PhotosTimelineStore
+    let presentation: PhotosPresentationState
     let media: MediaLibraryController
     let saveProfile: (ConnectionProfileDraft) async -> ConnectionProfileSaveResult
     let signOut: () async -> Void
@@ -152,6 +153,7 @@ extension EnvironmentValues {
         activeRoute: nil,
         routeStatus: .waitingForNetwork,
         photos: store,
+        presentation: .init(),
         media: .init(),
         saveProfile: { _ in .saved(profile: .init()) },
         signOut: {}
