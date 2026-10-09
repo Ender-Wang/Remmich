@@ -6,6 +6,19 @@ import UIKit
 
 @Suite("Server-backed Photos timeline")
 struct PhotosTimelineRegressionTests {
+    @Test func gridFillsNewestFirstFromBottomLeft() {
+        #expect(TimelineGridOrder.displaySlots(itemCount: 0, columns: 3).isEmpty)
+        #expect(TimelineGridOrder.displaySlots(itemCount: 1, columns: 3) == [0, nil, nil])
+        #expect(TimelineGridOrder.displaySlots(itemCount: 3, columns: 3) == [0, 1, 2])
+        #expect(TimelineGridOrder.displaySlots(itemCount: 4, columns: 3) == [3, nil, nil, 0, 1, 2])
+        #expect(TimelineGridOrder.displaySlots(itemCount: 5, columns: 3) == [3, 4, nil, 0, 1, 2])
+        #expect(TimelineGridOrder.displaySlots(itemCount: 7, columns: 3) == [6, nil, nil, 3, 4, 5, 0, 1, 2])
+        #expect(TimelineGridOrder.displaySlots(itemCount: 5, columns: 1) == [4, 3, 2, 1, 0])
+        #expect(TimelineGridOrder.columnCount(availableWidth: 393, minimumColumnWidth: 88) == 4)
+        #expect(TimelineGridOrder.columnCount(availableWidth: 843, minimumColumnWidth: 120) == 6)
+        #expect(TimelineGridOrder.columnCount(availableWidth: 320, minimumColumnWidth: 88) == 3)
+    }
+
     @Test @MainActor func initialLoadPublishesNewestContentAndKeepsMemoryFailureIndependent() async {
         let reader = ScenarioTimelineReader(
             buckets: Self.buckets(count: 2),

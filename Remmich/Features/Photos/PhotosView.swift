@@ -13,6 +13,7 @@ struct PhotosView: View {
     @State private var viewportUpdateTask: Task<Void, Never>?
     @State private var rotationRestoreTask: Task<Void, Never>?
     @State private var rotationAnchorID: String?
+    @State private var timelineWidth: CGFloat = 0
     @State private var didPositionInitially = false
 
     var body: some View {
@@ -88,6 +89,7 @@ struct PhotosView: View {
                                 section: section,
                                 store: store,
                                 media: media,
+                                availableWidth: timelineWidth,
                                 visibilityChanged: updateVisibility,
                                 viewportChanged: updateViewport
                             )
@@ -116,7 +118,8 @@ struct PhotosView: View {
                 )
                 .refreshable { await store.refresh() }
                 .onGeometryChange(for: CGSize.self) { $0.size } action: { oldSize, newSize in
-                    guard abs(oldSize.width - newSize.width) > 20 else { return }
+                    timelineWidth = newSize.width
+                    guard oldSize.width > 0, abs(oldSize.width - newSize.width) > 20 else { return }
                     if rotationRestoreTask == nil {
                         rotationAnchorID = visibleAssets.max(by: { $0.value < $1.value })?.key
                     }
@@ -202,6 +205,7 @@ private struct TimelineSectionView: View {
     let section: TimelineSection
     let store: PhotosTimelineStore
     let media: MediaLibraryController
+    let availableWidth: CGFloat
     let visibilityChanged: (String, MediaRequestDescriptor?) -> Void
     let viewportChanged: (TimelineAssetSummary, Bool) -> Void
 
@@ -227,8 +231,9 @@ private struct TimelineSectionView: View {
                                 subtitle: group.assets.count.formatted() + " items"
                             )
                             TimelineAssetGrid(
-                                assets: Array(group.assets.reversed()),
+                                assets: group.assets,
                                 media: media,
+                                availableWidth: availableWidth,
                                 visibilityChanged: visibilityChanged,
                                 viewportChanged: viewportChanged
                             )

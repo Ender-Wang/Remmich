@@ -175,8 +175,8 @@ final class RemmichUITests: XCTestCase {
         XCTAssertTrue(assets[4].waitForExistence(timeout: 2))
 
         let frames = assets.map(\.frame)
-        let firstRowY = frames.map(\.midY).min() ?? 0
-        let firstRowCount = frames.count { abs($0.midY - firstRowY) < 2 }
+        let newestRowY = frames[0].midY
+        let newestRowCount = frames.count { abs($0.midY - newestRowY) < 2 }
         for frame in frames {
             XCTAssertGreaterThan(frame.width, 0)
             XCTAssertEqual(frame.width, frame.height, accuracy: 2)
@@ -186,10 +186,21 @@ final class RemmichUITests: XCTestCase {
 
         if photos.frame.width >= 600 {
             XCTAssertGreaterThanOrEqual(frames[0].width, 118)
-            XCTAssertGreaterThanOrEqual(firstRowCount, 4)
+            XCTAssertGreaterThanOrEqual(newestRowCount, 4)
         } else {
             XCTAssertGreaterThanOrEqual(frames[0].width, 86)
-            XCTAssertGreaterThanOrEqual(firstRowCount, 3)
+            XCTAssertGreaterThanOrEqual(newestRowCount, 3)
+            // The fixture's five assets share one capture day. The newest
+            // row fills left to right; any remaining older assets start above it.
+            XCTAssertEqual(frames[0].minX, photos.frame.minX, accuracy: 2)
+            for index in 1 ..< newestRowCount {
+                XCTAssertEqual(frames[index].midY, newestRowY, accuracy: 2)
+                XCTAssertGreaterThan(frames[index].minX, frames[index - 1].minX)
+            }
+            if newestRowCount < frames.count {
+                XCTAssertLessThan(frames[newestRowCount].midY, newestRowY)
+                XCTAssertEqual(frames[newestRowCount].minX, frames[0].minX, accuracy: 2)
+            }
         }
     }
 
