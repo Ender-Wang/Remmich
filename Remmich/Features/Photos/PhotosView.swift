@@ -2,6 +2,8 @@ import OSLog
 import SwiftUI
 
 struct PhotosView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     private static let logger = Logger(
         subsystem: "io.github.ender-wang.Remmich",
         category: "PhotosTimeline"
@@ -14,8 +16,9 @@ struct PhotosView: View {
 
     @State private var showsJumpPicker = false
     @State private var pendingScrollID: TimelineBucketID?
-    @State private var pendingLatestScrollID: TimelineBucketID?
+    @State private var latestScrollReset = 0
     @State private var latestJumpTask: Task<Void, Never>?
+    @State private var calendarJumpTask: Task<Void, Never>?
     @State private var visibleDescriptors: [String: MediaRequestDescriptor] = [:]
     @State private var visibleAssets: [String: Date] = [:]
     @State private var viewportUpdateTask: Task<Void, Never>?
@@ -74,7 +77,8 @@ struct PhotosView: View {
             rotationRestoreTask?.cancel()
             latestJumpTask?.cancel()
             latestJumpTask = nil
-            pendingLatestScrollID = nil
+            calendarJumpTask?.cancel()
+            calendarJumpTask = nil
             store.completeJump()
         }
         .accessibilityIdentifier("photos-root")
@@ -112,11 +116,50 @@ struct PhotosView: View {
                                     bucketID: section.id,
                                     assetID: section.assets.first?.id
                                 ))
+                                if store.jumpTarget == section.id,
+                                   section.id != latestScrollTarget
+                                {
+                                    Self.logger.info(
+                                        "Calendar jump target became visible bucket=\(section.id.rawValue, privacy: .public)"
+                                    )
+                                    store.completeJump()
+                                }
                             }
                         }
                     }
                 }
                 .defaultScrollAnchor(.bottom)
+                .id(latestScrollReset)
+                .transition(
+                    reduceMotion
+                        ? .opacity
+                        : .asymmetric(
+                            insertion: .opacity.combined(with: .offset(y: 20)),
+                            removal: .opacity
+                        )
+                )
+                .task(id: latestScrollReset) {
+                    guard latestScrollReset > 0,
+                          store.jumpTarget == latestScrollTarget,
+                          let latestDayID = latestDayScrollTarget
+                    else { return }
+                    for attempt in 1 ... 20 {
+                        guard !Task.isCancelled,
+                              store.jumpTarget == latestScrollTarget
+                        else { return }
+                        Self.logger.info(
+                            "Latest day scroll attempt=\(attempt) day=\(latestDayID, privacy: .public)"
+                        )
+                        proxy.scrollTo(latestDayID, anchor: .bottom)
+                        try? await Task.sleep(for: .milliseconds(90))
+                    }
+                    if store.jumpTarget == latestScrollTarget {
+                        Self.logger.error(
+                            "Latest day scroll did not settle day=\(latestDayID, privacy: .public)"
+                        )
+                        store.completeJump()
+                    }
+                }
                 .ignoresSafeArea(.container, edges: .horizontal)
                 .ignoresSafeArea(
                     .container,
@@ -149,38 +192,49 @@ struct PhotosView: View {
             }
             .onChange(of: pendingScrollID) { _, bucketID in
                 guard let bucketID else { return }
-                withAnimation(.snappy) {
-                    proxy.scrollTo(bucketID, anchor: .bottom)
+                calendarJumpTask?.cancel()
+                calendarJumpTask = Task { @MainActor in
+                    for attempt in 1 ... 20 {
+                        guard !Task.isCancelled,
+                              store.jumpTarget == bucketID
+                        else { return }
+                        Self.logger.info(
+                            "Calendar scroll attempt=\(attempt) bucket=\(bucketID.rawValue, privacy: .public)"
+                        )
+                        proxy.scrollTo(bucketID, anchor: .bottom)
+                        try? await Task.sleep(for: .milliseconds(90))
+                    }
+                    if store.jumpTarget == bucketID {
+                        Self.logger.error(
+                            "Calendar scroll did not settle bucket=\(bucketID.rawValue, privacy: .public)"
+                        )
+                        store.completeJump()
+                    }
                 }
                 pendingScrollID = nil
-                store.completeJump()
             }
             .onChange(of: scrollToLatestRequest) {
                 guard let latest = latestScrollTarget else { return }
                 guard latestJumpTask == nil else { return }
+                calendarJumpTask?.cancel()
+                calendarJumpTask = nil
+                store.completeJump()
                 latestJumpTask = Task { @MainActor in
                     defer { latestJumpTask = nil }
                     guard await store.prepareJump(to: latest), !Task.isCancelled else {
                         store.completeJump()
                         return
                     }
-                    pendingLatestScrollID = latest
+                    // Recreate the scroll view after the latest bucket and its
+                    // metadata window are ready, then target the small newest
+                    // day instead of the tall, lazily measured month section.
+                    withAnimation(.smooth(duration: 0.35)) {
+                        latestScrollReset &+= 1
+                    }
+                    Self.logger.info(
+                        "Photos re-tap reset to latest bucket=\(latest.rawValue, privacy: .public)"
+                    )
                 }
-            }
-            .onChange(of: pendingLatestScrollID) { _, latest in
-                guard let latest else { return }
-                // Wait until the evicted latest section is loaded and published,
-                // then jump without materializing the months between it and here.
-                var transaction = Transaction(animation: nil)
-                transaction.disablesAnimations = true
-                withTransaction(transaction) {
-                    proxy.scrollTo(latest, anchor: .bottom)
-                }
-                pendingLatestScrollID = nil
-                store.completeJump()
-                Self.logger.info(
-                    "Photos re-tap jumped directly to latest bucket=\(latest.rawValue, privacy: .public)"
-                )
             }
             .task {
                 guard !didPositionInitially else { return }
@@ -201,6 +255,10 @@ struct PhotosView: View {
 
     private var latestScrollTarget: TimelineBucketID? {
         store.sections.first?.id
+    }
+
+    private var latestDayScrollTarget: String? {
+        store.sections.first?.dayGroups.first?.id.id
     }
 
     private func updateVisibility(
@@ -235,6 +293,11 @@ struct PhotosView: View {
 }
 
 private struct TimelineSectionView: View {
+    private static let logger = Logger(
+        subsystem: "io.github.ender-wang.Remmich",
+        category: "PhotosTimeline"
+    )
+
     let section: TimelineSection
     let store: PhotosTimelineStore
     let media: MediaLibraryController
@@ -273,6 +336,17 @@ private struct TimelineSectionView: View {
                         }
                         .id(group.id.id)
                         .accessibilityIdentifier("timeline-day-\(group.id.id)")
+                        .onScrollVisibilityChange(threshold: 0.01) { visible in
+                            guard visible,
+                                  section.id == store.sections.first?.id,
+                                  store.jumpTarget == section.id,
+                                  group.id == section.dayGroups.first?.id
+                            else { return }
+                            Self.logger.info(
+                                "Latest day became visible day=\(group.id.id, privacy: .public)"
+                            )
+                            store.completeJump()
+                        }
                     }
                 }
             case let .failed(message):
@@ -418,6 +492,7 @@ private struct TimelineJumpPicker: View {
                                 }
                             }
                             .disabled(store.jumpTarget != nil)
+                            .accessibilityIdentifier("timeline-jump-\(bucket.id.rawValue)")
                         }
                     }
                 }
