@@ -1,6 +1,12 @@
+import OSLog
 import SwiftUI
 
 struct PhotosView: View {
+    private static let logger = Logger(
+        subsystem: "io.github.ender-wang.Remmich",
+        category: "PhotosTimeline"
+    )
+
     let store: PhotosTimelineStore
     let media: MediaLibraryController
     var scrollToLatestRequest = 0
@@ -8,6 +14,8 @@ struct PhotosView: View {
 
     @State private var showsJumpPicker = false
     @State private var pendingScrollID: TimelineBucketID?
+    @State private var pendingLatestScrollID: TimelineBucketID?
+    @State private var latestJumpTask: Task<Void, Never>?
     @State private var visibleDescriptors: [String: MediaRequestDescriptor] = [:]
     @State private var visibleAssets: [String: Date] = [:]
     @State private var viewportUpdateTask: Task<Void, Never>?
@@ -64,6 +72,10 @@ struct PhotosView: View {
         .onDisappear {
             viewportUpdateTask?.cancel()
             rotationRestoreTask?.cancel()
+            latestJumpTask?.cancel()
+            latestJumpTask = nil
+            pendingLatestScrollID = nil
+            store.completeJump()
         }
         .accessibilityIdentifier("photos-root")
     }
@@ -145,9 +157,30 @@ struct PhotosView: View {
             }
             .onChange(of: scrollToLatestRequest) {
                 guard let latest = latestScrollTarget else { return }
-                withAnimation(.snappy) {
+                guard latestJumpTask == nil else { return }
+                latestJumpTask = Task { @MainActor in
+                    defer { latestJumpTask = nil }
+                    guard await store.prepareJump(to: latest), !Task.isCancelled else {
+                        store.completeJump()
+                        return
+                    }
+                    pendingLatestScrollID = latest
+                }
+            }
+            .onChange(of: pendingLatestScrollID) { _, latest in
+                guard let latest else { return }
+                // Wait until the evicted latest section is loaded and published,
+                // then jump without materializing the months between it and here.
+                var transaction = Transaction(animation: nil)
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
                     proxy.scrollTo(latest, anchor: .bottom)
                 }
+                pendingLatestScrollID = nil
+                store.completeJump()
+                Self.logger.info(
+                    "Photos re-tap jumped directly to latest bucket=\(latest.rawValue, privacy: .public)"
+                )
             }
             .task {
                 guard !didPositionInitially else { return }

@@ -127,6 +127,9 @@ final class PhotosTimelineStore {
     }
 
     func updateVisibleAnchor(_ anchor: TimelineVisibleAnchor) {
+        if let jumpTarget, anchor.bucketID != jumpTarget {
+            return
+        }
         guard visibleAnchor?.bucketID != anchor.bucketID else { return }
         visibleAnchor = anchor
         applyMetadataWindow(centeredOn: anchor.bucketID)
@@ -189,12 +192,13 @@ final class PhotosTimelineStore {
     func prepareJump(to bucketID: TimelineBucketID) async -> Bool {
         guard sectionsByID[bucketID] != nil else { return false }
         jumpTarget = bucketID
-        applyMetadataWindow(centeredOn: bucketID)
         await loadBucket(bucketID)
-        guard case .loaded = sectionsByID[bucketID]?.loadState else {
+        guard !Task.isCancelled, case .loaded = sectionsByID[bucketID]?.loadState else {
             jumpTarget = nil
             return false
         }
+        visibleAnchor = .init(bucketID: bucketID, assetID: sectionsByID[bucketID]?.assets.first?.id)
+        applyMetadataWindow(centeredOn: bucketID)
         return true
     }
 

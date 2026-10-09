@@ -191,6 +191,32 @@ struct PhotosTimelineRegressionTests {
         #expect(store.sectionsByID[buckets[0].id]?.assets.map(\.id) == ["asset-0"])
     }
 
+    @Test @MainActor func reselectLoadsEvictedLatestBeforeReleasingOlderWindow() async {
+        let buckets = Self.buckets(count: 7)
+        let assets = Dictionary(uniqueKeysWithValues: buckets.enumerated().map { index, bucket in
+            (bucket.id, [Self.asset("asset-\(index)")])
+        })
+        let reader = ScenarioTimelineReader(buckets: buckets, assets: assets)
+        let store = PhotosTimelineStore(reader: reader)
+        await store.load()
+
+        let latest = buckets[0].id
+        let older = buckets[6].id
+        store.updateVisibleAnchor(.init(bucketID: older, assetID: "asset-6"))
+        await Self.eventually { store.sectionsByID[older]?.loadState == .loaded }
+        #expect(store.sectionsByID[latest]?.loadState == .unloaded)
+
+        #expect(await store.prepareJump(to: latest))
+        #expect(store.sectionsByID[latest]?.assets.map(\.id) == ["asset-0"])
+        #expect(store.visibleAnchor?.bucketID == latest)
+        #expect(await reader.assetRequestCount(for: latest) == 2)
+
+        store.updateVisibleAnchor(.init(bucketID: older, assetID: "asset-6"))
+        #expect(store.visibleAnchor?.bucketID == latest)
+        #expect(store.sectionsByID[latest]?.loadState == .loaded)
+        store.completeJump()
+    }
+
     @Test @MainActor func crossBucketDuplicatesKeepNewestServerPosition() async {
         let buckets = Self.buckets(count: 2)
         let reader = ScenarioTimelineReader(
