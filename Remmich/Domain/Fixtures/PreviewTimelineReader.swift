@@ -12,11 +12,11 @@ actor PreviewTimelineReader: TimelineReading {
     private let memoryValues: [TimelineMemorySummary]
     private var hasFailedInitialLoad = false
 
-    @MainActor init(mode: Mode = .loaded) {
+    @MainActor init(mode: Mode = .loaded, rangeLibrary: Bool = false) {
         self.mode = mode
         let calendar = Calendar(identifier: .gregorian)
         let referenceDate = PreviewFixtures.assets.map(\.capturedAt).max() ?? .now
-        buckets = PreviewFixtures.photoSections.enumerated().map { index, section in
+        let simpleBuckets = PreviewFixtures.photoSections.enumerated().map { index, section in
             let date = calendar.date(byAdding: .day, value: -index, to: referenceDate) ?? referenceDate
             let assets = section.assets.map(Self.map)
             let id = TimelineBucketID(rawValue: date.ISO8601Format())
@@ -25,6 +25,7 @@ actor PreviewTimelineReader: TimelineReading {
                 assets
             )
         }
+        buckets = rangeLibrary ? Self.rangeBuckets() : simpleBuckets
         memoryValues = PreviewFixtures.memories.map { memory in
             TimelineMemorySummary(
                 id: memory.id,
@@ -38,6 +39,25 @@ actor PreviewTimelineReader: TimelineReading {
                 ]
             )
         }
+    }
+
+    private nonisolated static func rangeBuckets() -> [(TimelineBucketSummary, [TimelineAssetSummary])] {
+        ["2026-10-01", "2026-09-01", "2026-08-01", "2026-07-01", "2026-06-01", "2025-12-01", "2025-06-01", "2024-04-01"]
+            .map { rawValue in
+                let id = TimelineBucketID(rawValue: rawValue)
+                let newest = id.displayDate!.addingTimeInterval(6 * 86400 + 20 * 3600)
+                let assets = (0 ..< 8).map { index in
+                    let date = newest.addingTimeInterval(TimeInterval(-index * 18000))
+                    return TimelineAssetSummary(
+                        id: "range-\(rawValue)-\(index)", ownerID: "preview-owner",
+                        capturedAt: date, uploadedAt: date, localOffsetHours: 0,
+                        mediaKind: .image, durationMilliseconds: nil, aspectRatio: index.isMultiple(of: 2) ? 2 : 0.5,
+                        isFavorite: false, visibility: .timeline, livePhotoVideoID: nil,
+                        stack: nil, projectionType: nil, thumbhash: nil, thumbnailRevision: date
+                    )
+                }
+                return (TimelineBucketSummary(id: id, assetCount: assets.count), assets)
+            }
     }
 
     func bucketSummaries(query _: TimelineQuery) async throws -> [TimelineBucketSummary] {

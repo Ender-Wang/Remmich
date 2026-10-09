@@ -122,7 +122,7 @@ jobs:
           xcrun simctl boot "iPad Air 13-inch (M4)" || true
           xcrun simctl bootstatus "iPad Air 13-inch (M4)" -b
 
-      - name: Test adaptive iPad layout
+      - name: Test iPad UI
         run: |
           set -o pipefail
           xcodebuild test-without-building \
@@ -134,7 +134,7 @@ jobs:
             -resultBundlePath "$RUNNER_TEMP/RemmichIPadLayoutTests.xcresult" \
             -skipPackagePluginValidation \
             -parallel-testing-enabled NO \
-            -only-testing:RemmichUITests/RemmichUITests/testAdaptivePhotoGridUsesAvailableWidth \
+            -only-testing:RemmichUITests \
             COMPILER_INDEX_STORE_ENABLE=NO \
             | xcbeautify
 

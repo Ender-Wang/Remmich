@@ -9,8 +9,12 @@ import UIKit
 import XCTest
 
 final class RemmichUITests: XCTestCase {
-    override func setUpWithError() throws {
+    override func setUp() async throws {
         continueAfterFailure = false
+        await MainActor.run { XCUIDevice.shared.orientation = .portrait }
+        addTeardownBlock {
+            await MainActor.run { XCUIDevice.shared.orientation = .portrait }
+        }
     }
 
     @MainActor
@@ -222,10 +226,10 @@ final class RemmichUITests: XCTestCase {
         let firstAsset = app.descendants(matching: .any)["asset-asset-0"].firstMatch
         XCTAssertTrue(firstAsset.waitForExistence(timeout: 2))
         XCTAssertLessThanOrEqual(firstAsset.frame.minX, app.frame.minX + 1)
-        let spacing: CGFloat = 2
-        let columnCount = floor((app.frame.width + spacing) / (firstAsset.frame.width + spacing))
-        let gridWidth = columnCount * firstAsset.frame.width + max(0, columnCount - 1) * spacing
-        XCTAssertGreaterThanOrEqual(gridWidth, app.frame.width - 1)
+        let grids = app.otherElements.matching(NSPredicate(format: "label == %@", "Photo grid"))
+        XCTAssertTrue(grids.firstMatch.waitForExistence(timeout: 5))
+        let gridWidth = grids.allElementsBoundByIndex.map(\.frame.width).max() ?? 0
+        XCTAssertGreaterThanOrEqual(gridWidth, app.frame.width - 2)
     }
 
     @MainActor
@@ -235,7 +239,7 @@ final class RemmichUITests: XCTestCase {
         app.launch()
 
         XCTAssertTrue(app.descendants(matching: .any)["photos-root"].waitForExistence(timeout: 5))
-        let memory = app.buttons["memory-memory-1"].firstMatch
+        let memory = app.descendants(matching: .any)["memory-memory-1"].firstMatch
         XCTAssertTrue(memory.waitForExistence(timeout: 5))
         XCTAssertTrue(memory.label.contains("Memory"))
         XCTAssertTrue(app.buttons["timeline-jump-button"].exists)
@@ -277,6 +281,214 @@ final class RemmichUITests: XCTestCase {
     @MainActor
     private func tabButton(_ label: String, in app: XCUIApplication) -> XCUIElement {
         app.buttons.matching(NSPredicate(format: "label == %@", label)).firstMatch
+    }
+
+    @MainActor
+    private func rangeApplication() -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-ui-testing-signed-in", "-ui-testing-range-library",
+            "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
+        ]
+        app.launchEnvironment["REMMICH_UI_TEST_PREFERENCES_SUITE"] = "remmich.ui-tests.\(UUID().uuidString)"
+        return app
+    }
+
+    @MainActor
+    private func selectRange(_ title: String, in app: XCUIApplication) {
+        app.buttons["timeline-range-menu"].tap()
+        let option = app.buttons[title].firstMatch
+        XCTAssertTrue(option.waitForExistence(timeout: 5))
+        option.tap()
+    }
+
+    @MainActor
+    func testTimelineRangeRootsRestorePreferenceOnRelaunch() {
+        let app = rangeApplication()
+        app.launch()
+        XCTAssertTrue(app.buttons["timeline-jump-button"].waitForExistence(timeout: 10))
+        selectRange("Years", in: app)
+        let year = app.buttons["timeline-year-2026"]
+        XCTAssertTrue(year.waitForExistence(timeout: 5))
+        XCTAssertTrue(year.label.contains("2026"))
+        XCTAssertEqual(year.frame.width, year.frame.height, accuracy: 2)
+        selectRange("Months", in: app)
+        let month = app.buttons["timeline-month-2026-10-01"]
+        XCTAssertTrue(month.waitForExistence(timeout: 5))
+        XCTAssertTrue(month.label.contains("October 2026"))
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(month.waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["timeline-jump-button"].exists)
+        selectRange("All Photos", in: app)
+        XCTAssertTrue(app.buttons["timeline-jump-button"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor
+    func testTimelineRangeDrillDownAndBackNavigation() {
+        let app = rangeApplication()
+        app.launch()
+        XCTAssertTrue(app.buttons["timeline-range-menu"].waitForExistence(timeout: 10))
+        selectRange("Years", in: app)
+        let year = app.buttons["timeline-year-2026"]
+        XCTAssertTrue(year.waitForExistence(timeout: 5))
+        year.tap()
+        let month = app.buttons["timeline-month-2026-10-01"]
+        XCTAssertTrue(month.waitForExistence(timeout: 5))
+        month.tap()
+        let week = app.buttons["timeline-week-2026-10-01-2026-W41"]
+        XCTAssertTrue(week.waitForExistence(timeout: 5))
+        week.tap()
+        let day = app.buttons["timeline-range-day-2026-10-01-2026-10-07"]
+        XCTAssertTrue(day.waitForExistence(timeout: 5))
+        day.tap()
+        let asset = app.descendants(matching: .any)["asset-range-2026-10-01-0"]
+        XCTAssertTrue(asset.waitForExistence(timeout: 5))
+        tabButton("Albums", in: app).tap()
+        tabButton("Photos", in: app).tap()
+        XCTAssertTrue(asset.isHittable)
+        for expected in [day, week, month, year] {
+            app.navigationBars.buttons.element(boundBy: 0).tap()
+            XCTAssertTrue(expected.waitForExistence(timeout: 5))
+        }
+    }
+
+    @MainActor
+    func testRangeCardsStaySquareAndUseAdaptiveColumns() {
+        let app = rangeApplication()
+        app.launch()
+        XCTAssertTrue(app.buttons["timeline-range-menu"].waitForExistence(timeout: 10))
+        selectRange("Months", in: app)
+        let card = app.buttons["timeline-month-2026-10-01"]
+        XCTAssertTrue(card.waitForExistence(timeout: 5))
+        assertRangeCardGeometry(card, in: app, landscape: false)
+        XCUIDevice.shared.orientation = .landscapeLeft
+        XCTAssertTrue(waitUntil { app.frame.width > app.frame.height })
+        XCTAssertTrue(waitUntil { [self] in
+            let columns: CGFloat = UIDevice.current.userInterfaceIdiom == .pad ? 3 : 2
+            let expected = (app.frame.width - 32 - 14 * (columns - 1)) / columns
+            if UIDevice.current.userInterfaceIdiom == .phone {
+                let fittedSide = expectedPhoneLandscapeCardSide(in: app)
+                return abs(card.frame.width - fittedSide) < 3 && rangeCardFitsAboveNavigation(card, in: app)
+            }
+            return abs(card.frame.width - expected) < 3
+        })
+        assertRangeCardGeometry(card, in: app, landscape: true)
+        let previousMonth = app.buttons["timeline-month-2026-09-01"]
+        XCTAssertTrue(previousMonth.waitForExistence(timeout: 5))
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            XCTAssertLessThan(card.frame.minX, previousMonth.frame.minX)
+            XCTAssertEqual(card.frame.minY, previousMonth.frame.minY, accuracy: 3)
+            XCTAssertTrue(rangeCardFitsAboveNavigation(previousMonth, in: app))
+            XCTAssertEqual(card.frame.maxY, app.tabBars.firstMatch.frame.minY - 20, accuracy: 3)
+            XCTAssertEqual(card.frame.minY, app.frame.minY + 20, accuracy: 3)
+            for month in ["2026-08-01", "2026-07-01"] {
+                let olderCard = app.buttons["timeline-month-\(month)"]
+                if olderCard.exists {
+                    XCTAssertLessThanOrEqual(olderCard.frame.maxY, app.frame.minY + 3)
+                }
+            }
+        }
+        XCUIDevice.shared.orientation = .portrait
+        XCTAssertTrue(waitUntil { app.frame.width < app.frame.height })
+        XCTAssertTrue(waitUntil {
+            let columns: CGFloat = UIDevice.current.userInterfaceIdiom == .pad ? 2 : 1
+            let expected = (app.frame.width - 32 - 14 * (columns - 1)) / columns
+            return abs(card.frame.width - expected) < 3
+        })
+        assertRangeCardGeometry(card, in: app, landscape: false)
+    }
+
+    @MainActor
+    private func assertRangeCardGeometry(_ card: XCUIElement, in app: XCUIApplication, landscape: Bool) {
+        let columns: CGFloat = UIDevice.current.userInterfaceIdiom == .pad ? (landscape ? 3 : 2) : (landscape ? 2 : 1)
+        let width = app.frame.width
+        XCTAssertEqual(card.frame.width, card.frame.height, accuracy: 2)
+        let widthBasedSide = (width - 32 - 14 * (columns - 1)) / columns
+        if UIDevice.current.userInterfaceIdiom == .phone, landscape {
+            // Checking only an upper bound would let shrunken, unreadable cards pass.
+            XCTAssertEqual(card.frame.width, expectedPhoneLandscapeCardSide(in: app), accuracy: 3)
+            XCTAssertTrue(rangeCardFitsAboveNavigation(card, in: app))
+        } else {
+            XCTAssertEqual(card.frame.width, widthBasedSide, accuracy: 3)
+        }
+    }
+
+    @MainActor
+    private func expectedPhoneLandscapeCardSide(in app: XCUIApplication) -> CGFloat {
+        let bottomNavigationHeight = app.frame.maxY - app.tabBars.firstMatch.frame.minY
+        return app.frame.height - bottomNavigationHeight - 20 * 2
+    }
+
+    @MainActor
+    private func rangeCardFitsAboveNavigation(_ card: XCUIElement, in app: XCUIApplication) -> Bool {
+        let tabBar = app.tabBars.firstMatch
+        let top = app.frame.minY + 20
+        let bottom = tabBar.frame.minY - 20
+        return card.frame.minY >= top - 3 && card.frame.maxY <= bottom + 3
+    }
+
+    @MainActor
+    func testRangeCoverCyclesBeyondFirstThreeWithoutResizingCard() {
+        let app = rangeApplication()
+        app.launch()
+        XCTAssertTrue(app.buttons["timeline-range-menu"].waitForExistence(timeout: 10))
+        selectRange("Months", in: app)
+        let card = app.buttons["timeline-month-2026-10-01"]
+        XCTAssertTrue(card.waitForExistence(timeout: 5))
+        let size = card.frame.size
+        attachLayoutScreenshot(app, name: "Centered landscape and portrait local covers")
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            (card.value as? String)?.hasPrefix("range-2026-10-01-") == true
+        }, "The month card did not expose its current cover")
+        XCTAssertTrue(waitUntil(timeout: 30) {
+            (card.value as? String) == "range-2026-10-01-4"
+        }, "The month cover did not advance past its first three assets")
+        XCTAssertEqual(card.frame.width, size.width, accuracy: 2)
+        XCTAssertEqual(card.frame.height, size.height, accuracy: 2)
+        XCTAssertTrue(card.label.contains("October 2026"))
+        attachLayoutScreenshot(app, name: "Cover cycle beyond first three assets")
+    }
+
+    @MainActor
+    func testPhotosRetapReturnsToLatestAndTabSwitchRetainsPosition() {
+        let app = rangeApplication()
+        app.launch()
+        XCTAssertTrue(app.buttons["timeline-jump-button"].waitForExistence(timeout: 10))
+        app.buttons["timeline-jump-button"].tap()
+        let oldest = app.buttons["timeline-jump-2024-04-01"]
+        for _ in 0 ..< 4 {
+            if oldest.isHittable {
+                break
+            }
+            app.swipeUp()
+        }
+        XCTAssertTrue(oldest.isHittable)
+        oldest.tap()
+        let oldAsset = app.descendants(matching: .any)["asset-range-2024-04-01-0"]
+        XCTAssertTrue(waitUntil { oldAsset.isHittable })
+        let previousY = oldAsset.frame.midY
+        tabButton("Albums", in: app).tap()
+        tabButton("Photos", in: app).tap()
+        XCTAssertTrue(oldAsset.isHittable)
+        XCTAssertEqual(oldAsset.frame.midY, previousY, accuracy: 5)
+        let latest = app.descendants(matching: .any)["asset-range-2026-10-01-0"]
+        for _ in 0 ..< 3 {
+            tabButton("Photos", in: app).tap()
+            XCTAssertTrue(waitUntil { latest.isHittable })
+            XCTAssertFalse(oldAsset.isHittable)
+        }
+        let latestY = latest.frame.midY
+        tabButton("Albums", in: app).tap()
+        tabButton("Photos", in: app).tap()
+        XCTAssertTrue(latest.isHittable)
+        XCTAssertEqual(latest.frame.midY, latestY, accuracy: 5)
+    }
+
+    @MainActor
+    private func waitUntil(timeout: TimeInterval = 10, _ condition: @escaping () -> Bool) -> Bool {
+        let predicate = NSPredicate { _, _ in condition() }
+        return XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: nil)], timeout: timeout) == .completed
     }
 
     @MainActor

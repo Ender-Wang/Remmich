@@ -61,6 +61,12 @@ final class MediaLibraryController {
     }
 
     func imageRequest(for descriptor: MediaRequestDescriptor) -> ImageRequest? {
+        #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("-ui-testing-signed-in") {
+                let data = PreviewMediaFixtures.data(for: descriptor.assetID)
+                return ImageRequest(id: "ui-fixture-\(descriptor.assetID)", data: { data })
+            }
+        #endif
         guard let scope, let session, let activeAPIURL,
               let url = Self.mediaURL(for: descriptor, apiURL: activeAPIURL)
         else { return nil }
@@ -79,6 +85,12 @@ final class MediaLibraryController {
     }
 
     func profileImageRequest(targetPixels: Int) -> ImageRequest? {
+        #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("-ui-testing-signed-in") {
+                let data = PreviewMediaFixtures.data(for: "avatar-0")
+                return ImageRequest(id: "ui-fixture-avatar", data: { data })
+            }
+        #endif
         guard let scope, let session, let activeAPIURL else { return nil }
         let url = activeAPIURL
             .appending(path: "users")

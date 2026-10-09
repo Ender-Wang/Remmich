@@ -70,7 +70,10 @@ final class AppSessionController {
             .loaded
         }
         let photosReader: any TimelineReading = if arguments.contains("-ui-testing-signed-in") {
-            PreviewTimelineReader(mode: previewMode)
+            PreviewTimelineReader(
+                mode: previewMode,
+                rangeLibrary: arguments.contains("-ui-testing-range-library")
+            )
         } else {
             timeline
         }
