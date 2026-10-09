@@ -16,6 +16,7 @@ final class PhotosTimelineStore {
     private(set) var memoryLaneState: PhotosMemoryLaneState = .idle
     private(set) var bucketSummaries: [TimelineBucketSummary] = []
     private(set) var sectionsByID: [TimelineBucketID: TimelineSection] = [:]
+    private(set) var rangeCoverRevision: UInt64 = 0
     private(set) var memories: [TimelineMemorySummary] = []
     private(set) var visibleAnchor: TimelineVisibleAnchor?
     private(set) var jumpTarget: TimelineBucketID?
@@ -202,6 +203,38 @@ final class PhotosTimelineStore {
         return true
     }
 
+    func loadRangeBucket(_ bucketID: TimelineBucketID) async {
+        guard sectionsByID[bucketID] != nil else { return }
+        visibleAnchor = .init(bucketID: bucketID, assetID: nil)
+        applyMetadataWindow(centeredOn: bucketID)
+        await loadBucket(bucketID)
+    }
+
+    func rangeCoverAssets(in bucketID: TimelineBucketID) async -> [TimelineAssetSummary] {
+        if let section = sectionsByID[bucketID], case .loaded = section.loadState {
+            return section.assets
+        }
+        guard sectionsByID[bucketID] != nil else { return [] }
+        let requestGeneration = generation
+        let requestRevision = rangeCoverRevision
+        do {
+            // The requesting card owns one month's metadata at a time.
+            // Reading covers does not move the All timeline's metadata window.
+            let assets = try await reader.assets(in: bucketID, query: query)
+            guard !Task.isCancelled,
+                  requestGeneration == generation,
+                  requestRevision == rangeCoverRevision
+            else { return [] }
+            return Self.deduplicate(assets)
+        } catch {
+            guard !Task.isCancelled, requestGeneration == generation else { return [] }
+            Self.logger.notice(
+                "Range cover unavailable bucket=\(bucketID.rawValue, privacy: .public) error=\(Self.errorSummary(error), privacy: .public)"
+            )
+            return []
+        }
+    }
+
     func completeJump() {
         jumpTarget = nil
     }
@@ -259,6 +292,7 @@ final class PhotosTimelineStore {
         memoryLaneState = .idle
         bucketSummaries = []
         sectionsByID = [:]
+        rangeCoverRevision &+= 1
         memories = []
         visibleAnchor = nil
         jumpTarget = nil
@@ -401,6 +435,7 @@ final class PhotosTimelineStore {
     }
 
     private func publishSummaries(_ summaries: [TimelineBucketSummary]) {
+        rangeCoverRevision &+= 1
         let unique = Self.deduplicateSummaries(summaries)
         let validIDs = Set(unique.map(\.id))
         sectionsByID = sectionsByID.filter { validIDs.contains($0.key) }

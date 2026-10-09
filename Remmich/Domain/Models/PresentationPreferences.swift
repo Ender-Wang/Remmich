@@ -4,6 +4,22 @@ enum PhotosRootRange: String, Codable, CaseIterable, Sendable {
     case year
     case month
     case all
+
+    var title: String {
+        switch self {
+        case .year: "Years"
+        case .month: "Months"
+        case .all: "All Photos"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .year: "calendar"
+        case .month: "calendar.circle"
+        case .all: "photo.on.rectangle"
+        }
+    }
 }
 
 enum PhotosAssetLayout: String, Codable, CaseIterable, Sendable {

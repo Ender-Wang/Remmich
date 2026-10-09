@@ -5,6 +5,7 @@ import SwiftUI
 struct ImmichThumbnail: View {
     let descriptor: MediaRequestDescriptor
     let media: MediaLibraryController
+    var contentMode: ContentMode = .fill
     var didLoad: (ImageContainer) -> Void = { _ in }
 
     @State private var retryID = 0
@@ -17,13 +18,21 @@ struct ImmichThumbnail: View {
             ZStack {
                 Rectangle().fill(.quaternary)
                 if let image = state.image, let container = state.imageContainer {
-                    image
-                        .resizable()
-                        .scaledToFill()
-                        .transition(.opacity)
-                        .task(id: ObjectIdentifier(container.image)) {
-                            didLoad(container)
-                        }
+                    GeometryReader { geometry in
+                        image
+                            .resizable()
+                            .aspectRatio(contentMode: contentMode)
+                            .frame(
+                                width: geometry.size.width,
+                                height: geometry.size.height,
+                                alignment: .center
+                            )
+                            .clipped()
+                    }
+                    .transition(.opacity)
+                    .task(id: ObjectIdentifier(container.image)) {
+                        didLoad(container)
+                    }
                 } else if state.error != nil {
                     Button {
                         retryID += 1

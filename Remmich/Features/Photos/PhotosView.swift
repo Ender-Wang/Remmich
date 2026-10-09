@@ -2,21 +2,22 @@ import OSLog
 import SwiftUI
 
 struct PhotosView: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
     private static let logger = Logger(
         subsystem: "io.github.ender-wang.Remmich",
         category: "PhotosTimeline"
     )
 
     let store: PhotosTimelineStore
+    let presentation: PhotosPresentationState
     let media: MediaLibraryController
+    @Binding var navigationPath: NavigationPath
     var scrollToLatestRequest = 0
     let showAccount: () -> Void
 
     @State private var showsJumpPicker = false
+    @State private var presentationError: String?
     @State private var pendingScrollID: TimelineBucketID?
-    @State private var latestScrollReset = 0
+    @State private var timelinePosition = ScrollPosition(edge: .bottom)
     @State private var latestJumpTask: Task<Void, Never>?
     @State private var calendarJumpTask: Task<Void, Never>?
     @State private var visibleDescriptors: [String: MediaRequestDescriptor] = [:]
@@ -25,6 +26,7 @@ struct PhotosView: View {
     @State private var rotationRestoreTask: Task<Void, Never>?
     @State private var rotationAnchorID: String?
     @State private var timelineWidth: CGFloat = 0
+    @State private var timelineBottomGap = CGFloat.infinity
     @State private var didPositionInitially = false
 
     var body: some View {
@@ -44,20 +46,37 @@ struct PhotosView: View {
                 }
                 .accessibilityHint(message)
             case .loaded:
-                timeline
+                rangeRoot
             }
+        }
+        .navigationDestination(for: PhotosRangeRoute.self) { route in
+            rangeDestination(route)
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(.hidden, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Button {
-                    showsJumpPicker = true
-                } label: {
-                    Label("Jump to Date", systemImage: "calendar")
+                HStack(spacing: 12) {
+                    if presentation.preferences.rootRange == .all {
+                        Button {
+                            showsJumpPicker = true
+                        } label: {
+                            Label("Jump to Date", systemImage: "calendar")
+                        }
+                        .disabled(store.bucketSummaries.isEmpty)
+                        .accessibilityIdentifier("timeline-jump-button")
+                    }
+                    Menu {
+                        ForEach(PhotosRootRange.allCases, id: \.self) { range in
+                            Button(range.title, systemImage: range.systemImage) {
+                                selectRootRange(range)
+                            }
+                        }
+                    } label: {
+                        Label("Timeline Range", systemImage: "square.grid.2x2")
+                    }
+                    .accessibilityIdentifier("timeline-range-menu")
                 }
-                .disabled(store.bucketSummaries.isEmpty)
-                .accessibilityIdentifier("timeline-jump-button")
             }
             AccountToolbarButton(action: showAccount)
         }
@@ -67,10 +86,48 @@ struct PhotosView: View {
                 showsJumpPicker = false
             }
         }
+        .alert("Couldn’t Save Preference", isPresented: Binding(
+            get: { presentationError != nil },
+            set: {
+                if !$0 {
+                    presentationError = nil
+                }
+            }
+        )) {
+            Button("OK") { presentationError = nil }
+        } message: {
+            Text(presentationError ?? "Please try again.")
+        }
         .onAppear { media.beginTimelinePresentation() }
         .task { await store.load() }
         .onChange(of: store.sections.map { "\($0.id.rawValue):\($0.contentRevision)" }) {
             scheduleViewportUpdate()
+        }
+        .onChange(of: scrollToLatestRequest) {
+            guard presentation.preferences.rootRange != .all || !navigationPath.isEmpty else { return }
+            let request = scrollToLatestRequest
+            Task { @MainActor in
+                guard !Task.isCancelled,
+                      request == scrollToLatestRequest,
+                      let latest = store.bucketSummaries.first?.id,
+                      await store.prepareJump(to: latest)
+                else {
+                    store.completeJump()
+                    return
+                }
+                if presentation.preferences.rootRange != .all {
+                    do {
+                        try presentation.setRootRange(.all)
+                    } catch {
+                        presentationError = error.localizedDescription
+                        store.completeJump()
+                        return
+                    }
+                }
+                navigationPath = NavigationPath()
+                didPositionInitially = false
+                store.completeJump()
+            }
         }
         .onDisappear {
             viewportUpdateTask?.cancel()
@@ -82,6 +139,65 @@ struct PhotosView: View {
             store.completeJump()
         }
         .accessibilityIdentifier("photos-root")
+    }
+
+    @ViewBuilder
+    private var rangeRoot: some View {
+        switch presentation.preferences.rootRange {
+        case .all:
+            timeline
+        case .year:
+            PhotosYearsView(store: store, media: media)
+        case .month:
+            PhotosMonthsView(summaries: store.bucketSummaries, store: store, media: media)
+        }
+    }
+
+    @ViewBuilder
+    private func rangeDestination(_ route: PhotosRangeRoute) -> some View {
+        switch route {
+        case let .year(year):
+            PhotosMonthsView(
+                summaries: TimelineRangeCatalog.years(from: store.bucketSummaries)
+                    .first { $0.id == year }?.months ?? [],
+                store: store,
+                media: media
+            )
+            .navigationTitle(String(year))
+        case let .month(bucketID):
+            PhotosRangeLoadedBucketView(bucketID: bucketID, store: store) { section in
+                PhotosWeeksView(section: section, media: media)
+            }
+            .navigationTitle(bucketID.displayDate?.formatted(.dateTime.month(.wide).year()) ?? bucketID.rawValue)
+        case let .week(bucketID, weekID):
+            PhotosRangeLoadedBucketView(bucketID: bucketID, store: store) { section in
+                PhotosDaysView(section: section, week: weekID, media: media)
+            }
+            .navigationTitle("Week of \(weekID.startDate.formatted(date: .abbreviated, time: .omitted))")
+        case let .day(bucketID, dayID):
+            PhotosRangeLoadedBucketView(bucketID: bucketID, store: store) { section in
+                if let day = section.dayGroups.first(where: { $0.id == dayID }) {
+                    PhotosDayAssetsView(
+                        day: day,
+                        media: media,
+                        visibilityChanged: updateVisibility,
+                        viewportChanged: updateViewport
+                    )
+                } else {
+                    ContentUnavailableView("Day Unavailable", systemImage: "photo.on.rectangle")
+                }
+            }
+            .navigationTitle(dayID.displayDate?.formatted(date: .abbreviated, time: .omitted) ?? dayID.id)
+        }
+    }
+
+    private func selectRootRange(_ range: PhotosRootRange) {
+        do {
+            try presentation.setRootRange(range)
+            navigationPath = NavigationPath()
+        } catch {
+            presentationError = error.localizedDescription
+        }
     }
 
     private var timeline: some View {
@@ -129,34 +245,15 @@ struct PhotosView: View {
                     }
                 }
                 .defaultScrollAnchor(.bottom)
-                .id(latestScrollReset)
-                .transition(
-                    reduceMotion
-                        ? .opacity
-                        : .asymmetric(
-                            insertion: .opacity.combined(with: .offset(y: 20)),
-                            removal: .opacity
-                        )
-                )
-                .task(id: latestScrollReset) {
-                    guard latestScrollReset > 0,
-                          store.jumpTarget == latestScrollTarget,
-                          let latestDayID = latestDayScrollTarget
-                    else { return }
-                    for attempt in 1 ... 20 {
-                        guard !Task.isCancelled,
-                              store.jumpTarget == latestScrollTarget
-                        else { return }
-                        Self.logger.info(
-                            "Latest day scroll attempt=\(attempt) day=\(latestDayID, privacy: .public)"
-                        )
-                        proxy.scrollTo(latestDayID, anchor: .bottom)
-                        try? await Task.sleep(for: .milliseconds(90))
-                    }
-                    if store.jumpTarget == latestScrollTarget {
-                        Self.logger.error(
-                            "Latest day scroll did not settle day=\(latestDayID, privacy: .public)"
-                        )
+                .scrollPosition($timelinePosition)
+                .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                    let visibleBottom = geometry.contentOffset.y
+                        + geometry.containerSize.height
+                        - geometry.contentInsets.bottom
+                    return max(0, geometry.contentSize.height - visibleBottom)
+                } action: { _, gap in
+                    timelineBottomGap = gap
+                    if gap <= 24, store.jumpTarget == latestScrollTarget {
                         store.completeJump()
                     }
                 }
@@ -214,10 +311,17 @@ struct PhotosView: View {
                 pendingScrollID = nil
             }
             .onChange(of: scrollToLatestRequest) {
+                guard navigationPath.isEmpty,
+                      presentation.preferences.rootRange == .all
+                else { return }
                 guard let latest = latestScrollTarget else { return }
                 guard latestJumpTask == nil else { return }
+                guard timelineBottomGap > 24 else { return }
                 calendarJumpTask?.cancel()
                 calendarJumpTask = nil
+                rotationRestoreTask?.cancel()
+                rotationRestoreTask = nil
+                rotationAnchorID = nil
                 store.completeJump()
                 latestJumpTask = Task { @MainActor in
                     defer { latestJumpTask = nil }
@@ -225,14 +329,13 @@ struct PhotosView: View {
                         store.completeJump()
                         return
                     }
-                    // Recreate the scroll view after the latest bucket and its
-                    // metadata window are ready, then target the small newest
-                    // day instead of the tall, lazily measured month section.
-                    withAnimation(.smooth(duration: 0.35)) {
-                        latestScrollReset &+= 1
+                    var transaction = Transaction(animation: nil)
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) {
+                        timelinePosition.scrollTo(edge: .bottom)
                     }
                     Self.logger.info(
-                        "Photos re-tap reset to latest bucket=\(latest.rawValue, privacy: .public)"
+                        "Photos re-tap scrolled to latest bucket=\(latest.rawValue, privacy: .public)"
                     )
                 }
             }
@@ -255,10 +358,6 @@ struct PhotosView: View {
 
     private var latestScrollTarget: TimelineBucketID? {
         store.sections.first?.id
-    }
-
-    private var latestDayScrollTarget: String? {
-        store.sections.first?.dayGroups.first?.id.id
     }
 
     private func updateVisibility(
@@ -293,11 +392,6 @@ struct PhotosView: View {
 }
 
 private struct TimelineSectionView: View {
-    private static let logger = Logger(
-        subsystem: "io.github.ender-wang.Remmich",
-        category: "PhotosTimeline"
-    )
-
     let section: TimelineSection
     let store: PhotosTimelineStore
     let media: MediaLibraryController
@@ -336,17 +430,6 @@ private struct TimelineSectionView: View {
                         }
                         .id(group.id.id)
                         .accessibilityIdentifier("timeline-day-\(group.id.id)")
-                        .onScrollVisibilityChange(threshold: 0.01) { visible in
-                            guard visible,
-                                  section.id == store.sections.first?.id,
-                                  store.jumpTarget == section.id,
-                                  group.id == section.dayGroups.first?.id
-                            else { return }
-                            Self.logger.info(
-                                "Latest day became visible day=\(group.id.id, privacy: .public)"
-                            )
-                            store.completeJump()
-                        }
                     }
                 }
             case let .failed(message):
@@ -527,14 +610,26 @@ private struct TimelineJumpPicker: View {
 #Preview("Loaded") {
     let store = PhotosTimelineStore(reader: PreviewTimelineReader())
     NavigationStack {
-        PhotosView(store: store, media: .init(), showAccount: {})
+        PhotosView(
+            store: store,
+            presentation: .init(),
+            media: .init(),
+            navigationPath: .constant(NavigationPath()),
+            showAccount: {}
+        )
     }
 }
 
 #Preview("Large Text") {
     let store = PhotosTimelineStore(reader: PreviewTimelineReader())
     NavigationStack {
-        PhotosView(store: store, media: .init(), showAccount: {})
+        PhotosView(
+            store: store,
+            presentation: .init(),
+            media: .init(),
+            navigationPath: .constant(NavigationPath()),
+            showAccount: {}
+        )
     }
     .environment(\.dynamicTypeSize, .accessibility3)
 }

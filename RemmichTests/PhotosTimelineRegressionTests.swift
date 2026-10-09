@@ -47,6 +47,37 @@ struct PhotosTimelineRegressionTests {
         #expect(store.sections.isEmpty)
     }
 
+    @Test @MainActor func rangeCoverReturnsAllAssetsWithoutMovingTheBucketWindow() async {
+        let bucketID = Self.bucketID(6)
+        let reader = ScenarioTimelineReader(
+            buckets: Self.buckets(count: 7),
+            assets: [bucketID: (0 ..< 8).map { Self.asset("cover-\($0)") }]
+        )
+        let store = PhotosTimelineStore(reader: reader)
+        await store.load()
+
+        let anchor = store.visibleAnchor
+        let covers = await store.rangeCoverAssets(in: bucketID)
+
+        #expect(covers.map(\.id) == (0 ..< 8).map { "cover-\($0)" })
+        #expect(store.sectionsByID[bucketID]?.assets.isEmpty == true)
+        #expect(store.visibleAnchor == anchor)
+        #expect(await reader.assetRequestCount(for: bucketID) == 1)
+    }
+
+    @Test @MainActor func rangeCoverReusesAllLoadedAssetsWithoutAnotherRequest() async {
+        let bucketID = Self.bucketID(0)
+        let assets = (0 ..< 8).map { Self.asset("cover-\($0)") }
+        let reader = ScenarioTimelineReader(buckets: Self.buckets(count: 1), assets: [bucketID: assets])
+        let store = PhotosTimelineStore(reader: reader)
+        await store.load()
+
+        let covers = await store.rangeCoverAssets(in: bucketID)
+
+        #expect(covers.map(\.id) == assets.map(\.id))
+        #expect(await reader.assetRequestCount(for: bucketID) == 1)
+    }
+
     @Test @MainActor func terminalInitialFailureRequiresAnExplicitRetry() async {
         let reader = InitialRetryTimelineReader(
             buckets: Self.buckets(count: 1),
@@ -215,6 +246,26 @@ struct PhotosTimelineRegressionTests {
         #expect(store.visibleAnchor?.bucketID == latest)
         #expect(store.sectionsByID[latest]?.loadState == .loaded)
         store.completeJump()
+    }
+
+    @Test @MainActor func selectedRangeLoadsOnlyItsOwningBucket() async {
+        let buckets = Self.buckets(count: 7)
+        let assets = Dictionary(uniqueKeysWithValues: buckets.enumerated().map { index, bucket in
+            (bucket.id, [Self.asset("asset-\(index)")])
+        })
+        let reader = ScenarioTimelineReader(buckets: buckets, assets: assets)
+        let store = PhotosTimelineStore(reader: reader)
+        await store.load()
+        let selected = buckets[5].id
+
+        await store.loadRangeBucket(selected)
+
+        #expect(store.sectionsByID[selected]?.assets.map(\.id) == ["asset-5"])
+        #expect(store.visibleAnchor?.bucketID == selected)
+        #expect(await reader.assetRequestCount(for: selected) == 1)
+        #expect(await reader.assetRequestCount(for: buckets[3].id) == 0)
+        #expect(await reader.assetRequestCount(for: buckets[4].id) == 0)
+        #expect(await reader.assetRequestCount(for: buckets[6].id) == 0)
     }
 
     @Test @MainActor func crossBucketDuplicatesKeepNewestServerPosition() async {

@@ -38,7 +38,9 @@ struct AppShellView: View {
                 NavigationStack(path: $photosPath) {
                     PhotosView(
                         store: photos,
+                        presentation: presentation,
                         media: media,
+                        navigationPath: $photosPath,
                         scrollToLatestRequest: photosScrollRequest,
                         showAccount: showAccount
                     )
