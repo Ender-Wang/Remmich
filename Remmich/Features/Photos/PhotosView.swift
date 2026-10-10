@@ -1,16 +1,86 @@
 import OSLog
 import SwiftUI
 
+private struct PhotosPinchFocus {
+    var year: Int?
+    var month: TimelineBucketID?
+    var week: TimelineWeekID?
+    var day: TimelineCaptureDay?
+}
+
+private struct PhotosPinchDay: Hashable {
+    let bucketID: TimelineBucketID
+    let dayID: TimelineCaptureDay
+}
+
+private enum PhotosRangePresentationID: Hashable {
+    case all
+    case years
+    case months
+    case route(PhotosRangeRoute)
+}
+
+private struct PhotosPinchTransitionState {
+    let source: PhotosRangePresentationID
+    let target: PhotosRangePresentationID
+    let direction: PhotosPinchDirection
+    let anchor: UnitPoint
+}
+
+private struct PhotosPinchVisualModifier: AnimatableModifier {
+    let scale: CGFloat
+    let opacity: CGFloat
+
+    var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { AnimatablePair(scale, opacity) }
+        set {
+            self = PhotosPinchVisualModifier(scale: newValue.first, opacity: newValue.second)
+        }
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .environment(\.photosPinchItemScale, scale)
+            .opacity(opacity)
+    }
+}
+
+private extension AnyTransition {
+    static func photosPinch(_ transition: PhotosPinchTransitionState) -> AnyTransition {
+        let identity = PhotosPinchVisualModifier(scale: 1, opacity: 1)
+        let insertionScale: CGFloat = transition.direction == .coarser ? 1.08 : 0.10
+        let removalScale: CGFloat = transition.direction == .coarser ? 0.10 : 1.08
+        return .asymmetric(
+            insertion: .modifier(
+                active: PhotosPinchVisualModifier(
+                    scale: insertionScale,
+                    opacity: 0
+                ),
+                identity: identity
+            ),
+            removal: .modifier(
+                active: PhotosPinchVisualModifier(
+                    scale: removalScale,
+                    opacity: 0
+                ),
+                identity: identity
+            )
+        )
+    }
+}
+
 struct PhotosView: View {
     private static let logger = Logger(
         subsystem: "io.github.ender-wang.Remmich",
         category: "PhotosTimeline"
     )
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     let store: PhotosTimelineStore
     let presentation: PhotosPresentationState
     let media: MediaLibraryController
-    @Binding var navigationPath: NavigationPath
+    @Binding var navigationPath: [PhotosRangeRoute]
     var scrollToLatestRequest = 0
     let showAccount: () -> Void
 
@@ -28,6 +98,10 @@ struct PhotosView: View {
     @State private var timelineWidth: CGFloat = 0
     @State private var timelineBottomGap = CGFloat.infinity
     @State private var didPositionInitially = false
+    @State private var pinchFocus: PhotosPinchFocus?
+    @State private var dayFrames: [PhotosPinchDay: CGRect] = [:]
+    @State private var timelineViewportSize: CGSize = .zero
+    @State private var pinchTransition: PhotosPinchTransitionState?
 
     var body: some View {
         Group {
@@ -46,18 +120,22 @@ struct PhotosView: View {
                 }
                 .accessibilityHint(message)
             case .loaded:
-                rangeRoot
+                rangePresentation
             }
         }
-        .navigationDestination(for: PhotosRangeRoute.self) { route in
-            rangeDestination(route)
-        }
+        .navigationTitle(navigationTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(.hidden, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 HStack(spacing: 12) {
-                    if presentation.preferences.rootRange == .all {
+                    if !navigationPath.isEmpty {
+                        Button(action: navigateBack) {
+                            Label("Back", systemImage: "chevron.backward")
+                        }
+                        .accessibilityIdentifier("timeline-range-back")
+                    }
+                    if navigationPath.isEmpty, presentation.preferences.rootRange == .all {
                         Button {
                             showsJumpPicker = true
                         } label: {
@@ -124,7 +202,7 @@ struct PhotosView: View {
                         return
                     }
                 }
-                navigationPath = NavigationPath()
+                navigationPath = []
                 didPositionInitially = false
                 store.completeJump()
             }
@@ -141,16 +219,47 @@ struct PhotosView: View {
         .accessibilityIdentifier("photos-root")
     }
 
-    @ViewBuilder
-    private var rangeRoot: some View {
-        switch presentation.preferences.rootRange {
-        case .all:
-            timeline
-        case .year:
-            PhotosYearsView(store: store, media: media)
-        case .month:
-            PhotosMonthsView(summaries: store.bucketSummaries, store: store, media: media)
+    private var rangePresentation: some View {
+        ZStack {
+            currentRangeContent
+                .id(visiblePresentationID)
+                .transition(activeRangeTransition)
         }
+        .clipped()
+    }
+
+    @ViewBuilder
+    private var currentRangeContent: some View {
+        if let route = navigationPath.last {
+            rangeDestination(route)
+        } else {
+            switch presentation.preferences.rootRange {
+            case .all:
+                timeline
+            case .year:
+                PhotosYearsView(
+                    store: store,
+                    media: media,
+                    focusID: pinchFocus?.year,
+                    onSelect: selectRoute,
+                    onPinch: { gesture, year in pinchYear(gesture, year: year) }
+                )
+            case .month:
+                PhotosMonthsView(
+                    summaries: store.bucketSummaries,
+                    store: store,
+                    media: media,
+                    focusID: pinchFocus?.month,
+                    onSelect: selectRoute,
+                    onPinch: { gesture, bucketID in pinchMonth(gesture, bucketID: bucketID) }
+                )
+            }
+        }
+    }
+
+    private var activeRangeTransition: AnyTransition {
+        guard !reduceMotion, let pinchTransition else { return .opacity }
+        return .photosPinch(pinchTransition)
     }
 
     @ViewBuilder
@@ -161,19 +270,36 @@ struct PhotosView: View {
                 summaries: TimelineRangeCatalog.years(from: store.bucketSummaries)
                     .first { $0.id == year }?.months ?? [],
                 store: store,
-                media: media
+                media: media,
+                focusID: pinchFocus?.month,
+                onSelect: selectRoute,
+                onPinch: { gesture, bucketID in pinchMonth(gesture, bucketID: bucketID) }
             )
-            .navigationTitle(String(year))
         case let .month(bucketID):
             PhotosRangeLoadedBucketView(bucketID: bucketID, store: store) { section in
-                PhotosWeeksView(section: section, media: media)
+                PhotosWeeksView(
+                    section: section,
+                    media: media,
+                    focusID: pinchFocus?.week,
+                    onSelect: selectRoute,
+                    onPinch: { gesture, weekID in
+                        pinchWeek(gesture, bucketID: bucketID, weekID: weekID)
+                    }
+                )
             }
-            .navigationTitle(bucketID.displayDate?.formatted(.dateTime.month(.wide).year()) ?? bucketID.rawValue)
         case let .week(bucketID, weekID):
             PhotosRangeLoadedBucketView(bucketID: bucketID, store: store) { section in
-                PhotosDaysView(section: section, week: weekID, media: media)
+                PhotosDaysView(
+                    section: section,
+                    week: weekID,
+                    media: media,
+                    focusID: pinchFocus?.day,
+                    onSelect: selectRoute,
+                    onPinch: { gesture, dayID in
+                        pinchDay(gesture, bucketID: bucketID, dayID: dayID)
+                    }
+                )
             }
-            .navigationTitle("Week of \(weekID.startDate.formatted(date: .abbreviated, time: .omitted))")
         case let .day(bucketID, dayID):
             PhotosRangeLoadedBucketView(bucketID: bucketID, store: store) { section in
                 if let day = section.dayGroups.first(where: { $0.id == dayID }) {
@@ -181,23 +307,224 @@ struct PhotosView: View {
                         day: day,
                         media: media,
                         visibilityChanged: updateVisibility,
-                        viewportChanged: updateViewport
+                        viewportChanged: updateViewport,
+                        onPinch: { gesture in pinchAssets(gesture, dayID: dayID) }
                     )
                 } else {
                     ContentUnavailableView("Day Unavailable", systemImage: "photo.on.rectangle")
                 }
             }
-            .navigationTitle(dayID.displayDate?.formatted(date: .abbreviated, time: .omitted) ?? dayID.id)
+        }
+    }
+
+    private var navigationTitle: String {
+        guard let route = navigationPath.last else { return "" }
+        switch route {
+        case let .year(year):
+            return String(year)
+        case let .month(bucketID):
+            return bucketID.displayDate?.formatted(.dateTime.month(.wide).year()) ?? bucketID.rawValue
+        case let .week(_, weekID):
+            return "Week of \(weekID.startDate.formatted(date: .abbreviated, time: .omitted))"
+        case let .day(_, dayID):
+            return dayID.displayDate?.formatted(date: .abbreviated, time: .omitted) ?? dayID.id
+        }
+    }
+
+    private func selectRoute(_ route: PhotosRangeRoute) {
+        guard pinchTransition == nil else { return }
+        withAnimation(.smooth(duration: 0.25)) {
+            navigationPath.append(route)
+        }
+    }
+
+    private func navigateBack() {
+        guard pinchTransition == nil, !navigationPath.isEmpty else { return }
+        withAnimation(.smooth(duration: 0.25)) {
+            navigationPath = Array(navigationPath.dropLast())
         }
     }
 
     private func selectRootRange(_ range: PhotosRootRange) {
         do {
             try presentation.setRootRange(range)
-            navigationPath = NavigationPath()
+            pinchFocus = nil
+            navigationPath = []
         } catch {
             presentationError = error.localizedDescription
         }
+    }
+
+    private var rootPresentationID: PhotosRangePresentationID {
+        switch presentation.preferences.rootRange {
+        case .all: .all
+        case .year: .years
+        case .month: .months
+        }
+    }
+
+    private var visiblePresentationID: PhotosRangePresentationID {
+        navigationPath.last.map(PhotosRangePresentationID.route) ?? rootPresentationID
+    }
+
+    private func presentationID(afterRemovingLastFrom path: [PhotosRangeRoute]) -> PhotosRangePresentationID {
+        path.dropLast().last.map(PhotosRangePresentationID.route) ?? rootPresentationID
+    }
+
+    private func performPinchTransition(
+        _ gesture: PhotosPinchGesture,
+        from source: PhotosRangePresentationID,
+        to target: PhotosRangePresentationID,
+        update: @escaping @MainActor () -> Void,
+        completion: (@MainActor () -> Void)? = nil
+    ) {
+        guard pinchTransition == nil else { return }
+        if reduceMotion {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) { update() }
+            completion?()
+            return
+        }
+
+        let duration = 0.3
+        pinchTransition = PhotosPinchTransitionState(
+            source: source,
+            target: target,
+            direction: gesture.direction,
+            anchor: gesture.anchor
+        )
+        withAnimation(.linear(duration: duration)) { update() }
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(duration))
+            completion?()
+            pinchTransition = nil
+        }
+    }
+
+    private func pinchTimeline(_ gesture: PhotosPinchGesture, at anchor: PhotosPinchDay) {
+        guard gesture.direction == .coarser else { return }
+        guard let week = TimelineWeekID(day: anchor.dayID) else { return }
+        let target = PhotosRangeRoute.week(anchor.bucketID, week)
+        let targetPath: [PhotosRangeRoute] = [.month(anchor.bucketID), target]
+        performPinchTransition(
+            gesture,
+            from: .all,
+            to: .route(target),
+            update: {
+                pinchFocus = .init(month: anchor.bucketID, week: week, day: anchor.dayID)
+                navigationPath = targetPath
+            },
+            completion: {
+                do {
+                    try presentation.setRootRange(.month)
+                } catch {
+                    presentationError = error.localizedDescription
+                }
+            }
+        )
+        Self.logger.info("Pinch coarsened All Photos to days bucket=\(anchor.bucketID.rawValue, privacy: .public)")
+    }
+
+    private func pinchYear(_ gesture: PhotosPinchGesture, year: Int) {
+        guard gesture.direction == .finer else { return }
+        let target = PhotosRangeRoute.year(year)
+        performPinchTransition(gesture, from: visiblePresentationID, to: .route(target)) {
+            pinchFocus = .init(year: year)
+            navigationPath.append(target)
+        }
+        Self.logger.info("Pinch refined year=\(year) to months")
+    }
+
+    private func pinchMonth(_ gesture: PhotosPinchGesture, bucketID: TimelineBucketID) {
+        switch gesture.direction {
+        case .finer:
+            let target = PhotosRangeRoute.month(bucketID)
+            performPinchTransition(gesture, from: visiblePresentationID, to: .route(target)) {
+                pinchFocus = .init(month: bucketID)
+                navigationPath.append(target)
+            }
+            Self.logger.info("Pinch refined month=\(bucketID.rawValue, privacy: .public) to weeks")
+        case .coarser:
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+            let year = bucketID.displayDate.map { calendar.component(.year, from: $0) }
+            if case .year = navigationPath.last {
+                performPinchTransition(gesture, from: visiblePresentationID, to: .years) {
+                    pinchFocus = .init(year: year, month: bucketID)
+                    navigationPath.removeLast()
+                }
+            } else {
+                performPinchTransition(gesture, from: visiblePresentationID, to: .years) {
+                    pinchFocus = .init(year: year, month: bucketID)
+                    do {
+                        try presentation.setRootRange(.year)
+                        navigationPath = []
+                    } catch {
+                        presentationError = error.localizedDescription
+                    }
+                }
+            }
+            Self.logger.info("Pinch coarsened month=\(bucketID.rawValue, privacy: .public) to years")
+        }
+    }
+
+    private func pinchWeek(
+        _ gesture: PhotosPinchGesture,
+        bucketID: TimelineBucketID,
+        weekID: TimelineWeekID
+    ) {
+        switch gesture.direction {
+        case .finer:
+            let target = PhotosRangeRoute.week(bucketID, weekID)
+            performPinchTransition(gesture, from: visiblePresentationID, to: .route(target)) {
+                pinchFocus = .init(month: bucketID, week: weekID)
+                navigationPath.append(target)
+            }
+            Self.logger.info("Pinch refined week=\(weekID.id, privacy: .public) to days")
+        case .coarser:
+            let target = presentationID(afterRemovingLastFrom: navigationPath)
+            performPinchTransition(gesture, from: visiblePresentationID, to: target) {
+                pinchFocus = .init(month: bucketID, week: weekID)
+                navigationPath.removeLast()
+            }
+            Self.logger.info("Pinch coarsened week=\(weekID.id, privacy: .public) to months")
+        }
+    }
+
+    private func pinchDay(
+        _ gesture: PhotosPinchGesture,
+        bucketID: TimelineBucketID,
+        dayID: TimelineCaptureDay
+    ) {
+        guard let week = TimelineWeekID(day: dayID) else { return }
+        switch gesture.direction {
+        case .finer:
+            let target = PhotosRangeRoute.day(bucketID, dayID)
+            performPinchTransition(gesture, from: visiblePresentationID, to: .route(target)) {
+                pinchFocus = .init(month: bucketID, week: week, day: dayID)
+                navigationPath.append(target)
+            }
+            Self.logger.info("Pinch refined day=\(dayID.id, privacy: .public) to assets")
+        case .coarser:
+            guard !navigationPath.isEmpty else { return }
+            let target = presentationID(afterRemovingLastFrom: navigationPath)
+            performPinchTransition(gesture, from: visiblePresentationID, to: target) {
+                pinchFocus = .init(month: bucketID, week: week, day: dayID)
+                navigationPath.removeLast()
+            }
+            Self.logger.info("Pinch coarsened day=\(dayID.id, privacy: .public) to weeks")
+        }
+    }
+
+    private func pinchAssets(_ gesture: PhotosPinchGesture, dayID: TimelineCaptureDay) {
+        guard gesture.direction == .coarser, !navigationPath.isEmpty else { return }
+        let target = presentationID(afterRemovingLastFrom: navigationPath)
+        performPinchTransition(gesture, from: visiblePresentationID, to: target) {
+            pinchFocus = .init(day: dayID)
+            navigationPath.removeLast()
+        }
+        Self.logger.info("Pinch coarsened assets to day=\(dayID.id, privacy: .public)")
     }
 
     private var timeline: some View {
@@ -223,7 +550,15 @@ struct PhotosView: View {
                                 media: media,
                                 availableWidth: timelineWidth,
                                 visibilityChanged: updateVisibility,
-                                viewportChanged: updateViewport
+                                viewportChanged: updateViewport,
+                                dayFrameChanged: { day, frame in
+                                    let key = PhotosPinchDay(bucketID: section.id, dayID: day)
+                                    if let frame {
+                                        dayFrames[key] = frame
+                                    } else {
+                                        dayFrames.removeValue(forKey: key)
+                                    }
+                                }
                             )
                             .id(section.id)
                             .onScrollVisibilityChange(threshold: 0.01) { visible in
@@ -246,6 +581,26 @@ struct PhotosView: View {
                 }
                 .defaultScrollAnchor(.bottom)
                 .scrollPosition($timelinePosition)
+                .coordinateSpace(name: "timeline-pinch")
+                .simultaneousGesture(MagnifyGesture().onEnded { value in
+                    guard let gesture = PhotosPinchGesture(
+                        magnification: value.magnification,
+                        location: value.startLocation,
+                        viewportSize: timelineViewportSize
+                    ),
+                        gesture.direction == .coarser
+                    else { return }
+                    let point = value.startLocation
+                    let anchor = dayFrames.filter { _, frame in
+                        frame.intersects(CGRect(origin: .zero, size: timelineViewportSize))
+                    }.min { first, second in
+                        PhotosPinchGeometry.distanceSquared(from: point, to: first.value)
+                            < PhotosPinchGeometry.distanceSquared(from: point, to: second.value)
+                    }?.key
+                    if let anchor {
+                        pinchTimeline(gesture, at: anchor)
+                    }
+                })
                 .onScrollGeometryChange(for: CGFloat.self) { geometry in
                     let visibleBottom = geometry.contentOffset.y
                         + geometry.containerSize.height
@@ -271,6 +626,7 @@ struct PhotosView: View {
                 .refreshable { await store.refresh() }
                 .onGeometryChange(for: CGSize.self) { $0.size } action: { oldSize, newSize in
                     timelineWidth = newSize.width
+                    timelineViewportSize = newSize
                     guard oldSize.width > 0, abs(oldSize.width - newSize.width) > 20 else { return }
                     if rotationRestoreTask == nil {
                         rotationAnchorID = visibleAssets.max(by: { $0.value < $1.value })?.key
@@ -398,6 +754,7 @@ private struct TimelineSectionView: View {
     let availableWidth: CGFloat
     let visibilityChanged: (String, MediaRequestDescriptor?) -> Void
     let viewportChanged: (TimelineAssetSummary, Bool) -> Void
+    let dayFrameChanged: (TimelineCaptureDay, CGRect?) -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -429,6 +786,14 @@ private struct TimelineSectionView: View {
                             )
                         }
                         .id(group.id.id)
+                        .onGeometryChange(for: CGRect.self) {
+                            $0.frame(in: .named("timeline-pinch"))
+                        } action: { dayFrameChanged(group.id, $0) }
+                        .onScrollVisibilityChange(threshold: 0.01) { visible in
+                            if !visible {
+                                dayFrameChanged(group.id, nil)
+                            }
+                        }
                         .accessibilityIdentifier("timeline-day-\(group.id.id)")
                     }
                 }
@@ -614,7 +979,7 @@ private struct TimelineJumpPicker: View {
             store: store,
             presentation: .init(),
             media: .init(),
-            navigationPath: .constant(NavigationPath()),
+            navigationPath: .constant([]),
             showAccount: {}
         )
     }
@@ -627,7 +992,7 @@ private struct TimelineJumpPicker: View {
             store: store,
             presentation: .init(),
             media: .init(),
-            navigationPath: .constant(NavigationPath()),
+            navigationPath: .constant([]),
             showAccount: {}
         )
     }

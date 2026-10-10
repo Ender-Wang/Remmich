@@ -1,9 +1,44 @@
+import CoreGraphics
 import Foundation
+import SwiftUI
 import Testing
 @testable import Remmich
 
 @Suite("Timeline range catalog")
 struct TimelineRangeCatalogTests {
+    @Test func pinchRequiresACompletedGestureBeyondTheDeadZone() {
+        #expect(PhotosPinchDirection(magnification: 0.77) == .coarser)
+        #expect(PhotosPinchDirection(magnification: 1.29) == .finer)
+        #expect(PhotosPinchDirection(magnification: 0.9) == nil)
+        #expect(PhotosPinchDirection(magnification: 1.1) == nil)
+    }
+
+    @Test func pinchFocusPrefersTheRangeContainingTheFingers() {
+        let point = CGPoint(x: 50, y: 100)
+        let tallDay = CGRect(x: 0, y: 0, width: 100, height: 1000)
+        let nearbyDay = CGRect(x: 0, y: -100, width: 100, height: 90)
+        #expect(PhotosPinchGeometry.distanceSquared(from: point, to: tallDay) == 0)
+        #expect(PhotosPinchGeometry.distanceSquared(from: point, to: nearbyDay) > 0)
+    }
+
+    @Test func pinchGestureNormalizesAndClampsItsVisualAnchor() {
+        let centered = PhotosPinchGesture(
+            magnification: 0.7,
+            location: CGPoint(x: 100, y: 200),
+            viewportSize: CGSize(width: 200, height: 400)
+        )
+        #expect(centered?.direction == .coarser)
+        #expect(centered?.anchor == .center)
+
+        let clamped = PhotosPinchGesture(
+            magnification: 1.5,
+            location: CGPoint(x: -20, y: 500),
+            viewportSize: CGSize(width: 200, height: 400)
+        )
+        #expect(clamped?.direction == .finer)
+        #expect(clamped?.anchor == .bottomLeading)
+    }
+
     @Test func rangeCardsUsePhoneAndIPadColumnCounts() {
         #expect(TimelineRangeGridLayout.columnCount(isPhone: true, viewportSize: .init(width: 844, height: 390)) == 2)
         #expect(TimelineRangeGridLayout.columnCount(isPhone: true, viewportSize: .init(width: 390, height: 844)) == 1)

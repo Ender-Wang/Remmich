@@ -18,7 +18,7 @@ struct AppShellView: View {
 
     @State private var selection: AppDestination = .photos
     @State private var photosScrollRequest = 0
-    @State private var photosPath = NavigationPath()
+    @State private var photosPath: [PhotosRangeRoute] = []
     @State private var albumsPath = NavigationPath()
     @State private var libraryPath = NavigationPath()
     @State private var searchPath = NavigationPath()
@@ -35,7 +35,7 @@ struct AppShellView: View {
             }
         )) {
             Tab(AppDestination.photos.title, systemImage: AppDestination.photos.systemImage, value: .photos) {
-                NavigationStack(path: $photosPath) {
+                NavigationStack {
                     PhotosView(
                         store: photos,
                         presentation: presentation,

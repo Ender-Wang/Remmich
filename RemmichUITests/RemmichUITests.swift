@@ -348,9 +348,58 @@ final class RemmichUITests: XCTestCase {
         tabButton("Photos", in: app).tap()
         XCTAssertTrue(asset.isHittable)
         for expected in [day, week, month, year] {
-            app.navigationBars.buttons.element(boundBy: 0).tap()
+            let back = app.buttons["timeline-range-back"]
+            XCTAssertTrue(back.waitForExistence(timeout: 5))
+            back.tap()
             XCTAssertTrue(expected.waitForExistence(timeout: 5))
         }
+    }
+
+    @MainActor
+    func testPinchChangesRangeOnSignedInDevice() throws {
+        #if targetEnvironment(simulator)
+            throw XCTSkip("Uses the saved Immich account on the connected iPhone")
+        #else
+            let app = XCUIApplication()
+            app.launch()
+            let menu = app.buttons["timeline-range-menu"]
+            if app.descendants(matching: .any)["onboarding-root"].waitForExistence(timeout: 5) {
+                throw XCTSkip("Requires a saved signed-in Immich account on the connected device")
+            }
+            XCTAssertTrue(menu.waitForExistence(timeout: 30))
+            selectRange("Months", in: app)
+            let months = app.buttons.matching(NSPredicate(
+                format: "identifier BEGINSWITH %@", "timeline-month-"
+            ))
+            guard let month = months.allElementsBoundByIndex.first(where: \.isHittable) else {
+                XCTFail("No visible month card in the signed-in library")
+                return
+            }
+            let yearID = String(month.identifier.dropFirst("timeline-month-".count).prefix(4))
+            month.pinch(withScale: 0.6, velocity: 1)
+            let year = app.buttons["timeline-year-\(yearID)"]
+            XCTAssertTrue(year.waitForExistence(timeout: 10))
+            year.pinch(withScale: 1.5, velocity: 1)
+            XCTAssertTrue(month.waitForExistence(timeout: 10))
+            selectRange("All Photos", in: app)
+        #endif
+    }
+
+    @MainActor
+    func testPinchChangesOneRangeAtATime() {
+        let app = rangeApplication()
+        app.launch()
+        XCTAssertTrue(app.buttons["timeline-range-menu"].waitForExistence(timeout: 10))
+        selectRange("Months", in: app)
+        let month = app.buttons["timeline-month-2026-10-01"]
+        XCTAssertTrue(month.waitForExistence(timeout: 5))
+        month.pinch(withScale: 0.6, velocity: 1)
+        let year = app.buttons["timeline-year-2026"]
+        XCTAssertTrue(year.waitForExistence(timeout: 5))
+        year.pinch(withScale: 1.5, velocity: 1)
+        XCTAssertTrue(month.waitForExistence(timeout: 5))
+        month.pinch(withScale: 1.5, velocity: 1)
+        XCTAssertTrue(app.buttons["timeline-week-2026-10-01-2026-W41"].waitForExistence(timeout: 5))
     }
 
     @MainActor

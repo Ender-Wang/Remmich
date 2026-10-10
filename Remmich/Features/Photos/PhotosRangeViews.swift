@@ -7,20 +7,68 @@ enum PhotosRangeRoute: Hashable {
     case day(TimelineBucketID, TimelineCaptureDay)
 }
 
+nonisolated enum PhotosPinchDirection: Equatable {
+    case coarser
+    case finer
+
+    init?(magnification: CGFloat) {
+        if magnification <= 0.78 {
+            self = .coarser
+        } else if magnification >= 1.28 {
+            self = .finer
+        } else {
+            return nil
+        }
+    }
+}
+
+nonisolated struct PhotosPinchGesture: Equatable {
+    let direction: PhotosPinchDirection
+    let anchor: UnitPoint
+
+    init?(magnification: CGFloat, location: CGPoint, viewportSize: CGSize) {
+        guard let direction = PhotosPinchDirection(magnification: magnification),
+              viewportSize.width > 0,
+              viewportSize.height > 0
+        else { return nil }
+        self.direction = direction
+        anchor = UnitPoint(
+            x: min(max(location.x / viewportSize.width, 0), 1),
+            y: min(max(location.y / viewportSize.height, 0), 1)
+        )
+    }
+}
+
+nonisolated enum PhotosPinchGeometry {
+    static func distanceSquared(from point: CGPoint, to frame: CGRect) -> CGFloat {
+        let dx = max(0, max(frame.minX - point.x, point.x - frame.maxX))
+        let dy = max(0, max(frame.minY - point.y, point.y - frame.maxY))
+        return dx * dx + dy * dy
+    }
+}
+
 struct PhotosYearsView: View {
     let store: PhotosTimelineStore
     let media: MediaLibraryController
+    var focusID: Int?
+    var onSelect: ((PhotosRangeRoute) -> Void)?
+    var onPinch: ((PhotosPinchGesture, Int) -> Void)?
 
     var body: some View {
-        PhotosRangeCardGrid(items: TimelineRangeCatalog.years(from: store.bucketSummaries)) { year in
-            PhotosBucketCoverLink(
+        PhotosRangeCardGrid(
+            items: TimelineRangeCatalog.years(from: store.bucketSummaries),
+            focusID: focusID,
+            onPinch: { gesture, year in onPinch?(gesture, year.id) }
+        ) { year in
+            PhotosBucketCoverButton(
                 route: .year(year.id),
                 title: String(year.id),
                 count: year.assetCount,
                 systemImage: "calendar",
                 bucketIDs: year.months.reversed().filter { $0.assetCount > 0 }.map(\.id),
                 store: store,
-                media: media
+                media: media,
+                onSelect: onSelect
             )
             .accessibilityIdentifier("timeline-year-\(year.id)")
         }
@@ -32,10 +80,17 @@ struct PhotosMonthsView: View {
     let summaries: [TimelineBucketSummary]
     let store: PhotosTimelineStore
     let media: MediaLibraryController
+    var focusID: TimelineBucketID?
+    var onSelect: ((PhotosRangeRoute) -> Void)?
+    var onPinch: ((PhotosPinchGesture, TimelineBucketID) -> Void)?
 
     var body: some View {
-        PhotosRangeCardGrid(items: TimelineRangeCatalog.months(from: summaries)) { month in
-            PhotosBucketCoverLink(
+        PhotosRangeCardGrid(
+            items: TimelineRangeCatalog.months(from: summaries),
+            focusID: focusID,
+            onPinch: { gesture, month in onPinch?(gesture, month.id) }
+        ) { month in
+            PhotosBucketCoverButton(
                 route: .month(month.id),
                 title: month.id.displayDate?.formatted(.dateTime.month(.wide).year())
                     ?? month.id.rawValue,
@@ -43,7 +98,8 @@ struct PhotosMonthsView: View {
                 systemImage: "calendar.circle",
                 bucketIDs: month.assetCount > 0 ? [month.id] : [],
                 store: store,
-                media: media
+                media: media,
+                onSelect: onSelect
             )
             .accessibilityIdentifier("timeline-month-\(month.id.rawValue)")
         }
@@ -54,10 +110,19 @@ struct PhotosMonthsView: View {
 struct PhotosWeeksView: View {
     let section: TimelineSection
     let media: MediaLibraryController
+    var focusID: TimelineWeekID?
+    var onSelect: ((PhotosRangeRoute) -> Void)?
+    var onPinch: ((PhotosPinchGesture, TimelineWeekID) -> Void)?
 
     var body: some View {
-        PhotosRangeCardGrid(items: TimelineRangeCatalog.weeks(in: section)) { week in
-            NavigationLink(value: PhotosRangeRoute.week(section.id, week.id)) {
+        PhotosRangeCardGrid(
+            items: TimelineRangeCatalog.weeks(in: section),
+            focusID: focusID,
+            onPinch: { gesture, week in onPinch?(gesture, week.id) }
+        ) { week in
+            Button {
+                onSelect?(.week(section.id, week.id))
+            } label: {
                 PhotosRangeCard(
                     title: "Week of \(week.id.startDate.formatted(date: .abbreviated, time: .omitted))",
                     count: week.assetCount,
@@ -77,10 +142,19 @@ struct PhotosDaysView: View {
     let section: TimelineSection
     let week: TimelineWeekID
     let media: MediaLibraryController
+    var focusID: TimelineCaptureDay?
+    var onSelect: ((PhotosRangeRoute) -> Void)?
+    var onPinch: ((PhotosPinchGesture, TimelineCaptureDay) -> Void)?
 
     var body: some View {
-        PhotosRangeCardGrid(items: TimelineRangeCatalog.days(in: section, week: week)) { day in
-            NavigationLink(value: PhotosRangeRoute.day(section.id, day.id)) {
+        PhotosRangeCardGrid(
+            items: TimelineRangeCatalog.days(in: section, week: week),
+            focusID: focusID,
+            onPinch: { gesture, day in onPinch?(gesture, day.id) }
+        ) { day in
+            Button {
+                onSelect?(.day(section.id, day.id))
+            } label: {
                 PhotosRangeCard(
                     title: day.id.displayDate?.formatted(date: .abbreviated, time: .omitted)
                         ?? day.id.id,
@@ -102,8 +176,10 @@ struct PhotosDayAssetsView: View {
     let media: MediaLibraryController
     let visibilityChanged: (String, MediaRequestDescriptor?) -> Void
     let viewportChanged: (TimelineAssetSummary, Bool) -> Void
+    var onPinch: ((PhotosPinchGesture) -> Void)?
 
     @State private var availableWidth: CGFloat = 0
+    @State private var viewportSize: CGSize = .zero
 
     var body: some View {
         ScrollView {
@@ -115,8 +191,19 @@ struct PhotosDayAssetsView: View {
                 viewportChanged: viewportChanged
             )
         }
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { availableWidth = $0 }
+        .onGeometryChange(for: CGSize.self) { $0.size } action: {
+            availableWidth = $0.width
+            viewportSize = $0
+        }
         .ignoresSafeArea(.container, edges: .horizontal)
+        .simultaneousGesture(MagnifyGesture().onEnded { value in
+            guard let gesture = PhotosPinchGesture(
+                magnification: value.magnification,
+                location: value.startLocation,
+                viewportSize: viewportSize
+            ) else { return }
+            onPinch?(gesture)
+        })
         .accessibilityIdentifier("timeline-range-assets-\(day.id.id)")
     }
 }
@@ -148,7 +235,7 @@ struct PhotosRangeLoadedBucketView<Content: View>: View {
     }
 }
 
-private struct PhotosBucketCoverLink: View {
+private struct PhotosBucketCoverButton: View {
     let route: PhotosRangeRoute
     let title: String
     let count: Int
@@ -156,10 +243,13 @@ private struct PhotosBucketCoverLink: View {
     let bucketIDs: [TimelineBucketID]
     let store: PhotosTimelineStore
     let media: MediaLibraryController
+    let onSelect: ((PhotosRangeRoute) -> Void)?
     @State private var currentCoverID = "loading"
 
     var body: some View {
-        NavigationLink(value: route) {
+        Button {
+            onSelect?(route)
+        } label: {
             PhotosRangeCard(
                 title: title,
                 count: count,
@@ -184,11 +274,14 @@ private struct PhotosBucketCoverLink: View {
     }
 }
 
-private struct PhotosRangeCardGrid<Item: Identifiable, Content: View>: View {
+private struct PhotosRangeCardGrid<Item: Identifiable, Content: View>: View where Item.ID: Sendable {
     let items: [Item]
+    var focusID: Item.ID?
+    var onPinch: ((PhotosPinchGesture, Item) -> Void)?
     @ViewBuilder let content: (Item) -> Content
     @State private var position = ScrollPosition(edge: .bottom)
     @State private var didPositionInitially = false
+    @State private var frames: [Item.ID: CGRect] = [:]
 
     var body: some View {
         GeometryReader { geometry in
@@ -218,6 +311,14 @@ private struct PhotosRangeCardGrid<Item: Identifiable, Content: View>: View {
                         if let index = displaySlots[slot] {
                             content(items[index])
                                 .id(items[index].id)
+                                .onGeometryChange(for: CGRect.self) {
+                                    $0.frame(in: .named("range-pinch"))
+                                } action: { frames[items[index].id] = $0 }
+                                .onScrollVisibilityChange(threshold: 0.01) { visible in
+                                    if !visible {
+                                        frames.removeValue(forKey: items[index].id)
+                                    }
+                                }
                         } else {
                             Color.clear
                                 .aspectRatio(1, contentMode: .fit)
@@ -225,6 +326,7 @@ private struct PhotosRangeCardGrid<Item: Identifiable, Content: View>: View {
                         }
                     }
                 }
+                .scrollTargetLayout()
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal, 16)
                 .padding(.top, topSpacing)
@@ -232,11 +334,42 @@ private struct PhotosRangeCardGrid<Item: Identifiable, Content: View>: View {
             .defaultScrollAnchor(.bottom)
             .contentMargins(.bottom, bottomSpacing, for: .scrollContent)
             .scrollPosition($position)
+            .coordinateSpace(name: "range-pinch")
+            .simultaneousGesture(MagnifyGesture().onEnded { value in
+                guard let gesture = PhotosPinchGesture(
+                    magnification: value.magnification,
+                    location: value.startLocation,
+                    viewportSize: geometry.size
+                ),
+                    let onPinch
+                else { return }
+                let point = value.startLocation
+                let item = items.filter { item in
+                    guard let frame = frames[item.id] else { return false }
+                    return frame.intersects(CGRect(origin: .zero, size: geometry.size))
+                }.min { first, second in
+                    guard let firstFrame = frames[first.id], let secondFrame = frames[second.id] else { return false }
+                    return PhotosPinchGeometry.distanceSquared(from: point, to: firstFrame)
+                        < PhotosPinchGeometry.distanceSquared(from: point, to: secondFrame)
+                }
+                if let item {
+                    onPinch(gesture, item)
+                }
+            })
             .task {
                 guard !didPositionInitially else { return }
                 didPositionInitially = true
                 await Task.yield()
-                position.scrollTo(edge: .bottom)
+                if let focusID {
+                    position.scrollTo(id: focusID, anchor: .center)
+                } else {
+                    position.scrollTo(edge: .bottom)
+                }
+            }
+            .onChange(of: focusID) { _, focusID in
+                if let focusID {
+                    position.scrollTo(id: focusID, anchor: .center)
+                }
             }
 
             if isPhoneLandscape {
@@ -274,6 +407,7 @@ nonisolated enum TimelineRangeGridLayout {
 
 private struct PhotosRangeCard: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.photosPinchItemScale) private var photosPinchItemScale
     @Environment(\.scenePhase) private var scenePhase
 
     let title: String
@@ -369,6 +503,7 @@ private struct PhotosRangeCard: View {
                 .allowsHitTesting(false)
             }
             .frame(maxWidth: .infinity)
+            .scaleEffect(photosPinchItemScale, anchor: .center)
             .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
             .onChange(of: currentAsset?.id, initial: true) { _, coverID in
                 onCoverChanged(coverID)

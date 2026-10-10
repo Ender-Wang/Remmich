@@ -1,5 +1,9 @@
 import SwiftUI
 
+extension EnvironmentValues {
+    @Entry var photosPinchItemScale: CGFloat = 1
+}
+
 struct AssetGrid: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     let assets: [FixtureAsset]
@@ -157,6 +161,7 @@ nonisolated enum TimelineGridOrder {
 
 private struct TimelineAssetThumbnail: View {
     @Environment(\.displayScale) private var displayScale
+    @Environment(\.photosPinchItemScale) private var photosPinchItemScale
     let asset: TimelineAssetSummary
     let media: MediaLibraryController
     let visibilityChanged: (String, MediaRequestDescriptor?) -> Void
@@ -218,6 +223,7 @@ private struct TimelineAssetThumbnail: View {
             }
         }
         .aspectRatio(1, contentMode: .fit)
+        .scaleEffect(photosPinchItemScale, anchor: .center)
         .clipped()
         .contentShape(.rect)
         .accessibilityElement(children: .ignore)
