@@ -297,7 +297,7 @@ private struct PhotosRangeCardGrid<Item: Identifiable, Content: View>: View wher
                 itemCount: items.count, isPhone: isPhone, columns: columnCount
             )
             let isPhoneLandscape = isPhone && columnCount == 2
-            let bottomSpacing: CGFloat = isPhone ? 20 : 0
+            let bottomSpacing: CGFloat = isPhone ? 20 : 16
             let topSpacing: CGFloat = isPhoneLandscape ? bottomSpacing : 16
             let bottomNavigationHeight = geometry.safeAreaInsets.bottom
             let deviceHeight = geometry.frame(in: .global).maxY + bottomNavigationHeight
