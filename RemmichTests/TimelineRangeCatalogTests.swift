@@ -47,13 +47,14 @@ struct TimelineRangeCatalogTests {
         #expect(TimelineRangeGridLayout.columnCount(isPhone: false, viewportSize: .init(width: 500, height: 800)) == 1)
     }
 
-    @Test func phoneLandscapeCardsFillNewestLeftwardFromTheBottom() {
-        #expect(TimelineRangeGridLayout.displaySlots(itemCount: 4, isPhone: true, columns: 2) == [1, 0, 3, 2])
-        #expect(TimelineRangeGridLayout.displaySlots(itemCount: 5, isPhone: true, columns: 2) == [0, nil, 2, 1, 4, 3])
-        #expect(TimelineRangeGridLayout.displaySlots(itemCount: 1, isPhone: true, columns: 2) == [0, nil])
-        #expect(TimelineRangeGridLayout.displaySlots(itemCount: 0, isPhone: true, columns: 2).isEmpty)
-        #expect(TimelineRangeGridLayout.displaySlots(itemCount: 3, isPhone: true, columns: 1) == [0, 1, 2])
-        #expect(TimelineRangeGridLayout.displaySlots(itemCount: 4, isPhone: false, columns: 2) == [0, 1, 2, 3])
+    @Test func rangeCardsFillNewestLeftwardFromTheBottomOnPhoneAndIPad() {
+        #expect(TimelineRangeGridLayout.displaySlots(itemCount: 4, columns: 2) == [1, 0, 3, 2])
+        #expect(TimelineRangeGridLayout.displaySlots(itemCount: 5, columns: 2) == [0, nil, 2, 1, 4, 3])
+        #expect(TimelineRangeGridLayout.displaySlots(itemCount: 5, columns: 3) == [1, 0, nil, 4, 3, 2])
+        #expect(TimelineRangeGridLayout.displaySlots(itemCount: 7, columns: 3) == [0, nil, nil, 3, 2, 1, 6, 5, 4])
+        #expect(TimelineRangeGridLayout.displaySlots(itemCount: 1, columns: 2) == [0, nil])
+        #expect(TimelineRangeGridLayout.displaySlots(itemCount: 0, columns: 2).isEmpty)
+        #expect(TimelineRangeGridLayout.displaySlots(itemCount: 3, columns: 1) == [0, 1, 2])
     }
 
     @Test(arguments: [CGFloat(402), CGFloat(390), CGFloat(375)])

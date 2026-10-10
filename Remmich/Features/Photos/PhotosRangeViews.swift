@@ -294,7 +294,7 @@ private struct PhotosRangeCardGrid<Item: Identifiable, Content: View>: View wher
             let isPhone = UIDevice.current.userInterfaceIdiom == .phone
             let columnCount = TimelineRangeGridLayout.columnCount(isPhone: isPhone, viewportSize: geometry.size)
             let displaySlots = TimelineRangeGridLayout.displaySlots(
-                itemCount: items.count, isPhone: isPhone, columns: columnCount
+                itemCount: items.count, columns: columnCount
             )
             let isPhoneLandscape = isPhone && columnCount == 2
             let bottomSpacing: CGFloat = isPhone ? 20 : 16
@@ -425,10 +425,9 @@ nonisolated enum TimelineRangeGridLayout {
         return viewportSize.width > viewportSize.height ? 3 : 2
     }
 
-    /// Catalogs remain oldest-first. Only phone multi-column presentation changes.
-    static func displaySlots(itemCount: Int, isPhone: Bool, columns: Int) -> [Int?] {
-        guard isPhone, columns > 1 else { return (0 ..< itemCount).map(Optional.some) }
-        return TimelineGridOrder.displaySlots(itemCount: itemCount, columns: columns)
+    /// Catalogs remain oldest-first; cards display newest-left in rows filled from the bottom.
+    static func displaySlots(itemCount: Int, columns: Int) -> [Int?] {
+        TimelineGridOrder.displaySlots(itemCount: itemCount, columns: columns)
             .map { $0.map { itemCount - 1 - $0 } }
     }
 }

@@ -425,9 +425,9 @@ final class RemmichUITests: XCTestCase {
         assertRangeCardGeometry(card, in: app, landscape: true)
         let previousMonth = app.buttons["timeline-month-2026-09-01"]
         XCTAssertTrue(previousMonth.waitForExistence(timeout: 5))
+        XCTAssertLessThan(card.frame.minX, previousMonth.frame.minX)
+        XCTAssertEqual(card.frame.minY, previousMonth.frame.minY, accuracy: 3)
         if UIDevice.current.userInterfaceIdiom == .phone {
-            XCTAssertLessThan(card.frame.minX, previousMonth.frame.minX)
-            XCTAssertEqual(card.frame.minY, previousMonth.frame.minY, accuracy: 3)
             XCTAssertTrue(rangeCardFitsAboveNavigation(previousMonth, in: app))
             XCTAssertEqual(card.frame.maxY, app.tabBars.firstMatch.frame.minY - 20, accuracy: 3)
             XCTAssertEqual(card.frame.minY, app.frame.minY + 20, accuracy: 3)
@@ -446,6 +446,11 @@ final class RemmichUITests: XCTestCase {
             return abs(card.frame.width - expected) < 3
         })
         assertRangeCardGeometry(card, in: app, landscape: false)
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            XCTAssertTrue(previousMonth.waitForExistence(timeout: 5))
+            XCTAssertLessThan(card.frame.minX, previousMonth.frame.minX)
+            XCTAssertEqual(card.frame.minY, previousMonth.frame.minY, accuracy: 3)
+        }
     }
 
     @MainActor
