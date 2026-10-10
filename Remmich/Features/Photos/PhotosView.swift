@@ -225,7 +225,6 @@ struct PhotosView: View {
                 .id(visiblePresentationID)
                 .transition(activeRangeTransition)
         }
-        .clipped()
     }
 
     @ViewBuilder
@@ -581,6 +580,7 @@ struct PhotosView: View {
                 }
                 .defaultScrollAnchor(.bottom)
                 .scrollPosition($timelinePosition)
+                .scrollEdgeEffectHidden(for: .bottom)
                 .coordinateSpace(name: "timeline-pinch")
                 .simultaneousGesture(MagnifyGesture().onEnded { value in
                     guard let gesture = PhotosPinchGesture(

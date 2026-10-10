@@ -195,7 +195,12 @@ struct PhotosDayAssetsView: View {
             availableWidth = $0.width
             viewportSize = $0
         }
+        .scrollEdgeEffectHidden(for: .bottom)
         .ignoresSafeArea(.container, edges: .horizontal)
+        .ignoresSafeArea(
+            .container,
+            edges: UIDevice.current.userInterfaceIdiom == .pad ? .bottom : []
+        )
         .simultaneousGesture(MagnifyGesture().onEnded { value in
             guard let gesture = PhotosPinchGesture(
                 magnification: value.magnification,
@@ -334,6 +339,11 @@ private struct PhotosRangeCardGrid<Item: Identifiable, Content: View>: View wher
             .defaultScrollAnchor(.bottom)
             .contentMargins(.bottom, bottomSpacing, for: .scrollContent)
             .scrollPosition($position)
+            .scrollEdgeEffectHidden(for: .bottom)
+            .ignoresSafeArea(
+                .container,
+                edges: isPhone ? [] : .bottom
+            )
             .coordinateSpace(name: "range-pinch")
             .simultaneousGesture(MagnifyGesture().onEnded { value in
                 guard let gesture = PhotosPinchGesture(
