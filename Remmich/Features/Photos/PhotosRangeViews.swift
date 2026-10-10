@@ -286,6 +286,7 @@ private struct PhotosRangeCardGrid<Item: Identifiable, Content: View>: View wher
     @ViewBuilder let content: (Item) -> Content
     @State private var position = ScrollPosition(edge: .bottom)
     @State private var didPositionInitially = false
+    @State private var userHasScrolled = false
     @State private var frames: [Item.ID: CGRect] = [:]
 
     var body: some View {
@@ -339,6 +340,11 @@ private struct PhotosRangeCardGrid<Item: Identifiable, Content: View>: View wher
             .defaultScrollAnchor(.bottom)
             .contentMargins(.bottom, bottomSpacing, for: .scrollContent)
             .scrollPosition($position)
+            .onScrollPhaseChange { _, phase in
+                if phase == .interacting {
+                    userHasScrolled = true
+                }
+            }
             .scrollEdgeEffectHidden(for: .bottom)
             .ignoresSafeArea(
                 .container,
@@ -366,14 +372,26 @@ private struct PhotosRangeCardGrid<Item: Identifiable, Content: View>: View wher
                     onPinch(gesture, item)
                 }
             })
-            .task {
-                guard !didPositionInitially else { return }
-                didPositionInitially = true
+            .task(id: items.last?.id) {
+                guard !didPositionInitially, !items.isEmpty else { return }
                 await Task.yield()
+                guard !Task.isCancelled else { return }
+                didPositionInitially = true
                 if let focusID {
                     position.scrollTo(id: focusID, anchor: .center)
                 } else {
                     position.scrollTo(edge: .bottom)
+                }
+            }
+            .onChange(of: columnCount) {
+                guard didPositionInitially, !userHasScrolled else { return }
+                Task { @MainActor in
+                    await Task.yield()
+                    if let focusID {
+                        position.scrollTo(id: focusID, anchor: .center)
+                    } else {
+                        position.scrollTo(edge: .bottom)
+                    }
                 }
             }
             .onChange(of: focusID) { _, focusID in

@@ -376,7 +376,7 @@ final class RemmichUITests: XCTestCase {
                 return
             }
             let yearID = String(month.identifier.dropFirst("timeline-month-".count).prefix(4))
-            month.pinch(withScale: 0.6, velocity: 1)
+            month.pinch(withScale: 0.6, velocity: -1)
             let year = app.buttons["timeline-year-\(yearID)"]
             XCTAssertTrue(year.waitForExistence(timeout: 10))
             year.pinch(withScale: 1.5, velocity: 1)
@@ -393,7 +393,7 @@ final class RemmichUITests: XCTestCase {
         selectRange("Months", in: app)
         let month = app.buttons["timeline-month-2026-10-01"]
         XCTAssertTrue(month.waitForExistence(timeout: 5))
-        month.pinch(withScale: 0.6, velocity: 1)
+        month.pinch(withScale: 0.6, velocity: -1)
         let year = app.buttons["timeline-year-2026"]
         XCTAssertTrue(year.waitForExistence(timeout: 5))
         year.pinch(withScale: 1.5, velocity: 1)
