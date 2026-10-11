@@ -5,14 +5,14 @@ import Testing
 @Suite("Video-only timeline")
 struct VideoTimelineReaderTests {
     @Test func pinchGroupsEntireVideoLibraryOneLevelAtATime() {
-        #expect(VideoLibraryRange.all.next(for: .coarser) == .day)
-        #expect(VideoLibraryRange.day.next(for: .coarser) == .week)
-        #expect(VideoLibraryRange.week.next(for: .coarser) == .month)
-        #expect(VideoLibraryRange.month.next(for: .coarser) == .year)
-        #expect(VideoLibraryRange.year.next(for: .coarser) == nil)
-        #expect(VideoLibraryRange.year.next(for: .finer) == .month)
-        #expect(VideoLibraryRange.day.next(for: .finer) == .all)
-        #expect(VideoLibraryRange.all.next(for: .finer) == nil)
+        #expect(TimelineLibraryRange.all.next(for: .coarser) == .day)
+        #expect(TimelineLibraryRange.day.next(for: .coarser) == .week)
+        #expect(TimelineLibraryRange.week.next(for: .coarser) == .month)
+        #expect(TimelineLibraryRange.month.next(for: .coarser) == .year)
+        #expect(TimelineLibraryRange.year.next(for: .coarser) == nil)
+        #expect(TimelineLibraryRange.year.next(for: .finer) == .month)
+        #expect(TimelineLibraryRange.day.next(for: .finer) == .all)
+        #expect(TimelineLibraryRange.all.next(for: .finer) == nil)
     }
 
     @Test func groupsAllSearchPagesIntoMonthsWithoutDuplicates() async throws {

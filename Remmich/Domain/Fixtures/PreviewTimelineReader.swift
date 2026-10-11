@@ -46,10 +46,14 @@ actor PreviewTimelineReader: TimelineReading, VideoReading {
     }
 
     private nonisolated static func rangeBuckets() -> [(TimelineBucketSummary, [TimelineAssetSummary])] {
-        ["2026-10-01", "2026-09-01", "2026-08-01", "2026-07-01", "2026-06-01", "2025-12-01", "2025-06-01", "2024-04-01"]
+        ["2026-10-01", "2026-09-01", "2026-08-01", "2026-07-01", "2026-06-01", "2026-01-01", "2025-12-01", "2025-06-01", "2024-04-01"]
             .map { rawValue in
                 let id = TimelineBucketID(rawValue: rawValue)
-                let newest = id.displayDate!.addingTimeInterval(6 * 86400 + 20 * 3600)
+                let newest = switch rawValue {
+                case "2026-01-01": id.displayDate!.addingTimeInterval(20 * 3600)
+                case "2025-12-01": id.displayDate!.addingTimeInterval(30 * 86400 + 20 * 3600)
+                default: id.displayDate!.addingTimeInterval(6 * 86400 + 20 * 3600)
+                }
                 let assets = (0 ..< 8).map { index in
                     let date = newest.addingTimeInterval(TimeInterval(-index * 18000))
                     return TimelineAssetSummary(

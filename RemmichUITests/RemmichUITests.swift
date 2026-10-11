@@ -301,6 +301,24 @@ final class RemmichUITests: XCTestCase {
     }
 
     @MainActor
+    private func coarsenTimeline(_ tab: String, in app: XCUIApplication) {
+        let buttons = app.buttons.matching(identifier: "timeline-test-\(tab.lowercased())-coarser")
+        XCTAssertTrue(buttons.firstMatch.waitForExistence(timeout: 10))
+        guard let button = buttons.allElementsBoundByIndex.first(where: \.isHittable) else {
+            XCTFail("Expected the active \(tab) timeline range control")
+            return
+        }
+        button.tap()
+    }
+
+    @MainActor
+    private func assertTimelineRange(_ range: String, tab: String, in app: XCUIApplication) {
+        let status = app.staticTexts["timeline-test-\(tab.lowercased())-range"].firstMatch
+        XCTAssertTrue(status.waitForExistence(timeout: 10))
+        XCTAssertEqual(status.label, range)
+    }
+
+    @MainActor
     private func selectRange(_ title: String, in app: XCUIApplication) {
         if title == "All Photos" {
             tabButton("Photos", in: app).tap()
@@ -337,7 +355,7 @@ final class RemmichUITests: XCTestCase {
         tabButton("Years", in: app).tap()
         let year = app.buttons["timeline-year-2026"]
         XCTAssertTrue(year.waitForExistence(timeout: 10))
-        XCTAssertTrue(year.label.contains("10 items"), "Years must use the video-only store")
+        XCTAssertTrue(year.label.contains("12 items"), "Years must use the video-only store")
 
         tabButton("Videos", in: app).tap()
         XCTAssertTrue(videos.waitForExistence(timeout: 5))
@@ -400,6 +418,110 @@ final class RemmichUITests: XCTestCase {
             XCTAssertTrue(back.waitForExistence(timeout: 5))
             back.tap()
             XCTAssertTrue(expected.waitForExistence(timeout: 5))
+        }
+    }
+
+    @MainActor
+    func testPhotosAndVideosPinchReachOlderLibraryRangesAndKeepIndependentState() {
+        let app = rangeApplication()
+        app.launch()
+
+        let photos = app.descendants(matching: .any)["photos-root"].firstMatch
+        XCTAssertTrue(photos.waitForExistence(timeout: 10))
+        coarsenTimeline("Photos", in: app)
+
+        XCTAssertTrue(app.buttons["timeline-range-back"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.navigationBars.staticTexts.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "Week of ")
+        ).firstMatch.exists)
+
+        let olderPhotoDay = app.buttons["timeline-library-day-2025-12-01-2025-12-31"]
+        for _ in 0 ..< 12 where !olderPhotoDay.isHittable {
+            app.swipeDown()
+        }
+        XCTAssertTrue(olderPhotoDay.isHittable, "Photos Days must reach older library months")
+
+        coarsenTimeline("Photos", in: app)
+        let olderPhotoWeek = app.buttons["timeline-library-week-2026-W01"]
+        for _ in 0 ..< 12 where !olderPhotoWeek.isHittable {
+            app.swipeDown()
+        }
+        XCTAssertTrue(olderPhotoWeek.isHittable, "Photos Weeks must reach older library months")
+
+        tabButton("Videos", in: app).tap()
+        XCTAssertTrue(app.descendants(matching: .any)["videos-root"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["timeline-jump-button"].waitForExistence(timeout: 5))
+        XCTAssertFalse(olderPhotoWeek.isHittable)
+
+        tabButton("Photos", in: app).tap()
+        assertTimelineRange("week", tab: "Photos", in: app)
+    }
+
+    @MainActor
+    func testTimelinePinchBackBehaviorMatchesAndScopedRouteIsInert() {
+        let app = rangeApplication()
+        app.launch()
+
+        for tab in ["Photos", "Videos"] {
+            tabButton(tab, in: app).tap()
+            let isPhotos = tab == "Photos"
+            let rootID = tab == "Photos" ? "photos-root" : "videos-root"
+            let root = app.descendants(matching: .any)[rootID].firstMatch
+            XCTAssertTrue(root.waitForExistence(timeout: 10))
+
+            coarsenTimeline(tab, in: app)
+            assertTimelineRange("day", tab: tab, in: app)
+            let dayButtons = app.buttons.matching(NSPredicate(
+                format: "identifier BEGINSWITH %@", "timeline-library-day-"
+            ))
+            if isPhotos {
+                XCTAssertTrue(dayButtons.firstMatch.waitForExistence(timeout: 10))
+            }
+            coarsenTimeline(tab, in: app)
+            assertTimelineRange("week", tab: tab, in: app)
+            let weekButtons = app.buttons.matching(NSPredicate(
+                format: "identifier BEGINSWITH %@", "timeline-library-week-"
+            ))
+            if isPhotos {
+                XCTAssertTrue(weekButtons.firstMatch.waitForExistence(timeout: 10))
+            }
+
+            coarsenTimeline(tab, in: app)
+            assertTimelineRange("month", tab: tab, in: app)
+            coarsenTimeline(tab, in: app)
+            assertTimelineRange("year", tab: tab, in: app)
+
+            app.buttons["timeline-range-back"].tap()
+            assertTimelineRange("month", tab: tab, in: app)
+            app.buttons["timeline-range-back"].tap()
+            assertTimelineRange("week", tab: tab, in: app)
+            if isPhotos {
+                XCTAssertTrue(weekButtons.firstMatch.waitForExistence(timeout: 10))
+
+                guard let visibleWeek = weekButtons.allElementsBoundByIndex.first(where: \.isHittable) else {
+                    XCTFail("Expected a visible \(tab) week card")
+                    return
+                }
+                visibleWeek.tap()
+                let scopedDays = app.buttons.matching(NSPredicate(
+                    format: "identifier BEGINSWITH %@", "timeline-range-day-"
+                )).firstMatch
+                XCTAssertTrue(scopedDays.waitForExistence(timeout: 10))
+                coarsenTimeline(tab, in: app)
+                XCTAssertTrue(scopedDays.waitForExistence(timeout: 3), "Pinch must be inert inside scoped drill-down")
+                assertTimelineRange("week", tab: tab, in: app)
+                app.buttons["timeline-range-back"].tap()
+                XCTAssertTrue(weekButtons.firstMatch.waitForExistence(timeout: 10))
+            }
+
+            app.buttons["timeline-range-back"].tap()
+            assertTimelineRange("day", tab: tab, in: app)
+            if isPhotos {
+                XCTAssertTrue(dayButtons.firstMatch.waitForExistence(timeout: 10))
+            }
+            app.buttons["timeline-range-back"].tap()
+            assertTimelineRange("all", tab: tab, in: app)
+            XCTAssertTrue(app.buttons["timeline-jump-button"].waitForExistence(timeout: 10))
         }
     }
 

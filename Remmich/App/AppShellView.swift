@@ -107,6 +107,7 @@ struct AppShellView: View {
                     tabBarTop: tabBarTop,
                     store: groupedMediaStore,
                     media: media,
+                    dayIconSystemImage: groupedDayIconSystemImage,
                     showAccount: showAccount
                 )
                 .id(groupedMediaOwner)
@@ -119,6 +120,7 @@ struct AppShellView: View {
                     tabBarTop: tabBarTop,
                     store: groupedMediaStore,
                     media: media,
+                    dayIconSystemImage: groupedDayIconSystemImage,
                     showAccount: showAccount
                 )
                 .id(groupedMediaOwner)
@@ -131,6 +133,7 @@ struct AppShellView: View {
                     tabBarTop: tabBarTop,
                     store: groupedMediaStore,
                     media: media,
+                    dayIconSystemImage: groupedDayIconSystemImage,
                     showAccount: showAccount
                 )
                 .id(groupedMediaOwner)
@@ -189,6 +192,10 @@ struct AppShellView: View {
 
     private var groupedMediaStore: PhotosTimelineStore {
         groupedMediaOwner == .videos ? videos : photos
+    }
+
+    private var groupedDayIconSystemImage: String {
+        timelineDayIconSystemImage(contentName: groupedMediaOwner == .videos ? "Videos" : "Photos")
     }
 }
 

@@ -6,6 +6,30 @@ enum PhotosGroupedTabKind {
     case weeks
 }
 
+nonisolated enum PhotosLibraryWeekDetail {
+    static func mergedSection(current: TimelineSection, previous: TimelineSection?) -> TimelineSection {
+        let assets = ((previous?.assets ?? []) + current.assets)
+            .sorted { $0.capturedAt > $1.capturedAt }
+        return TimelineSection(
+            summary: current.summary,
+            assets: assets,
+            loadState: .loaded,
+            contentRevision: max(current.contentRevision, previous?.contentRevision ?? 0)
+        )
+    }
+
+    static func ownerID(
+        for dayID: TimelineCaptureDay,
+        current: TimelineSection,
+        previous: TimelineSection?
+    ) -> TimelineBucketID {
+        if let previous, previous.dayGroups.contains(where: { $0.id == dayID }) {
+            return previous.id
+        }
+        return current.id
+    }
+}
+
 /// The compact tab destinations reuse M5's range catalog and bucket-local reads.
 /// They do not create a second timeline or a separate server query.
 struct PhotosGroupedTabView: View {
@@ -15,6 +39,7 @@ struct PhotosGroupedTabView: View {
     let tabBarTop: CGFloat
     let store: PhotosTimelineStore
     let media: MediaLibraryController
+    let dayIconSystemImage: String
     let showAccount: () -> Void
 
     @State private var path: [PhotosRangeRoute] = []
@@ -83,19 +108,21 @@ struct PhotosGroupedTabView: View {
             )
         case let .month(bucketID):
             weeks(in: bucketID)
-        case let .week(bucketID, weekID):
-            if kind == .weeks {
+        case let .week(bucketID, weekID, origin):
+            if origin == .library {
                 PhotosLibraryWeekDetailView(
                     ownerID: bucketID,
                     weekID: weekID,
                     store: store,
                     media: media,
+                    dayIconSystemImage: dayIconSystemImage,
                     onSelect: open
                 )
             } else {
                 PhotosRangeLoadedBucketView(bucketID: bucketID, store: store) { section in
                     PhotosDaysView(
                         section: section, week: weekID, media: media,
+                        dayIconSystemImage: dayIconSystemImage,
                         tabBarTop: tabBarTop, onSelect: open
                     )
                 }
@@ -110,7 +137,7 @@ struct PhotosGroupedTabView: View {
                         viewportChanged: { _, _ in }
                     )
                 } else {
-                    ContentUnavailableView("Day Unavailable", systemImage: "photo.on.rectangle")
+                    ContentUnavailableView("Day Unavailable", systemImage: dayIconSystemImage)
                 }
             }
         }
@@ -126,6 +153,7 @@ struct PhotosLibraryWeekDetailView: View {
     let weekID: TimelineWeekID
     let store: PhotosTimelineStore
     let media: MediaLibraryController
+    let dayIconSystemImage: String
     let onSelect: (PhotosRangeRoute) -> Void
 
     private var previousID: TimelineBucketID? {
@@ -146,25 +174,25 @@ struct PhotosLibraryWeekDetailView: View {
                previousIsLoaded
             {
                 let previous = previousID.flatMap { store.sectionsByID[$0] }
-                let assets = ((previous?.assets ?? []) + current.assets)
-                    .sorted { $0.capturedAt > $1.capturedAt }
-                let merged = TimelineSection(
-                    summary: current.summary,
-                    assets: assets,
-                    loadState: .loaded,
-                    contentRevision: max(current.contentRevision, previous?.contentRevision ?? 0)
+                let merged = PhotosLibraryWeekDetail.mergedSection(
+                    current: current,
+                    previous: previous
                 )
-                PhotosDaysView(section: merged, week: weekID, media: media, onSelect: { route in
-                    guard case let .day(_, dayID) = route else { return }
-                    let bucketID: TimelineBucketID = if let previous,
-                                                        previous.dayGroups.contains(where: { $0.id == dayID })
-                    {
-                        previous.id
-                    } else {
-                        current.id
+                PhotosDaysView(
+                    section: merged,
+                    week: weekID,
+                    media: media,
+                    dayIconSystemImage: dayIconSystemImage,
+                    onSelect: { route in
+                        guard case let .day(_, dayID) = route else { return }
+                        let bucketID = PhotosLibraryWeekDetail.ownerID(
+                            for: dayID,
+                            current: current,
+                            previous: previous
+                        )
+                        onSelect(.day(bucketID, dayID))
                     }
-                    onSelect(.day(bucketID, dayID))
-                })
+                )
             } else if case let .failed(message) = store.sectionsByID[ownerID]?.loadState {
                 ErrorStateView {
                     Task { await store.retryBucket(ownerID) }

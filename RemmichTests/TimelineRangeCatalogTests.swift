@@ -1,6 +1,5 @@
 import CoreGraphics
 import Foundation
-import SwiftUI
 import Testing
 @testable import Remmich
 
@@ -13,30 +12,33 @@ struct TimelineRangeCatalogTests {
         #expect(PhotosPinchDirection(magnification: 1.1) == nil)
     }
 
-    @Test func pinchFocusPrefersTheRangeContainingTheFingers() {
-        let point = CGPoint(x: 50, y: 100)
-        let tallDay = CGRect(x: 0, y: 0, width: 100, height: 1000)
-        let nearbyDay = CGRect(x: 0, y: -100, width: 100, height: 90)
-        #expect(PhotosPinchGeometry.distanceSquared(from: point, to: tallDay) == 0)
-        #expect(PhotosPinchGeometry.distanceSquared(from: point, to: nearbyDay) > 0)
+    @Test func pinchGestureCarriesDirectionWithoutAContentAnchor() {
+        #expect(PhotosPinchGesture(magnification: 0.7)?.direction == .coarser)
+        #expect(PhotosPinchGesture(magnification: 1.5)?.direction == .finer)
+        #expect(PhotosPinchGesture(magnification: 1)?.direction == nil)
     }
 
-    @Test func pinchGestureNormalizesAndClampsItsVisualAnchor() {
-        let centered = PhotosPinchGesture(
-            magnification: 0.7,
-            location: CGPoint(x: 100, y: 200),
-            viewportSize: CGSize(width: 200, height: 400)
-        )
-        #expect(centered?.direction == .coarser)
-        #expect(centered?.anchor == .center)
+    @Test func weekRoutesRecordWhetherTheirDetailIsLibraryOrBucketOwned() throws {
+        let bucketID = TimelineBucketID(rawValue: "2027-01-01")
+        let day = TimelineCaptureDay(capturedAt: date("2027-01-01T12:00:00Z"))
+        let weekID = try #require(TimelineWeekID(day: day))
 
-        let clamped = PhotosPinchGesture(
-            magnification: 1.5,
-            location: CGPoint(x: -20, y: 500),
-            viewportSize: CGSize(width: 200, height: 400)
-        )
-        #expect(clamped?.direction == .finer)
-        #expect(clamped?.anchor == .bottomLeading)
+        let libraryRoute = PhotosRangeRoute.week(bucketID, weekID, .library)
+        let bucketRoute = PhotosRangeRoute.week(bucketID, weekID, .bucket)
+
+        guard case .week(_, _, .library) = libraryRoute else {
+            Issue.record("Library week route lost its provenance")
+            return
+        }
+        guard case .week(_, _, .bucket) = bucketRoute else {
+            Issue.record("Bucket week route lost its provenance")
+            return
+        }
+    }
+
+    @Test func dayCardFallbackIconMatchesTheMediaContent() {
+        #expect(timelineDayIconSystemImage(contentName: "Photos") == "photo.on.rectangle")
+        #expect(timelineDayIconSystemImage(contentName: "Videos") == "video")
     }
 
     @Test func rangeCardsUsePhoneAndIPadColumnCounts() {
@@ -141,6 +143,34 @@ struct TimelineRangeCatalogTests {
         #expect(januaryWeeks.map(\.id.id) == ["2026-W53", "2027-W01"])
         #expect(januaryWeeks[0].days.flatMap(\.assets).map(\.id) == ["dec-31", "jan-1"])
         #expect(januaryWeeks.map(\.assetCount) == [2, 1])
+    }
+
+    @Test func libraryWeekDetailMergesBoundaryAssetsAndPreservesTheirOwningBuckets() {
+        let december = TimelineSection(
+            summary: bucket("2026-12-01", count: 1),
+            assets: [asset("dec-31", at: "2026-12-31T12:00:00Z")],
+            loadState: .loaded,
+            contentRevision: 1
+        )
+        let january = TimelineSection(
+            summary: bucket("2027-01-01", count: 1),
+            assets: [asset("jan-1", at: "2027-01-01T12:00:00Z")],
+            loadState: .loaded,
+            contentRevision: 2
+        )
+
+        let merged = PhotosLibraryWeekDetail.mergedSection(current: january, previous: december)
+        let decemberDay = TimelineCaptureDay(capturedAt: date("2026-12-31T12:00:00Z"))
+        let januaryDay = TimelineCaptureDay(capturedAt: date("2027-01-01T12:00:00Z"))
+
+        #expect(merged.assets.map(\.id) == ["jan-1", "dec-31"])
+        #expect(merged.contentRevision == 2)
+        #expect(PhotosLibraryWeekDetail.ownerID(
+            for: decemberDay, current: january, previous: december
+        ) == december.id)
+        #expect(PhotosLibraryWeekDetail.ownerID(
+            for: januaryDay, current: january, previous: december
+        ) == january.id)
     }
 
     private func bucket(_ id: String, count: Int) -> TimelineBucketSummary {
