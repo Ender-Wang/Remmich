@@ -24,14 +24,14 @@ Each milestone is a small, testable step toward a native, read-only Immich clien
 | M2 | ✅ Done | Secure login, Keychain restoration, verified endpoint failover, and typed read-only API boundary |
 | M3 | ✅ Done | Shared image loading, memory management, prefetching, and download infrastructure |
 | M4 | ✅ Done | Real server-backed Photos timeline with bounded decoded-image residency |
-| M5 | Planned | Native viewer with Save to Photos, Share, and Download |
+| M5 | In progress | Timeline presentation, native media tabs, Videos, viewer, and local export |
 | M6 | Planned | Read-only Albums browsing |
 | M7 | Planned | Read-only Library collections |
 | M8 | Planned | Search with native filters |
 | M9 | Planned | iPad, Liquid Glass, accessibility, resilience, and performance polish |
 | M10 | Planned | Real-device verification and AltStore release candidate |
 
-# Current state — M4 complete
+# Current state — M5 in progress
 
 This is the single living state diagram for the implemented app. It is updated when each milestone finishes.
 
@@ -77,14 +77,27 @@ flowchart TD
     Active --> Media[Account-scoped media controller]
     Media --> Identity[Stable asset + derivative + update + target-size identity]
     Identity --> Nuke[Nuke 13 memory/disk cache, coalescing, and downsampling]
-    Active --> Timeline[Route-aware timeline repository]
+    Active --> Timeline[Route-aware photo timeline repository]
     Timeline --> Buckets[Read bucket summaries and load bounded asset windows]
     Buckets --> Pages[Stable bucket-local logical pages]
-    Pages --> Photos[Adaptive capture-day Photos timeline]
-    Photos --> TimelineActions[Jump, refresh, retry, and scroll-anchor restoration]
+    Active --> VideoSearch[Read-only paginated video metadata search]
+    VideoSearch --> VideoBuckets[Group video pages into month buckets]
+    Pages --> PhotosState[Independent Photos timeline and range state]
+    VideoBuckets --> VideosState[Independent Videos timeline and range state]
+    PhotosState --> Browser[Shared bottom-up native media browser]
+    VideosState --> Browser
+    Browser --> TimelineActions[Jump, refresh, retry, and scroll-anchor restoration]
+    Browser --> Ranges[All → Days → Weeks → Months → Years]
+    Ranges --> RangeCards[Lazy grouped cards and tap drill-down]
+    Browser --> NativeTabs[One native Liquid Glass tab bar]
+    NativeTabs -->|Latest| RootTabs[Photos, Videos, Albums, Library, Search]
+    NativeTabs -->|Browsing older Photos| PhotoRangeTabs[Photos, Weeks, Months, Years, Search]
+    NativeTabs -->|Browsing older Videos| VideoRangeTabs[Videos, Weeks, Months, Years, Search]
     TimelineActions --> Residency[Newest, viewport, and 45-second warm decoded pins]
     Residency --> Nuke
     Timeline --> Memories[Optional independent memory lane]
+    Active --> Preferences[Local presentation preferences]
+    Preferences --> Browser
     Media --> Download[Authenticated streaming temporary-file downloads]
     Download --> Player[Local AVKit playback item]
     Media --> Lifecycle[Stop prefetching in background; purge decoded memory on warning]
