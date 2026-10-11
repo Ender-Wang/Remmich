@@ -25,6 +25,11 @@ final class RemmichUITests: XCTestCase {
 
         XCTAssertTrue(app.descendants(matching: .any)["photos-root"].waitForExistence(timeout: 5))
 
+        tabButton("Videos", in: app).tap()
+        let videos = app.descendants(matching: .any)["videos-root"]
+        XCTAssertTrue(videos.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["asset-asset-0"].waitForExistence(timeout: 5))
+
         tabButton("Albums", in: app).tap()
         XCTAssertTrue(app.descendants(matching: .any)["albums-root"].waitForExistence(timeout: 2))
 
@@ -88,6 +93,7 @@ final class RemmichUITests: XCTestCase {
             let end = app.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.75))
             start.press(forDuration: 0.1, thenDragTo: end)
             attachLayoutScreenshot(app, name: "Photos after browsing older items")
+            tabButton("Photos", in: app).tap()
             tabButton("Albums", in: app).tap()
             tabButton("Photos", in: app).tap()
             attachLayoutScreenshot(app, name: "Photos after returning from Albums")
@@ -273,7 +279,7 @@ final class RemmichUITests: XCTestCase {
         app.launchArguments = ["-ui-testing-signed-in", "-ui-testing-photos-retry"]
         app.launch()
 
-        XCTAssertTrue(app.staticTexts["Couldn’t Load Library"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Couldn’t Load Photos"].waitForExistence(timeout: 5))
         app.buttons["Try Again"].firstMatch.tap()
         XCTAssertTrue(app.descendants(matching: .any)["asset-asset-0"].waitForExistence(timeout: 5))
     }
@@ -296,14 +302,52 @@ final class RemmichUITests: XCTestCase {
 
     @MainActor
     private func selectRange(_ title: String, in app: XCUIApplication) {
-        app.buttons["timeline-range-menu"].tap()
-        let option = app.buttons[title].firstMatch
-        XCTAssertTrue(option.waitForExistence(timeout: 5))
-        option.tap()
+        if title == "All Photos" {
+            tabButton("Photos", in: app).tap()
+            return
+        }
+        let tab = tabButton(title, in: app)
+        if !tab.exists {
+            let photos = app.descendants(matching: .any)["photos-root"]
+            XCTAssertTrue(photos.waitForExistence(timeout: 10))
+            photos.swipeDown()
+        }
+        XCTAssertTrue(tab.waitForExistence(timeout: 5))
+        tab.tap()
     }
 
     @MainActor
-    func testTimelineRangeRootsRestorePreferenceOnRelaunch() {
+    func testVideosScrollReplacesNativeTabsWithVideoOnlyRanges() {
+        let app = rangeApplication()
+        app.launch()
+        tabButton("Videos", in: app).tap()
+        let videos = app.descendants(matching: .any)["videos-root"]
+        XCTAssertTrue(videos.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.descendants(matching: .any)["asset-video-range-2026-10-01-0"]
+            .waitForExistence(timeout: 10))
+
+        let weeksTab = tabButton("Weeks", in: app)
+        for _ in 0 ..< 4 where !weeksTab.exists {
+            videos.swipeDown()
+        }
+        XCTAssertTrue(weeksTab.waitForExistence(timeout: 5))
+        XCTAssertFalse(tabButton("Albums", in: app).exists)
+        XCTAssertFalse(tabButton("Photos", in: app).exists)
+
+        tabButton("Years", in: app).tap()
+        let year = app.buttons["timeline-year-2026"]
+        XCTAssertTrue(year.waitForExistence(timeout: 10))
+        XCTAssertTrue(year.label.contains("10 items"), "Years must use the video-only store")
+
+        tabButton("Videos", in: app).tap()
+        XCTAssertTrue(videos.waitForExistence(timeout: 5))
+        tabButton("Videos", in: app).tap()
+        XCTAssertTrue(tabButton("Albums", in: app).waitForExistence(timeout: 5))
+        XCTAssertFalse(weeksTab.exists)
+    }
+
+    @MainActor
+    func testMonthCardRemainsAccessibleAfterRelaunch() {
         let app = rangeApplication()
         app.launch()
         XCTAssertTrue(app.buttons["timeline-jump-button"].waitForExistence(timeout: 10))
@@ -318,8 +362,12 @@ final class RemmichUITests: XCTestCase {
         XCTAssertTrue(month.label.contains("October 2026"))
         app.terminate()
         app.launch()
-        XCTAssertTrue(month.waitForExistence(timeout: 10))
-        XCTAssertFalse(app.buttons["timeline-jump-button"].exists)
+        selectRange("Months", in: app)
+        XCTAssertTrue(app.descendants(matching: .any)["timeline-months-root"].waitForExistence(timeout: 10))
+        let relaunchedMonth = app.buttons["timeline-month-2026-10-01"].firstMatch
+        XCTAssertTrue(relaunchedMonth.waitForExistence(timeout: 10))
+        XCTAssertTrue(relaunchedMonth.label.contains("October 2026"))
+        XCTAssertTrue(relaunchedMonth.isHittable)
         selectRange("All Photos", in: app)
         XCTAssertTrue(app.buttons["timeline-jump-button"].waitForExistence(timeout: 5))
     }
@@ -328,7 +376,7 @@ final class RemmichUITests: XCTestCase {
     func testTimelineRangeDrillDownAndBackNavigation() {
         let app = rangeApplication()
         app.launch()
-        XCTAssertTrue(app.buttons["timeline-range-menu"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["timeline-jump-button"].waitForExistence(timeout: 10))
         selectRange("Years", in: app)
         let year = app.buttons["timeline-year-2026"]
         XCTAssertTrue(year.waitForExistence(timeout: 5))
@@ -344,11 +392,11 @@ final class RemmichUITests: XCTestCase {
         day.tap()
         let asset = app.descendants(matching: .any)["asset-range-2026-10-01-0"]
         XCTAssertTrue(asset.waitForExistence(timeout: 5))
-        tabButton("Albums", in: app).tap()
-        tabButton("Photos", in: app).tap()
+        tabButton("Months", in: app).tap()
+        tabButton("Years", in: app).tap()
         XCTAssertTrue(asset.isHittable)
         for expected in [day, week, month, year] {
-            let back = app.buttons["timeline-range-back"]
+            let back = app.navigationBars.buttons.firstMatch
             XCTAssertTrue(back.waitForExistence(timeout: 5))
             back.tap()
             XCTAssertTrue(expected.waitForExistence(timeout: 5))
@@ -356,17 +404,16 @@ final class RemmichUITests: XCTestCase {
     }
 
     @MainActor
-    func testPinchChangesRangeOnSignedInDevice() throws {
+    func testGroupedTabPinchDoesNotChangeRangeOnSignedInDevice() throws {
         #if targetEnvironment(simulator)
             throw XCTSkip("Uses the saved Immich account on the connected iPhone")
         #else
             let app = XCUIApplication()
             app.launch()
-            let menu = app.buttons["timeline-range-menu"]
             if app.descendants(matching: .any)["onboarding-root"].waitForExistence(timeout: 5) {
                 throw XCTSkip("Requires a saved signed-in Immich account on the connected device")
             }
-            XCTAssertTrue(menu.waitForExistence(timeout: 30))
+            XCTAssertTrue(app.descendants(matching: .any)["photos-root"].waitForExistence(timeout: 30))
             selectRange("Months", in: app)
             let months = app.buttons.matching(NSPredicate(
                 format: "identifier BEGINSWITH %@", "timeline-month-"
@@ -375,38 +422,33 @@ final class RemmichUITests: XCTestCase {
                 XCTFail("No visible month card in the signed-in library")
                 return
             }
-            let yearID = String(month.identifier.dropFirst("timeline-month-".count).prefix(4))
             month.pinch(withScale: 0.6, velocity: -1)
-            let year = app.buttons["timeline-year-\(yearID)"]
-            XCTAssertTrue(year.waitForExistence(timeout: 10))
-            year.pinch(withScale: 1.5, velocity: 1)
+            XCTAssertTrue(month.waitForExistence(timeout: 10))
+            month.pinch(withScale: 1.5, velocity: 1)
             XCTAssertTrue(month.waitForExistence(timeout: 10))
             selectRange("All Photos", in: app)
         #endif
     }
 
     @MainActor
-    func testPinchChangesOneRangeAtATime() {
+    func testGroupedTabsKeepTheirRangeAfterPinch() {
         let app = rangeApplication()
         app.launch()
-        XCTAssertTrue(app.buttons["timeline-range-menu"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["timeline-jump-button"].waitForExistence(timeout: 10))
         selectRange("Months", in: app)
         let month = app.buttons["timeline-month-2026-10-01"]
         XCTAssertTrue(month.waitForExistence(timeout: 5))
         month.pinch(withScale: 0.6, velocity: -1)
-        let year = app.buttons["timeline-year-2026"]
-        XCTAssertTrue(year.waitForExistence(timeout: 5))
-        year.pinch(withScale: 1.5, velocity: 1)
         XCTAssertTrue(month.waitForExistence(timeout: 5))
         month.pinch(withScale: 1.5, velocity: 1)
-        XCTAssertTrue(app.buttons["timeline-week-2026-10-01-2026-W41"].waitForExistence(timeout: 5))
+        XCTAssertTrue(month.waitForExistence(timeout: 5))
     }
 
     @MainActor
     func testRangeCardsStaySquareAndUseAdaptiveColumns() {
         let app = rangeApplication()
         app.launch()
-        XCTAssertTrue(app.buttons["timeline-range-menu"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["timeline-jump-button"].waitForExistence(timeout: 10))
         selectRange("Months", in: app)
         let card = app.buttons["timeline-month-2026-10-01"]
         XCTAssertTrue(card.waitForExistence(timeout: 5))
@@ -415,7 +457,7 @@ final class RemmichUITests: XCTestCase {
         XCTAssertTrue(waitUntil { app.frame.width > app.frame.height })
         XCTAssertTrue(waitUntil { [self] in
             let columns: CGFloat = UIDevice.current.userInterfaceIdiom == .pad ? 3 : 2
-            let expected = (app.frame.width - 32 - 14 * (columns - 1)) / columns
+            let expected = (app.frame.width - 14 * (columns - 1)) / columns
             if UIDevice.current.userInterfaceIdiom == .phone {
                 let fittedSide = expectedPhoneLandscapeCardSide(in: app)
                 return abs(card.frame.width - fittedSide) < 3 && rangeCardFitsAboveNavigation(card, in: app)
@@ -442,7 +484,7 @@ final class RemmichUITests: XCTestCase {
         XCTAssertTrue(waitUntil { app.frame.width < app.frame.height })
         XCTAssertTrue(waitUntil {
             let columns: CGFloat = UIDevice.current.userInterfaceIdiom == .pad ? 2 : 1
-            let expected = (app.frame.width - 32 - 14 * (columns - 1)) / columns
+            let expected = (app.frame.width - 14 * (columns - 1)) / columns
             return abs(card.frame.width - expected) < 3
         })
         assertRangeCardGeometry(card, in: app, landscape: false)
@@ -458,7 +500,7 @@ final class RemmichUITests: XCTestCase {
         let columns: CGFloat = UIDevice.current.userInterfaceIdiom == .pad ? (landscape ? 3 : 2) : (landscape ? 2 : 1)
         let width = app.frame.width
         XCTAssertEqual(card.frame.width, card.frame.height, accuracy: 2)
-        let widthBasedSide = (width - 32 - 14 * (columns - 1)) / columns
+        let widthBasedSide = (width - 14 * (columns - 1)) / columns
         if UIDevice.current.userInterfaceIdiom == .phone, landscape {
             // Checking only an upper bound would let shrunken, unreadable cards pass.
             XCTAssertEqual(card.frame.width, expectedPhoneLandscapeCardSide(in: app), accuracy: 3)
@@ -486,7 +528,7 @@ final class RemmichUITests: XCTestCase {
     func testRangeCoverCyclesBeyondFirstThreeWithoutResizingCard() {
         let app = rangeApplication()
         app.launch()
-        XCTAssertTrue(app.buttons["timeline-range-menu"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["timeline-jump-button"].waitForExistence(timeout: 10))
         selectRange("Months", in: app)
         let card = app.buttons["timeline-month-2026-10-01"]
         XCTAssertTrue(card.waitForExistence(timeout: 5))

@@ -11,30 +11,47 @@ struct AppShellView: View {
     let activeRoute: ActiveConnectionRoute?
     let routeStatus: ConnectionRouteStatus
     let photos: PhotosTimelineStore
+    let videos: PhotosTimelineStore
     let presentation: PhotosPresentationState
     let media: MediaLibraryController
     let saveProfile: (ConnectionProfileDraft) async -> ConnectionProfileSaveResult
     let signOut: () async -> Void
 
-    @State private var selection: AppDestination = .photos
+    @State private var selection: NativeTabDestination = .photos
+    @State private var tabBarTop: CGFloat = 0
+    @State private var compactPhotosTabs = false
+    @State private var compactVideosTabs = false
+    @State private var groupedMediaOwner: NativeTabDestination = .photos
     @State private var photosScrollRequest = 0
+    @State private var videosScrollRequest = 0
+    @State private var videoPresentation = PhotosPresentationState(
+        store: UserDefaultsPresentationPreferencesStore(key: "video-presentation-preferences")
+    )
+    @State private var groupedScrollRequests: [NativeTabDestination: Int] = [:]
     @State private var photosPath: [PhotosRangeRoute] = []
+    @State private var videosPath: [PhotosRangeRoute] = []
     @State private var albumsPath = NavigationPath()
     @State private var libraryPath = NavigationPath()
     @State private var searchPath = NavigationPath()
     @State private var showsAccount = false
 
     var body: some View {
-        TabView(selection: Binding(
-            get: { selection },
-            set: { destination in
-                if destination == .photos, selection == .photos {
-                    photosScrollRequest &+= 1
-                }
-                selection = destination
-            }
-        )) {
-            Tab(AppDestination.photos.title, systemImage: AppDestination.photos.systemImage, value: .photos) {
+        NativeAppTabShell(
+            selection: $selection,
+            tabBarTop: $tabBarTop,
+            compactOwner: compactTabOwner,
+            photosRetapped: {
+                photosScrollRequest &+= 1
+                compactPhotosTabs = false
+            },
+            videosRetapped: {
+                videosScrollRequest &+= 1
+                compactVideosTabs = false
+            },
+            groupedTabRetapped: { destination in
+                groupedScrollRequests[destination, default: 0] &+= 1
+            },
+            photos: AnyView(
                 NavigationStack {
                     PhotosView(
                         store: photos,
@@ -42,30 +59,89 @@ struct AppShellView: View {
                         media: media,
                         navigationPath: $photosPath,
                         scrollToLatestRequest: photosScrollRequest,
+                        compactChromeChanged: { compact in
+                            compactPhotosTabs = compact
+                            if compact, selection == .photos {
+                                groupedMediaOwner = .photos
+                            }
+                        },
                         showAccount: showAccount
                     )
                 }
-            }
-
-            Tab(AppDestination.albums.title, systemImage: AppDestination.albums.systemImage, value: .albums) {
+            ),
+            videos: AnyView(
+                NavigationStack {
+                    PhotosView(
+                        store: videos,
+                        presentation: videoPresentation,
+                        media: media,
+                        navigationPath: $videosPath,
+                        scrollToLatestRequest: videosScrollRequest,
+                        contentName: "Videos",
+                        rootAccessibilityID: "videos-root",
+                        compactChromeChanged: { compact in
+                            compactVideosTabs = compact
+                            if compact, selection == .videos {
+                                groupedMediaOwner = .videos
+                            }
+                        },
+                        showAccount: showAccount
+                    )
+                }
+            ),
+            albums: AnyView(
                 NavigationStack(path: $albumsPath) {
                     AlbumsView(albums: PreviewFixtures.albums, showAccount: showAccount)
                 }
-            }
-
-            Tab(AppDestination.library.title, systemImage: AppDestination.library.systemImage, value: .library) {
+            ),
+            library: AnyView(
                 NavigationStack(path: $libraryPath) {
                     LibraryView(collections: PreviewFixtures.collections, showAccount: showAccount)
                 }
-            }
-
-            Tab(value: .search, role: .search) {
+            ),
+            years: AnyView(
+                PhotosGroupedTabView(
+                    kind: .years,
+                    isSelected: selection == .years,
+                    scrollToLatestRequest: groupedScrollRequests[.years, default: 0],
+                    tabBarTop: tabBarTop,
+                    store: groupedMediaStore,
+                    media: media,
+                    showAccount: showAccount
+                )
+                .id(groupedMediaOwner)
+            ),
+            months: AnyView(
+                PhotosGroupedTabView(
+                    kind: .months,
+                    isSelected: selection == .months,
+                    scrollToLatestRequest: groupedScrollRequests[.months, default: 0],
+                    tabBarTop: tabBarTop,
+                    store: groupedMediaStore,
+                    media: media,
+                    showAccount: showAccount
+                )
+                .id(groupedMediaOwner)
+            ),
+            weeks: AnyView(
+                PhotosGroupedTabView(
+                    kind: .weeks,
+                    isSelected: selection == .weeks,
+                    scrollToLatestRequest: groupedScrollRequests[.weeks, default: 0],
+                    tabBarTop: tabBarTop,
+                    store: groupedMediaStore,
+                    media: media,
+                    showAccount: showAccount
+                )
+                .id(groupedMediaOwner)
+            ),
+            search: AnyView(
                 NavigationStack(path: $searchPath) {
                     SearchView(assets: PreviewFixtures.assets, showAccount: showAccount)
                 }
-            }
-        }
-        .tabViewStyle(.tabBarOnly)
+            )
+        )
+        .ignoresSafeArea(.container, edges: .all)
         .environment(\.accountAvatarMedia, media)
         .overlay {
             if showsAccount {
@@ -100,6 +176,19 @@ struct AppShellView: View {
 
     private func showAccount() {
         showsAccount = true
+    }
+
+    private var compactTabOwner: NativeTabDestination? {
+        switch selection {
+        case .photos: compactPhotosTabs ? .photos : nil
+        case .videos: compactVideosTabs ? .videos : nil
+        case .weeks, .months, .years: groupedMediaOwner
+        default: nil
+        }
+    }
+
+    private var groupedMediaStore: PhotosTimelineStore {
+        groupedMediaOwner == .videos ? videos : photos
     }
 }
 
@@ -155,6 +244,7 @@ extension EnvironmentValues {
         activeRoute: nil,
         routeStatus: .waitingForNetwork,
         photos: store,
+        videos: PhotosTimelineStore(reader: VideoTimelineReader(source: PreviewTimelineReader())),
         presentation: .init(),
         media: .init(),
         saveProfile: { _ in .saved(profile: .init()) },

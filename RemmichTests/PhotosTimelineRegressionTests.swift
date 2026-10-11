@@ -6,6 +6,33 @@ import UIKit
 
 @Suite("Server-backed Photos timeline")
 struct PhotosTimelineRegressionTests {
+    @Test @MainActor func nativeTabLayoutRetainsPhotosAndSearchIdentity() {
+        #expect(NativeTabLayout.destinations(compactOwner: nil) == [.photos, .videos, .albums, .library, .search])
+        #expect(NativeTabLayout.destinations(compactOwner: .photos) == [.photos, .weeks, .months, .years, .search])
+        #expect(NativeTabLayout.destinations(compactOwner: .videos) == [.videos, .weeks, .months, .years, .search])
+    }
+
+    @Test @MainActor func scrollChromeNeedsDeliberateDirectionAndRestoresAtLatest() {
+        var tracker = PhotosChromeTracker()
+        #expect(tracker.update(offsetDelta: -100, bottomGap: 12, userScrolling: true, programmaticJump: false) == nil)
+        #expect(tracker.update(offsetDelta: -20, bottomGap: 300, userScrolling: true, programmaticJump: false) == nil)
+        #expect(tracker.update(offsetDelta: -20, bottomGap: 320, userScrolling: true, programmaticJump: false) == nil)
+        #expect(tracker.update(offsetDelta: -10, bottomGap: 330, userScrolling: true, programmaticJump: false) == true)
+        #expect(tracker.update(offsetDelta: 12, bottomGap: 320, userScrolling: true, programmaticJump: false) == nil)
+        #expect(tracker.update(offsetDelta: 40, bottomGap: 280, userScrolling: true, programmaticJump: false) == false)
+        #expect(tracker.update(offsetDelta: -55, bottomGap: 335, userScrolling: true, programmaticJump: false) == true)
+        #expect(tracker.update(offsetDelta: 0, bottomGap: 20, userScrolling: false, programmaticJump: false) == false)
+    }
+
+    @Test @MainActor func programmaticPhotosJumpCannotCompactTheBar() {
+        var tracker = PhotosChromeTracker()
+        #expect(tracker.update(offsetDelta: -100, bottomGap: 400, userScrolling: true, programmaticJump: true) == nil)
+        #expect(tracker.update(offsetDelta: -30, bottomGap: 430, userScrolling: true, programmaticJump: false) == nil)
+        #expect(tracker.update(offsetDelta: 0, bottomGap: 430, userScrolling: false, programmaticJump: false) == nil)
+        #expect(tracker.update(offsetDelta: -30, bottomGap: 460, userScrolling: true, programmaticJump: false) == nil)
+        #expect(tracker.isCompact == false)
+    }
+
     @Test func gridFillsNewestFirstFromBottomLeft() {
         #expect(TimelineGridOrder.displaySlots(itemCount: 0, columns: 3).isEmpty)
         #expect(TimelineGridOrder.displaySlots(itemCount: 1, columns: 3) == [0, nil, nil])

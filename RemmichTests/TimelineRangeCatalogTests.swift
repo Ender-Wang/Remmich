@@ -111,6 +111,38 @@ struct TimelineRangeCatalogTests {
         #expect(TimelineWeekID(day: day)?.id == "2026-W53")
     }
 
+    @Test func libraryWeeksMergeBoundaryDaysWithoutDuplicatingTheWeek() {
+        let december = TimelineSection(
+            summary: bucket("2026-12-01", count: 1),
+            assets: [asset("dec-31", at: "2026-12-31T12:00:00Z")],
+            loadState: .loaded,
+            contentRevision: 1
+        )
+        let january = TimelineSection(
+            summary: bucket("2027-01-01", count: 2),
+            assets: [
+                asset("jan-4", at: "2027-01-04T12:00:00Z"),
+                asset("jan-1", at: "2027-01-01T12:00:00Z"),
+            ],
+            loadState: .loaded,
+            contentRevision: 1
+        )
+        let summaries = [january.summary, december.summary]
+
+        #expect(TimelineRangeCatalog.adjacentMonth(to: january.id, offset: -1, in: summaries) == december.id)
+        #expect(TimelineRangeCatalog.adjacentMonth(to: december.id, offset: 1, in: summaries) == january.id)
+        #expect(TimelineRangeCatalog.libraryWeeks(
+            endingIn: december.id, current: december, previous: nil, hasNextMonth: true
+        ).isEmpty)
+
+        let januaryWeeks = TimelineRangeCatalog.libraryWeeks(
+            endingIn: january.id, current: january, previous: december, hasNextMonth: false
+        )
+        #expect(januaryWeeks.map(\.id.id) == ["2026-W53", "2027-W01"])
+        #expect(januaryWeeks[0].days.flatMap(\.assets).map(\.id) == ["dec-31", "jan-1"])
+        #expect(januaryWeeks.map(\.assetCount) == [2, 1])
+    }
+
     private func bucket(_ id: String, count: Int) -> TimelineBucketSummary {
         .init(id: .init(rawValue: id), assetCount: count)
     }

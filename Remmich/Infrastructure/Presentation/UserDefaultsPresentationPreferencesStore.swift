@@ -3,9 +3,10 @@ import Foundation
 @MainActor
 struct UserDefaultsPresentationPreferencesStore: PresentationPreferencesStoring {
     private let defaults: UserDefaults
-    private let key = "presentation-preferences"
+    private let key: String
 
-    init(suiteName: String? = nil) {
+    init(suiteName: String? = nil, key: String = "presentation-preferences") {
+        self.key = key
         #if DEBUG
             if suiteName == nil, ProcessInfo.processInfo.arguments.contains("-ui-testing-signed-in") {
                 let testSuite = ProcessInfo.processInfo.environment["REMMICH_UI_TEST_PREFERENCES_SUITE"]

@@ -13,11 +13,64 @@ private struct PhotosPinchDay: Hashable {
     let dayID: TimelineCaptureDay
 }
 
+private struct PhotosChromeGeometry: Equatable {
+    let offset: CGFloat
+    let bottomGap: CGFloat
+}
+
+struct PhotosChromeTracker {
+    private(set) var isCompact = false
+    private var travel: CGFloat = 0
+
+    mutating func update(
+        offsetDelta: CGFloat,
+        bottomGap: CGFloat,
+        userScrolling: Bool,
+        programmaticJump: Bool
+    ) -> Bool? {
+        if bottomGap <= 24 {
+            travel = 0
+            guard isCompact else { return nil }
+            isCompact = false
+            return false
+        }
+        guard userScrolling, !programmaticJump, abs(offsetDelta) >= 1 else {
+            travel = 0
+            return nil
+        }
+        if travel.sign != offsetDelta.sign {
+            travel = 0
+        }
+        travel += offsetDelta
+        guard abs(travel) >= 48 else { return nil }
+        let next = travel < 0
+        travel = 0
+        guard next != isCompact else { return nil }
+        isCompact = next
+        return next
+    }
+}
+
 private enum PhotosRangePresentationID: Hashable {
     case all
+    case days
+    case weeks
     case years
     case months
     case route(PhotosRangeRoute)
+}
+
+nonisolated enum VideoLibraryRange: Int, CaseIterable {
+    case all
+    case day
+    case week
+    case month
+    case year
+
+    func next(for direction: PhotosPinchDirection) -> Self? {
+        let step = direction == .coarser ? 1 : -1
+        return Self(rawValue: rawValue + step)
+    }
 }
 
 private struct PhotosPinchTransitionState {
@@ -82,6 +135,9 @@ struct PhotosView: View {
     let media: MediaLibraryController
     @Binding var navigationPath: [PhotosRangeRoute]
     var scrollToLatestRequest = 0
+    var contentName = "Photos"
+    var rootAccessibilityID = "photos-root"
+    let compactChromeChanged: (Bool) -> Void
     let showAccount: () -> Void
 
     @State private var showsJumpPicker = false
@@ -97,11 +153,15 @@ struct PhotosView: View {
     @State private var rotationAnchorID: String?
     @State private var timelineWidth: CGFloat = 0
     @State private var timelineBottomGap = CGFloat.infinity
+    @State private var compactChrome = false
+    @State private var userScrollPhase = false
+    @State private var chromeTracker = PhotosChromeTracker()
     @State private var didPositionInitially = false
     @State private var pinchFocus: PhotosPinchFocus?
     @State private var dayFrames: [PhotosPinchDay: CGRect] = [:]
     @State private var timelineViewportSize: CGSize = .zero
     @State private var pinchTransition: PhotosPinchTransitionState?
+    @State private var videoRange: VideoLibraryRange = .all
 
     var body: some View {
         Group {
@@ -110,12 +170,12 @@ struct PhotosView: View {
                 LoadingStateView()
             case .empty:
                 EmptyStateView(
-                    title: "No Photos",
-                    message: "Photos from your Immich library will appear here.",
-                    systemImage: "photo.on.rectangle"
+                    title: "No \(contentName)",
+                    message: "\(contentName) from your Immich library will appear here.",
+                    systemImage: contentName == "Videos" ? "video" : "photo.on.rectangle"
                 )
             case let .failed(message):
-                ErrorStateView {
+                ErrorStateView(title: "Couldn’t Load \(contentName)") {
                     Task { await store.retryInitialLoad() }
                 }
                 .accessibilityHint(message)
@@ -129,13 +189,15 @@ struct PhotosView: View {
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 HStack(spacing: 12) {
-                    if !navigationPath.isEmpty {
+                    if !navigationPath.isEmpty || (contentName == "Videos" && videoRange != .all) {
                         Button(action: navigateBack) {
                             Label("Back", systemImage: "chevron.backward")
                         }
                         .accessibilityIdentifier("timeline-range-back")
                     }
-                    if navigationPath.isEmpty, presentation.preferences.rootRange == .all {
+                    if navigationPath.isEmpty, videoRange == .all,
+                       presentation.preferences.rootRange == .all
+                    {
                         Button {
                             showsJumpPicker = true
                         } label: {
@@ -144,16 +206,6 @@ struct PhotosView: View {
                         .disabled(store.bucketSummaries.isEmpty)
                         .accessibilityIdentifier("timeline-jump-button")
                     }
-                    Menu {
-                        ForEach(PhotosRootRange.allCases, id: \.self) { range in
-                            Button(range.title, systemImage: range.systemImage) {
-                                selectRootRange(range)
-                            }
-                        }
-                    } label: {
-                        Label("Timeline Range", systemImage: "square.grid.2x2")
-                    }
-                    .accessibilityIdentifier("timeline-range-menu")
                 }
             }
             AccountToolbarButton(action: showAccount)
@@ -182,7 +234,9 @@ struct PhotosView: View {
             scheduleViewportUpdate()
         }
         .onChange(of: scrollToLatestRequest) {
-            guard presentation.preferences.rootRange != .all || !navigationPath.isEmpty else { return }
+            guard presentation.preferences.rootRange != .all || !navigationPath.isEmpty
+                || (contentName == "Videos" && videoRange != .all)
+            else { return }
             let request = scrollToLatestRequest
             Task { @MainActor in
                 guard !Task.isCancelled,
@@ -203,6 +257,7 @@ struct PhotosView: View {
                     }
                 }
                 navigationPath = []
+                videoRange = .all
                 didPositionInitially = false
                 store.completeJump()
             }
@@ -216,7 +271,7 @@ struct PhotosView: View {
             calendarJumpTask = nil
             store.completeJump()
         }
-        .accessibilityIdentifier("photos-root")
+        .accessibilityIdentifier(rootAccessibilityID)
     }
 
     private var rangePresentation: some View {
@@ -231,6 +286,8 @@ struct PhotosView: View {
     private var currentRangeContent: some View {
         if let route = navigationPath.last {
             rangeDestination(route)
+        } else if contentName == "Videos" {
+            videoRangeContent
         } else {
             switch presentation.preferences.rootRange {
             case .all:
@@ -253,6 +310,30 @@ struct PhotosView: View {
                     onPinch: { gesture, bucketID in pinchMonth(gesture, bucketID: bucketID) }
                 )
             }
+        }
+    }
+
+    @ViewBuilder
+    private var videoRangeContent: some View {
+        switch videoRange {
+        case .all:
+            timeline
+        case .day:
+            PhotosLibraryDaysView(store: store, media: media, onSelect: selectRoute,
+                                  onPinch: pinchVideoRange)
+        case .week:
+            PhotosLibraryWeeksView(store: store, media: media, onSelect: selectRoute,
+                                   onPinch: pinchVideoRange)
+        case .month:
+            PhotosMonthsView(
+                summaries: store.bucketSummaries, store: store, media: media,
+                onSelect: selectRoute, onPinch: { gesture, _ in pinchVideoRange(gesture) }
+            )
+        case .year:
+            PhotosYearsView(
+                store: store, media: media,
+                onSelect: selectRoute, onPinch: { gesture, _ in pinchVideoRange(gesture) }
+            )
         }
     }
 
@@ -287,17 +368,27 @@ struct PhotosView: View {
                 )
             }
         case let .week(bucketID, weekID):
-            PhotosRangeLoadedBucketView(bucketID: bucketID, store: store) { section in
-                PhotosDaysView(
-                    section: section,
-                    week: weekID,
+            if contentName == "Videos" {
+                PhotosLibraryWeekDetailView(
+                    ownerID: bucketID,
+                    weekID: weekID,
+                    store: store,
                     media: media,
-                    focusID: pinchFocus?.day,
-                    onSelect: selectRoute,
-                    onPinch: { gesture, dayID in
-                        pinchDay(gesture, bucketID: bucketID, dayID: dayID)
-                    }
+                    onSelect: selectRoute
                 )
+            } else {
+                PhotosRangeLoadedBucketView(bucketID: bucketID, store: store) { section in
+                    PhotosDaysView(
+                        section: section,
+                        week: weekID,
+                        media: media,
+                        focusID: pinchFocus?.day,
+                        onSelect: selectRoute,
+                        onPinch: { gesture, dayID in
+                            pinchDay(gesture, bucketID: bucketID, dayID: dayID)
+                        }
+                    )
+                }
             }
         case let .day(bucketID, dayID):
             PhotosRangeLoadedBucketView(bucketID: bucketID, store: store) { section in
@@ -338,9 +429,13 @@ struct PhotosView: View {
     }
 
     private func navigateBack() {
-        guard pinchTransition == nil, !navigationPath.isEmpty else { return }
+        guard pinchTransition == nil else { return }
         withAnimation(.smooth(duration: 0.25)) {
-            navigationPath = Array(navigationPath.dropLast())
+            if navigationPath.isEmpty, contentName == "Videos" {
+                videoRange = videoRange.next(for: .finer) ?? .all
+            } else {
+                navigationPath = Array(navigationPath.dropLast())
+            }
         }
     }
 
@@ -349,13 +444,23 @@ struct PhotosView: View {
             try presentation.setRootRange(range)
             pinchFocus = nil
             navigationPath = []
+            videoRange = .all
         } catch {
             presentationError = error.localizedDescription
         }
     }
 
     private var rootPresentationID: PhotosRangePresentationID {
-        switch presentation.preferences.rootRange {
+        if contentName == "Videos" {
+            return switch videoRange {
+            case .all: .all
+            case .day: .days
+            case .week: .weeks
+            case .month: .months
+            case .year: .years
+            }
+        }
+        return switch presentation.preferences.rootRange {
         case .all: .all
         case .year: .years
         case .month: .months
@@ -423,6 +528,23 @@ struct PhotosView: View {
             }
         )
         Self.logger.info("Pinch coarsened All Photos to days bucket=\(anchor.bucketID.rawValue, privacy: .public)")
+    }
+
+    private func pinchVideoRange(_ gesture: PhotosPinchGesture) {
+        guard contentName == "Videos", navigationPath.isEmpty,
+              let next = videoRange.next(for: gesture.direction)
+        else { return }
+        let target: PhotosRangePresentationID = switch next {
+        case .all: .all
+        case .day: .days
+        case .week: .weeks
+        case .month: .months
+        case .year: .years
+        }
+        performPinchTransition(gesture, from: visiblePresentationID, to: target) {
+            videoRange = next
+        }
+        Self.logger.info("Video pinch changed range to \(String(describing: next), privacy: .public)")
     }
 
     private func pinchYear(_ gesture: PhotosPinchGesture, year: Int) {
@@ -534,12 +656,6 @@ struct PhotosView: View {
                         Task { await store.refresh() }
                     }
                 }
-                if store.memoryLaneState == .loaded, !store.memories.isEmpty {
-                    TimelineMemoryLane(memories: store.memories, media: media)
-                        .frame(height: 120)
-                        .padding(.bottom, 12)
-                        .ignoresSafeArea(.container, edges: .horizontal)
-                }
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         ForEach(Array(store.sections.reversed())) { section in
@@ -590,6 +706,10 @@ struct PhotosView: View {
                     ),
                         gesture.direction == .coarser
                     else { return }
+                    if contentName == "Videos" {
+                        pinchVideoRange(gesture)
+                        return
+                    }
                     let point = value.startLocation
                     let anchor = dayFrames.filter { _, frame in
                         frame.intersects(CGRect(origin: .zero, size: timelineViewportSize))
@@ -601,18 +721,25 @@ struct PhotosView: View {
                         pinchTimeline(gesture, at: anchor)
                     }
                 })
-                .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                .onScrollPhaseChange { _, phase in
+                    userScrollPhase = phase == .interacting || phase == .decelerating
+                }
+                .onScrollGeometryChange(for: PhotosChromeGeometry.self) { geometry in
                     let visibleBottom = geometry.contentOffset.y
                         + geometry.containerSize.height
                         - geometry.contentInsets.bottom
-                    return max(0, geometry.contentSize.height - visibleBottom)
-                } action: { _, gap in
-                    timelineBottomGap = gap
-                    if gap <= 24, store.jumpTarget == latestScrollTarget {
+                    return PhotosChromeGeometry(
+                        offset: geometry.contentOffset.y,
+                        bottomGap: max(0, geometry.contentSize.height - visibleBottom)
+                    )
+                } action: { old, new in
+                    timelineBottomGap = new.bottomGap
+                    updateChrome(old: old, new: new)
+                    if new.bottomGap <= 24, store.jumpTarget == latestScrollTarget {
                         store.completeJump()
                     }
                 }
-                .ignoresSafeArea(.container, edges: .horizontal)
+                .ignoresSafeArea(.container, edges: [.top, .horizontal])
                 .ignoresSafeArea(
                     .container,
                     edges: UIDevice.current.userInterfaceIdiom == .pad ? .bottom : []
@@ -624,6 +751,26 @@ struct PhotosView: View {
                     for: .scrollContent
                 )
                 .refreshable { await store.refresh() }
+                .overlay(alignment: .top) {
+                    if memoryBackdropVisible {
+                        TimelineMemoryLane(memories: store.memories, media: media)
+                            .frame(height: 120)
+                            .padding(.bottom, 12)
+                            .background {
+                                LinearGradient(
+                                    colors: [
+                                        Color(uiColor: .systemBackground).opacity(0.72),
+                                        Color(uiColor: .systemBackground).opacity(0),
+                                    ],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                                .ignoresSafeArea(.container, edges: .top)
+                            }
+                            .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
+                    }
+                }
+                .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: compactChrome)
                 .onGeometryChange(for: CGSize.self) { $0.size } action: { oldSize, newSize in
                     timelineWidth = newSize.width
                     timelineViewportSize = newSize
@@ -714,6 +861,35 @@ struct PhotosView: View {
 
     private var latestScrollTarget: TimelineBucketID? {
         store.sections.first?.id
+    }
+
+    private var memoryBackdropVisible: Bool {
+        !compactChrome
+            && navigationPath.isEmpty
+            && presentation.preferences.rootRange == .all
+            && store.memoryLaneState == .loaded
+            && !store.memories.isEmpty
+    }
+
+    private func updateChrome(old: PhotosChromeGeometry, new: PhotosChromeGeometry) {
+        let programmaticJump = store.jumpTarget != nil
+            || latestJumpTask != nil
+            || calendarJumpTask != nil
+            || rotationRestoreTask != nil
+        if let compact = chromeTracker.update(
+            offsetDelta: new.offset - old.offset,
+            bottomGap: new.bottomGap,
+            userScrolling: userScrollPhase,
+            programmaticJump: programmaticJump
+        ) {
+            setCompactChrome(compact)
+        }
+    }
+
+    private func setCompactChrome(_ compact: Bool) {
+        guard compactChrome != compact else { return }
+        compactChrome = compact
+        compactChromeChanged(compact)
     }
 
     private func updateVisibility(
@@ -980,6 +1156,7 @@ private struct TimelineJumpPicker: View {
             presentation: .init(),
             media: .init(),
             navigationPath: .constant([]),
+            compactChromeChanged: { _ in },
             showAccount: {}
         )
     }
@@ -993,6 +1170,7 @@ private struct TimelineJumpPicker: View {
             presentation: .init(),
             media: .init(),
             navigationPath: .constant([]),
+            compactChromeChanged: { _ in },
             showAccount: {}
         )
     }

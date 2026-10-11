@@ -30,6 +30,7 @@ final class AppSessionController {
     let media = MediaLibraryController()
     let timeline: ImmichTimelineRepository
     let photos: PhotosTimelineStore
+    let videos: PhotosTimelineStore
 
     private let service: any ServerReading & SessionManaging & RouteValidating
     private let sessionStore: any SessionStoring
@@ -69,15 +70,26 @@ final class AppSessionController {
         } else {
             .loaded
         }
-        let photosReader: any TimelineReading = if arguments.contains("-ui-testing-signed-in") {
+        let previewReader: PreviewTimelineReader? = if arguments.contains("-ui-testing-signed-in") {
             PreviewTimelineReader(
                 mode: previewMode,
                 rangeLibrary: arguments.contains("-ui-testing-range-library")
             )
         } else {
+            nil
+        }
+        let photosReader: any TimelineReading = if let previewReader {
+            previewReader
+        } else {
+            timeline
+        }
+        let videosReader: any VideoReading = if let previewReader {
+            previewReader
+        } else {
             timeline
         }
         photos = PhotosTimelineStore(reader: photosReader)
+        videos = PhotosTimelineStore(reader: VideoTimelineReader(source: videosReader))
         self.service = service
         self.sessionStore = sessionStore
         self.profileStore = profileStore
@@ -94,6 +106,7 @@ final class AppSessionController {
             media.configure(session: session, activeEndpoint: session.apiURL)
             if await timeline.configure(session: session, activeEndpoint: session.apiURL) {
                 photos.routeDidChange(isReachable: true)
+                videos.routeDidChange(isReachable: true)
             }
             await photos.load()
             state = .signedIn(session)
@@ -159,6 +172,7 @@ final class AppSessionController {
             media.configure(session: session, activeEndpoint: session.apiURL)
             if await timeline.configure(session: session, activeEndpoint: session.apiURL) {
                 photos.routeDidChange(isReachable: true)
+                videos.routeDidChange(isReachable: true)
             }
             Self.routeLogger.info("Connected directly to \(session.apiURL.absoluteString, privacy: .public)")
             state = .signedIn(session)
@@ -174,6 +188,7 @@ final class AppSessionController {
         media.clearAll()
         await timeline.clear()
         photos.reset()
+        videos.reset()
         guard case let .signedIn(session) = state else {
             try? await sessionStore.delete()
             state = .signedOut
@@ -310,6 +325,7 @@ final class AppSessionController {
             media.updateRoute(route.endpoint)
             if await timeline.updateRoute(route.endpoint) {
                 photos.routeDidChange(isReachable: true)
+                videos.routeDidChange(isReachable: true)
             }
             Self.routeLogger.info(
                 "Activated \(route.kind.rawValue, privacy: .public) endpoint \(route.endpoint.absoluteString, privacy: .public)"
@@ -408,6 +424,7 @@ final class AppSessionController {
             media.updateRoute(session.apiURL)
             if await timeline.updateRoute(session.apiURL) {
                 photos.routeDidChange(isReachable: true)
+                videos.routeDidChange(isReachable: true)
             }
             Self.routeLogger.info(
                 "Restored direct endpoint \(session.apiURL.absoluteString, privacy: .public)"
@@ -480,6 +497,7 @@ final class AppSessionController {
         media.clearAll()
         await timeline.clear()
         photos.reset()
+        videos.reset()
         state = .signingOut
         try? await sessionStore.delete()
         await service.signOut(session)

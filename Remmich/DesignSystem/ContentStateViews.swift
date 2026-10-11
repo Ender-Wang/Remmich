@@ -31,11 +31,12 @@ struct EmptyStateView: View {
 }
 
 struct ErrorStateView: View {
+    var title = "Couldn’t Load Library"
     var retry: () -> Void
 
     var body: some View {
         ContentUnavailableView {
-            Label("Couldn’t Load Library", systemImage: "exclamationmark.icloud")
+            Label(title, systemImage: "exclamationmark.icloud")
         } description: {
             Text("Check the server connection and try again.")
         } actions: {

@@ -79,6 +79,17 @@ struct AuthenticationMiddlewareTests {
             try ReadOnlyOperationPolicy.validate(request: request, operationID: operationID)
         }
     }
+
+    @Test func permitsMetadataSearchButNotOtherPosts() throws {
+        let search = HTTPRequest(method: .post, scheme: "https", authority: "example.com", path: "/api/search/metadata")
+        #expect(throws: Never.self) {
+            try ReadOnlyOperationPolicy.validate(request: search, operationID: "searchAssets")
+        }
+        let mutation = HTTPRequest(method: .post, scheme: "https", authority: "example.com", path: "/api/assets/id")
+        #expect(throws: ImmichAPIError.readOnlyPolicyViolation(operationID: "updateAsset")) {
+            try ReadOnlyOperationPolicy.validate(request: mutation, operationID: "updateAsset")
+        }
+    }
 }
 
 @Suite("Discovery and error mapping")

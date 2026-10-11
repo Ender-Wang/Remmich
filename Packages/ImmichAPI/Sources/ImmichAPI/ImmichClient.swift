@@ -246,6 +246,54 @@ public actor ImmichClient {
         }
     }
 
+    public func videoAssets(cursor: String? = nil, size: Int = 100) async throws -> ImmichVideoPage {
+        guard credential != nil else { throw ImmichAPIError.unauthorized }
+        guard (1 ... 1000).contains(size) else { throw ImmichAPIError.invalidResponse }
+        do {
+            let output = try await makeClient().searchAssets(.init(body: .json(.init(
+                cursor: cursor,
+                filter: .init(
+                    _type: .init(eq: .VIDEO),
+                    visibility: .init(eq: .timeline)
+                ),
+                orderBy: .init(direction: .desc, field: .fileCreatedAt),
+                size: size
+            ))))
+            switch output {
+            case let .ok(response):
+                let page = try response.body.json.assets
+                return ImmichVideoPage(
+                    assets: page.items.filter { $0._type == .VIDEO }.map { asset in
+                        let aspectRatio: Double = if let width = asset.width,
+                                                     let height = asset.height,
+                                                     height > 0
+                        {
+                            Double(width) / Double(height)
+                        } else {
+                            1
+                        }
+                        return ImmichVideoAsset(
+                            id: asset.id,
+                            ownerID: asset.ownerId,
+                            capturedAt: asset.localDateTime,
+                            uploadedAt: asset.createdAt,
+                            thumbnailRevision: asset.updatedAt,
+                            durationMilliseconds: asset.duration,
+                            aspectRatio: aspectRatio,
+                            isFavorite: asset.isFavorite,
+                            thumbhash: asset.thumbhash
+                        )
+                    },
+                    nextCursor: page.nextCursor
+                )
+            case let .undocumented(statusCode, _):
+                throw Self.map(status: statusCode)
+            }
+        } catch {
+            throw Self.map(error)
+        }
+    }
+
     public func memories(query: ImmichMemoryQuery = .init()) async throws -> [ImmichMemory] {
         guard credential != nil else { throw ImmichAPIError.unauthorized }
         guard query.page > 0, query.size > 0 else { throw ImmichAPIError.invalidResponse }

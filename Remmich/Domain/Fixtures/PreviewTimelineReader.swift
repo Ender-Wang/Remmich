@@ -1,6 +1,6 @@
 import Foundation
 
-actor PreviewTimelineReader: TimelineReading {
+actor PreviewTimelineReader: TimelineReading, VideoReading {
     enum Mode: Sendable {
         case loaded
         case empty
@@ -10,6 +10,7 @@ actor PreviewTimelineReader: TimelineReading {
     private let mode: Mode
     private let buckets: [(TimelineBucketSummary, [TimelineAssetSummary])]
     private let memoryValues: [TimelineMemorySummary]
+    private let videoValues: [TimelineAssetSummary]
     private var hasFailedInitialLoad = false
 
     @MainActor init(mode: Mode = .loaded, rangeLibrary: Bool = false) {
@@ -26,6 +27,9 @@ actor PreviewTimelineReader: TimelineReading {
             )
         }
         buckets = rangeLibrary ? Self.rangeBuckets() : simpleBuckets
+        videoValues = rangeLibrary
+            ? Self.rangeVideos()
+            : PreviewFixtures.assets.filter { $0.kind == .video }.map(Self.map)
         memoryValues = PreviewFixtures.memories.map { memory in
             TimelineMemorySummary(
                 id: memory.id,
@@ -60,6 +64,30 @@ actor PreviewTimelineReader: TimelineReading {
             }
     }
 
+    private nonisolated static func rangeVideos() -> [TimelineAssetSummary] {
+        rangeBuckets().flatMap { summary, assets in
+            assets.prefix(2).enumerated().map { index, asset in
+                TimelineAssetSummary(
+                    id: "video-range-\(summary.id.rawValue)-\(index)",
+                    ownerID: asset.ownerID,
+                    capturedAt: asset.capturedAt,
+                    uploadedAt: asset.uploadedAt,
+                    localOffsetHours: asset.localOffsetHours,
+                    mediaKind: .video,
+                    durationMilliseconds: 28000,
+                    aspectRatio: asset.aspectRatio,
+                    isFavorite: asset.isFavorite,
+                    visibility: asset.visibility,
+                    livePhotoVideoID: nil,
+                    stack: nil,
+                    projectionType: nil,
+                    thumbhash: nil,
+                    thumbnailRevision: asset.thumbnailRevision
+                )
+            }
+        }
+    }
+
     func bucketSummaries(query _: TimelineQuery) async throws -> [TimelineBucketSummary] {
         if mode == .empty {
             return []
@@ -80,6 +108,11 @@ actor PreviewTimelineReader: TimelineReading {
 
     func memories() async throws -> [TimelineMemorySummary] {
         memoryValues
+    }
+
+    func videos(cursor: String?) async throws -> VideoPage {
+        guard cursor == nil else { return VideoPage(assets: [], nextCursor: nil) }
+        return VideoPage(assets: videoValues, nextCursor: nil)
     }
 
     private nonisolated static func map(_ asset: FixtureAsset) -> TimelineAssetSummary {

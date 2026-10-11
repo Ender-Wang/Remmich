@@ -2,7 +2,7 @@ import Foundation
 import ImmichAPI
 import OSLog
 
-actor ImmichTimelineRepository: TimelineReading {
+actor ImmichTimelineRepository: TimelineReading, VideoReading {
     private nonisolated static let logger = Logger(
         subsystem: "io.github.ender-wang.Remmich",
         category: "TimelineRepository"
@@ -137,6 +137,39 @@ actor ImmichTimelineRepository: TimelineReading {
             Self.logger.error(
                 "Memories failed generation=\(requestGeneration) elapsedMs=\(Self.elapsedMilliseconds(since: startedAt)) error=\(Self.errorSummary(error), privacy: .public)"
             )
+            try requireCurrent(requestGeneration)
+            throw Self.map(error)
+        }
+    }
+
+    func videos(cursor: String?) async throws -> VideoPage {
+        let (client, requestGeneration) = try requestContext()
+        do {
+            let page = try await client.videoAssets(cursor: cursor)
+            try requireCurrent(requestGeneration)
+            return VideoPage(
+                assets: page.assets.map {
+                    TimelineAssetSummary(
+                        id: $0.id,
+                        ownerID: $0.ownerID,
+                        capturedAt: $0.capturedAt,
+                        uploadedAt: $0.uploadedAt,
+                        localOffsetHours: 0,
+                        mediaKind: .video,
+                        durationMilliseconds: $0.durationMilliseconds,
+                        aspectRatio: $0.aspectRatio,
+                        isFavorite: $0.isFavorite,
+                        visibility: .timeline,
+                        livePhotoVideoID: nil,
+                        stack: nil,
+                        projectionType: nil,
+                        thumbhash: $0.thumbhash,
+                        thumbnailRevision: $0.thumbnailRevision
+                    )
+                },
+                nextCursor: page.nextCursor
+            )
+        } catch {
             try requireCurrent(requestGeneration)
             throw Self.map(error)
         }

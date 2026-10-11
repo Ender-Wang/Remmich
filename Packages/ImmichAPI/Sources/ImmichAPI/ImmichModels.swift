@@ -101,6 +101,23 @@ public enum ImmichAssetVisibility: Codable, Hashable, Sendable {
     }
 }
 
+public struct ImmichVideoAsset: Hashable, Sendable {
+    public let id: String
+    public let ownerID: String
+    public let capturedAt: Date
+    public let uploadedAt: Date
+    public let thumbnailRevision: Date
+    public let durationMilliseconds: Int?
+    public let aspectRatio: Double
+    public let isFavorite: Bool
+    public let thumbhash: String?
+}
+
+public struct ImmichVideoPage: Hashable, Sendable {
+    public let assets: [ImmichVideoAsset]
+    public let nextCursor: String?
+}
+
 public struct ImmichTimelineQuery: Codable, Hashable, Sendable {
     public let order: ImmichTimelineOrder
     public let orderBy: ImmichTimelineOrderBy

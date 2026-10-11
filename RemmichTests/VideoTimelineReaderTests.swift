@@ -1,0 +1,82 @@
+import Foundation
+import Testing
+@testable import Remmich
+
+@Suite("Video-only timeline")
+struct VideoTimelineReaderTests {
+    @Test func pinchGroupsEntireVideoLibraryOneLevelAtATime() {
+        #expect(VideoLibraryRange.all.next(for: .coarser) == .day)
+        #expect(VideoLibraryRange.day.next(for: .coarser) == .week)
+        #expect(VideoLibraryRange.week.next(for: .coarser) == .month)
+        #expect(VideoLibraryRange.month.next(for: .coarser) == .year)
+        #expect(VideoLibraryRange.year.next(for: .coarser) == nil)
+        #expect(VideoLibraryRange.year.next(for: .finer) == .month)
+        #expect(VideoLibraryRange.day.next(for: .finer) == .all)
+        #expect(VideoLibraryRange.all.next(for: .finer) == nil)
+    }
+
+    @Test func groupsAllSearchPagesIntoMonthsWithoutDuplicates() async throws {
+        let reader = VideoTimelineReader(source: VideoPageFixture())
+        let summaries = try await reader.bucketSummaries(query: .init())
+        #expect(summaries.map(\.id.rawValue) == ["2026-10-01", "2026-09-01"])
+        #expect(summaries.map(\.assetCount) == [2, 1])
+        let october = try await reader.assets(
+            in: TimelineBucketID(rawValue: "2026-10-01"), query: .init()
+        )
+        #expect(october.map(\.id) == ["newest", "older"])
+        #expect(try await reader.memories().isEmpty)
+    }
+}
+
+private actor VideoPageFixture: VideoReading {
+    func bucketSummaries(query _: TimelineQuery) async throws -> [TimelineBucketSummary] {
+        []
+    }
+
+    func assets(in _: TimelineBucketID, query _: TimelineQuery) async throws -> [TimelineAssetSummary] {
+        []
+    }
+
+    func memories() async throws -> [TimelineMemorySummary] {
+        []
+    }
+
+    func videos(cursor: String?) async throws -> VideoPage {
+        if cursor == nil {
+            return VideoPage(
+                assets: [
+                    asset("older", day: 2, month: 10),
+                    asset("september", day: 28, month: 9),
+                ],
+                nextCursor: "page-2"
+            )
+        }
+        return VideoPage(
+            assets: [asset("newest", day: 7, month: 10), asset("older", day: 2, month: 10)],
+            nextCursor: nil
+        )
+    }
+
+    private func asset(_ id: String, day: Int, month: Int) -> TimelineAssetSummary {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let date = calendar.date(from: DateComponents(year: 2026, month: month, day: day))!
+        return TimelineAssetSummary(
+            id: id,
+            ownerID: "owner",
+            capturedAt: date,
+            uploadedAt: date,
+            localOffsetHours: 0,
+            mediaKind: .video,
+            durationMilliseconds: 1000,
+            aspectRatio: 1,
+            isFavorite: false,
+            visibility: .timeline,
+            livePhotoVideoID: nil,
+            stack: nil,
+            projectionType: nil,
+            thumbhash: nil,
+            thumbnailRevision: date
+        )
+    }
+}
