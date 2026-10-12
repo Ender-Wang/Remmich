@@ -122,6 +122,7 @@ struct PhotosView: View {
     let media: MediaLibraryController
     @Binding var navigationPath: [PhotosRangeRoute]
     var scrollToLatestRequest = 0
+    var tabBarTop: CGFloat = 0
     var contentName = "Photos"
     var rootAccessibilityID = "photos-root"
     let compactChromeChanged: (Bool) -> Void
@@ -306,20 +307,23 @@ struct PhotosView: View {
                     store: store,
                     media: media,
                     dayIconSystemImage: dayIconSystemImage,
+                    tabBarTop: tabBarTop,
                     onSelect: selectRoute,
                     onPinch: pinchLibraryRange
                 )
             case .week:
-                PhotosLibraryWeeksView(store: store, media: media, onSelect: selectRoute,
-                                       onPinch: pinchLibraryRange)
+                PhotosLibraryWeeksView(
+                    store: store, media: media, tabBarTop: tabBarTop,
+                    onSelect: selectRoute, onPinch: pinchLibraryRange
+                )
             case .month:
                 PhotosMonthsView(
                     summaries: store.bucketSummaries, store: store, media: media,
-                    onSelect: selectRoute, onPinch: pinchLibraryRange
+                    tabBarTop: tabBarTop, onSelect: selectRoute, onPinch: pinchLibraryRange
                 )
             case .year:
                 PhotosYearsView(
-                    store: store, media: media,
+                    store: store, media: media, tabBarTop: tabBarTop,
                     onSelect: selectRoute, onPinch: pinchLibraryRange
                 )
             }
@@ -340,6 +344,7 @@ struct PhotosView: View {
                     .first { $0.id == year }?.months ?? [],
                 store: store,
                 media: media,
+                tabBarTop: tabBarTop,
                 onSelect: selectRoute
             )
         case let .month(bucketID):
@@ -347,6 +352,7 @@ struct PhotosView: View {
                 PhotosWeeksView(
                     section: section,
                     media: media,
+                    tabBarTop: tabBarTop,
                     onSelect: selectRoute
                 )
             }
@@ -367,6 +373,7 @@ struct PhotosView: View {
                         week: weekID,
                         media: media,
                         dayIconSystemImage: dayIconSystemImage,
+                        tabBarTop: tabBarTop,
                         onSelect: selectRoute
                     )
                 }
@@ -434,30 +441,15 @@ struct PhotosView: View {
     }
 
     private func performPinchTransition(
-        _ gesture: PhotosPinchGesture,
-        from source: PhotosRangePresentationID,
-        to target: PhotosRangePresentationID,
+        _: PhotosPinchGesture,
+        from _: PhotosRangePresentationID,
+        to _: PhotosRangePresentationID,
         update: @escaping @MainActor () -> Void
     ) {
         guard pinchTransition == nil else { return }
-        if reduceMotion {
-            var transaction = Transaction()
-            transaction.disablesAnimations = true
-            withTransaction(transaction) { update() }
-            return
-        }
-
-        let duration = 0.3
-        pinchTransition = PhotosPinchTransitionState(
-            source: source,
-            target: target,
-            direction: gesture.direction
-        )
-        withAnimation(.linear(duration: duration)) { update() }
-        Task { @MainActor in
-            try? await Task.sleep(for: .seconds(duration))
-            pinchTransition = nil
-        }
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { update() }
     }
 
     private func pinchLibraryRange(_ gesture: PhotosPinchGesture) {

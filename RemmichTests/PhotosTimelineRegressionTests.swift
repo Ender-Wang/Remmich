@@ -46,6 +46,23 @@ struct PhotosTimelineRegressionTests {
         #expect(TimelineGridOrder.columnCount(availableWidth: 320, minimumColumnWidth: 88) == 3)
     }
 
+    @Test func rangeCardsClearTheMeasuredTabBar() {
+        #expect(TimelineRangeGridLayout.contentViewportHeight(
+            frameMinY: 0,
+            frameBottom: 844,
+            tabBarTop: 760,
+            minimumBarHeight: 84,
+            spacing: 12
+        ) == 748)
+        #expect(TimelineRangeGridLayout.contentViewportHeight(
+            frameMinY: 0,
+            frameBottom: 844,
+            tabBarTop: 0,
+            minimumBarHeight: 84,
+            spacing: 12
+        ) == 748)
+    }
+
     @Test @MainActor func initialLoadPublishesNewestContentAndKeepsMemoryFailureIndependent() async {
         let reader = ScenarioTimelineReader(
             buckets: Self.buckets(count: 2),
@@ -293,6 +310,32 @@ struct PhotosTimelineRegressionTests {
         #expect(await reader.assetRequestCount(for: buckets[3].id) == 0)
         #expect(await reader.assetRequestCount(for: buckets[4].id) == 0)
         #expect(await reader.assetRequestCount(for: buckets[6].id) == 0)
+    }
+
+    @Test @MainActor func libraryRangeBrowsingKeepsItsResidencySeparateFromTheMainTimeline() async {
+        let buckets = Self.buckets(count: 9)
+        let assets = Dictionary(uniqueKeysWithValues: buckets.enumerated().map { index, bucket in
+            (bucket.id, [Self.asset("asset-\(index)")])
+        })
+        let reader = ScenarioTimelineReader(buckets: buckets, assets: assets)
+        let store = PhotosTimelineStore(reader: reader)
+        await store.load()
+
+        let newest = buckets[0].id
+        let older = buckets[7].id
+        let owner = UUID()
+        store.updateVisibleAnchor(.init(bucketID: newest, assetID: "asset-0"))
+        store.beginLibraryRangeBrowsing(owner: owner, newestBucketID: newest)
+        await store.loadLibraryRangeBucket(older, owner: owner)
+
+        #expect(store.visibleAnchor?.bucketID == newest)
+        #expect(store.sectionsByID[newest]?.loadState == .loaded)
+        #expect(store.sectionsByID[older]?.assets.map(\.id) == ["asset-7"])
+
+        store.endLibraryRangeBrowsing(owner: owner)
+
+        #expect(store.sectionsByID[newest]?.loadState == .loaded)
+        #expect(store.sectionsByID[older]?.loadState == .unloaded)
     }
 
     @Test @MainActor func crossBucketDuplicatesKeepNewestServerPosition() async {

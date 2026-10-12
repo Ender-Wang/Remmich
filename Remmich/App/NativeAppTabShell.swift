@@ -220,6 +220,19 @@ private final class MeasuringTabBarController: UITabBarController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        tabBarTopChanged?(tabBar.frame.minY)
+        tabBar.layoutIfNeeded()
+        tabBarTopChanged?(visibleTop(of: tabBar) ?? tabBar.frame.minY)
+    }
+
+    private func visibleTop(of root: UIView) -> CGFloat? {
+        guard !root.isHidden, root.alpha > 0.01, !root.bounds.isEmpty else { return nil }
+
+        var top = root.convert(root.bounds, to: view).minY
+        for subview in root.subviews {
+            if let subviewTop = visibleTop(of: subview) {
+                top = min(top, subviewTop)
+            }
+        }
+        return top
     }
 }

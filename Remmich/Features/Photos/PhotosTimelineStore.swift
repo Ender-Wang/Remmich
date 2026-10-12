@@ -20,6 +20,9 @@ final class PhotosTimelineStore {
     private(set) var memories: [TimelineMemorySummary] = []
     private(set) var visibleAnchor: TimelineVisibleAnchor?
     private(set) var jumpTarget: TimelineBucketID?
+    private var rangeBrowseOwner: UUID?
+    private var rangeBaseBucketID: TimelineBucketID?
+    private var rangeVisibleBucketID: TimelineBucketID?
 
     var sections: [TimelineSection] {
         bucketSummaries.compactMap { sectionsByID[$0.id] }
@@ -210,6 +213,42 @@ final class PhotosTimelineStore {
         await loadBucket(bucketID)
     }
 
+    func beginLibraryRangeBrowsing(owner: UUID, newestBucketID: TimelineBucketID) {
+        guard sectionsByID[newestBucketID] != nil else { return }
+        rangeBrowseOwner = owner
+        rangeBaseBucketID = visibleAnchor?.bucketID ?? newestBucketID
+        rangeVisibleBucketID = newestBucketID
+        applyMetadataWindow(centeredOn: rangeBaseBucketID ?? newestBucketID)
+    }
+
+    func loadLibraryRangeBucket(
+        _ bucketID: TimelineBucketID,
+        owner: UUID,
+        includingPreviousMonth: Bool = false
+    ) async {
+        guard rangeBrowseOwner == owner, sectionsByID[bucketID] != nil else { return }
+        if rangeVisibleBucketID != bucketID {
+            rangeVisibleBucketID = bucketID
+            applyMetadataWindow(centeredOn: rangeBaseBucketID ?? bucketID)
+        }
+        await loadBucket(bucketID)
+        guard includingPreviousMonth, rangeBrowseOwner == owner,
+              let index = bucketSummaries.firstIndex(where: { $0.id == bucketID }),
+              index + 1 < bucketSummaries.count
+        else { return }
+        await loadBucket(bucketSummaries[index + 1].id)
+    }
+
+    func endLibraryRangeBrowsing(owner: UUID) {
+        guard rangeBrowseOwner == owner else { return }
+        rangeBrowseOwner = nil
+        rangeBaseBucketID = nil
+        rangeVisibleBucketID = nil
+        if let bucketID = visibleAnchor?.bucketID ?? bucketSummaries.first?.id {
+            applyMetadataWindow(centeredOn: bucketID)
+        }
+    }
+
     func rangeCoverAssets(in bucketID: TimelineBucketID) async -> [TimelineAssetSummary] {
         if let section = sectionsByID[bucketID], case .loaded = section.loadState {
             return section.assets
@@ -296,6 +335,9 @@ final class PhotosTimelineStore {
         memories = []
         visibleAnchor = nil
         jumpTarget = nil
+        rangeBrowseOwner = nil
+        rangeBaseBucketID = nil
+        rangeVisibleBucketID = nil
         bucketRequestRevisions = [:]
         rawAssetsByID = [:]
     }
@@ -497,7 +539,15 @@ final class PhotosTimelineStore {
         var upper = min(bucketSummaries.count, lower + count)
         lower = max(0, upper - count)
         upper = min(bucketSummaries.count, lower + count)
-        let retained = Set(bucketSummaries[lower ..< upper].map(\.id))
+        var retained = Set(bucketSummaries[lower ..< upper].map(\.id))
+        if let rangeVisibleBucketID,
+           let rangeCenter = bucketSummaries.firstIndex(where: { $0.id == rangeVisibleBucketID })
+        {
+            var rangeLower = max(0, rangeCenter - count / 2)
+            let rangeUpper = min(bucketSummaries.count, rangeLower + count)
+            rangeLower = max(0, rangeUpper - count)
+            retained.formUnion(bucketSummaries[rangeLower ..< rangeUpper].map(\.id))
+        }
 
         for id in Array(bucketTasks.keys) where !retained.contains(id) {
             bucketTasks[id]?.cancel()

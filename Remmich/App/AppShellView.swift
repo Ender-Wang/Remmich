@@ -59,6 +59,7 @@ struct AppShellView: View {
                         media: media,
                         navigationPath: $photosPath,
                         scrollToLatestRequest: photosScrollRequest,
+                        tabBarTop: tabBarTop,
                         compactChromeChanged: { compact in
                             compactPhotosTabs = compact
                             if compact, selection == .photos {
@@ -77,6 +78,7 @@ struct AppShellView: View {
                         media: media,
                         navigationPath: $videosPath,
                         scrollToLatestRequest: videosScrollRequest,
+                        tabBarTop: tabBarTop,
                         contentName: "Videos",
                         rootAccessibilityID: "videos-root",
                         compactChromeChanged: { compact in
