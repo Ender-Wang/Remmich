@@ -63,6 +63,24 @@ struct PhotosTimelineRegressionTests {
         ) == 748)
     }
 
+    @Test func rangeCardOuterInsetsMatchTheTabBarClearance() {
+        let phoneInset = TimelineRangeGridLayout.edgeInset(isPhone: true)
+        #expect(phoneInset == 12)
+        #expect(TimelineRangeGridLayout.edgeInset(isPhone: false) == 20)
+        #expect(TimelineRangeGridLayout.cardSide(
+            viewportWidth: 393,
+            columns: 1,
+            interItemSpacing: 14,
+            edgeInset: phoneInset
+        ) == 369)
+        #expect(TimelineRangeGridLayout.cardSide(
+            viewportWidth: 844,
+            columns: 2,
+            interItemSpacing: 14,
+            edgeInset: phoneInset
+        ) == 403)
+    }
+
     @Test @MainActor func initialLoadPublishesNewestContentAndKeepsMemoryFailureIndependent() async {
         let reader = ScenarioTimelineReader(
             buckets: Self.buckets(count: 2),
