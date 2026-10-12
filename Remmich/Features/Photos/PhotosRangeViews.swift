@@ -160,8 +160,7 @@ struct PhotosLibraryDaysView: View {
             )
             let edgeInset = TimelineRangeGridLayout.edgeInset(isPhone: isPhone)
             let globalFrame = geometry.frame(in: .global)
-            let contentHeight = TimelineRangeGridLayout.contentViewportHeight(
-                frameMinY: globalFrame.minY,
+            let bottomContentInset = TimelineRangeGridLayout.bottomContentInset(
                 frameBottom: globalFrame.maxY,
                 tabBarTop: tabBarTop,
                 minimumBarHeight: isPhone ? 84 : geometry.safeAreaInsets.bottom,
@@ -189,8 +188,7 @@ struct PhotosLibraryDaysView: View {
             .defaultScrollAnchor(.bottom)
             .scrollEdgeEffectHidden(for: .bottom)
             .ignoresSafeArea(.container, edges: [.top, .horizontal, .bottom])
-            .frame(height: contentHeight, alignment: .top)
-            .clipped()
+            .contentMargins(.bottom, bottomContentInset, for: .scrollContent)
             .simultaneousGesture(MagnifyGesture().onEnded { value in
                 guard let gesture = PhotosPinchGesture(magnification: value.magnification) else { return }
                 onPinch(gesture)
@@ -334,8 +332,7 @@ struct PhotosLibraryWeeksView: View {
             )
             let edgeInset = TimelineRangeGridLayout.edgeInset(isPhone: isPhone)
             let globalFrame = geometry.frame(in: .global)
-            let contentHeight = TimelineRangeGridLayout.contentViewportHeight(
-                frameMinY: globalFrame.minY,
+            let bottomContentInset = TimelineRangeGridLayout.bottomContentInset(
                 frameBottom: globalFrame.maxY,
                 tabBarTop: tabBarTop,
                 minimumBarHeight: isPhone ? 84 : geometry.safeAreaInsets.bottom,
@@ -378,8 +375,7 @@ struct PhotosLibraryWeeksView: View {
             }
             .scrollEdgeEffectHidden(for: .bottom)
             .ignoresSafeArea(.container, edges: [.top, .horizontal, .bottom])
-            .frame(height: contentHeight, alignment: .top)
-            .clipped()
+            .contentMargins(.bottom, bottomContentInset, for: .scrollContent)
             .simultaneousGesture(MagnifyGesture().onEnded { value in
                 guard let onPinch,
                       let gesture = PhotosPinchGesture(magnification: value.magnification)
@@ -686,14 +682,13 @@ private struct PhotosRangeCardGrid<Item: Identifiable, Content: View>: View wher
             let edgeInset = TimelineRangeGridLayout.edgeInset(isPhone: isPhone)
             let interRowSpacing: CGFloat = isPhoneLandscape ? 40 : 14
             let globalFrame = geometry.frame(in: .global)
-            let contentHeight = TimelineRangeGridLayout.contentViewportHeight(
-                frameMinY: globalFrame.minY,
+            let bottomContentInset = TimelineRangeGridLayout.bottomContentInset(
                 frameBottom: globalFrame.maxY,
                 tabBarTop: tabBarTop,
                 minimumBarHeight: isPhone ? 84 : geometry.safeAreaInsets.bottom,
                 spacing: edgeInset
             )
-            let navigationTop = globalFrame.minY + contentHeight + edgeInset
+            let navigationTop = globalFrame.maxY - bottomContentInset + edgeInset
             let widthBasedSide = TimelineRangeGridLayout.cardSide(
                 viewportWidth: geometry.size.width,
                 columns: columnCount,
@@ -742,8 +737,7 @@ private struct PhotosRangeCardGrid<Item: Identifiable, Content: View>: View wher
             }
             .scrollEdgeEffectHidden(for: .bottom)
             .ignoresSafeArea(.container, edges: [.top, .horizontal, .bottom])
-            .frame(height: contentHeight, alignment: .top)
-            .clipped()
+            .contentMargins(.bottom, bottomContentInset, for: .scrollContent)
             .simultaneousGesture(MagnifyGesture().onEnded { value in
                 guard let gesture = PhotosPinchGesture(magnification: value.magnification),
                       let onPinch
@@ -792,8 +786,7 @@ nonisolated enum TimelineRangeGridLayout {
         return max(10, availableWidth / CGFloat(columns))
     }
 
-    static func contentViewportHeight(
-        frameMinY: CGFloat,
+    static func bottomContentInset(
         frameBottom: CGFloat,
         tabBarTop: CGFloat,
         minimumBarHeight: CGFloat,
@@ -802,8 +795,7 @@ nonisolated enum TimelineRangeGridLayout {
         let resolvedTabBarTop = tabBarTop > 0
             ? tabBarTop
             : frameBottom - minimumBarHeight
-        let availableHeight = resolvedTabBarTop - frameMinY - spacing
-        return max(1, min(frameBottom - frameMinY, availableHeight))
+        return max(spacing, frameBottom - resolvedTabBarTop + spacing)
     }
 
     static func landscapeCardSide(deviceHeight: CGFloat, bottomNavigationHeight: CGFloat, padding: CGFloat) -> CGFloat {

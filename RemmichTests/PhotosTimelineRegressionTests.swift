@@ -46,21 +46,19 @@ struct PhotosTimelineRegressionTests {
         #expect(TimelineGridOrder.columnCount(availableWidth: 320, minimumColumnWidth: 88) == 3)
     }
 
-    @Test func rangeCardsClearTheMeasuredTabBar() {
-        #expect(TimelineRangeGridLayout.contentViewportHeight(
-            frameMinY: 0,
+    @Test func rangeCardsRestAboveTheMeasuredTabBar() {
+        #expect(TimelineRangeGridLayout.bottomContentInset(
             frameBottom: 844,
             tabBarTop: 760,
             minimumBarHeight: 84,
             spacing: 12
-        ) == 748)
-        #expect(TimelineRangeGridLayout.contentViewportHeight(
-            frameMinY: 0,
+        ) == 96)
+        #expect(TimelineRangeGridLayout.bottomContentInset(
             frameBottom: 844,
             tabBarTop: 0,
             minimumBarHeight: 84,
             spacing: 12
-        ) == 748)
+        ) == 96)
     }
 
     @Test func rangeCardOuterInsetsMatchTheTabBarClearance() {
