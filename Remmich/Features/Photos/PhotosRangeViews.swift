@@ -142,7 +142,6 @@ struct PhotosLibraryDaysView: View {
     let onSelect: (PhotosRangeRoute) -> Void
     let onPinch: (PhotosPinchGesture) -> Void
 
-    @State private var position = ScrollPosition(edge: .bottom)
     @State private var browseOwner = UUID()
 
     private var newestMonthID: TimelineBucketID? {
@@ -186,7 +185,6 @@ struct PhotosLibraryDaysView: View {
                 .scrollTargetLayout()
             }
             .defaultScrollAnchor(.bottom)
-            .scrollPosition($position)
             .scrollEdgeEffectHidden(for: .bottom)
             .ignoresSafeArea(.container, edges: [.top, .horizontal, .bottom])
             .frame(height: contentHeight, alignment: .top)
@@ -774,7 +772,6 @@ nonisolated enum TimelineRangeGridLayout {
 
 private struct PhotosRangeCard: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.photosPinchItemScale) private var photosPinchItemScale
     @Environment(\.scenePhase) private var scenePhase
 
     let title: String
@@ -870,7 +867,6 @@ private struct PhotosRangeCard: View {
                 .allowsHitTesting(false)
             }
             .frame(maxWidth: .infinity)
-            .scaleEffect(photosPinchItemScale, anchor: .center)
             .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
             .onChange(of: currentAsset?.id, initial: true) { _, coverID in
                 onCoverChanged(coverID)

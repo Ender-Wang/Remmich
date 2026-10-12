@@ -61,54 +61,6 @@ nonisolated enum TimelineLibraryRange: Int, CaseIterable {
     }
 }
 
-private struct PhotosPinchTransitionState {
-    let source: PhotosRangePresentationID
-    let target: PhotosRangePresentationID
-    let direction: PhotosPinchDirection
-}
-
-private struct PhotosPinchVisualModifier: AnimatableModifier {
-    let scale: CGFloat
-    let opacity: CGFloat
-
-    var animatableData: AnimatablePair<CGFloat, CGFloat> {
-        get { AnimatablePair(scale, opacity) }
-        set {
-            self = PhotosPinchVisualModifier(scale: newValue.first, opacity: newValue.second)
-        }
-    }
-
-    func body(content: Content) -> some View {
-        content
-            .environment(\.photosPinchItemScale, scale)
-            .opacity(opacity)
-    }
-}
-
-private extension AnyTransition {
-    static func photosPinch(_ transition: PhotosPinchTransitionState) -> AnyTransition {
-        let identity = PhotosPinchVisualModifier(scale: 1, opacity: 1)
-        let insertionScale: CGFloat = transition.direction == .coarser ? 1.08 : 0.10
-        let removalScale: CGFloat = transition.direction == .coarser ? 0.10 : 1.08
-        return .asymmetric(
-            insertion: .modifier(
-                active: PhotosPinchVisualModifier(
-                    scale: insertionScale,
-                    opacity: 0
-                ),
-                identity: identity
-            ),
-            removal: .modifier(
-                active: PhotosPinchVisualModifier(
-                    scale: removalScale,
-                    opacity: 0
-                ),
-                identity: identity
-            )
-        )
-    }
-}
-
 struct PhotosView: View {
     private static let logger = Logger(
         subsystem: "io.github.ender-wang.Remmich",
@@ -144,7 +96,6 @@ struct PhotosView: View {
     @State private var userScrollPhase = false
     @State private var chromeTracker = PhotosChromeTracker()
     @State private var didPositionInitially = false
-    @State private var pinchTransition: PhotosPinchTransitionState?
     @State private var libraryRange: TimelineLibraryRange = .all
 
     var body: some View {
@@ -240,7 +191,7 @@ struct PhotosView: View {
         ZStack {
             rangeContent
                 .id(visiblePresentationID)
-                .transition(activeRangeTransition)
+                .transition(.opacity)
         }
     }
 
@@ -330,11 +281,6 @@ struct PhotosView: View {
         }
     }
 
-    private var activeRangeTransition: AnyTransition {
-        guard !reduceMotion, let pinchTransition else { return .opacity }
-        return .photosPinch(pinchTransition)
-    }
-
     @ViewBuilder
     private func rangeDestination(_ route: PhotosRangeRoute) -> some View {
         switch route {
@@ -409,14 +355,12 @@ struct PhotosView: View {
     }
 
     private func selectRoute(_ route: PhotosRangeRoute) {
-        guard pinchTransition == nil else { return }
         withAnimation(.smooth(duration: 0.25)) {
             navigationPath.append(route)
         }
     }
 
     private func navigateBack() {
-        guard pinchTransition == nil else { return }
         withAnimation(.smooth(duration: 0.25)) {
             if !navigationPath.isEmpty {
                 navigationPath = Array(navigationPath.dropLast())
@@ -440,30 +384,13 @@ struct PhotosView: View {
         navigationPath.last.map(PhotosRangePresentationID.route) ?? rootPresentationID
     }
 
-    private func performPinchTransition(
-        _: PhotosPinchGesture,
-        from _: PhotosRangePresentationID,
-        to _: PhotosRangePresentationID,
-        update: @escaping @MainActor () -> Void
-    ) {
-        guard pinchTransition == nil else { return }
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) { update() }
-    }
-
     private func pinchLibraryRange(_ gesture: PhotosPinchGesture) {
         guard navigationPath.isEmpty,
               let next = libraryRange.next(for: gesture.direction)
         else { return }
-        let target: PhotosRangePresentationID = switch next {
-        case .all: .all
-        case .day: .days
-        case .week: .weeks
-        case .month: .months
-        case .year: .years
-        }
-        performPinchTransition(gesture, from: visiblePresentationID, to: target) {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
             libraryRange = next
         }
         Self.logger.info("\(contentName, privacy: .public) pinch changed range to \(String(describing: next), privacy: .public)")
