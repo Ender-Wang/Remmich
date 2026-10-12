@@ -59,6 +59,12 @@ struct PhotosTimelineRegressionTests {
             minimumBarHeight: 84,
             spacing: 12
         ) == 96)
+        #expect(TimelineRangeGridLayout.bottomContentInset(
+            frameBottom: 760,
+            tabBarTop: 760,
+            minimumBarHeight: 84,
+            spacing: 12
+        ) == 96)
     }
 
     @Test func rangeCardOuterInsetsMatchTheTabBarClearance() {

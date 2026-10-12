@@ -521,6 +521,31 @@ final class RemmichUITests: XCTestCase {
     }
 
     @MainActor
+    func testPinchedRangeCardsSettleAboveTabBar() {
+        for tab in ["Photos", "Videos"] {
+            let app = rangeApplication()
+            app.launch()
+            if tab == "Videos" {
+                tabButton(tab, in: app).tap()
+            }
+            let rootID = tab == "Photos" ? "photos-root" : "videos-root"
+            XCTAssertTrue(app.descendants(matching: .any)[rootID].waitForExistence(timeout: 10))
+
+            for prefix in [
+                "timeline-library-day-",
+                "timeline-library-week-",
+                "timeline-month-",
+                "timeline-year-",
+            ] {
+                coarsenTimeline(tab, in: app)
+                assertBottomAnchoredCards(prefix: prefix, in: app)
+            }
+
+            app.terminate()
+        }
+    }
+
+    @MainActor
     func testGroupedTabPinchDoesNotChangeRangeOnSignedInDevice() throws {
         #if targetEnvironment(simulator)
             throw XCTSkip("Uses the saved Immich account on the connected iPhone")
@@ -639,6 +664,24 @@ final class RemmichUITests: XCTestCase {
         let top = app.frame.minY + 20
         let bottom = tabBar.frame.minY - 20
         return card.frame.minY >= top - 3 && card.frame.maxY <= bottom + 3
+    }
+
+    @MainActor
+    private func assertBottomAnchoredCards(prefix: String, in app: XCUIApplication) {
+        let cards = app.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@", prefix
+        ))
+        let inset: CGFloat = UIDevice.current.userInterfaceIdiom == .phone ? 12 : 20
+        let settled = waitUntil(timeout: 10) {
+            let visibleCards = cards.allElementsBoundByIndex.filter(\.isHittable)
+            guard let bottom = visibleCards.map(\.frame.maxY).max() else { return false }
+            return abs(bottom - (app.tabBars.firstMatch.frame.minY - inset)) < 4
+        }
+        if !settled {
+            let elements = cards.allElementsBoundByIndex
+            let frames = elements.map { "\($0.identifier):\($0.frame):hittable=\($0.isHittable)" }
+            XCTFail("The bottom-anchored \(prefix) cards must clear tabBarTop=\(app.tabBars.firstMatch.frame.minY); frames=\(frames)")
+        }
     }
 
     @MainActor

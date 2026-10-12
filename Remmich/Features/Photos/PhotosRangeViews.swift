@@ -40,6 +40,16 @@ nonisolated func timelineDayIconSystemImage(contentName: String) -> String {
     contentName == "Videos" ? "video" : "photo.on.rectangle"
 }
 
+private struct PhotosRangeViewportKey: Equatable {
+    let viewport: CGSize
+    let navigationTop: CGFloat
+}
+
+private nonisolated enum PhotosRangeScrollAnchor: Hashable {
+    case row(Int)
+    case bottom
+}
+
 struct PhotosYearsView: View {
     let store: PhotosTimelineStore
     let media: MediaLibraryController
@@ -142,6 +152,8 @@ struct PhotosLibraryDaysView: View {
     let onSelect: (PhotosRangeRoute) -> Void
     let onPinch: (PhotosPinchGesture) -> Void
 
+    @State private var didSettleInitialViewport = false
+    @State private var userHasScrolled = false
     @State private var browseOwner = UUID()
 
     private var newestMonthID: TimelineBucketID? {
@@ -166,33 +178,54 @@ struct PhotosLibraryDaysView: View {
                 minimumBarHeight: isPhone ? 84 : geometry.safeAreaInsets.bottom,
                 spacing: edgeInset
             )
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(allMonths) { summary in
-                        PhotosVisibleRangeSection {
-                            await store.loadLibraryRangeBucket(summary.id, owner: browseOwner)
-                        } content: {
-                            PhotosLibraryDayMonthSection(
-                                summary: summary, store: store, media: media,
-                                dayIconSystemImage: dayIconSystemImage,
-                                columns: columns, viewportSize: geometry.size,
-                                edgeInset: edgeInset,
-                                onSelect: onSelect
-                            )
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(allMonths) { summary in
+                            PhotosVisibleRangeSection {
+                                await store.loadLibraryRangeBucket(summary.id, owner: browseOwner)
+                            } content: {
+                                PhotosLibraryDayMonthSection(
+                                    summary: summary, store: store, media: media,
+                                    dayIconSystemImage: dayIconSystemImage,
+                                    columns: columns, viewportSize: geometry.size,
+                                    edgeInset: edgeInset,
+                                    onSelect: onSelect
+                                )
+                            }
+                            .id(summary.id)
                         }
-                        .id(summary.id)
+                        Color.clear
+                            .frame(height: bottomContentInset)
+                            .id(PhotosRangeScrollAnchor.bottom)
+                            .accessibilityIdentifier("timeline-range-bottom-spacer")
+                    }
+                    .scrollTargetLayout()
+                }
+                .defaultScrollAnchor(.bottom)
+                .onScrollPhaseChange { _, phase in
+                    if didSettleInitialViewport, phase == .interacting {
+                        userHasScrolled = true
                     }
                 }
-                .scrollTargetLayout()
+                .scrollEdgeEffectHidden(for: .bottom)
+                .ignoresSafeArea(.container, edges: [.top, .horizontal, .bottom])
+                .task(id: PhotosRangeViewportKey(
+                    viewport: geometry.size,
+                    navigationTop: globalFrame.maxY - bottomContentInset
+                )) {
+                    try? await Task.sleep(for: .milliseconds(80))
+                    guard !Task.isCancelled,
+                          !didSettleInitialViewport || !userHasScrolled
+                    else { return }
+                    proxy.scrollTo(PhotosRangeScrollAnchor.bottom, anchor: .bottom)
+                    didSettleInitialViewport = true
+                }
+                .simultaneousGesture(MagnifyGesture().onEnded { value in
+                    guard let gesture = PhotosPinchGesture(magnification: value.magnification) else { return }
+                    onPinch(gesture)
+                })
             }
-            .defaultScrollAnchor(.bottom)
-            .scrollEdgeEffectHidden(for: .bottom)
-            .ignoresSafeArea(.container, edges: [.top, .horizontal, .bottom])
-            .contentMargins(.bottom, bottomContentInset, for: .scrollContent)
-            .simultaneousGesture(MagnifyGesture().onEnded { value in
-                guard let gesture = PhotosPinchGesture(magnification: value.magnification) else { return }
-                onPinch(gesture)
-            })
         }
         .task(id: newestMonthID) {
             guard let newestMonthID else { return }
@@ -312,7 +345,8 @@ struct PhotosLibraryWeeksView: View {
     let onSelect: (PhotosRangeRoute) -> Void
     var onPinch: ((PhotosPinchGesture) -> Void)?
 
-    @State private var position = ScrollPosition(edge: .bottom)
+    @State private var didSettleInitialViewport = false
+    @State private var userHasScrolled = false
     @State private var browseOwner = UUID()
 
     private var newestMonthID: TimelineBucketID? {
@@ -338,50 +372,70 @@ struct PhotosLibraryWeeksView: View {
                 minimumBarHeight: isPhone ? 84 : geometry.safeAreaInsets.bottom,
                 spacing: edgeInset
             )
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(allMonths) { summary in
-                        PhotosVisibleRangeSection {
-                            await store.loadLibraryRangeBucket(
-                                summary.id, owner: browseOwner, includingPreviousMonth: true
-                            )
-                        } content: {
-                            PhotosLibraryWeekMonthSection(
-                                summary: summary,
-                                store: store,
-                                media: media,
-                                columns: columns,
-                                viewportSize: geometry.size,
-                                tabBarTop: tabBarTop,
-                                edgeInset: edgeInset,
-                                onSelect: onSelect
-                            )
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(allMonths) { summary in
+                            PhotosVisibleRangeSection {
+                                await store.loadLibraryRangeBucket(
+                                    summary.id, owner: browseOwner, includingPreviousMonth: true
+                                )
+                            } content: {
+                                PhotosLibraryWeekMonthSection(
+                                    summary: summary,
+                                    store: store,
+                                    media: media,
+                                    columns: columns,
+                                    viewportSize: geometry.size,
+                                    tabBarTop: tabBarTop,
+                                    edgeInset: edgeInset,
+                                    onSelect: onSelect
+                                )
+                            }
+                            .id(summary.id)
                         }
-                        .id(summary.id)
+                        Color.clear
+                            .frame(height: bottomContentInset)
+                            .id(PhotosRangeScrollAnchor.bottom)
+                            .accessibilityIdentifier("timeline-range-bottom-spacer")
+                    }
+                    .scrollTargetLayout()
+                }
+                .defaultScrollAnchor(.bottom)
+                .onScrollPhaseChange { _, phase in
+                    if didSettleInitialViewport, phase == .interacting {
+                        userHasScrolled = true
                     }
                 }
-                .scrollTargetLayout()
-            }
-            .defaultScrollAnchor(.bottom)
-            .scrollPosition($position)
-            .onChange(of: scrollToLatestRequest) {
-                position.scrollTo(edge: .bottom)
-                guard let newestMonthID else { return }
-                Task {
-                    await store.loadLibraryRangeBucket(
-                        newestMonthID, owner: browseOwner, includingPreviousMonth: true
-                    )
+                .onChange(of: scrollToLatestRequest) {
+                    proxy.scrollTo(PhotosRangeScrollAnchor.bottom, anchor: .bottom)
+                    guard let newestMonthID else { return }
+                    Task {
+                        await store.loadLibraryRangeBucket(
+                            newestMonthID, owner: browseOwner, includingPreviousMonth: true
+                        )
+                    }
                 }
+                .scrollEdgeEffectHidden(for: .bottom)
+                .ignoresSafeArea(.container, edges: [.top, .horizontal, .bottom])
+                .task(id: PhotosRangeViewportKey(
+                    viewport: geometry.size,
+                    navigationTop: globalFrame.maxY - bottomContentInset
+                )) {
+                    try? await Task.sleep(for: .milliseconds(80))
+                    guard !Task.isCancelled,
+                          !didSettleInitialViewport || !userHasScrolled
+                    else { return }
+                    proxy.scrollTo(PhotosRangeScrollAnchor.bottom, anchor: .bottom)
+                    didSettleInitialViewport = true
+                }
+                .simultaneousGesture(MagnifyGesture().onEnded { value in
+                    guard let onPinch,
+                          let gesture = PhotosPinchGesture(magnification: value.magnification)
+                    else { return }
+                    onPinch(gesture)
+                })
             }
-            .scrollEdgeEffectHidden(for: .bottom)
-            .ignoresSafeArea(.container, edges: [.top, .horizontal, .bottom])
-            .contentMargins(.bottom, bottomContentInset, for: .scrollContent)
-            .simultaneousGesture(MagnifyGesture().onEnded { value in
-                guard let onPinch,
-                      let gesture = PhotosPinchGesture(magnification: value.magnification)
-                else { return }
-                onPinch(gesture)
-            })
         }
         .task(id: newestMonthID) {
             guard let newestMonthID else { return }
@@ -643,6 +697,7 @@ private struct PhotosBucketCoverButton: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(title), \(count.formatted()) items")
         .accessibilityIdentifier(accessibilityID)
+        .accessibilityAddTraits(.isButton)
         .accessibilityValue(coverAccessibilityValue)
     }
 
@@ -662,8 +717,8 @@ private struct PhotosRangeCardGrid<Item: Identifiable, Content: View>: View wher
     var tabBarTop: CGFloat = 0
     var onPinch: ((PhotosPinchGesture) -> Void)?
     @ViewBuilder let content: (Item) -> Content
-    @State private var position = ScrollPosition(edge: .bottom)
     @State private var didPositionInitially = false
+    @State private var didSettleInitialViewport = false
     @State private var userHasScrolled = false
 
     private struct LayoutKey: Equatable {
@@ -703,64 +758,81 @@ private struct PhotosRangeCardGrid<Item: Identifiable, Content: View>: View wher
                     padding: edgeInset
                 )
             )
-            let size: GridItem.Size = isPhoneLandscape ? .fixed(side) : .flexible()
+            let rowCount = displaySlots.count / columnCount
 
-            let scrollView = ScrollView {
-                LazyVStack(spacing: 0) {
-                    LazyVGrid(columns: Array(
-                        repeating: GridItem(size, spacing: 14, alignment: .top),
-                        count: columnCount
-                    ), spacing: interRowSpacing) {
-                        ForEach(displaySlots.indices, id: \.self) { slot in
-                            if let index = displaySlots[slot] {
-                                content(items[index])
-                                    .id(items[index].id)
-                            } else {
-                                Color.clear
-                                    .aspectRatio(1, contentMode: .fit)
-                                    .accessibilityHidden(true)
+            let scrollView = ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(spacing: 0) {
+                        ForEach(0 ..< rowCount, id: \.self) { row in
+                            VStack(spacing: 0) {
+                                HStack(alignment: .top, spacing: 14) {
+                                    ForEach(0 ..< columnCount, id: \.self) { column in
+                                        let slot = row * columnCount + column
+                                        Group {
+                                            if let index = displaySlots[slot] {
+                                                content(items[index])
+                                                    .id(items[index].id)
+                                            } else {
+                                                Color.clear
+                                                    .aspectRatio(1, contentMode: .fit)
+                                                    .accessibilityHidden(true)
+                                            }
+                                        }
+                                        .frame(width: side, height: side)
+                                    }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                if row == rowCount - 1 {
+                                    Color.clear
+                                        .frame(height: bottomContentInset)
+                                        .accessibilityHidden(true)
+                                }
                             }
+                            .padding(.bottom, row == rowCount - 1 ? 0 : interRowSpacing)
+                            .id(PhotosRangeScrollAnchor.row(row))
                         }
                     }
-                    .scrollTargetLayout()
                     .frame(maxWidth: .infinity)
                     .padding(.horizontal, edgeInset)
                     .padding(.top, edgeInset)
+                    .scrollTargetLayout()
                 }
-            }
-            .defaultScrollAnchor(.bottom)
-            .scrollPosition($position)
-            .onScrollPhaseChange { _, phase in
-                if phase == .interacting {
-                    userHasScrolled = true
+                .defaultScrollAnchor(.bottom)
+                .onScrollPhaseChange { _, phase in
+                    if didSettleInitialViewport, phase == .interacting {
+                        userHasScrolled = true
+                    }
                 }
-            }
-            .scrollEdgeEffectHidden(for: .bottom)
-            .ignoresSafeArea(.container, edges: [.top, .horizontal, .bottom])
-            .contentMargins(.bottom, bottomContentInset, for: .scrollContent)
-            .simultaneousGesture(MagnifyGesture().onEnded { value in
-                guard let gesture = PhotosPinchGesture(magnification: value.magnification),
-                      let onPinch
-                else { return }
-                onPinch(gesture)
-            })
-            .task(id: items.last?.id) {
-                guard !didPositionInitially, !items.isEmpty else { return }
-                await Task.yield()
-                guard !Task.isCancelled else { return }
-                didPositionInitially = true
-                position.scrollTo(edge: .bottom)
-            }
-            .task(id: LayoutKey(viewport: geometry.size, navigationTop: navigationTop)) {
-                guard didPositionInitially, !userHasScrolled else { return }
-                // Rotation changes the viewport and the native tab bar in separate
-                // layout passes. Let the last pass settle before restoring the row.
-                try? await Task.sleep(for: .milliseconds(80))
-                guard !Task.isCancelled, !userHasScrolled else { return }
-                position.scrollTo(edge: .bottom)
-            }
-            .onChange(of: scrollToLatestRequest) {
-                position.scrollTo(edge: .bottom)
+                .scrollEdgeEffectHidden(for: .bottom)
+                .ignoresSafeArea(.container, edges: [.top, .horizontal, .bottom])
+                .simultaneousGesture(MagnifyGesture().onEnded { value in
+                    guard let gesture = PhotosPinchGesture(magnification: value.magnification),
+                          let onPinch
+                    else { return }
+                    onPinch(gesture)
+                })
+                .task(id: items.last?.id) {
+                    guard !didPositionInitially, rowCount > 0 else { return }
+                    proxy.scrollTo(PhotosRangeScrollAnchor.row(rowCount - 1), anchor: .bottom)
+                    guard !Task.isCancelled else { return }
+                    didPositionInitially = true
+                }
+                .task(id: LayoutKey(viewport: geometry.size, navigationTop: navigationTop)) {
+                    guard didPositionInitially else { return }
+                    // Rotation changes the viewport and the native tab bar in separate
+                    // layout passes. Let the last pass settle before restoring the row.
+                    try? await Task.sleep(for: .milliseconds(80))
+                    guard !Task.isCancelled,
+                          !didSettleInitialViewport || !userHasScrolled,
+                          rowCount > 0
+                    else { return }
+                    proxy.scrollTo(PhotosRangeScrollAnchor.row(rowCount - 1), anchor: .bottom)
+                    didSettleInitialViewport = true
+                }
+                .onChange(of: scrollToLatestRequest) {
+                    guard rowCount > 0 else { return }
+                    proxy.scrollTo(PhotosRangeScrollAnchor.row(rowCount - 1), anchor: .bottom)
+                }
             }
 
             scrollView
@@ -795,7 +867,8 @@ nonisolated enum TimelineRangeGridLayout {
         let resolvedTabBarTop = tabBarTop > 0
             ? tabBarTop
             : frameBottom - minimumBarHeight
-        return max(spacing, frameBottom - resolvedTabBarTop + spacing)
+        let measuredBarHeight = frameBottom - resolvedTabBarTop
+        return max(spacing, max(measuredBarHeight, minimumBarHeight) + spacing)
     }
 
     static func landscapeCardSide(deviceHeight: CGFloat, bottomNavigationHeight: CGFloat, padding: CGFloat) -> CGFloat {
