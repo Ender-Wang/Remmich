@@ -239,7 +239,7 @@ final class RemmichUITests: XCTestCase {
     }
 
     @MainActor
-    func testLoadedPhotosTimelineExposesMemoryBadgesAndJumpControl() {
+    func testLoadedPhotosTimelineExposesMemoryAndAssetBadges() {
         let app = XCUIApplication()
         app.launchArguments = ["-ui-testing-signed-in"]
         app.launch()
@@ -248,7 +248,7 @@ final class RemmichUITests: XCTestCase {
         let memory = app.descendants(matching: .any)["memory-memory-1"].firstMatch
         XCTAssertTrue(memory.waitForExistence(timeout: 5))
         XCTAssertTrue(memory.label.contains("Memory"))
-        XCTAssertTrue(app.buttons["timeline-jump-button"].exists)
+        XCTAssertFalse(app.buttons["timeline-jump-button"].exists)
         let video = app.descendants(matching: .any)["asset-asset-0"]
         XCTAssertTrue(video.waitForExistence(timeout: 2))
         XCTAssertTrue(video.label.contains("Video"))
@@ -257,10 +257,6 @@ final class RemmichUITests: XCTestCase {
         let livePhoto = app.descendants(matching: .any)["asset-asset-5"]
         XCTAssertTrue(livePhoto.waitForExistence(timeout: 2))
         XCTAssertTrue(livePhoto.label.contains("Live Photo"))
-
-        app.buttons["timeline-jump-button"].tap()
-        XCTAssertTrue(app.navigationBars["Jump to Date"].waitForExistence(timeout: 2))
-        XCTAssertTrue(app.buttons["Cancel"].exists)
     }
 
     @MainActor
@@ -368,7 +364,7 @@ final class RemmichUITests: XCTestCase {
     func testMonthCardRemainsAccessibleAfterRelaunch() {
         let app = rangeApplication()
         app.launch()
-        XCTAssertTrue(app.buttons["timeline-jump-button"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.descendants(matching: .any)["photos-root"].waitForExistence(timeout: 10))
         selectRange("Years", in: app)
         let year = app.buttons["timeline-year-2026"]
         XCTAssertTrue(year.waitForExistence(timeout: 5))
@@ -387,14 +383,14 @@ final class RemmichUITests: XCTestCase {
         XCTAssertTrue(relaunchedMonth.label.contains("October 2026"))
         XCTAssertTrue(relaunchedMonth.isHittable)
         selectRange("All Photos", in: app)
-        XCTAssertTrue(app.buttons["timeline-jump-button"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["photos-root"].waitForExistence(timeout: 5))
     }
 
     @MainActor
     func testTimelineRangeDrillDownAndBackNavigation() {
         let app = rangeApplication()
         app.launch()
-        XCTAssertTrue(app.buttons["timeline-jump-button"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.descendants(matching: .any)["photos-root"].waitForExistence(timeout: 10))
         selectRange("Years", in: app)
         let year = app.buttons["timeline-year-2026"]
         XCTAssertTrue(year.waitForExistence(timeout: 5))
@@ -450,7 +446,6 @@ final class RemmichUITests: XCTestCase {
 
         tabButton("Videos", in: app).tap()
         XCTAssertTrue(app.descendants(matching: .any)["videos-root"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.buttons["timeline-jump-button"].waitForExistence(timeout: 5))
         XCTAssertFalse(olderPhotoWeek.isHittable)
 
         tabButton("Photos", in: app).tap()
@@ -521,7 +516,7 @@ final class RemmichUITests: XCTestCase {
             }
             app.buttons["timeline-range-back"].tap()
             assertTimelineRange("all", tab: tab, in: app)
-            XCTAssertTrue(app.buttons["timeline-jump-button"].waitForExistence(timeout: 10))
+            XCTAssertTrue(root.waitForExistence(timeout: 10))
         }
     }
 
@@ -556,7 +551,7 @@ final class RemmichUITests: XCTestCase {
     func testGroupedTabsKeepTheirRangeAfterPinch() {
         let app = rangeApplication()
         app.launch()
-        XCTAssertTrue(app.buttons["timeline-jump-button"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.descendants(matching: .any)["photos-root"].waitForExistence(timeout: 10))
         selectRange("Months", in: app)
         let month = app.buttons["timeline-month-2026-10-01"]
         XCTAssertTrue(month.waitForExistence(timeout: 5))
@@ -570,7 +565,7 @@ final class RemmichUITests: XCTestCase {
     func testRangeCardsStaySquareAndUseAdaptiveColumns() {
         let app = rangeApplication()
         app.launch()
-        XCTAssertTrue(app.buttons["timeline-jump-button"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.descendants(matching: .any)["photos-root"].waitForExistence(timeout: 10))
         selectRange("Months", in: app)
         let card = app.buttons["timeline-month-2026-10-01"]
         XCTAssertTrue(card.waitForExistence(timeout: 5))
@@ -650,7 +645,7 @@ final class RemmichUITests: XCTestCase {
     func testRangeCoverCyclesBeyondFirstThreeWithoutResizingCard() {
         let app = rangeApplication()
         app.launch()
-        XCTAssertTrue(app.buttons["timeline-jump-button"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.descendants(matching: .any)["photos-root"].waitForExistence(timeout: 10))
         selectRange("Months", in: app)
         let card = app.buttons["timeline-month-2026-10-01"]
         XCTAssertTrue(card.waitForExistence(timeout: 5))
@@ -672,21 +667,15 @@ final class RemmichUITests: XCTestCase {
     func testPhotosRetapReturnsToLatestAndTabSwitchRetainsPosition() {
         let app = rangeApplication()
         app.launch()
-        XCTAssertTrue(app.buttons["timeline-jump-button"].waitForExistence(timeout: 10))
-        app.buttons["timeline-jump-button"].tap()
-        let oldest = app.buttons["timeline-jump-2024-04-01"]
-        for _ in 0 ..< 4 {
-            if oldest.isHittable {
-                break
-            }
-            app.swipeUp()
-        }
-        XCTAssertTrue(oldest.isHittable)
-        oldest.tap()
+        let photos = app.descendants(matching: .any)["photos-root"].firstMatch
+        XCTAssertTrue(photos.waitForExistence(timeout: 10))
         let oldAsset = app.descendants(matching: .any)["asset-range-2024-04-01-0"]
-        XCTAssertTrue(waitUntil { oldAsset.isHittable })
+        for _ in 0 ..< 16 where !oldAsset.isHittable {
+            app.swipeDown()
+        }
+        XCTAssertTrue(oldAsset.isHittable)
         let previousY = oldAsset.frame.midY
-        tabButton("Albums", in: app).tap()
+        tabButton("Search", in: app).tap()
         tabButton("Photos", in: app).tap()
         XCTAssertTrue(oldAsset.isHittable)
         XCTAssertEqual(oldAsset.frame.midY, previousY, accuracy: 5)
@@ -697,7 +686,7 @@ final class RemmichUITests: XCTestCase {
             XCTAssertFalse(oldAsset.isHittable)
         }
         let latestY = latest.frame.midY
-        tabButton("Albums", in: app).tap()
+        tabButton("Search", in: app).tap()
         tabButton("Photos", in: app).tap()
         XCTAssertTrue(latest.isHittable)
         XCTAssertEqual(latest.frame.midY, latestY, accuracy: 5)

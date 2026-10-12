@@ -80,11 +80,8 @@ struct PhotosView: View {
     let compactChromeChanged: (Bool) -> Void
     let showAccount: () -> Void
 
-    @State private var showsJumpPicker = false
-    @State private var pendingScrollID: TimelineBucketID?
     @State private var timelinePosition = ScrollPosition(edge: .bottom)
     @State private var latestJumpTask: Task<Void, Never>?
-    @State private var calendarJumpTask: Task<Void, Never>?
     @State private var visibleDescriptors: [String: MediaRequestDescriptor] = [:]
     @State private var visibleAssets: [String: Date] = [:]
     @State private var viewportUpdateTask: Task<Void, Never>?
@@ -122,32 +119,15 @@ struct PhotosView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(.hidden, for: .navigationBar)
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                HStack(spacing: 12) {
-                    if !navigationPath.isEmpty || libraryRange != .all {
-                        Button(action: navigateBack) {
-                            Label("Back", systemImage: "chevron.backward")
-                        }
-                        .accessibilityIdentifier("timeline-range-back")
+            if !navigationPath.isEmpty || libraryRange != .all {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button(action: navigateBack) {
+                        Label("Back", systemImage: "chevron.backward")
                     }
-                    if navigationPath.isEmpty, libraryRange == .all {
-                        Button {
-                            showsJumpPicker = true
-                        } label: {
-                            Label("Jump to Date", systemImage: "calendar")
-                        }
-                        .disabled(store.bucketSummaries.isEmpty)
-                        .accessibilityIdentifier("timeline-jump-button")
-                    }
+                    .accessibilityIdentifier("timeline-range-back")
                 }
             }
             AccountToolbarButton(action: showAccount)
-        }
-        .sheet(isPresented: $showsJumpPicker) {
-            TimelineJumpPicker(store: store) { bucketID in
-                pendingScrollID = bucketID
-                showsJumpPicker = false
-            }
         }
         .onAppear { media.beginTimelinePresentation() }
         .task { await store.load() }
@@ -177,8 +157,6 @@ struct PhotosView: View {
             rotationRestoreTask?.cancel()
             latestJumpTask?.cancel()
             latestJumpTask = nil
-            calendarJumpTask?.cancel()
-            calendarJumpTask = nil
             store.completeJump()
         }
         .accessibilityIdentifier(rootAccessibilityID)
@@ -511,29 +489,6 @@ struct PhotosView: View {
                     }
                 }
             }
-            .onChange(of: pendingScrollID) { _, bucketID in
-                guard let bucketID else { return }
-                calendarJumpTask?.cancel()
-                calendarJumpTask = Task { @MainActor in
-                    for attempt in 1 ... 20 {
-                        guard !Task.isCancelled,
-                              store.jumpTarget == bucketID
-                        else { return }
-                        Self.logger.info(
-                            "Calendar scroll attempt=\(attempt) bucket=\(bucketID.rawValue, privacy: .public)"
-                        )
-                        proxy.scrollTo(bucketID, anchor: .bottom)
-                        try? await Task.sleep(for: .milliseconds(90))
-                    }
-                    if store.jumpTarget == bucketID {
-                        Self.logger.error(
-                            "Calendar scroll did not settle bucket=\(bucketID.rawValue, privacy: .public)"
-                        )
-                        store.completeJump()
-                    }
-                }
-                pendingScrollID = nil
-            }
             .onChange(of: scrollToLatestRequest) {
                 guard navigationPath.isEmpty,
                       libraryRange == .all
@@ -541,8 +496,6 @@ struct PhotosView: View {
                 guard let latest = latestScrollTarget else { return }
                 guard latestJumpTask == nil else { return }
                 guard timelineBottomGap > 24 else { return }
-                calendarJumpTask?.cancel()
-                calendarJumpTask = nil
                 rotationRestoreTask?.cancel()
                 rotationRestoreTask = nil
                 rotationAnchorID = nil
@@ -595,7 +548,6 @@ struct PhotosView: View {
     private func updateChrome(old: PhotosChromeGeometry, new: PhotosChromeGeometry) {
         let programmaticJump = store.jumpTarget != nil
             || latestJumpTask != nil
-            || calendarJumpTask != nil
             || rotationRestoreTask != nil
         if let compact = chromeTracker.update(
             offsetDelta: new.offset - old.offset,
@@ -796,67 +748,6 @@ private struct TimelineRefreshError: View {
         .padding(.vertical, 10)
         .background(.orange.opacity(0.08))
         .accessibilityIdentifier("timeline-refresh-error")
-    }
-}
-
-private struct TimelineJumpPicker: View {
-    @Environment(\.dismiss) private var dismiss
-    let store: PhotosTimelineStore
-    let onReady: (TimelineBucketID) -> Void
-
-    var body: some View {
-        NavigationStack {
-            List {
-                ForEach(groupedBuckets, id: \.year) { group in
-                    Section(group.year) {
-                        ForEach(group.buckets) { bucket in
-                            Button {
-                                Task {
-                                    if await store.prepareJump(to: bucket.id) {
-                                        onReady(bucket.id)
-                                    }
-                                }
-                            } label: {
-                                HStack {
-                                    Text(bucketTitle(bucket))
-                                    Spacer()
-                                    Text(bucket.assetCount, format: .number)
-                                        .foregroundStyle(.secondary)
-                                    if store.jumpTarget == bucket.id {
-                                        ProgressView()
-                                    }
-                                }
-                            }
-                            .disabled(store.jumpTarget != nil)
-                            .accessibilityIdentifier("timeline-jump-\(bucket.id.rawValue)")
-                        }
-                    }
-                }
-            }
-            .navigationTitle("Jump to Date")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        store.completeJump()
-                        dismiss()
-                    }
-                }
-            }
-        }
-        .presentationDetents([.medium, .large])
-    }
-
-    private var groupedBuckets: [(year: String, buckets: [TimelineBucketSummary])] {
-        let values = Dictionary(grouping: store.bucketSummaries) { bucket in
-            bucket.id.displayDate?.formatted(.dateTime.year()) ?? "Other"
-        }
-        return values.map { (year: $0.key, buckets: $0.value) }
-            .sorted { $0.year > $1.year }
-    }
-
-    private func bucketTitle(_ bucket: TimelineBucketSummary) -> String {
-        bucket.id.displayDate?.formatted(.dateTime.month(.wide).day()) ?? bucket.id.rawValue
     }
 }
 
