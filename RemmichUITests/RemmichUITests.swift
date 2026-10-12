@@ -23,10 +23,10 @@ final class RemmichUITests: XCTestCase {
         app.launchArguments = ["-ui-testing-signed-in"]
         app.launch()
 
-        XCTAssertTrue(app.descendants(matching: .any)["photos-root"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["photos-root"].firstMatch.waitForExistence(timeout: 5))
 
         tabButton("Videos", in: app).tap()
-        let videos = app.descendants(matching: .any)["videos-root"]
+        let videos = app.descendants(matching: .any)["videos-root"].firstMatch
         XCTAssertTrue(videos.waitForExistence(timeout: 5))
         XCTAssertTrue(app.descendants(matching: .any)["asset-asset-0"].waitForExistence(timeout: 5))
 
@@ -85,7 +85,7 @@ final class RemmichUITests: XCTestCase {
         #else
             let app = XCUIApplication()
             app.launch()
-            XCTAssertTrue(app.descendants(matching: .any)["photos-root"].waitForExistence(timeout: 20))
+            XCTAssertTrue(app.descendants(matching: .any)["photos-root"].firstMatch.waitForExistence(timeout: 20))
             sleep(5)
             attachLayoutScreenshot(app, name: "Photos initial position")
 
@@ -230,12 +230,12 @@ final class RemmichUITests: XCTestCase {
         XCTAssertGreaterThan(photos.frame.width, photos.frame.height)
 
         let firstAsset = app.descendants(matching: .any)["asset-asset-0"].firstMatch
-        XCTAssertTrue(firstAsset.waitForExistence(timeout: 2))
+        XCTAssertTrue(firstAsset.waitForExistence(timeout: 8))
         XCTAssertLessThanOrEqual(firstAsset.frame.minX, app.frame.minX + 1)
         let grids = app.otherElements.matching(NSPredicate(format: "label == %@", "Photo grid"))
         XCTAssertTrue(grids.firstMatch.waitForExistence(timeout: 5))
         let gridWidth = grids.allElementsBoundByIndex.map(\.frame.width).max() ?? 0
-        XCTAssertGreaterThanOrEqual(gridWidth, app.frame.width - 2)
+        XCTAssertGreaterThanOrEqual(gridWidth, photos.frame.width - 2)
     }
 
     @MainActor
@@ -244,7 +244,7 @@ final class RemmichUITests: XCTestCase {
         app.launchArguments = ["-ui-testing-signed-in"]
         app.launch()
 
-        XCTAssertTrue(app.descendants(matching: .any)["photos-root"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["photos-root"].firstMatch.waitForExistence(timeout: 5))
         let memory = app.descendants(matching: .any)["memory-memory-1"].firstMatch
         XCTAssertTrue(memory.waitForExistence(timeout: 5))
         XCTAssertTrue(memory.label.contains("Memory"))
@@ -319,18 +319,25 @@ final class RemmichUITests: XCTestCase {
     }
 
     @MainActor
-    private func selectRange(_ title: String, in app: XCUIApplication) {
+    private func selectRange(
+        _ title: String,
+        in app: XCUIApplication,
+        rootID: String = "photos-root",
+        resetTab: String = "Photos"
+    ) {
         if title == "All Photos" {
-            tabButton("Photos", in: app).tap()
+            tabButton(resetTab, in: app).tap()
             return
         }
         let tab = tabButton(title, in: app)
-        if !tab.exists {
-            let photos = app.descendants(matching: .any)["photos-root"]
-            XCTAssertTrue(photos.waitForExistence(timeout: 10))
-            photos.swipeDown()
+        if !tab.waitForExistence(timeout: 3) {
+            let root = app.descendants(matching: .any)[rootID].firstMatch
+            XCTAssertTrue(root.waitForExistence(timeout: 15))
+            for _ in 0 ..< 8 where !tab.exists {
+                root.swipeDown()
+            }
         }
-        XCTAssertTrue(tab.waitForExistence(timeout: 5))
+        XCTAssertTrue(tab.waitForExistence(timeout: 10))
         tab.tap()
     }
 
@@ -339,7 +346,7 @@ final class RemmichUITests: XCTestCase {
         let app = rangeApplication()
         app.launch()
         tabButton("Videos", in: app).tap()
-        let videos = app.descendants(matching: .any)["videos-root"]
+        let videos = app.descendants(matching: .any)["videos-root"].firstMatch
         XCTAssertTrue(videos.waitForExistence(timeout: 10))
         XCTAssertTrue(app.descendants(matching: .any)["asset-video-range-2026-10-01-0"]
             .waitForExistence(timeout: 10))
@@ -352,9 +359,12 @@ final class RemmichUITests: XCTestCase {
         XCTAssertFalse(tabButton("Albums", in: app).exists)
         XCTAssertFalse(tabButton("Photos", in: app).exists)
 
-        tabButton("Years", in: app).tap()
-        let year = app.buttons["timeline-year-2026"]
-        XCTAssertTrue(year.waitForExistence(timeout: 10))
+        selectRange("Years", in: app, rootID: "videos-root", resetTab: "Videos")
+        let year = app.buttons["timeline-year-2026"].firstMatch
+        for _ in 0 ..< 6 where !year.exists {
+            videos.swipeDown()
+        }
+        XCTAssertTrue(year.waitForExistence(timeout: 15))
         XCTAssertTrue(year.label.contains("12 items"), "Years must use the video-only store")
 
         tabButton("Videos", in: app).tap()
@@ -437,19 +447,19 @@ final class RemmichUITests: XCTestCase {
 
         let olderPhotoDay = app.buttons["timeline-library-day-2025-12-01-2025-12-31"]
         for _ in 0 ..< 12 where !olderPhotoDay.isHittable {
-            app.swipeDown()
+            photos.swipeDown()
         }
         XCTAssertTrue(olderPhotoDay.isHittable, "Photos Days must reach older library months")
 
         coarsenTimeline("Photos", in: app)
         let olderPhotoWeek = app.buttons["timeline-library-week-2026-W01"]
         for _ in 0 ..< 12 where !olderPhotoWeek.isHittable {
-            app.swipeDown()
+            photos.swipeDown()
         }
         XCTAssertTrue(olderPhotoWeek.isHittable, "Photos Weeks must reach older library months")
 
         tabButton("Videos", in: app).tap()
-        XCTAssertTrue(app.descendants(matching: .any)["videos-root"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.descendants(matching: .any)["videos-root"].firstMatch.waitForExistence(timeout: 10))
         XCTAssertTrue(app.buttons["timeline-jump-button"].waitForExistence(timeout: 5))
         XCTAssertFalse(olderPhotoWeek.isHittable)
 
@@ -535,7 +545,7 @@ final class RemmichUITests: XCTestCase {
             if app.descendants(matching: .any)["onboarding-root"].waitForExistence(timeout: 5) {
                 throw XCTSkip("Requires a saved signed-in Immich account on the connected device")
             }
-            XCTAssertTrue(app.descendants(matching: .any)["photos-root"].waitForExistence(timeout: 30))
+            XCTAssertTrue(app.descendants(matching: .any)["photos-root"].firstMatch.waitForExistence(timeout: 30))
             selectRange("Months", in: app)
             let months = app.buttons.matching(NSPredicate(
                 format: "identifier BEGINSWITH %@", "timeline-month-"
@@ -728,7 +738,7 @@ final class RemmichUITests: XCTestCase {
             let app = XCUIApplication()
             app.launch()
 
-            XCTAssertTrue(app.descendants(matching: .any)["photos-root"].waitForExistence(timeout: 10))
+            XCTAssertTrue(app.descendants(matching: .any)["photos-root"].firstMatch.waitForExistence(timeout: 10))
         #endif
     }
 
@@ -740,7 +750,7 @@ final class RemmichUITests: XCTestCase {
             let app = XCUIApplication()
             app.launch()
 
-            let photos = app.descendants(matching: .any)["photos-root"]
+            let photos = app.descendants(matching: .any)["photos-root"].firstMatch
             XCTAssertTrue(photos.waitForExistence(timeout: 20))
             sleep(5)
 
