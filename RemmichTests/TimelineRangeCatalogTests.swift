@@ -173,9 +173,13 @@ struct TimelineRangeCatalogTests {
         let day = TimelineCaptureDay(capturedAt: date("2027-01-04T12:00:00Z"))
         let dayRoute = PhotosRangeRoute.day(january, day)
         #expect(PhotosRangeAssetCatalog.assets(for: dayRoute, buckets: buckets).map(\.id) == ["jan-4"])
+        #expect(dayRoute.groupsAssetsByDay == false)
 
         let monthRoute = PhotosRangeRoute.month(january)
-        #expect(PhotosRangeAssetCatalog.assets(for: monthRoute, buckets: buckets).map(\.id) == ["jan-4", "jan-1"])
+        let monthAssets = PhotosRangeAssetCatalog.assets(for: monthRoute, buckets: buckets)
+        #expect(monthAssets.map(\.id) == ["jan-4", "jan-1"])
+        #expect(monthRoute.groupsAssetsByDay)
+        #expect(PhotosRangeAssetCatalog.dayGroups(from: monthAssets).map(\.id.id) == ["2027-01-04", "2027-01-01"])
 
         let yearRoute = PhotosRangeRoute.year(2027)
         #expect(PhotosRangeAssetCatalog.bucketIDs(for: yearRoute, summaries: summaries) == [january])

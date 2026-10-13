@@ -473,6 +473,8 @@ final class RemmichUITests: XCTestCase {
         XCTAssertTrue(latest.waitForExistence(timeout: 10))
         XCTAssertTrue(next.waitForExistence(timeout: 5))
         XCTAssertTrue(oldest.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["timeline-range-day-section-2026-10-07"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["timeline-range-day-section-2026-10-06"].exists)
 
         let isPhone = UIDevice.current.userInterfaceIdiom == .phone
         let tabBarTopProbe = app.staticTexts["timeline-test-tab-bar-top"]

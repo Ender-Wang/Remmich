@@ -73,6 +73,44 @@ struct AssetSectionHeader: View {
     }
 }
 
+struct TimelineDayAssetSection: View {
+    let group: TimelineDayGroup
+    let media: MediaLibraryController
+    let availableWidth: CGFloat
+    var accessibilityIdentifierPrefix = "timeline-day"
+    var visibilityChanged: (String, MediaRequestDescriptor?) -> Void = { _, _ in }
+    var viewportChanged: (TimelineAssetSummary, Bool) -> Void = { _, _ in }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            AssetSectionHeader(
+                title: title,
+                subtitle: group.assets.count.formatted() + " items"
+            )
+            TimelineAssetGrid(
+                assets: group.assets,
+                media: media,
+                availableWidth: availableWidth,
+                visibilityChanged: visibilityChanged,
+                viewportChanged: viewportChanged
+            )
+        }
+        .id(group.id.id)
+        .accessibilityIdentifier("\(accessibilityIdentifierPrefix)-\(group.id.id)")
+    }
+
+    private var title: String {
+        guard let date = group.id.displayDate else { return group.id.id }
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = .autoupdatingCurrent
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateStyle = .long
+        formatter.timeStyle = .none
+        return formatter.string(from: date)
+    }
+}
+
 struct TimelineAssetGrid: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     let assets: [TimelineAssetSummary]

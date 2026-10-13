@@ -575,21 +575,13 @@ private struct TimelineSectionView: View {
                         .frame(maxWidth: .infinity, minHeight: 64)
                 } else {
                     ForEach(Array(section.dayGroups.reversed())) { group in
-                        VStack(spacing: 0) {
-                            AssetSectionHeader(
-                                title: title(for: group.id),
-                                subtitle: group.assets.count.formatted() + " items"
-                            )
-                            TimelineAssetGrid(
-                                assets: group.assets,
-                                media: media,
-                                availableWidth: availableWidth,
-                                visibilityChanged: visibilityChanged,
-                                viewportChanged: viewportChanged
-                            )
-                        }
-                        .id(group.id.id)
-                        .accessibilityIdentifier("timeline-day-\(group.id.id)")
+                        TimelineDayAssetSection(
+                            group: group,
+                            media: media,
+                            availableWidth: availableWidth,
+                            visibilityChanged: visibilityChanged,
+                            viewportChanged: viewportChanged
+                        )
                     }
                 }
             case let .failed(message):
@@ -620,17 +612,6 @@ private struct TimelineSectionView: View {
 
     private var bucketTitle: String {
         section.id.displayDate?.formatted(date: .long, time: .omitted) ?? section.id.rawValue
-    }
-
-    private func title(for day: TimelineCaptureDay) -> String {
-        guard let date = day.displayDate else { return day.id }
-        let formatter = DateFormatter()
-        formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.locale = .autoupdatingCurrent
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        formatter.dateStyle = .long
-        formatter.timeStyle = .none
-        return formatter.string(from: date)
     }
 }
 

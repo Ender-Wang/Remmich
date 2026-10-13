@@ -34,6 +34,14 @@ extension PhotosRangeRoute {
             "timeline-range-assets-\(dayID.id)"
         }
     }
+
+    var groupsAssetsByDay: Bool {
+        if case .day = self {
+            false
+        } else {
+            true
+        }
+    }
 }
 
 nonisolated enum PhotosWeekRouteOrigin: Hashable {
@@ -958,6 +966,19 @@ nonisolated enum PhotosRangeAssetCatalog {
                 return $0.id > $1.id
             }
     }
+
+    static func dayGroups(from assets: [TimelineAssetSummary]) -> [TimelineDayGroup] {
+        var groups: [TimelineDayGroup] = []
+        for asset in assets {
+            let day = TimelineCaptureDay(capturedAt: asset.capturedAt)
+            if groups.last?.id == day {
+                groups[groups.count - 1].assets.append(asset)
+            } else {
+                groups.append(.init(id: day, assets: [asset]))
+            }
+        }
+        return groups
+    }
 }
 
 struct PhotosRangeAssetsView: View {
@@ -1012,6 +1033,10 @@ struct PhotosRangeAssetsView: View {
             .reduce(0) { $0 + $1.assetCount }
     }
 
+    private var dayGroups: [TimelineDayGroup] {
+        PhotosRangeAssetCatalog.dayGroups(from: assets)
+    }
+
     private var assetGrid: some View {
         GeometryReader { geometry in
             let isPhone = UIDevice.current.userInterfaceIdiom == .phone
@@ -1030,13 +1055,7 @@ struct PhotosRangeAssetsView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(spacing: 0) {
-                        TimelineAssetGrid(
-                            assets: assets,
-                            media: media,
-                            availableWidth: geometry.size.width,
-                            visibilityChanged: visibilityChanged,
-                            viewportChanged: viewportChanged
-                        )
+                        rangeGrid(availableWidth: geometry.size.width)
                         Color.clear
                             .frame(height: bottomContentInset)
                             .id(PhotosRangeScrollAnchor.bottom)
@@ -1071,6 +1090,30 @@ struct PhotosRangeAssetsView: View {
                 }
                 .accessibilityIdentifier(route.assetGridAccessibilityID)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func rangeGrid(availableWidth: CGFloat) -> some View {
+        if route.groupsAssetsByDay {
+            ForEach(Array(dayGroups.reversed())) { group in
+                TimelineDayAssetSection(
+                    group: group,
+                    media: media,
+                    availableWidth: availableWidth,
+                    accessibilityIdentifierPrefix: "timeline-range-day-section",
+                    visibilityChanged: visibilityChanged,
+                    viewportChanged: viewportChanged
+                )
+            }
+        } else {
+            TimelineAssetGrid(
+                assets: assets,
+                media: media,
+                availableWidth: availableWidth,
+                visibilityChanged: visibilityChanged,
+                viewportChanged: viewportChanged
+            )
         }
     }
 
