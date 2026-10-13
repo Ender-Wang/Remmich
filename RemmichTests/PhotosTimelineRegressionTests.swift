@@ -51,20 +51,42 @@ struct PhotosTimelineRegressionTests {
             frameBottom: 844,
             tabBarTop: 760,
             minimumBarHeight: 84,
-            spacing: 12
+            spacing: 12,
+            hasBottomNavigation: true
         ) == 96)
         #expect(TimelineRangeGridLayout.bottomContentInset(
             frameBottom: 844,
             tabBarTop: 0,
             minimumBarHeight: 84,
-            spacing: 12
+            spacing: 12,
+            hasBottomNavigation: true
         ) == 96)
         #expect(TimelineRangeGridLayout.bottomContentInset(
             frameBottom: 760,
             tabBarTop: 760,
             minimumBarHeight: 84,
-            spacing: 12
+            spacing: 12,
+            hasBottomNavigation: true
         ) == 96)
+        #expect(TimelineRangeGridLayout.bottomContentInset(
+            frameBottom: 1194,
+            tabBarTop: 24,
+            minimumBarHeight: 20,
+            spacing: 20,
+            hasBottomNavigation: false
+        ) == 20)
+        #expect(TimelineRangeGridLayout.minimumBottomNavigationHeight(
+            isPhone: true,
+            viewportSize: CGSize(width: 844, height: 390)
+        ) == 64)
+        #expect(TimelineRangeGridLayout.minimumBottomNavigationHeight(
+            isPhone: true,
+            viewportSize: CGSize(width: 390, height: 844)
+        ) == 84)
+        #expect(TimelineRangeGridLayout.minimumBottomNavigationHeight(
+            isPhone: false,
+            viewportSize: CGSize(width: 1194, height: 834)
+        ) == 0)
     }
 
     @Test func rangeCardOuterInsetsMatchTheTabBarClearance() {
@@ -344,13 +366,14 @@ struct PhotosTimelineRegressionTests {
         await store.load()
 
         let newest = buckets[0].id
+        let mainTimelineAnchor = buckets[4].id
         let older = buckets[7].id
-        let owner = UUID()
-        store.updateVisibleAnchor(.init(bucketID: newest, assetID: "asset-0"))
+        let owner = PhotosLibraryRangeBrowseOwner(id: UUID(), scope: .test)
+        store.updateVisibleAnchor(.init(bucketID: mainTimelineAnchor, assetID: "asset-4"))
         store.beginLibraryRangeBrowsing(owner: owner, newestBucketID: newest)
         await store.loadLibraryRangeBucket(older, owner: owner)
 
-        #expect(store.visibleAnchor?.bucketID == newest)
+        #expect(store.visibleAnchor?.bucketID == mainTimelineAnchor)
         #expect(store.sectionsByID[newest]?.loadState == .loaded)
         #expect(store.sectionsByID[older]?.assets.map(\.id) == ["asset-7"])
 

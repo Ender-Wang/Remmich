@@ -574,6 +574,66 @@ final class RemmichUITests: XCTestCase {
     }
 
     @MainActor
+    func testGroupedRangeLayoutsUseConsistentGeometryInPortrait() {
+        assertGroupedRangeLayouts(orientation: .portrait)
+    }
+
+    @MainActor
+    func testPhotosGroupedRangeLayoutsUseConsistentGeometryInLandscape() {
+        assertGroupedRangeLayouts(orientation: .landscapeLeft, tabs: ["Photos"])
+    }
+
+    @MainActor
+    func testVideosGroupedRangeLayoutsUseConsistentGeometryInLandscape() {
+        assertGroupedRangeLayouts(orientation: .landscapeLeft, tabs: ["Videos"])
+    }
+
+    @MainActor
+    private func assertGroupedRangeLayouts(
+        orientation: UIDeviceOrientation,
+        tabs: [String] = ["Photos", "Videos"]
+    ) {
+        let ranges = [
+            (prefix: "timeline-library-day-", name: "day"),
+            (prefix: "timeline-library-week-", name: "week"),
+            (prefix: "timeline-month-", name: "month"),
+            (prefix: "timeline-year-", name: "year"),
+        ]
+
+        XCUIDevice.shared.orientation = orientation
+        for tab in tabs {
+            let app = rangeApplication()
+            app.launch()
+            if tab == "Videos" {
+                tabButton(tab, in: app).tap()
+            }
+            let rootID = tab == "Photos" ? "photos-root" : "videos-root"
+            XCTAssertTrue(app.descendants(matching: .any)[rootID].waitForExistence(timeout: 10))
+
+            var expectedSide: CGFloat?
+            for range in ranges {
+                coarsenTimeline(tab, in: app)
+                let side = assertGroupedRangeGeometry(
+                    prefix: range.prefix,
+                    tab: tab,
+                    range: range.name,
+                    orientation: orientation,
+                    in: app
+                )
+                if let expectedSide {
+                    XCTAssertEqual(
+                        side, expectedSide, accuracy: 3,
+                        "\(tab) \(range.name) cards changed size in \(orientation.rawValue)"
+                    )
+                } else {
+                    expectedSide = side
+                }
+            }
+            app.terminate()
+        }
+    }
+
+    @MainActor
     func testGroupedTabPinchDoesNotChangeRangeOnSignedInDevice() throws {
         #if targetEnvironment(simulator)
             throw XCTSkip("Uses the saved Immich account on the connected iPhone")
@@ -685,13 +745,13 @@ final class RemmichUITests: XCTestCase {
 
     @MainActor
     private func expectedPhoneLandscapeCardSide(in app: XCUIApplication) -> CGFloat {
-        app.tabBars.firstMatch.frame.minY - app.frame.minY - 84 - 12 * 2
+        app.tabBars.firstMatch.frame.minY - app.frame.minY - 64 - 12 * 2
     }
 
     @MainActor
     private func expectedPhoneLandscapeCardBottom(in app: XCUIApplication) -> CGFloat {
         let measuredBarHeight = app.frame.maxY - app.tabBars.firstMatch.frame.minY
-        return app.frame.maxY - max(measuredBarHeight, 84) - 12
+        return app.frame.maxY - max(measuredBarHeight, 64) - 12
     }
 
     @MainActor
@@ -713,21 +773,81 @@ final class RemmichUITests: XCTestCase {
             format: "identifier BEGINSWITH %@", prefix
         ))
         let tabBarTopProbe = app.staticTexts["timeline-test-tab-bar-top"]
-        XCTAssertTrue(tabBarTopProbe.waitForExistence(timeout: 5))
+        let isPhone = UIDevice.current.userInterfaceIdiom == .phone
+        if isPhone {
+            XCTAssertTrue(tabBarTopProbe.waitForExistence(timeout: 5))
+        }
         let inset: CGFloat = UIDevice.current.userInterfaceIdiom == .phone ? 12 : 20
         let settled = waitUntil(timeout: 10) {
-            guard let tabBarTop = Double(tabBarTopProbe.label), tabBarTop > 0 else { return false }
             let visibleFrames = cards.allElementsBoundByIndex.map(\.frame).filter { frame in
                 frame.width > 0 && frame.height > 0 && frame.intersects(app.frame)
             }
             guard let bottom = visibleFrames.map(\.maxY).max() else { return false }
-            return abs(bottom - (CGFloat(tabBarTop) - inset)) < 4
+            let expectedBottom: CGFloat
+            if isPhone {
+                guard let tabBarTop = Double(tabBarTopProbe.label), tabBarTop > 0 else { return false }
+                expectedBottom = CGFloat(tabBarTop) - inset
+            } else {
+                expectedBottom = app.frame.maxY - inset
+            }
+            return abs(bottom - expectedBottom) <= 5
         }
         if !settled {
             let elements = cards.allElementsBoundByIndex
             let frames = elements.map { "\($0.identifier):\($0.frame):hittable=\($0.isHittable)" }
             XCTFail("The bottom-anchored \(prefix) cards must clear tabBarTop=\(tabBarTopProbe.label); frames=\(frames)")
         }
+    }
+
+    @MainActor
+    private func assertGroupedRangeGeometry(
+        prefix: String,
+        tab: String,
+        range: String,
+        orientation: UIDeviceOrientation,
+        in app: XCUIApplication
+    ) -> CGFloat {
+        let cards = app.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@", prefix
+        ))
+        XCTAssertTrue(
+            cards.firstMatch.waitForExistence(timeout: 10),
+            "\(tab) \(range) cards did not appear in orientation \(orientation.rawValue)"
+        )
+        let isLandscape = orientation.isLandscape
+        let columns: CGFloat = UIDevice.current.userInterfaceIdiom == .pad
+            ? (isLandscape ? 3 : 2)
+            : (isLandscape ? 2 : 1)
+        let expectedSide = UIDevice.current.userInterfaceIdiom == .phone && isLandscape
+            ? expectedPhoneLandscapeCardSide(in: app)
+            : expectedRangeCardSide(in: app, columns: columns)
+        let edgeInset: CGFloat = UIDevice.current.userInterfaceIdiom == .pad ? 20 : 12
+
+        let settled = waitUntil(timeout: 10) {
+            let visibleFrames = cards.allElementsBoundByIndex.map(\.frame).filter { frame in
+                frame.width > 0 && frame.height > 0 && frame.intersects(app.frame)
+            }
+            guard !visibleFrames.isEmpty else { return false }
+            let squaresMatch = visibleFrames.allSatisfy { frame in
+                abs(frame.width - frame.height) < 3 && abs(frame.width - expectedSide) < 3
+            }
+            guard let left = visibleFrames.map(\.minX).min() else { return false }
+            let expectedLeft = if UIDevice.current.userInterfaceIdiom == .phone, isLandscape {
+                app.frame.minX + (app.frame.width - expectedSide * columns - 14 * (columns - 1)) / 2
+            } else {
+                app.frame.minX + edgeInset
+            }
+            return squaresMatch && abs(left - expectedLeft) < 4
+        }
+        if !settled {
+            let frames = cards.allElementsBoundByIndex.map { "\($0.identifier):\($0.frame)" }
+            XCTFail(
+                "\(tab) \(range) cards have inconsistent \(orientation.rawValue) geometry; "
+                    + "expectedSide=\(expectedSide), frames=\(frames)"
+            )
+        }
+        assertBottomAnchoredCards(prefix: prefix, in: app)
+        return expectedSide
     }
 
     @MainActor

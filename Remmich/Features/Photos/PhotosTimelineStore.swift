@@ -2,6 +2,17 @@ import Foundation
 import Observation
 import OSLog
 
+nonisolated struct PhotosLibraryRangeBrowseOwner: Equatable, Sendable {
+    enum Scope: Sendable {
+        case days
+        case weeks
+        case test
+    }
+
+    let id: UUID
+    let scope: Scope
+}
+
 @MainActor
 @Observable
 final class PhotosTimelineStore {
@@ -20,7 +31,7 @@ final class PhotosTimelineStore {
     private(set) var memories: [TimelineMemorySummary] = []
     private(set) var visibleAnchor: TimelineVisibleAnchor?
     private(set) var jumpTarget: TimelineBucketID?
-    private var rangeBrowseOwner: UUID?
+    private var rangeBrowseOwner: PhotosLibraryRangeBrowseOwner?
     private var rangeBaseBucketID: TimelineBucketID?
     private var rangeVisibleBucketID: TimelineBucketID?
 
@@ -213,17 +224,17 @@ final class PhotosTimelineStore {
         await loadBucket(bucketID)
     }
 
-    func beginLibraryRangeBrowsing(owner: UUID, newestBucketID: TimelineBucketID) {
+    func beginLibraryRangeBrowsing(owner: PhotosLibraryRangeBrowseOwner, newestBucketID: TimelineBucketID) {
         guard sectionsByID[newestBucketID] != nil else { return }
         rangeBrowseOwner = owner
-        rangeBaseBucketID = visibleAnchor?.bucketID ?? newestBucketID
+        rangeBaseBucketID = newestBucketID
         rangeVisibleBucketID = newestBucketID
-        applyMetadataWindow(centeredOn: rangeBaseBucketID ?? newestBucketID)
+        applyMetadataWindow(centeredOn: newestBucketID)
     }
 
     func loadLibraryRangeBucket(
         _ bucketID: TimelineBucketID,
-        owner: UUID,
+        owner: PhotosLibraryRangeBrowseOwner,
         includingPreviousMonth: Bool = false
     ) async {
         guard rangeBrowseOwner == owner, sectionsByID[bucketID] != nil else { return }
@@ -239,7 +250,7 @@ final class PhotosTimelineStore {
         await loadBucket(bucketSummaries[index + 1].id)
     }
 
-    func endLibraryRangeBrowsing(owner: UUID) {
+    func endLibraryRangeBrowsing(owner: PhotosLibraryRangeBrowseOwner) {
         guard rangeBrowseOwner == owner else { return }
         rangeBrowseOwner = nil
         rangeBaseBucketID = nil

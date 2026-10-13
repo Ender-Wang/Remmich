@@ -59,6 +59,14 @@ struct TimelineRangeCatalogTests {
         #expect(TimelineRangeGridLayout.displaySlots(itemCount: 3, columns: 1) == [0, 1, 2])
     }
 
+    @Test func adjacentMonthDaysPackIntoSharedRows() {
+        let days = ["Sep 21", "Sep 26", "Sep 27", "Oct 2"]
+
+        let rows = TimelineRangeGridLayout.displayRows(items: days, columns: 2)
+
+        #expect(rows == [["Sep 26", "Sep 21"], ["Oct 2", "Sep 27"]])
+    }
+
     @Test(arguments: [CGFloat(402), CGFloat(390), CGFloat(375)])
     func phoneLandscapeCardsUseDeviceHeightMinusNavigationAndTwoGaps(_ deviceHeight: CGFloat) {
         #expect(TimelineRangeGridLayout.landscapeCardSide(

@@ -156,8 +156,16 @@ struct PhotosLibraryDaysView: View {
     @State private var userHasScrolled = false
     @State private var browseOwner = UUID()
 
+    private var rangeBrowseOwner: PhotosLibraryRangeBrowseOwner {
+        PhotosLibraryRangeBrowseOwner(id: browseOwner, scope: .days)
+    }
+
     private var newestMonthID: TimelineBucketID? {
         store.bucketSummaries.first?.id
+    }
+
+    private var newestContentRevision: UInt64 {
+        newestMonthID.flatMap { store.sectionsByID[$0]?.contentRevision } ?? 0
     }
 
     private var allMonths: [TimelineBucketSummary] {
@@ -173,22 +181,33 @@ struct PhotosLibraryDaysView: View {
             let edgeInset = TimelineRangeGridLayout.edgeInset(isPhone: isPhone)
             let globalFrame = geometry.frame(in: .global)
             let bottomContentInset = TimelineRangeGridLayout.bottomContentInset(
-                frameBottom: globalFrame.maxY + (isPhone ? 0 : geometry.safeAreaInsets.bottom),
+                frameBottom: globalFrame.maxY,
                 tabBarTop: tabBarTop,
-                minimumBarHeight: isPhone ? 84 : geometry.safeAreaInsets.bottom,
-                spacing: edgeInset
+                minimumBarHeight: TimelineRangeGridLayout.minimumBottomNavigationHeight(
+                    isPhone: isPhone, viewportSize: geometry.size
+                ),
+                spacing: edgeInset,
+                hasBottomNavigation: isPhone
+            )
+            let cardSide = TimelineRangeGridLayout.cardSide(
+                viewportSize: geometry.size,
+                navigationTop: globalFrame.maxY - bottomContentInset + edgeInset,
+                columns: columns,
+                isPhone: isPhone,
+                edgeInset: edgeInset
             )
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         ForEach(allMonths) { summary in
-                            PhotosVisibleRangeSection {
-                                await store.loadLibraryRangeBucket(summary.id, owner: browseOwner)
+                            PhotosVisibleRangeSection(alwaysAccessible: summary.id == newestMonthID) {
+                                await store.loadLibraryRangeBucket(summary.id, owner: rangeBrowseOwner)
                             } content: {
                                 PhotosLibraryDayMonthSection(
                                     summary: summary, store: store, media: media,
                                     dayIconSystemImage: dayIconSystemImage,
-                                    columns: columns, viewportSize: geometry.size,
+                                    columns: columns, cardSide: cardSide,
+                                    allMonths: allMonths,
                                     edgeInset: edgeInset,
                                     onSelect: onSelect
                                 )
@@ -206,6 +225,14 @@ struct PhotosLibraryDaysView: View {
                 .onScrollPhaseChange { _, phase in
                     if didSettleInitialViewport, phase == .interacting {
                         userHasScrolled = true
+                    }
+                }
+                .onChange(of: newestContentRevision) {
+                    guard !userHasScrolled else { return }
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(80))
+                        guard !Task.isCancelled, !userHasScrolled else { return }
+                        proxy.scrollTo(PhotosRangeScrollAnchor.bottom, anchor: .bottom)
                     }
                 }
                 .scrollEdgeEffectHidden(for: .bottom)
@@ -227,19 +254,24 @@ struct PhotosLibraryDaysView: View {
                 })
             }
         }
+        .onAppear {
+            guard let newestMonthID else { return }
+            store.beginLibraryRangeBrowsing(owner: rangeBrowseOwner, newestBucketID: newestMonthID)
+        }
         .task(id: newestMonthID) {
             guard let newestMonthID else { return }
-            store.beginLibraryRangeBrowsing(owner: browseOwner, newestBucketID: newestMonthID)
-            await store.loadLibraryRangeBucket(newestMonthID, owner: browseOwner)
+            store.beginLibraryRangeBrowsing(owner: rangeBrowseOwner, newestBucketID: newestMonthID)
+            await store.loadLibraryRangeBucket(newestMonthID, owner: rangeBrowseOwner)
         }
         .onDisappear {
-            store.endLibraryRangeBrowsing(owner: browseOwner)
+            store.endLibraryRangeBrowsing(owner: rangeBrowseOwner)
         }
         .accessibilityIdentifier("timeline-library-days-root")
     }
 }
 
 private struct PhotosVisibleRangeSection<Content: View>: View {
+    let alwaysAccessible: Bool
     let load: () async -> Void
     @ViewBuilder let content: () -> Content
 
@@ -247,7 +279,7 @@ private struct PhotosVisibleRangeSection<Content: View>: View {
 
     var body: some View {
         content()
-            .accessibilityHidden(!isVisible)
+            .accessibilityHidden(!alwaysAccessible && !isVisible)
             .onScrollVisibilityChange(threshold: 0.01) { visible in
                 isVisible = visible
                 guard visible else { return }
@@ -262,60 +294,94 @@ private struct PhotosLibraryDayMonthSection: View {
     let media: MediaLibraryController
     let dayIconSystemImage: String
     let columns: Int
-    let viewportSize: CGSize
+    let cardSide: CGFloat
+    let allMonths: [TimelineBucketSummary]
     let edgeInset: CGFloat
     let onSelect: (PhotosRangeRoute) -> Void
 
-    private var cardSide: CGFloat {
-        let isPhoneLandscape = UIDevice.current.userInterfaceIdiom == .phone && columns == 2
-        let widthBasedSide = TimelineRangeGridLayout.cardSide(
-            viewportWidth: viewportSize.width,
-            columns: columns,
-            interItemSpacing: 14,
-            edgeInset: edgeInset
-        )
-        guard isPhoneLandscape else { return widthBasedSide }
-        return min(
-            widthBasedSide,
-            TimelineRangeGridLayout.landscapeCardSide(
-                deviceHeight: viewportSize.height,
-                bottomNavigationHeight: 0,
-                padding: edgeInset
-            )
-        )
+    private struct Entry {
+        let bucketID: TimelineBucketID
+        let day: TimelineDayGroup
+    }
+
+    private var packedRows: [[Entry?]] {
+        guard let monthIndex = allMonths.firstIndex(where: { $0.id == summary.id }),
+              isLoaded(summary.id)
+        else { return [] }
+
+        var first = monthIndex
+        while first > allMonths.startIndex, isLoaded(allMonths[first - 1].id) {
+            first -= 1
+        }
+        var last = monthIndex
+        while last + 1 < allMonths.endIndex, isLoaded(allMonths[last + 1].id) {
+            last += 1
+        }
+
+        let entries = allMonths[first ... last].flatMap { month in
+            guard let section = store.sectionsByID[month.id] else { return [Entry]() }
+            return section.dayGroups.reversed().map { Entry(bucketID: month.id, day: $0) }
+        }
+        return TimelineRangeGridLayout.displayRows(items: entries, columns: columns)
+            .filter { row in row.compactMap(\.self).first?.bucketID == summary.id }
+    }
+
+    private var topSpacing: CGFloat {
+        guard !packedRows.isEmpty else { return 0 }
+        guard let monthIndex = allMonths.firstIndex(where: { $0.id == summary.id }) else {
+            return edgeInset
+        }
+        return monthIndex > allMonths.startIndex && isLoaded(allMonths[monthIndex - 1].id)
+            ? interRowSpacing
+            : edgeInset
+    }
+
+    private var interRowSpacing: CGFloat {
+        columns == 2 && UIDevice.current.userInterfaceIdiom == .phone ? 40 : 14
+    }
+
+    private func isLoaded(_ bucketID: TimelineBucketID) -> Bool {
+        guard let section = store.sectionsByID[bucketID], case .loaded = section.loadState else {
+            return false
+        }
+        return true
     }
 
     var body: some View {
         Group {
-            if let section = store.sectionsByID[summary.id], case .loaded = section.loadState {
-                let days = Array(section.dayGroups.reversed())
-                let slots = TimelineRangeGridLayout.displaySlots(itemCount: days.count, columns: columns)
+            if isLoaded(summary.id) {
+                let rows = packedRows
                 LazyVGrid(columns: Array(
                     repeating: GridItem(.fixed(cardSide), spacing: 14), count: columns
-                ), spacing: columns == 2 && UIDevice.current.userInterfaceIdiom == .phone ? 40 : 14) {
-                    ForEach(slots.indices, id: \.self) { slot in
-                        if let index = slots[slot] {
-                            let day = days[index]
-                            Button {
-                                onSelect(.day(summary.id, day.id))
-                            } label: {
-                                PhotosRangeCard(
-                                    title: day.id.displayDate?.formatted(date: .abbreviated, time: .omitted)
-                                        ?? day.id.id,
-                                    count: day.assets.count,
-                                    systemImage: dayIconSystemImage,
-                                    assets: day.assets,
-                                    media: media
+                ), alignment: columns == 2 && UIDevice.current.userInterfaceIdiom == .phone ? .center : .leading,
+                spacing: interRowSpacing) {
+                    ForEach(rows.indices, id: \.self) { row in
+                        ForEach(0 ..< columns, id: \.self) { column in
+                            if let entry = rows[row][column] {
+                                let day = entry.day
+                                Button {
+                                    onSelect(.day(entry.bucketID, day.id))
+                                } label: {
+                                    PhotosRangeCard(
+                                        title: day.id.displayDate?.formatted(date: .abbreviated, time: .omitted)
+                                            ?? day.id.id,
+                                        count: day.assets.count,
+                                        systemImage: dayIconSystemImage,
+                                        assets: day.assets,
+                                        media: media
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityIdentifier(
+                                    "timeline-library-day-\(entry.bucketID.rawValue)-\(day.id.id)"
                                 )
+                            } else {
+                                Color.clear.aspectRatio(1, contentMode: .fit).accessibilityHidden(true)
                             }
-                            .buttonStyle(.plain)
-                            .accessibilityIdentifier("timeline-library-day-\(summary.id.rawValue)-\(day.id.id)")
-                        } else {
-                            Color.clear.aspectRatio(1, contentMode: .fit).accessibilityHidden(true)
                         }
                     }
                 }
-                .padding(.top, edgeInset)
+                .padding(.top, topSpacing)
             } else if case let .failed(message) = store.sectionsByID[summary.id]?.loadState {
                 VStack(spacing: 8) {
                     Text(message).font(.caption).foregroundStyle(.secondary)
@@ -349,8 +415,22 @@ struct PhotosLibraryWeeksView: View {
     @State private var userHasScrolled = false
     @State private var browseOwner = UUID()
 
+    private var rangeBrowseOwner: PhotosLibraryRangeBrowseOwner {
+        PhotosLibraryRangeBrowseOwner(id: browseOwner, scope: .weeks)
+    }
+
     private var newestMonthID: TimelineBucketID? {
         store.bucketSummaries.first?.id
+    }
+
+    private var newestContentRevision: String {
+        guard let newestMonthID else { return "" }
+        let current = store.sectionsByID[newestMonthID]?.contentRevision ?? 0
+        let previousID = TimelineRangeCatalog.adjacentMonth(
+            to: newestMonthID, offset: -1, in: store.bucketSummaries
+        )
+        let previous = previousID.flatMap { store.sectionsByID[$0]?.contentRevision } ?? 0
+        return "\(current):\(previous)"
     }
 
     private var allMonths: [TimelineBucketSummary] {
@@ -367,18 +447,28 @@ struct PhotosLibraryWeeksView: View {
             let edgeInset = TimelineRangeGridLayout.edgeInset(isPhone: isPhone)
             let globalFrame = geometry.frame(in: .global)
             let bottomContentInset = TimelineRangeGridLayout.bottomContentInset(
-                frameBottom: globalFrame.maxY + (isPhone ? 0 : geometry.safeAreaInsets.bottom),
+                frameBottom: globalFrame.maxY,
                 tabBarTop: tabBarTop,
-                minimumBarHeight: isPhone ? 84 : geometry.safeAreaInsets.bottom,
-                spacing: edgeInset
+                minimumBarHeight: TimelineRangeGridLayout.minimumBottomNavigationHeight(
+                    isPhone: isPhone, viewportSize: geometry.size
+                ),
+                spacing: edgeInset,
+                hasBottomNavigation: isPhone
+            )
+            let cardSide = TimelineRangeGridLayout.cardSide(
+                viewportSize: geometry.size,
+                navigationTop: globalFrame.maxY - bottomContentInset + edgeInset,
+                columns: columns,
+                isPhone: isPhone,
+                edgeInset: edgeInset
             )
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         ForEach(allMonths) { summary in
-                            PhotosVisibleRangeSection {
+                            PhotosVisibleRangeSection(alwaysAccessible: summary.id == newestMonthID) {
                                 await store.loadLibraryRangeBucket(
-                                    summary.id, owner: browseOwner, includingPreviousMonth: true
+                                    summary.id, owner: rangeBrowseOwner, includingPreviousMonth: true
                                 )
                             } content: {
                                 PhotosLibraryWeekMonthSection(
@@ -386,8 +476,8 @@ struct PhotosLibraryWeeksView: View {
                                     store: store,
                                     media: media,
                                     columns: columns,
-                                    viewportSize: geometry.size,
-                                    tabBarTop: tabBarTop,
+                                    cardSide: cardSide,
+                                    allMonths: allMonths,
                                     edgeInset: edgeInset,
                                     onSelect: onSelect
                                 )
@@ -407,12 +497,20 @@ struct PhotosLibraryWeeksView: View {
                         userHasScrolled = true
                     }
                 }
+                .onChange(of: newestContentRevision) {
+                    guard !userHasScrolled else { return }
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(80))
+                        guard !Task.isCancelled, !userHasScrolled else { return }
+                        proxy.scrollTo(PhotosRangeScrollAnchor.bottom, anchor: .bottom)
+                    }
+                }
                 .onChange(of: scrollToLatestRequest) {
                     proxy.scrollTo(PhotosRangeScrollAnchor.bottom, anchor: .bottom)
                     guard let newestMonthID else { return }
                     Task {
                         await store.loadLibraryRangeBucket(
-                            newestMonthID, owner: browseOwner, includingPreviousMonth: true
+                            newestMonthID, owner: rangeBrowseOwner, includingPreviousMonth: true
                         )
                     }
                 }
@@ -437,15 +535,19 @@ struct PhotosLibraryWeeksView: View {
                 })
             }
         }
+        .onAppear {
+            guard let newestMonthID else { return }
+            store.beginLibraryRangeBrowsing(owner: rangeBrowseOwner, newestBucketID: newestMonthID)
+        }
         .task(id: newestMonthID) {
             guard let newestMonthID else { return }
-            store.beginLibraryRangeBrowsing(owner: browseOwner, newestBucketID: newestMonthID)
+            store.beginLibraryRangeBrowsing(owner: rangeBrowseOwner, newestBucketID: newestMonthID)
             await store.loadLibraryRangeBucket(
-                newestMonthID, owner: browseOwner, includingPreviousMonth: true
+                newestMonthID, owner: rangeBrowseOwner, includingPreviousMonth: true
             )
         }
         .onDisappear {
-            store.endLibraryRangeBrowsing(owner: browseOwner)
+            store.endLibraryRangeBrowsing(owner: rangeBrowseOwner)
         }
         .accessibilityIdentifier("timeline-library-weeks-root")
     }
@@ -456,60 +558,91 @@ private struct PhotosLibraryWeekMonthSection: View {
     let store: PhotosTimelineStore
     let media: MediaLibraryController
     let columns: Int
-    let viewportSize: CGSize
-    let tabBarTop: CGFloat
+    let cardSide: CGFloat
+    let allMonths: [TimelineBucketSummary]
     let edgeInset: CGFloat
     let onSelect: (PhotosRangeRoute) -> Void
 
-    private var previousID: TimelineBucketID? {
-        TimelineRangeCatalog.adjacentMonth(
-            to: summary.id, offset: -1, in: store.bucketSummaries
-        )
+    private struct Entry {
+        let bucketID: TimelineBucketID
+        let week: TimelineWeekGroup
     }
 
-    private var hasNextMonth: Bool {
-        TimelineRangeCatalog.adjacentMonth(
-            to: summary.id, offset: 1, in: store.bucketSummaries
-        ) != nil
+    private var packedRows: [[Entry?]] {
+        guard let monthIndex = allMonths.firstIndex(where: { $0.id == summary.id }),
+              isReady(monthIndex)
+        else { return [] }
+
+        var first = monthIndex
+        while first > allMonths.startIndex, isReady(first - 1) {
+            first -= 1
+        }
+        var last = monthIndex
+        while last + 1 < allMonths.endIndex, isReady(last + 1) {
+            last += 1
+        }
+
+        let entries = (first ... last).flatMap { index in
+            weeks(at: index).map { Entry(bucketID: allMonths[index].id, week: $0) }
+        }
+        return TimelineRangeGridLayout.displayRows(items: entries, columns: columns)
+            .filter { row in row.compactMap(\.self).first?.bucketID == summary.id }
     }
 
-    private var cardSide: CGFloat {
-        let isPhoneLandscape = UIDevice.current.userInterfaceIdiom == .phone && columns == 2
-        let widthBasedSide = TimelineRangeGridLayout.cardSide(
-            viewportWidth: viewportSize.width,
-            columns: columns,
-            interItemSpacing: 14,
-            edgeInset: edgeInset
+    private var topSpacing: CGFloat {
+        guard !packedRows.isEmpty else { return 0 }
+        guard let monthIndex = allMonths.firstIndex(where: { $0.id == summary.id }) else {
+            return edgeInset
+        }
+        return monthIndex > allMonths.startIndex && isReady(monthIndex - 1)
+            ? interRowSpacing
+            : edgeInset
+    }
+
+    private var interRowSpacing: CGFloat {
+        columns == 2 && UIDevice.current.userInterfaceIdiom == .phone ? 40 : 14
+    }
+
+    private func isLoaded(_ bucketID: TimelineBucketID) -> Bool {
+        guard let section = store.sectionsByID[bucketID], case .loaded = section.loadState else {
+            return false
+        }
+        return true
+    }
+
+    private func isReady(_ monthIndex: Int) -> Bool {
+        isLoaded(allMonths[monthIndex].id)
+    }
+
+    private func weeks(at monthIndex: Int) -> [TimelineWeekGroup] {
+        let bucketID = allMonths[monthIndex].id
+        guard let current = store.sectionsByID[bucketID] else { return [] }
+        let previousID = TimelineRangeCatalog.adjacentMonth(
+            to: bucketID, offset: -1, in: store.bucketSummaries
         )
-        guard isPhoneLandscape else { return widthBasedSide }
-        let availableHeight = tabBarTop > 0 ? tabBarTop : viewportSize.height
-        return min(
-            widthBasedSide,
-            TimelineRangeGridLayout.landscapeCardSide(
-                deviceHeight: availableHeight,
-                bottomNavigationHeight: 0,
-                padding: edgeInset
-            )
+        let previous = previousID.flatMap { store.sectionsByID[$0] }
+        return TimelineRangeCatalog.libraryWeeks(
+            endingIn: bucketID,
+            current: current,
+            previous: previous,
+            hasNextMonth: TimelineRangeCatalog.adjacentMonth(
+                to: bucketID, offset: 1, in: store.bucketSummaries
+            ) != nil
         )
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            if let current = store.sectionsByID[summary.id],
-               case .loaded = current.loadState,
-               let previous = previousID.flatMap({ store.sectionsByID[$0] }),
-               case .loaded = previous.loadState
+            if let monthIndex = allMonths.firstIndex(where: { $0.id == summary.id }),
+               isReady(monthIndex)
             {
-                loaded(current: current, previous: previous)
-            } else if previousID == nil,
-                      let current = store.sectionsByID[summary.id],
-                      case .loaded = current.loadState
-            {
-                loaded(current: current, previous: nil)
+                loaded()
             } else if case let .failed(message) = store.sectionsByID[summary.id]?.loadState {
                 failure(message)
-            } else if let previousID,
-                      case let .failed(message) = store.sectionsByID[previousID]?.loadState
+            } else if let previousID = TimelineRangeCatalog.adjacentMonth(
+                to: summary.id, offset: -1, in: store.bucketSummaries
+            ),
+                case let .failed(message) = store.sectionsByID[previousID]?.loadState
             {
                 failure(message)
             } else {
@@ -521,42 +654,38 @@ private struct PhotosLibraryWeekMonthSection: View {
         .padding(.horizontal, edgeInset)
     }
 
-    private func loaded(current: TimelineSection, previous: TimelineSection?) -> some View {
-        let weeks = TimelineRangeCatalog.libraryWeeks(
-            endingIn: summary.id,
-            current: current,
-            previous: previous,
-            hasNextMonth: hasNextMonth
-        )
-        let slots = TimelineRangeGridLayout.displaySlots(itemCount: weeks.count, columns: columns)
-        let isPhoneLandscape = UIDevice.current.userInterfaceIdiom == .phone && columns == 2
+    private func loaded() -> some View {
+        let rows = packedRows
         return LazyVGrid(columns: Array(
             repeating: GridItem(.fixed(cardSide), spacing: 14),
             count: columns
-        ), spacing: isPhoneLandscape ? 40 : 14) {
-            ForEach(slots.indices, id: \.self) { slot in
-                if let index = slots[slot] {
-                    let week = weeks[index]
-                    Button {
-                        onSelect(.week(summary.id, week.id, .library))
-                    } label: {
-                        PhotosRangeCard(
-                            title: "Week of \(week.id.startDate.formatted(date: .abbreviated, time: .omitted))",
-                            count: week.assetCount,
-                            systemImage: "calendar",
-                            assets: week.days.reversed().flatMap(\.assets),
-                            media: media
-                        )
+        ), alignment: columns == 2 && UIDevice.current.userInterfaceIdiom == .phone ? .center : .leading,
+        spacing: interRowSpacing) {
+            ForEach(rows.indices, id: \.self) { row in
+                ForEach(0 ..< columns, id: \.self) { column in
+                    if let entry = rows[row][column] {
+                        let week = entry.week
+                        Button {
+                            onSelect(.week(entry.bucketID, week.id, .library))
+                        } label: {
+                            PhotosRangeCard(
+                                title: "Week of \(week.id.startDate.formatted(date: .abbreviated, time: .omitted))",
+                                count: week.assetCount,
+                                systemImage: "calendar",
+                                assets: week.days.reversed().flatMap(\.assets),
+                                media: media
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("timeline-library-week-\(week.id.id)")
+                    } else {
+                        Color.clear.aspectRatio(1, contentMode: .fit)
+                            .accessibilityHidden(true)
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("timeline-library-week-\(week.id.id)")
-                } else {
-                    Color.clear.aspectRatio(1, contentMode: .fit)
-                        .accessibilityHidden(true)
                 }
             }
         }
-        .padding(.top, edgeInset)
+        .padding(.top, topSpacing)
     }
 
     private func failure(_ message: String) -> some View {
@@ -565,7 +694,9 @@ private struct PhotosLibraryWeekMonthSection: View {
             Button("Retry") {
                 Task {
                     await store.retryBucket(summary.id)
-                    if let previousID {
+                    if let previousID = TimelineRangeCatalog.adjacentMonth(
+                        to: summary.id, offset: -1, in: store.bucketSummaries
+                    ) {
                         await store.retryBucket(previousID)
                     }
                 }
@@ -738,25 +869,21 @@ private struct PhotosRangeCardGrid<Item: Identifiable, Content: View>: View wher
             let interRowSpacing: CGFloat = isPhoneLandscape ? 40 : 14
             let globalFrame = geometry.frame(in: .global)
             let bottomContentInset = TimelineRangeGridLayout.bottomContentInset(
-                frameBottom: globalFrame.maxY + (isPhone ? 0 : geometry.safeAreaInsets.bottom),
+                frameBottom: globalFrame.maxY,
                 tabBarTop: tabBarTop,
-                minimumBarHeight: isPhone ? 84 : geometry.safeAreaInsets.bottom,
-                spacing: edgeInset
+                minimumBarHeight: TimelineRangeGridLayout.minimumBottomNavigationHeight(
+                    isPhone: isPhone, viewportSize: geometry.size
+                ),
+                spacing: edgeInset,
+                hasBottomNavigation: isPhone
             )
             let navigationTop = globalFrame.maxY - bottomContentInset + edgeInset
-            let widthBasedSide = TimelineRangeGridLayout.cardSide(
-                viewportWidth: geometry.size.width,
+            let side = TimelineRangeGridLayout.cardSide(
+                viewportSize: geometry.size,
+                navigationTop: navigationTop,
                 columns: columnCount,
-                interItemSpacing: 14,
+                isPhone: isPhone,
                 edgeInset: edgeInset
-            )
-            let side = min(
-                widthBasedSide,
-                TimelineRangeGridLayout.landscapeCardSide(
-                    deviceHeight: navigationTop,
-                    bottomNavigationHeight: 0,
-                    padding: edgeInset
-                )
             )
             let rowCount = displaySlots.count / columnCount
 
@@ -781,7 +908,7 @@ private struct PhotosRangeCardGrid<Item: Identifiable, Content: View>: View wher
                                         .frame(width: side, height: side)
                                     }
                                 }
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .frame(maxWidth: .infinity, alignment: isPhoneLandscape ? .center : .leading)
                                 if row == rowCount - 1 {
                                     Color.clear
                                         .frame(height: bottomContentInset)
@@ -858,17 +985,48 @@ nonisolated enum TimelineRangeGridLayout {
         return max(10, availableWidth / CGFloat(columns))
     }
 
+    static func cardSide(
+        viewportSize: CGSize,
+        navigationTop: CGFloat,
+        columns: Int,
+        isPhone: Bool,
+        edgeInset: CGFloat
+    ) -> CGFloat {
+        let widthBasedSide = cardSide(
+            viewportWidth: viewportSize.width,
+            columns: columns,
+            interItemSpacing: 14,
+            edgeInset: edgeInset
+        )
+        guard isPhone, columns == 2 else { return widthBasedSide }
+        return min(
+            widthBasedSide,
+            landscapeCardSide(
+                deviceHeight: navigationTop,
+                bottomNavigationHeight: 0,
+                padding: edgeInset
+            )
+        )
+    }
+
     static func bottomContentInset(
         frameBottom: CGFloat,
         tabBarTop: CGFloat,
         minimumBarHeight: CGFloat,
-        spacing: CGFloat
+        spacing: CGFloat,
+        hasBottomNavigation: Bool = true
     ) -> CGFloat {
+        guard hasBottomNavigation else { return spacing }
         let resolvedTabBarTop = tabBarTop > 0
             ? tabBarTop
             : frameBottom - minimumBarHeight
         let measuredBarHeight = frameBottom - resolvedTabBarTop
         return max(spacing, max(measuredBarHeight, minimumBarHeight) + spacing)
+    }
+
+    static func minimumBottomNavigationHeight(isPhone: Bool, viewportSize: CGSize) -> CGFloat {
+        guard isPhone else { return 0 }
+        return viewportSize.width > viewportSize.height ? 64 : 84
     }
 
     static func landscapeCardSide(deviceHeight: CGFloat, bottomNavigationHeight: CGFloat, padding: CGFloat) -> CGFloat {
@@ -889,6 +1047,16 @@ nonisolated enum TimelineRangeGridLayout {
     static func displaySlots(itemCount: Int, columns: Int) -> [Int?] {
         TimelineGridOrder.displaySlots(itemCount: itemCount, columns: columns)
             .map { $0.map { itemCount - 1 - $0 } }
+    }
+
+    static func displayRows<Item>(items: [Item], columns: Int) -> [[Item?]] {
+        let columns = max(1, columns)
+        let slots = displaySlots(itemCount: items.count, columns: columns)
+        return stride(from: 0, to: slots.count, by: columns).map { start in
+            slots[start ..< min(start + columns, slots.count)].map { index in
+                index.map { items[$0] }
+            }
+        }
     }
 }
 

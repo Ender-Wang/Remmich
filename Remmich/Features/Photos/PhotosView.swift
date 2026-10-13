@@ -169,7 +169,6 @@ struct PhotosView: View {
         ZStack {
             rangeContent
                 .id(visiblePresentationID)
-                .transition(.opacity)
         }
     }
 
