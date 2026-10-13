@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 enum PhotosRangeRoute: Hashable {
     case year(Int)
@@ -33,6 +34,202 @@ nonisolated struct PhotosPinchGesture: Equatable {
     init?(magnification: CGFloat) {
         guard let direction = PhotosPinchDirection(magnification: magnification) else { return nil }
         self.direction = direction
+    }
+}
+
+@MainActor
+private final class PhotosRangePinchInteraction {
+    private var isActive = false
+    private var didHandle = false
+    private var resetTask: Task<Void, Never>?
+
+    func begin() {
+        if !isActive {
+            didHandle = false
+        }
+        resetTask?.cancel()
+        resetTask = nil
+        isActive = true
+    }
+
+    func handle(
+        magnification: CGFloat,
+        onPinch: (PhotosPinchGesture) -> Void
+    ) {
+        guard !didHandle else { return }
+        didHandle = true
+        if let gesture = PhotosPinchGesture(magnification: magnification) {
+            onPinch(gesture)
+        }
+        scheduleReset()
+    }
+
+    func cancel() {
+        scheduleReset()
+    }
+
+    private func scheduleReset() {
+        resetTask?.cancel()
+        resetTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(200))
+            guard !Task.isCancelled else { return }
+            self?.isActive = false
+        }
+    }
+}
+
+private extension EnvironmentValues {
+    @Entry var photosRangePinchInteraction: PhotosRangePinchInteraction?
+}
+
+private struct PhotosRangePinchModifier: ViewModifier {
+    let interaction: PhotosRangePinchInteraction
+    let onPinch: ((PhotosPinchGesture) -> Void)?
+
+    func body(content: Content) -> some View {
+        content
+            .environment(\.photosRangePinchInteraction, interaction)
+            .highPriorityGesture(MagnifyGesture().onChanged { _ in
+                guard onPinch != nil else { return }
+                interaction.begin()
+            }.onEnded { value in
+                guard let onPinch else { return }
+                interaction.handle(magnification: value.magnification, onPinch: onPinch)
+            })
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func photosRangePinchGesture(
+        interaction: PhotosRangePinchInteraction?,
+        onPinch: ((PhotosPinchGesture) -> Void)?
+    ) -> some View {
+        if let interaction {
+            modifier(PhotosRangePinchModifier(interaction: interaction, onPinch: onPinch))
+        } else {
+            self
+        }
+    }
+
+    func photosRangeCardInteraction(
+        interaction: PhotosRangePinchInteraction?,
+        onSelect: @escaping () -> Void,
+        onPinch: ((PhotosPinchGesture) -> Void)?
+    ) -> some View {
+        modifier(PhotosRangeCardInteractionModifier(
+            interaction: interaction,
+            onSelect: onSelect,
+            onPinch: onPinch
+        ))
+    }
+}
+
+private struct PhotosRangeCardInteractionModifier: ViewModifier {
+    let interaction: PhotosRangePinchInteraction?
+    let onSelect: () -> Void
+    let onPinch: ((PhotosPinchGesture) -> Void)?
+
+    func body(content: Content) -> some View {
+        if let interaction, let onPinch {
+            content
+                .overlay {
+                    PhotosRangeCardGestureSurface(
+                        interaction: interaction,
+                        onSelect: onSelect,
+                        onPinch: onPinch
+                    )
+                }
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction { onSelect() }
+        } else {
+            Button(action: onSelect) {
+                content
+            }
+            .buttonStyle(.plain)
+        }
+    }
+}
+
+private struct PhotosRangeCardGestureSurface: UIViewRepresentable {
+    let interaction: PhotosRangePinchInteraction
+    let onSelect: () -> Void
+    let onPinch: (PhotosPinchGesture) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(interaction: interaction, onSelect: onSelect, onPinch: onPinch)
+    }
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.backgroundColor = .clear
+
+        let pinch = UIPinchGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handlePinch(_:))
+        )
+        pinch.cancelsTouchesInView = true
+        pinch.delegate = context.coordinator
+
+        let tap = UITapGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleTap(_:))
+        )
+        tap.cancelsTouchesInView = true
+        tap.delegate = context.coordinator
+        tap.require(toFail: pinch)
+
+        view.addGestureRecognizer(pinch)
+        view.addGestureRecognizer(tap)
+        return view
+    }
+
+    func updateUIView(_: UIView, context: Context) {
+        context.coordinator.interaction = interaction
+        context.coordinator.onSelect = onSelect
+        context.coordinator.onPinch = onPinch
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var interaction: PhotosRangePinchInteraction
+        var onSelect: () -> Void
+        var onPinch: (PhotosPinchGesture) -> Void
+
+        init(
+            interaction: PhotosRangePinchInteraction,
+            onSelect: @escaping () -> Void,
+            onPinch: @escaping (PhotosPinchGesture) -> Void
+        ) {
+            self.interaction = interaction
+            self.onSelect = onSelect
+            self.onPinch = onPinch
+        }
+
+        @objc func handlePinch(_ recognizer: UIPinchGestureRecognizer) {
+            switch recognizer.state {
+            case .began:
+                interaction.begin()
+            case .ended:
+                interaction.handle(magnification: recognizer.scale, onPinch: onPinch)
+            case .cancelled, .failed:
+                interaction.cancel()
+            default:
+                break
+            }
+        }
+
+        @objc func handleTap(_ recognizer: UITapGestureRecognizer) {
+            guard recognizer.state == .ended else { return }
+            onSelect()
+        }
+
+        func gestureRecognizer(
+            _: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith _: UIGestureRecognizer
+        ) -> Bool {
+            true
+        }
     }
 }
 
@@ -74,7 +271,8 @@ struct PhotosYearsView: View {
                 bucketIDs: year.months.reversed().filter { $0.assetCount > 0 }.map(\.id),
                 store: store,
                 media: media,
-                onSelect: onSelect
+                onSelect: onSelect,
+                onPinch: onPinch
             )
         }
         .accessibilityIdentifier("timeline-years-root")
@@ -107,7 +305,8 @@ struct PhotosMonthsView: View {
                 bucketIDs: month.assetCount > 0 ? [month.id] : [],
                 store: store,
                 media: media,
-                onSelect: onSelect
+                onSelect: onSelect,
+                onPinch: onPinch
             )
         }
         .accessibilityIdentifier("timeline-months-root")
@@ -155,6 +354,7 @@ struct PhotosLibraryDaysView: View {
     @State private var didSettleInitialViewport = false
     @State private var userHasScrolled = false
     @State private var browseOwner = UUID()
+    @State private var pinchInteraction = PhotosRangePinchInteraction()
 
     private var rangeBrowseOwner: PhotosLibraryRangeBrowseOwner {
         PhotosLibraryRangeBrowseOwner(id: browseOwner, scope: .days)
@@ -209,7 +409,8 @@ struct PhotosLibraryDaysView: View {
                                     columns: columns, cardSide: cardSide,
                                     allMonths: allMonths,
                                     edgeInset: edgeInset,
-                                    onSelect: onSelect
+                                    onSelect: onSelect,
+                                    onPinch: onPinch
                                 )
                             }
                             .id(summary.id)
@@ -248,10 +449,7 @@ struct PhotosLibraryDaysView: View {
                     proxy.scrollTo(PhotosRangeScrollAnchor.bottom, anchor: .bottom)
                     didSettleInitialViewport = true
                 }
-                .simultaneousGesture(MagnifyGesture().onEnded { value in
-                    guard let gesture = PhotosPinchGesture(magnification: value.magnification) else { return }
-                    onPinch(gesture)
-                })
+                .photosRangePinchGesture(interaction: pinchInteraction, onPinch: onPinch)
             }
         }
         .onAppear {
@@ -289,6 +487,8 @@ private struct PhotosVisibleRangeSection<Content: View>: View {
 }
 
 private struct PhotosLibraryDayMonthSection: View {
+    @Environment(\.photosRangePinchInteraction) private var pinchInteraction
+
     let summary: TimelineBucketSummary
     let store: PhotosTimelineStore
     let media: MediaLibraryController
@@ -298,6 +498,7 @@ private struct PhotosLibraryDayMonthSection: View {
     let allMonths: [TimelineBucketSummary]
     let edgeInset: CGFloat
     let onSelect: (PhotosRangeRoute) -> Void
+    let onPinch: (PhotosPinchGesture) -> Void
 
     private struct Entry {
         let bucketID: TimelineBucketID
@@ -359,19 +560,19 @@ private struct PhotosLibraryDayMonthSection: View {
                         ForEach(0 ..< columns, id: \.self) { column in
                             if let entry = rows[row][column] {
                                 let day = entry.day
-                                Button {
-                                    onSelect(.day(entry.bucketID, day.id))
-                                } label: {
-                                    PhotosRangeCard(
-                                        title: day.id.displayDate?.formatted(date: .abbreviated, time: .omitted)
-                                            ?? day.id.id,
-                                        count: day.assets.count,
-                                        systemImage: dayIconSystemImage,
-                                        assets: day.assets,
-                                        media: media
-                                    )
-                                }
-                                .buttonStyle(.plain)
+                                PhotosRangeCard(
+                                    title: day.id.displayDate?.formatted(date: .abbreviated, time: .omitted)
+                                        ?? day.id.id,
+                                    count: day.assets.count,
+                                    systemImage: dayIconSystemImage,
+                                    assets: day.assets,
+                                    media: media
+                                )
+                                .photosRangeCardInteraction(
+                                    interaction: pinchInteraction,
+                                    onSelect: { onSelect(.day(entry.bucketID, day.id)) },
+                                    onPinch: onPinch
+                                )
                                 .accessibilityIdentifier(
                                     "timeline-library-day-\(entry.bucketID.rawValue)-\(day.id.id)"
                                 )
@@ -414,6 +615,7 @@ struct PhotosLibraryWeeksView: View {
     @State private var didSettleInitialViewport = false
     @State private var userHasScrolled = false
     @State private var browseOwner = UUID()
+    @State private var pinchInteraction = PhotosRangePinchInteraction()
 
     private var rangeBrowseOwner: PhotosLibraryRangeBrowseOwner {
         PhotosLibraryRangeBrowseOwner(id: browseOwner, scope: .weeks)
@@ -479,7 +681,8 @@ struct PhotosLibraryWeeksView: View {
                                     cardSide: cardSide,
                                     allMonths: allMonths,
                                     edgeInset: edgeInset,
-                                    onSelect: onSelect
+                                    onSelect: onSelect,
+                                    onPinch: onPinch
                                 )
                             }
                             .id(summary.id)
@@ -527,12 +730,7 @@ struct PhotosLibraryWeeksView: View {
                     proxy.scrollTo(PhotosRangeScrollAnchor.bottom, anchor: .bottom)
                     didSettleInitialViewport = true
                 }
-                .simultaneousGesture(MagnifyGesture().onEnded { value in
-                    guard let onPinch,
-                          let gesture = PhotosPinchGesture(magnification: value.magnification)
-                    else { return }
-                    onPinch(gesture)
-                })
+                .photosRangePinchGesture(interaction: pinchInteraction, onPinch: onPinch)
             }
         }
         .onAppear {
@@ -554,6 +752,8 @@ struct PhotosLibraryWeeksView: View {
 }
 
 private struct PhotosLibraryWeekMonthSection: View {
+    @Environment(\.photosRangePinchInteraction) private var pinchInteraction
+
     let summary: TimelineBucketSummary
     let store: PhotosTimelineStore
     let media: MediaLibraryController
@@ -562,6 +762,7 @@ private struct PhotosLibraryWeekMonthSection: View {
     let allMonths: [TimelineBucketSummary]
     let edgeInset: CGFloat
     let onSelect: (PhotosRangeRoute) -> Void
+    let onPinch: ((PhotosPinchGesture) -> Void)?
 
     private struct Entry {
         let bucketID: TimelineBucketID
@@ -665,18 +866,18 @@ private struct PhotosLibraryWeekMonthSection: View {
                 ForEach(0 ..< columns, id: \.self) { column in
                     if let entry = rows[row][column] {
                         let week = entry.week
-                        Button {
-                            onSelect(.week(entry.bucketID, week.id, .library))
-                        } label: {
-                            PhotosRangeCard(
-                                title: "Week of \(week.id.startDate.formatted(date: .abbreviated, time: .omitted))",
-                                count: week.assetCount,
-                                systemImage: "calendar",
-                                assets: week.days.reversed().flatMap(\.assets),
-                                media: media
-                            )
-                        }
-                        .buttonStyle(.plain)
+                        PhotosRangeCard(
+                            title: "Week of \(week.id.startDate.formatted(date: .abbreviated, time: .omitted))",
+                            count: week.assetCount,
+                            systemImage: "calendar",
+                            assets: week.days.reversed().flatMap(\.assets),
+                            media: media
+                        )
+                        .photosRangeCardInteraction(
+                            interaction: pinchInteraction,
+                            onSelect: { onSelect(.week(entry.bucketID, week.id, .library)) },
+                            onPinch: onPinch
+                        )
                         .accessibilityIdentifier("timeline-library-week-\(week.id.id)")
                     } else {
                         Color.clear.aspectRatio(1, contentMode: .fit)
@@ -799,6 +1000,8 @@ struct PhotosRangeLoadedBucketView<Content: View>: View {
 }
 
 private struct PhotosBucketCoverButton: View {
+    @Environment(\.photosRangePinchInteraction) private var pinchInteraction
+
     let route: PhotosRangeRoute
     let accessibilityID: String
     let title: String
@@ -808,23 +1011,24 @@ private struct PhotosBucketCoverButton: View {
     let store: PhotosTimelineStore
     let media: MediaLibraryController
     let onSelect: ((PhotosRangeRoute) -> Void)?
+    let onPinch: ((PhotosPinchGesture) -> Void)?
     @State private var currentCoverID = "loading"
 
     var body: some View {
-        Button {
-            onSelect?(route)
-        } label: {
-            PhotosRangeCard(
-                title: title,
-                count: count,
-                systemImage: systemImage,
-                media: media,
-                bucketIDs: bucketIDs,
-                store: store,
-                onCoverChanged: { currentCoverID = $0 ?? "loading" }
-            )
-        }
-        .buttonStyle(.plain)
+        PhotosRangeCard(
+            title: title,
+            count: count,
+            systemImage: systemImage,
+            media: media,
+            bucketIDs: bucketIDs,
+            store: store,
+            onCoverChanged: { currentCoverID = $0 ?? "loading" }
+        )
+        .photosRangeCardInteraction(
+            interaction: pinchInteraction,
+            onSelect: { onSelect?(route) },
+            onPinch: onPinch
+        )
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(title), \(count.formatted()) items")
         .accessibilityIdentifier(accessibilityID)
@@ -851,6 +1055,7 @@ private struct PhotosRangeCardGrid<Item: Identifiable, Content: View>: View wher
     @State private var didPositionInitially = false
     @State private var didSettleInitialViewport = false
     @State private var userHasScrolled = false
+    @State private var pinchInteraction = PhotosRangePinchInteraction()
 
     private struct LayoutKey: Equatable {
         let viewport: CGSize
@@ -932,12 +1137,7 @@ private struct PhotosRangeCardGrid<Item: Identifiable, Content: View>: View wher
                 }
                 .scrollEdgeEffectHidden(for: .bottom)
                 .ignoresSafeArea(.container, edges: [.top, .horizontal, .bottom])
-                .simultaneousGesture(MagnifyGesture().onEnded { value in
-                    guard let gesture = PhotosPinchGesture(magnification: value.magnification),
-                          let onPinch
-                    else { return }
-                    onPinch(gesture)
-                })
+                .photosRangePinchGesture(interaction: pinchInteraction, onPinch: onPinch)
                 .task(id: items.last?.id) {
                     guard !didPositionInitially, rowCount > 0 else { return }
                     proxy.scrollTo(PhotosRangeScrollAnchor.row(rowCount - 1), anchor: .bottom)

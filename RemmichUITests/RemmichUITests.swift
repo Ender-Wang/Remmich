@@ -567,6 +567,41 @@ final class RemmichUITests: XCTestCase {
     }
 
     @MainActor
+    func testPinchingDayCardCoarsensWithoutOpeningIt() throws {
+        #if targetEnvironment(simulator)
+            throw XCTSkip("XCUIElement pinch is not delivered to custom pinch recognizers in Simulator")
+        #else
+            let app = rangeApplication()
+            app.launch()
+
+            for tab in ["Photos", "Videos"] {
+                tabButton(tab, in: app).tap()
+                let rootID = tab == "Photos" ? "photos-root" : "videos-root"
+                XCTAssertTrue(app.descendants(matching: .any)[rootID].waitForExistence(timeout: 10))
+
+                coarsenTimeline(tab, in: app)
+                assertTimelineRange("day", tab: tab, in: app)
+                let dayCards = app.buttons.matching(NSPredicate(
+                    format: "identifier BEGINSWITH %@", "timeline-library-day-"
+                ))
+                XCTAssertTrue(dayCards.firstMatch.waitForExistence(timeout: 10))
+                guard let visibleDay = dayCards.allElementsBoundByIndex.first(where: \.isHittable) else {
+                    XCTFail("Expected a visible \(tab) day card")
+                    return
+                }
+
+                visibleDay.pinch(withScale: 0.6, velocity: -1)
+
+                assertTimelineRange("week", tab: tab, in: app)
+                XCTAssertTrue(
+                    app.descendants(matching: .any)["timeline-library-weeks-root"].waitForExistence(timeout: 10),
+                    "Pinching a \(tab) day card must coarsen the range instead of opening the card"
+                )
+            }
+        #endif
+    }
+
+    @MainActor
     func testPinchedRangeCardsSettleAboveTabBar() {
         for tab in ["Photos", "Videos"] {
             let app = rangeApplication()
