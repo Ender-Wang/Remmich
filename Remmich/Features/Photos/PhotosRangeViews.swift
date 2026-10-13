@@ -173,7 +173,7 @@ struct PhotosLibraryDaysView: View {
             let edgeInset = TimelineRangeGridLayout.edgeInset(isPhone: isPhone)
             let globalFrame = geometry.frame(in: .global)
             let bottomContentInset = TimelineRangeGridLayout.bottomContentInset(
-                frameBottom: globalFrame.maxY,
+                frameBottom: globalFrame.maxY + (isPhone ? 0 : geometry.safeAreaInsets.bottom),
                 tabBarTop: tabBarTop,
                 minimumBarHeight: isPhone ? 84 : geometry.safeAreaInsets.bottom,
                 spacing: edgeInset
@@ -367,7 +367,7 @@ struct PhotosLibraryWeeksView: View {
             let edgeInset = TimelineRangeGridLayout.edgeInset(isPhone: isPhone)
             let globalFrame = geometry.frame(in: .global)
             let bottomContentInset = TimelineRangeGridLayout.bottomContentInset(
-                frameBottom: globalFrame.maxY,
+                frameBottom: globalFrame.maxY + (isPhone ? 0 : geometry.safeAreaInsets.bottom),
                 tabBarTop: tabBarTop,
                 minimumBarHeight: isPhone ? 84 : geometry.safeAreaInsets.bottom,
                 spacing: edgeInset
@@ -738,7 +738,7 @@ private struct PhotosRangeCardGrid<Item: Identifiable, Content: View>: View wher
             let interRowSpacing: CGFloat = isPhoneLandscape ? 40 : 14
             let globalFrame = geometry.frame(in: .global)
             let bottomContentInset = TimelineRangeGridLayout.bottomContentInset(
-                frameBottom: globalFrame.maxY,
+                frameBottom: globalFrame.maxY + (isPhone ? 0 : geometry.safeAreaInsets.bottom),
                 tabBarTop: tabBarTop,
                 minimumBarHeight: isPhone ? 84 : geometry.safeAreaInsets.bottom,
                 spacing: edgeInset

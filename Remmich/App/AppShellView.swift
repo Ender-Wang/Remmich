@@ -40,6 +40,10 @@ struct AppShellView: View {
             selection: $selection,
             tabBarTop: $tabBarTop,
             compactOwner: compactTabOwner,
+            photosScrollRequest: photosScrollRequest,
+            videosScrollRequest: videosScrollRequest,
+            groupedScrollRequests: groupedScrollRequests,
+            groupedMediaOwner: groupedMediaOwner,
             photosRetapped: {
                 photosScrollRequest &+= 1
                 compactPhotosTabs = false
@@ -58,8 +62,8 @@ struct AppShellView: View {
                         presentation: presentation,
                         media: media,
                         navigationPath: $photosPath,
+                        tabBarTop: $tabBarTop,
                         scrollToLatestRequest: photosScrollRequest,
-                        tabBarTop: tabBarTop,
                         compactChromeChanged: { compact in
                             compactPhotosTabs = compact
                             if compact, selection == .photos {
@@ -77,8 +81,8 @@ struct AppShellView: View {
                         presentation: videoPresentation,
                         media: media,
                         navigationPath: $videosPath,
+                        tabBarTop: $tabBarTop,
                         scrollToLatestRequest: videosScrollRequest,
-                        tabBarTop: tabBarTop,
                         contentName: "Videos",
                         rootAccessibilityID: "videos-root",
                         compactChromeChanged: { compact in
@@ -148,6 +152,17 @@ struct AppShellView: View {
         )
         .ignoresSafeArea(.container, edges: .all)
         .environment(\.accountAvatarMedia, media)
+        .overlay(alignment: .topLeading) {
+            #if DEBUG
+                if ProcessInfo.processInfo.arguments.contains("-ui-testing-range-library") {
+                    Text(String(describing: tabBarTop))
+                        .frame(width: 1, height: 1)
+                        .opacity(0.01)
+                        .allowsHitTesting(false)
+                        .accessibilityIdentifier("timeline-test-tab-bar-top")
+                }
+            #endif
+        }
         .overlay {
             if showsAccount {
                 GeometryReader { geometry in

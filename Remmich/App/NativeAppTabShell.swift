@@ -31,6 +31,10 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
     @Binding var selection: NativeTabDestination
     @Binding var tabBarTop: CGFloat
     let compactOwner: NativeTabDestination?
+    let photosScrollRequest: Int
+    let videosScrollRequest: Int
+    let groupedScrollRequests: [NativeTabDestination: Int]
+    let groupedMediaOwner: NativeTabDestination
     let photosRetapped: () -> Void
     let videosRetapped: () -> Void
     let groupedTabRetapped: (NativeTabDestination) -> Void
@@ -129,15 +133,24 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
         }
 
         func update(_ next: NativeAppTabShell, animated: Bool) {
+            let previous = parent
             parent = next
-            photosController.rootView = next.photos
-            videosController.rootView = next.videos
-            albumsController.rootView = next.albums
-            libraryController.rootView = next.library
-            yearsController.rootView = next.years
-            monthsController.rootView = next.months
-            weeksController.rootView = next.weeks
-            searchController.rootView = next.search
+
+            let mediaLayoutChanged = previous.tabBarTop != next.tabBarTop
+            if previous.photosScrollRequest != next.photosScrollRequest {
+                photosController.rootView = next.photos
+            }
+            if previous.videosScrollRequest != next.videosScrollRequest {
+                videosController.rootView = next.videos
+            }
+            if mediaLayoutChanged
+                || previous.groupedScrollRequests != next.groupedScrollRequests
+                || previous.groupedMediaOwner != next.groupedMediaOwner
+            {
+                yearsController.rootView = next.years
+                monthsController.rootView = next.months
+                weeksController.rootView = next.weeks
+            }
 
             guard let controller else { return }
             isUpdatingTabs = true

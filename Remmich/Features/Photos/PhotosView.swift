@@ -73,8 +73,8 @@ struct PhotosView: View {
     let presentation: PhotosPresentationState
     let media: MediaLibraryController
     @Binding var navigationPath: [PhotosRangeRoute]
+    @Binding var tabBarTop: CGFloat
     var scrollToLatestRequest = 0
-    var tabBarTop: CGFloat = 0
     var contentName = "Photos"
     var rootAccessibilityID = "photos-root"
     let compactChromeChanged: (Bool) -> Void
@@ -207,6 +207,17 @@ struct PhotosView: View {
                     }
                     .accessibilityLabel("Coarsen \(contentName) timeline")
                     .accessibilityIdentifier("timeline-test-\(contentName.lowercased())-coarser")
+
+                    Button {
+                        setCompactChrome(true)
+                    } label: {
+                        Image(systemName: "rectangle.compress.vertical")
+                            .opacity(0.01)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .accessibilityLabel("Compact \(contentName) timeline navigation")
+                    .accessibilityIdentifier("timeline-test-\(contentName.lowercased())-compact")
                 }
                 .buttonStyle(.plain)
                 .padding(.trailing, 8)
@@ -759,6 +770,7 @@ private struct TimelineRefreshError: View {
             presentation: .init(),
             media: .init(),
             navigationPath: .constant([]),
+            tabBarTop: .constant(0),
             compactChromeChanged: { _ in },
             showAccount: {}
         )
@@ -773,6 +785,7 @@ private struct TimelineRefreshError: View {
             presentation: .init(),
             media: .init(),
             navigationPath: .constant([]),
+            tabBarTop: .constant(0),
             compactChromeChanged: { _ in },
             showAccount: {}
         )
