@@ -416,34 +416,42 @@ final class RemmichUITests: XCTestCase {
     }
 
     @MainActor
-    func testTimelineRangeDrillDownAndBackNavigation() {
+    func testGroupedRangeCardsOpenAssetGridsDirectly() {
         let app = rangeApplication()
         app.launch()
         XCTAssertTrue(app.descendants(matching: .any)["photos-root"].waitForExistence(timeout: 10))
+
         selectRange("Years", in: app)
         let year = app.buttons["timeline-year-2026"]
         XCTAssertTrue(year.waitForExistence(timeout: 5))
         year.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["timeline-range-assets-year-2026"]
+            .waitForExistence(timeout: 15))
+        XCTAssertTrue(app.navigationBars.staticTexts["2026"].exists)
+        app.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(year.waitForExistence(timeout: 5))
+
+        selectRange("Months", in: app)
         let month = app.buttons["timeline-month-2026-10-01"]
         XCTAssertTrue(month.waitForExistence(timeout: 5))
         month.tap()
-        let week = app.buttons["timeline-week-2026-10-01-2026-W41"]
+        XCTAssertTrue(app.descendants(matching: .any)["timeline-range-assets-month-2026-10-01"]
+            .waitForExistence(timeout: 10))
+        XCTAssertTrue(app.navigationBars.staticTexts["October 2026"].exists)
+        app.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(month.waitForExistence(timeout: 5))
+
+        selectRange("Weeks", in: app)
+        let week = app.buttons["timeline-library-week-2026-W41"]
         XCTAssertTrue(week.waitForExistence(timeout: 5))
         week.tap()
-        let day = app.buttons["timeline-range-day-2026-10-01-2026-10-07"]
-        XCTAssertTrue(day.waitForExistence(timeout: 5))
-        day.tap()
-        let asset = app.descendants(matching: .any)["asset-range-2026-10-01-0"]
-        XCTAssertTrue(asset.waitForExistence(timeout: 5))
-        tabButton("Months", in: app).tap()
-        tabButton("Years", in: app).tap()
-        XCTAssertTrue(asset.isHittable)
-        for expected in [day, week, month, year] {
-            let back = app.navigationBars.buttons.firstMatch
-            XCTAssertTrue(back.waitForExistence(timeout: 5))
-            back.tap()
-            XCTAssertTrue(expected.waitForExistence(timeout: 5))
-        }
+        XCTAssertTrue(app.descendants(matching: .any)["timeline-range-assets-week-2026-W41"]
+            .waitForExistence(timeout: 10))
+        XCTAssertTrue(app.navigationBars.staticTexts.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "Week of ")
+        ).firstMatch.exists)
+        app.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(week.waitForExistence(timeout: 5))
     }
 
     @MainActor
@@ -544,12 +552,10 @@ final class RemmichUITests: XCTestCase {
                     return
                 }
                 visibleWeek.tap()
-                let scopedDays = app.buttons.matching(NSPredicate(
-                    format: "identifier BEGINSWITH %@", "timeline-range-day-"
-                )).firstMatch
-                XCTAssertTrue(scopedDays.waitForExistence(timeout: 10))
+                let scopedAssets = app.descendants(matching: .any)["timeline-range-assets-week-2026-W41"]
+                XCTAssertTrue(scopedAssets.waitForExistence(timeout: 10))
                 coarsenTimeline(tab, in: app)
-                XCTAssertTrue(scopedDays.waitForExistence(timeout: 3), "Pinch must be inert inside scoped drill-down")
+                XCTAssertTrue(scopedAssets.waitForExistence(timeout: 3), "Pinch must be inert inside scoped drill-down")
                 assertTimelineRange("week", tab: tab, in: app)
                 app.buttons["timeline-range-back"].tap()
                 XCTAssertTrue(weekButtons.firstMatch.waitForExistence(timeout: 10))

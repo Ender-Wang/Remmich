@@ -117,7 +117,7 @@ struct PhotosView: View {
         }
         .navigationTitle(navigationTitle)
         .navigationBarTitleDisplayMode(.inline)
-        .toolbarBackground(.hidden, for: .navigationBar)
+        .toolbarBackground(navigationPath.isEmpty ? .hidden : .visible, for: .navigationBar)
         .toolbar {
             if !navigationPath.isEmpty || libraryRange != .all {
                 ToolbarItem(placement: .topBarLeading) {
@@ -269,77 +269,21 @@ struct PhotosView: View {
         }
     }
 
-    @ViewBuilder
     private func rangeDestination(_ route: PhotosRangeRoute) -> some View {
-        switch route {
-        case let .year(year):
-            PhotosMonthsView(
-                summaries: TimelineRangeCatalog.years(from: store.bucketSummaries)
-                    .first { $0.id == year }?.months ?? [],
-                store: store,
-                media: media,
-                tabBarTop: tabBarTop,
-                onSelect: selectRoute
-            )
-        case let .month(bucketID):
-            PhotosRangeLoadedBucketView(bucketID: bucketID, store: store) { section in
-                PhotosWeeksView(
-                    section: section,
-                    media: media,
-                    tabBarTop: tabBarTop,
-                    onSelect: selectRoute
-                )
-            }
-        case let .week(bucketID, weekID, origin):
-            if origin == .library {
-                PhotosLibraryWeekDetailView(
-                    ownerID: bucketID,
-                    weekID: weekID,
-                    store: store,
-                    media: media,
-                    dayIconSystemImage: dayIconSystemImage,
-                    onSelect: selectRoute
-                )
-            } else {
-                PhotosRangeLoadedBucketView(bucketID: bucketID, store: store) { section in
-                    PhotosDaysView(
-                        section: section,
-                        week: weekID,
-                        media: media,
-                        dayIconSystemImage: dayIconSystemImage,
-                        tabBarTop: tabBarTop,
-                        onSelect: selectRoute
-                    )
-                }
-            }
-        case let .day(bucketID, dayID):
-            PhotosRangeLoadedBucketView(bucketID: bucketID, store: store) { section in
-                if let day = section.dayGroups.first(where: { $0.id == dayID }) {
-                    PhotosDayAssetsView(
-                        day: day,
-                        media: media,
-                        visibilityChanged: updateVisibility,
-                        viewportChanged: updateViewport
-                    )
-                } else {
-                    ContentUnavailableView("Day Unavailable", systemImage: dayIconSystemImage)
-                }
-            }
-        }
+        PhotosRangeAssetsView(
+            route: route,
+            store: store,
+            media: media,
+            visibilityChanged: updateVisibility,
+            viewportChanged: updateViewport
+        )
+        .navigationTitle(route.navigationTitle)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(.visible, for: .navigationBar)
     }
 
     private var navigationTitle: String {
-        guard let route = navigationPath.last else { return "" }
-        switch route {
-        case let .year(year):
-            return String(year)
-        case let .month(bucketID):
-            return bucketID.displayDate?.formatted(.dateTime.month(.wide).year()) ?? bucketID.rawValue
-        case let .week(_, weekID, _):
-            return "Week of \(weekID.startDate.formatted(date: .abbreviated, time: .omitted))"
-        case let .day(_, dayID):
-            return dayID.displayDate?.formatted(date: .abbreviated, time: .omitted) ?? dayID.id
-        }
+        navigationPath.last?.navigationTitle ?? ""
     }
 
     private func selectRoute(_ route: PhotosRangeRoute) {

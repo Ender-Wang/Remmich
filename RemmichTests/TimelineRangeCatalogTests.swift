@@ -153,32 +153,34 @@ struct TimelineRangeCatalogTests {
         #expect(januaryWeeks.map(\.assetCount) == [2, 1])
     }
 
-    @Test func libraryWeekDetailMergesBoundaryAssetsAndPreservesTheirOwningBuckets() {
-        let december = TimelineSection(
-            summary: bucket("2026-12-01", count: 1),
-            assets: [asset("dec-31", at: "2026-12-31T12:00:00Z")],
-            loadState: .loaded,
-            contentRevision: 1
-        )
-        let january = TimelineSection(
-            summary: bucket("2027-01-01", count: 1),
-            assets: [asset("jan-1", at: "2027-01-01T12:00:00Z")],
-            loadState: .loaded,
-            contentRevision: 2
-        )
+    @Test @MainActor func selectedRangeRoutesResolveDirectlyToTheirAssets() throws {
+        let december = TimelineBucketID(rawValue: "2026-12-01")
+        let january = TimelineBucketID(rawValue: "2027-01-01")
+        let summaries = [bucket(january.rawValue, count: 2), bucket(december.rawValue, count: 1)]
+        let week = try #require(TimelineWeekID(day: .init(capturedAt: date("2027-01-01T12:00:00Z"))))
+        let buckets = [
+            december: [asset("dec-31", at: "2026-12-31T12:00:00Z")],
+            january: [
+                asset("jan-4", at: "2027-01-04T12:00:00Z"),
+                asset("jan-1", at: "2027-01-01T12:00:00Z"),
+            ],
+        ]
 
-        let merged = PhotosLibraryWeekDetail.mergedSection(current: january, previous: december)
-        let decemberDay = TimelineCaptureDay(capturedAt: date("2026-12-31T12:00:00Z"))
-        let januaryDay = TimelineCaptureDay(capturedAt: date("2027-01-01T12:00:00Z"))
+        let weekRoute = PhotosRangeRoute.week(january, week, .library)
+        #expect(PhotosRangeAssetCatalog.bucketIDs(for: weekRoute, summaries: summaries) == [december, january])
+        #expect(PhotosRangeAssetCatalog.assets(for: weekRoute, buckets: buckets).map(\.id) == ["jan-1", "dec-31"])
 
-        #expect(merged.assets.map(\.id) == ["jan-1", "dec-31"])
-        #expect(merged.contentRevision == 2)
-        #expect(PhotosLibraryWeekDetail.ownerID(
-            for: decemberDay, current: january, previous: december
-        ) == december.id)
-        #expect(PhotosLibraryWeekDetail.ownerID(
-            for: januaryDay, current: january, previous: december
-        ) == january.id)
+        let day = TimelineCaptureDay(capturedAt: date("2027-01-04T12:00:00Z"))
+        let dayRoute = PhotosRangeRoute.day(january, day)
+        #expect(PhotosRangeAssetCatalog.assets(for: dayRoute, buckets: buckets).map(\.id) == ["jan-4"])
+
+        let monthRoute = PhotosRangeRoute.month(january)
+        #expect(PhotosRangeAssetCatalog.assets(for: monthRoute, buckets: buckets).map(\.id) == ["jan-4", "jan-1"])
+
+        let yearRoute = PhotosRangeRoute.year(2027)
+        #expect(PhotosRangeAssetCatalog.bucketIDs(for: yearRoute, summaries: summaries) == [january])
+        #expect(yearRoute.navigationTitle == "2027")
+        #expect(monthRoute.navigationTitle == "January 2027")
     }
 
     private func bucket(_ id: String, count: Int) -> TimelineBucketSummary {

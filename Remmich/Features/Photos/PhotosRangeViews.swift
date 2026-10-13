@@ -8,6 +8,34 @@ enum PhotosRangeRoute: Hashable {
     case day(TimelineBucketID, TimelineCaptureDay)
 }
 
+extension PhotosRangeRoute {
+    var navigationTitle: String {
+        switch self {
+        case let .year(year):
+            String(year)
+        case let .month(bucketID):
+            bucketID.displayDate?.formatted(.dateTime.month(.wide).year()) ?? bucketID.rawValue
+        case let .week(_, weekID, _):
+            "Week of \(weekID.startDate.formatted(date: .abbreviated, time: .omitted))"
+        case let .day(_, dayID):
+            dayID.displayDate?.formatted(date: .abbreviated, time: .omitted) ?? dayID.id
+        }
+    }
+
+    var assetGridAccessibilityID: String {
+        switch self {
+        case let .year(year):
+            "timeline-range-assets-year-\(year)"
+        case let .month(bucketID):
+            "timeline-range-assets-month-\(bucketID.rawValue)"
+        case let .week(_, weekID, _):
+            "timeline-range-assets-week-\(weekID.id)"
+        case let .day(_, dayID):
+            "timeline-range-assets-\(dayID.id)"
+        }
+    }
+}
+
 nonisolated enum PhotosWeekRouteOrigin: Hashable {
     case bucket
     case library
@@ -310,35 +338,6 @@ struct PhotosMonthsView: View {
             )
         }
         .accessibilityIdentifier("timeline-months-root")
-    }
-}
-
-struct PhotosWeeksView: View {
-    let section: TimelineSection
-    let media: MediaLibraryController
-    var tabBarTop: CGFloat = 0
-    var onSelect: ((PhotosRangeRoute) -> Void)?
-
-    var body: some View {
-        PhotosRangeCardGrid(
-            items: TimelineRangeCatalog.weeks(in: section),
-            tabBarTop: tabBarTop
-        ) { week in
-            Button {
-                onSelect?(.week(section.id, week.id, .bucket))
-            } label: {
-                PhotosRangeCard(
-                    title: "Week of \(week.id.startDate.formatted(date: .abbreviated, time: .omitted))",
-                    count: week.assetCount,
-                    systemImage: "calendar",
-                    assets: week.days.reversed().flatMap(\.assets),
-                    media: media
-                )
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("timeline-week-\(section.id.rawValue)-\(week.id.id)")
-        }
-        .accessibilityIdentifier("timeline-weeks-\(section.id.rawValue)")
     }
 }
 
@@ -909,93 +908,146 @@ private struct PhotosLibraryWeekMonthSection: View {
     }
 }
 
-struct PhotosDaysView: View {
-    let section: TimelineSection
-    let week: TimelineWeekID
-    let media: MediaLibraryController
-    let dayIconSystemImage: String
-    var tabBarTop: CGFloat = 0
-    var onSelect: ((PhotosRangeRoute) -> Void)?
+nonisolated enum PhotosRangeAssetCatalog {
+    static func bucketIDs(
+        for route: PhotosRangeRoute,
+        summaries: [TimelineBucketSummary]
+    ) -> [TimelineBucketID] {
+        switch route {
+        case let .year(year):
+            return TimelineRangeCatalog.years(from: summaries)
+                .first { $0.id == year }?.months.map(\.id) ?? []
+        case let .month(bucketID), let .day(bucketID, _):
+            return [bucketID]
+        case let .week(bucketID, _, origin):
+            guard origin == .library,
+                  let previous = TimelineRangeCatalog.adjacentMonth(
+                      to: bucketID,
+                      offset: -1,
+                      in: summaries
+                  )
+            else { return [bucketID] }
+            return [previous, bucketID]
+        }
+    }
 
-    var body: some View {
-        PhotosRangeCardGrid(
-            items: TimelineRangeCatalog.days(in: section, week: week),
-            tabBarTop: tabBarTop
-        ) { day in
-            Button {
-                onSelect?(.day(section.id, day.id))
-            } label: {
-                PhotosRangeCard(
-                    title: day.id.displayDate?.formatted(date: .abbreviated, time: .omitted)
-                        ?? day.id.id,
-                    count: day.assets.count,
-                    systemImage: dayIconSystemImage,
-                    assets: day.assets,
-                    media: media
-                )
+    static func assets(
+        for route: PhotosRangeRoute,
+        buckets: [TimelineBucketID: [TimelineAssetSummary]]
+    ) -> [TimelineAssetSummary] {
+        let selected = bucketIDs(for: route, summaries: buckets.map {
+            TimelineBucketSummary(id: $0.key, assetCount: $0.value.count)
+        })
+        let candidates = selected.flatMap { buckets[$0, default: []] }
+        let filtered = candidates.filter { asset in
+            switch route {
+            case .year, .month:
+                true
+            case let .week(_, weekID, _):
+                TimelineWeekID(day: TimelineCaptureDay(capturedAt: asset.capturedAt)) == weekID
+            case let .day(_, dayID):
+                TimelineCaptureDay(capturedAt: asset.capturedAt) == dayID
             }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("timeline-range-day-\(section.id.rawValue)-\(day.id.id)")
         }
-        .accessibilityIdentifier("timeline-days-\(section.id.rawValue)-\(week.id)")
+        return Dictionary(grouping: filtered, by: \.id)
+            .compactMap(\.value.first)
+            .sorted {
+                if $0.capturedAt != $1.capturedAt {
+                    return $0.capturedAt > $1.capturedAt
+                }
+                return $0.id > $1.id
+            }
     }
 }
 
-struct PhotosDayAssetsView: View {
-    let day: TimelineDayGroup
-    let media: MediaLibraryController
-    let visibilityChanged: (String, MediaRequestDescriptor?) -> Void
-    let viewportChanged: (TimelineAssetSummary, Bool) -> Void
-
-    @State private var availableWidth: CGFloat = 0
-
-    var body: some View {
-        ScrollView {
-            TimelineAssetGrid(
-                assets: day.assets,
-                media: media,
-                availableWidth: availableWidth,
-                visibilityChanged: visibilityChanged,
-                viewportChanged: viewportChanged
-            )
-        }
-        .onGeometryChange(for: CGSize.self) { $0.size } action: {
-            availableWidth = $0.width
-        }
-        .scrollEdgeEffectHidden(for: .bottom)
-        .ignoresSafeArea(.container, edges: [.top, .horizontal])
-        .ignoresSafeArea(
-            .container,
-            edges: UIDevice.current.userInterfaceIdiom == .pad ? .bottom : []
-        )
-        .accessibilityIdentifier("timeline-range-assets-\(day.id.id)")
-    }
-}
-
-struct PhotosRangeLoadedBucketView<Content: View>: View {
-    let bucketID: TimelineBucketID
+struct PhotosRangeAssetsView: View {
+    let route: PhotosRangeRoute
     let store: PhotosTimelineStore
-    @ViewBuilder let content: (TimelineSection) -> Content
+    let media: MediaLibraryController
+    var visibilityChanged: (String, MediaRequestDescriptor?) -> Void = { _, _ in }
+    var viewportChanged: (TimelineAssetSummary, Bool) -> Void = { _, _ in }
+
+    @State private var assets: [TimelineAssetSummary] = []
+    @State private var isLoading = true
+    @State private var loadFailed = false
+    @State private var loadedBucketCount = 0
+    @State private var loadRequest = 0
 
     var body: some View {
         Group {
-            if let section = store.sectionsByID[bucketID] {
-                switch section.loadState {
-                case .unloaded, .loading:
-                    ProgressView("Loading month…")
-                case .loaded:
-                    content(section)
-                case let .failed(message):
-                    ErrorStateView {
-                        Task { await store.retryBucket(bucketID) }
-                    }
-                    .accessibilityHint(message)
+            if isLoading {
+                ProgressView(
+                    bucketIDs.count > 1
+                        ? "Loading \(loadedBucketCount) of \(bucketIDs.count)…"
+                        : "Loading items…"
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if loadFailed {
+                ErrorStateView(title: "Couldn’t Load \(route.navigationTitle)") {
+                    loadRequest &+= 1
                 }
+            } else if assets.isEmpty {
+                ContentUnavailableView("No Items", systemImage: "photo.on.rectangle")
             } else {
-                ContentUnavailableView("Month Unavailable", systemImage: "calendar.badge.exclamationmark")
+                assetGrid
             }
         }
-        .task(id: bucketID) { await store.loadRangeBucket(bucketID) }
+        .task(id: LoadKey(route: route, request: loadRequest)) {
+            await loadAssets()
+        }
+    }
+
+    private var bucketIDs: [TimelineBucketID] {
+        PhotosRangeAssetCatalog.bucketIDs(for: route, summaries: store.bucketSummaries)
+    }
+
+    private var expectedAssetCount: Int {
+        let ids = Set(bucketIDs)
+        return store.bucketSummaries
+            .filter { ids.contains($0.id) }
+            .reduce(0) { $0 + $1.assetCount }
+    }
+
+    private var assetGrid: some View {
+        GeometryReader { geometry in
+            ScrollView {
+                TimelineAssetGrid(
+                    assets: assets,
+                    media: media,
+                    availableWidth: geometry.size.width,
+                    visibilityChanged: visibilityChanged,
+                    viewportChanged: viewportChanged
+                )
+            }
+            .scrollEdgeEffectHidden(for: .bottom)
+            .accessibilityIdentifier(route.assetGridAccessibilityID)
+        }
+    }
+
+    private func loadAssets() async {
+        let ids = bucketIDs
+        isLoading = true
+        loadFailed = false
+        loadedBucketCount = 0
+        assets = []
+
+        var buckets: [TimelineBucketID: [TimelineAssetSummary]] = [:]
+        for bucketID in ids {
+            guard !Task.isCancelled else { return }
+            buckets[bucketID] = await store.rangeCoverAssets(in: bucketID)
+            loadedBucketCount += 1
+        }
+        guard !Task.isCancelled else { return }
+
+        let loadedAssets = PhotosRangeAssetCatalog.assets(for: route, buckets: buckets)
+        assets = loadedAssets
+        loadFailed = loadedAssets.isEmpty && expectedAssetCount > 0
+        isLoading = false
+    }
+
+    private struct LoadKey: Equatable {
+        let route: PhotosRangeRoute
+        let request: Int
     }
 }
 
