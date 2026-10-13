@@ -964,6 +964,7 @@ struct PhotosRangeAssetsView: View {
     let route: PhotosRangeRoute
     let store: PhotosTimelineStore
     let media: MediaLibraryController
+    var tabBarTop: CGFloat = 0
     var visibilityChanged: (String, MediaRequestDescriptor?) -> Void = { _, _ in }
     var viewportChanged: (TimelineAssetSummary, Bool) -> Void = { _, _ in }
 
@@ -972,6 +973,9 @@ struct PhotosRangeAssetsView: View {
     @State private var loadFailed = false
     @State private var loadedBucketCount = 0
     @State private var loadRequest = 0
+    @State private var didPositionInitially = false
+    @State private var didSettleInitialViewport = false
+    @State private var userHasScrolled = false
 
     var body: some View {
         Group {
@@ -1010,17 +1014,63 @@ struct PhotosRangeAssetsView: View {
 
     private var assetGrid: some View {
         GeometryReader { geometry in
-            ScrollView {
-                TimelineAssetGrid(
-                    assets: assets,
-                    media: media,
-                    availableWidth: geometry.size.width,
-                    visibilityChanged: visibilityChanged,
-                    viewportChanged: viewportChanged
-                )
+            let isPhone = UIDevice.current.userInterfaceIdiom == .phone
+            let edgeInset = TimelineRangeGridLayout.edgeInset(isPhone: isPhone)
+            let globalFrame = geometry.frame(in: .global)
+            let bottomContentInset = TimelineRangeGridLayout.bottomContentInset(
+                frameBottom: globalFrame.maxY,
+                tabBarTop: tabBarTop,
+                minimumBarHeight: TimelineRangeGridLayout.minimumBottomNavigationHeight(
+                    isPhone: isPhone,
+                    viewportSize: geometry.size
+                ),
+                spacing: edgeInset,
+                hasBottomNavigation: isPhone
+            )
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(spacing: 0) {
+                        TimelineAssetGrid(
+                            assets: assets,
+                            media: media,
+                            availableWidth: geometry.size.width,
+                            visibilityChanged: visibilityChanged,
+                            viewportChanged: viewportChanged
+                        )
+                        Color.clear
+                            .frame(height: bottomContentInset)
+                            .id(PhotosRangeScrollAnchor.bottom)
+                            .accessibilityHidden(true)
+                    }
+                    .scrollTargetLayout()
+                }
+                .defaultScrollAnchor(.bottom)
+                .onScrollPhaseChange { _, phase in
+                    if didSettleInitialViewport, phase == .interacting {
+                        userHasScrolled = true
+                    }
+                }
+                .scrollEdgeEffectHidden(for: .bottom)
+                .ignoresSafeArea(.container, edges: [.horizontal, .bottom])
+                .task(id: assets.map(\.id)) {
+                    guard !didPositionInitially, !assets.isEmpty else { return }
+                    proxy.scrollTo(PhotosRangeScrollAnchor.bottom, anchor: .bottom)
+                    didPositionInitially = true
+                }
+                .task(id: PhotosRangeViewportKey(
+                    viewport: geometry.size,
+                    navigationTop: globalFrame.maxY - bottomContentInset
+                )) {
+                    guard didPositionInitially else { return }
+                    try? await Task.sleep(for: .milliseconds(80))
+                    guard !Task.isCancelled,
+                          !didSettleInitialViewport || !userHasScrolled
+                    else { return }
+                    proxy.scrollTo(PhotosRangeScrollAnchor.bottom, anchor: .bottom)
+                    didSettleInitialViewport = true
+                }
+                .accessibilityIdentifier(route.assetGridAccessibilityID)
             }
-            .scrollEdgeEffectHidden(for: .bottom)
-            .accessibilityIdentifier(route.assetGridAccessibilityID)
         }
     }
 
@@ -1030,6 +1080,9 @@ struct PhotosRangeAssetsView: View {
         loadFailed = false
         loadedBucketCount = 0
         assets = []
+        didPositionInitially = false
+        didSettleInitialViewport = false
+        userHasScrolled = false
 
         var buckets: [TimelineBucketID: [TimelineAssetSummary]] = [:]
         for bucketID in ids {

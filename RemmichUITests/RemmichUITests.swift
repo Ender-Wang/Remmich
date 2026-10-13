@@ -455,6 +455,50 @@ final class RemmichUITests: XCTestCase {
     }
 
     @MainActor
+    func testRangeAssetGridStartsAtLatestAndClearsNativeChrome() {
+        let app = rangeApplication()
+        app.launch()
+        XCTAssertTrue(app.descendants(matching: .any)["photos-root"].waitForExistence(timeout: 10))
+
+        selectRange("Months", in: app)
+        let month = app.buttons["timeline-month-2026-10-01"]
+        XCTAssertTrue(month.waitForExistence(timeout: 5))
+        month.tap()
+
+        let grid = app.descendants(matching: .any)["timeline-range-assets-month-2026-10-01"]
+        let latest = app.descendants(matching: .any)["asset-range-2026-10-01-0"]
+        let next = app.descendants(matching: .any)["asset-range-2026-10-01-1"]
+        let oldest = app.descendants(matching: .any)["asset-range-2026-10-01-7"]
+        XCTAssertTrue(grid.waitForExistence(timeout: 10))
+        XCTAssertTrue(latest.waitForExistence(timeout: 10))
+        XCTAssertTrue(next.waitForExistence(timeout: 5))
+        XCTAssertTrue(oldest.waitForExistence(timeout: 5))
+
+        let isPhone = UIDevice.current.userInterfaceIdiom == .phone
+        let tabBarTopProbe = app.staticTexts["timeline-test-tab-bar-top"]
+        if isPhone {
+            XCTAssertTrue(tabBarTopProbe.waitForExistence(timeout: 5))
+        }
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            let expectedBottom: CGFloat
+            if isPhone {
+                guard let tabBarTop = Double(tabBarTopProbe.label), tabBarTop > 0 else { return false }
+                expectedBottom = CGFloat(tabBarTop) - 12
+            } else {
+                expectedBottom = app.frame.maxY - 20
+            }
+            return latest.isHittable
+                && next.isHittable
+                && latest.frame.minX < next.frame.minX
+                && abs(latest.frame.maxY - expectedBottom) <= 5
+        })
+
+        let navigationBar = app.navigationBars.firstMatch
+        XCTAssertTrue(navigationBar.exists)
+        XCTAssertGreaterThanOrEqual(oldest.frame.minY, navigationBar.frame.maxY - 3)
+    }
+
+    @MainActor
     func testPhotosAndVideosPinchReachOlderLibraryRangesAndKeepIndependentState() {
         let app = rangeApplication()
         app.launch()

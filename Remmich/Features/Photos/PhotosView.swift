@@ -274,6 +274,7 @@ struct PhotosView: View {
             route: route,
             store: store,
             media: media,
+            tabBarTop: tabBarTop,
             visibilityChanged: updateVisibility,
             viewportChanged: updateViewport
         )

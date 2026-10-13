@@ -67,7 +67,8 @@ struct PhotosGroupedTabView: View {
         PhotosRangeAssetsView(
             route: route,
             store: store,
-            media: media
+            media: media,
+            tabBarTop: tabBarTop
         )
         .navigationTitle(route.navigationTitle)
         .navigationBarTitleDisplayMode(.inline)
