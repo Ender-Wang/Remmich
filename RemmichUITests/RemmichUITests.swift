@@ -324,8 +324,26 @@ final class RemmichUITests: XCTestCase {
             return
         }
         let tab = tabButton(title, in: app)
-        for _ in 0 ..< 4 where !tab.exists {
-            app.swipeDown()
+        if !tab.exists {
+            #if targetEnvironment(simulator)
+                if UIDevice.current.userInterfaceIdiom == .pad {
+                    // XCTest's synthetic iPad scroll does not reliably trigger
+                    // SwiftUI's scroll phase. The iPhone suite still covers the
+                    // gesture-driven path; use the matching test-only state
+                    // control here so iPad range tests exercise their intent.
+                    let compactControl = app.buttons["timeline-test-photos-compact"].firstMatch
+                    XCTAssertTrue(compactControl.waitForExistence(timeout: 5))
+                    compactControl.tap()
+                } else {
+                    for _ in 0 ..< 4 where !tab.exists {
+                        app.swipeDown()
+                    }
+                }
+            #else
+                for _ in 0 ..< 4 where !tab.exists {
+                    app.swipeDown()
+                }
+            #endif
         }
         XCTAssertTrue(tab.waitForExistence(timeout: 5))
         tab.tap()
