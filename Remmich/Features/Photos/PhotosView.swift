@@ -217,6 +217,17 @@ struct PhotosView: View {
                     }
                     .accessibilityLabel("Compact \(contentName) timeline navigation")
                     .accessibilityIdentifier("timeline-test-\(contentName.lowercased())-compact")
+
+                    if libraryRange == .week {
+                        Button(action: uiTestOpenNewestWeek) {
+                            Image(systemName: "calendar")
+                                .opacity(0.01)
+                                .frame(width: 44, height: 44)
+                                .contentShape(Rectangle())
+                        }
+                        .accessibilityLabel("Open newest \(contentName) week")
+                        .accessibilityIdentifier("timeline-test-\(contentName.lowercased())-open-week")
+                    }
                 }
                 .buttonStyle(.plain)
                 .padding(.trailing, 8)
@@ -231,6 +242,17 @@ struct PhotosView: View {
         let magnification: CGFloat = direction == .coarser ? 0.6 : 1.5
         guard let gesture = PhotosPinchGesture(magnification: magnification) else { return }
         pinchLibraryRange(gesture)
+    }
+
+    private func uiTestOpenNewestWeek() {
+        guard libraryRange == .week,
+              let newest = store.bucketSummaries.first?.id,
+              let monthStart = newest.displayDate,
+              let representativeDate = Calendar(identifier: .gregorian)
+              .date(byAdding: .day, value: 6, to: monthStart),
+              let week = TimelineWeekID(day: TimelineCaptureDay(capturedAt: representativeDate))
+        else { return }
+        selectRoute(.week(newest, week, .library))
     }
 
     @ViewBuilder

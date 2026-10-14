@@ -370,16 +370,20 @@ struct PhotosTimelineRegressionTests {
         let older = buckets[7].id
         let owner = PhotosLibraryRangeBrowseOwner(id: UUID(), scope: .test)
         store.updateVisibleAnchor(.init(bucketID: mainTimelineAnchor, assetID: "asset-4"))
+        await store.loadBucket(mainTimelineAnchor)
         store.beginLibraryRangeBrowsing(owner: owner, newestBucketID: newest)
+        await store.loadLibraryRangeBucket(newest, owner: owner)
         await store.loadLibraryRangeBucket(older, owner: owner)
 
         #expect(store.visibleAnchor?.bucketID == mainTimelineAnchor)
+        #expect(store.sectionsByID[mainTimelineAnchor]?.loadState == .loaded)
         #expect(store.sectionsByID[newest]?.loadState == .loaded)
         #expect(store.sectionsByID[older]?.assets.map(\.id) == ["asset-7"])
 
         store.endLibraryRangeBrowsing(owner: owner)
 
-        #expect(store.sectionsByID[newest]?.loadState == .loaded)
+        #expect(store.sectionsByID[mainTimelineAnchor]?.loadState == .loaded)
+        #expect(store.sectionsByID[newest]?.loadState == .unloaded)
         #expect(store.sectionsByID[older]?.loadState == .unloaded)
     }
 

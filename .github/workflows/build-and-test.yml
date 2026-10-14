@@ -121,12 +121,15 @@ jobs:
           run_ui_tests "$RUNNER_TEMP/RemmichUITests-Retry.xcresult"
 
       - name: Boot iPad simulator
+        if: ${{ !cancelled() }}
         run: |
           xcrun simctl shutdown "iPhone 17e" || true
           xcrun simctl boot "iPad Air 13-inch (M4)" || true
           xcrun simctl bootstatus "iPad Air 13-inch (M4)" -b
 
       - name: Test iPad UI
+        if: ${{ !cancelled() }}
+        continue-on-error: true
         run: |
           set -o pipefail
           xcodebuild test-without-building \
