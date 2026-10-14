@@ -203,6 +203,7 @@ struct TimelineReadContractTests {
                 id: "memory-1",
                 ownerID: "owner-1",
                 memoryAt: #require(ISO8601DateFormatter().date(from: "2026-09-01T00:00:00Z")),
+                year: 2025,
                 kind: .onThisDay,
                 assets: []
             ),

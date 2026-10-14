@@ -120,10 +120,12 @@ actor ImmichTimelineRepository: TimelineReading, VideoReading {
             Self.logger.info(
                 "Memories finished generation=\(requestGeneration) count=\(memories.count) elapsedMs=\(Self.elapsedMilliseconds(since: startedAt))"
             )
-            return memories.map { memory in
-                TimelineMemorySummary(
+            return memories.compactMap { memory in
+                guard memory.kind == .onThisDay else { return nil }
+                return TimelineMemorySummary(
                     id: memory.id,
                     memoryAt: memory.memoryAt,
+                    sourceYear: memory.year,
                     assets: memory.assets.map {
                         TimelineMemoryAssetSummary(
                             id: $0.id,

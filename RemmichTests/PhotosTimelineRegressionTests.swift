@@ -126,6 +126,28 @@ struct PhotosTimelineRegressionTests {
         #expect(store.memories.isEmpty)
     }
 
+    @Test func memoryCatalogKeepsOnlyPriorYearsOnThisDayAndStacksEachYear() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(secondsFromGMT: 0))
+        let memories = [
+            Self.memory("recent", presentedAt: "2026-10-14T12:00:00Z", sourceYear: 2025, assets: ["a", "shared"]),
+            Self.memory("same-year", presentedAt: "2026-10-14T18:00:00Z", sourceYear: 2025, assets: ["shared", "b"]),
+            Self.memory("older", presentedAt: "2026-10-14T12:00:00Z", sourceYear: 2024, assets: ["c"]),
+            Self.memory("wrong-day", presentedAt: "2026-10-13T12:00:00Z", sourceYear: 2025, assets: ["d"]),
+            Self.memory("current-year", presentedAt: "2026-10-14T12:00:00Z", sourceYear: 2026, assets: ["e"]),
+            Self.memory("future-year", presentedAt: "2026-10-14T12:00:00Z", sourceYear: 2027, assets: ["f"]),
+        ]
+
+        let result = TimelineMemoryCatalog.onThisDay(
+            memories,
+            relativeTo: Self.date("2026-10-14T08:00:00Z"),
+            calendar: calendar
+        )
+
+        #expect(result.map(\.id) == ["recent", "older"])
+        #expect(result.map { $0.assets.map(\.id) } == [["a", "shared", "b"], ["c"]])
+    }
+
     @Test @MainActor func emptyLibraryPublishesEmptyState() async {
         let store = PhotosTimelineStore(reader: ScenarioTimelineReader(buckets: [], assets: [:]))
 
@@ -561,6 +583,21 @@ struct PhotosTimelineRegressionTests {
 
     private nonisolated static func date(_ value: String) -> Date {
         ISO8601DateFormatter().date(from: value)!
+    }
+
+    private nonisolated static func memory(
+        _ id: String,
+        presentedAt timestamp: String,
+        sourceYear: Int,
+        assets: [String]
+    ) -> TimelineMemorySummary {
+        let date = date(timestamp)
+        return TimelineMemorySummary(
+            id: id,
+            memoryAt: date,
+            sourceYear: sourceYear,
+            assets: assets.map { .init(id: $0, revision: date, mediaKind: .image) }
+        )
     }
 
     private nonisolated static func descriptor(_ asset: TimelineAssetSummary) -> MediaRequestDescriptor {

@@ -638,7 +638,6 @@ private struct TimelineSectionView: View {
 }
 
 private struct TimelineMemoryLane: View {
-    @Environment(\.displayScale) private var displayScale
     let memories: [TimelineMemorySummary]
     let media: MediaLibraryController
 
@@ -646,44 +645,186 @@ private struct TimelineMemoryLane: View {
         ScrollView(.horizontal) {
             LazyHStack(spacing: 12) {
                 ForEach(memories) { memory in
-                    if let asset = memory.assets.first {
-                        ZStack(alignment: .bottomLeading) {
-                            ImmichThumbnail(
-                                descriptor: .init(
-                                    assetID: asset.id,
-                                    updatedAt: asset.revision,
-                                    derivative: .thumbnail,
-                                    targetPixels: .init(
-                                        width: Int(190 * displayScale),
-                                        height: Int(120 * displayScale)
-                                    )
-                                ),
-                                media: media
-                            )
-                            LinearGradient(
-                                colors: [.clear, .black.opacity(0.65)],
-                                startPoint: .center,
-                                endPoint: .bottom
-                            )
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Memory")
-                                    .font(.headline)
-                                Text(memory.memoryAt.formatted(date: .abbreviated, time: .omitted))
-                                    .font(.caption)
-                            }
-                            .foregroundStyle(.white)
-                            .padding(12)
-                        }
-                        .frame(width: 190, height: 120)
-                        .clipShape(.rect(cornerRadius: 18))
-                        .accessibilityElement(children: .combine)
-                        .accessibilityIdentifier("memory-\(memory.id)")
-                    }
+                    TimelineMemoryCard(memory: memory, media: media)
                 }
             }
         }
         .scrollIndicators(.hidden)
         .accessibilityIdentifier("memory-lane")
+    }
+}
+
+private struct TimelineMemoryCard: View {
+    private static let logger = Logger(
+        subsystem: "io.github.ender-wang.Remmich",
+        category: "TimelineMemoryCard"
+    )
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.displayScale) private var displayScale
+    @Environment(\.scenePhase) private var scenePhase
+
+    let memory: TimelineMemorySummary
+    let media: MediaLibraryController
+
+    @State private var currentIndex = 0
+    @State private var incomingAsset: TimelineMemoryAssetSummary?
+    @State private var coverScales: [String: Double] = [:]
+    @State private var coverOpacities: [String: Double] = [:]
+    @State private var isPresented = false
+
+    private var currentAsset: TimelineMemoryAssetSummary? {
+        memory.assets.indices.contains(currentIndex) ? memory.assets[currentIndex] : memory.assets.first
+    }
+
+    private var renderedAssets: [TimelineMemoryAssetSummary] {
+        var pair = currentAsset.map { [$0] } ?? []
+        if let incomingAsset, incomingAsset.id != currentAsset?.id {
+            pair.append(incomingAsset)
+        }
+        return pair
+    }
+
+    private var slideshowID: String {
+        memory.assets.map { "\($0.id):\($0.revision.timeIntervalSinceReferenceDate)" }.joined(separator: "|")
+    }
+
+    var body: some View {
+        ZStack(alignment: .bottomLeading) {
+            Color(uiColor: .systemBackground)
+            ForEach(renderedAssets) { asset in
+                ImmichThumbnail(
+                    descriptor: .init(
+                        assetID: asset.id,
+                        updatedAt: asset.revision,
+                        derivative: .thumbnail,
+                        targetPixels: .init(
+                            width: Int(190 * displayScale),
+                            height: Int(120 * displayScale)
+                        )
+                    ),
+                    media: media,
+                    contentMode: .fill
+                )
+                .frame(width: 190, height: 120)
+                .opacity(opacity(for: asset))
+                .scaleEffect(scale(for: asset), anchor: .center)
+                .clipped()
+                .allowsHitTesting(false)
+            }
+            LinearGradient(
+                colors: [.clear, .black.opacity(0.65)],
+                startPoint: .center,
+                endPoint: .bottom
+            )
+            VStack(alignment: .leading, spacing: 2) {
+                Text("On This Day")
+                    .font(.headline)
+                Text(memory.memoryAt.formatted(date: .abbreviated, time: .omitted))
+                    .font(.caption)
+                if memory.assets.count > 1 {
+                    Text("\(memory.assets.count.formatted()) items")
+                        .font(.caption2)
+                }
+            }
+            .foregroundStyle(.white)
+            .padding(12)
+        }
+        .frame(width: 190, height: 120)
+        .clipShape(.rect(cornerRadius: 18))
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("memory-\(memory.id)")
+        .accessibilityValue(coverAccessibilityValue)
+        .onAppear { isPresented = true }
+        .onDisappear { isPresented = false }
+        .task(id: "\(isPresented):\(scenePhase):\(reduceMotion):\(slideshowID)") {
+            guard isPresented, scenePhase == .active else { return }
+            Self.logger.info(
+                "Memory slideshow evaluated id=\(memory.id, privacy: .public) assets=\(memory.assets.count) reduceMotion=\(reduceMotion)"
+            )
+            await runSlideshow()
+        }
+    }
+
+    private var coverAccessibilityValue: String {
+        #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("-ui-testing-signed-in") {
+                return currentAsset?.id ?? ""
+            }
+        #endif
+        return ""
+    }
+
+    private func opacity(for asset: TimelineMemoryAssetSummary) -> Double {
+        coverOpacities[asset.id] ?? (asset.id == currentAsset?.id && incomingAsset == nil ? 1 : 0)
+    }
+
+    private func scale(for asset: TimelineMemoryAssetSummary) -> Double {
+        coverScales[asset.id] ?? 1
+    }
+
+    private func runSlideshow() async {
+        guard !memory.assets.isEmpty else { return }
+        if !memory.assets.indices.contains(currentIndex) {
+            currentIndex = 0
+        }
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            coverScales = currentAsset.map { [$0.id: 1] } ?? [:]
+            coverOpacities = currentAsset.map { [$0.id: 1] } ?? [:]
+            incomingAsset = nil
+        }
+
+        var timeBeforeFadeOut = TimelineCoverAnimation.initialHold
+        while !Task.isCancelled {
+            withTransaction(transaction) {
+                incomingAsset = nil
+                coverScales = coverScales.filter { $0.key == currentAsset?.id }
+                coverOpacities = coverOpacities.filter { $0.key == currentAsset?.id }
+            }
+            guard !reduceMotion else { return }
+
+            let nextIndex = (currentIndex + 1) % memory.assets.count
+            let next = memory.assets[nextIndex]
+            guard next.id != currentAsset?.id else { return }
+            withTransaction(transaction) {
+                incomingAsset = next
+                coverScales[next.id] = 1
+                coverOpacities[next.id] = 0
+            }
+
+            if timeBeforeFadeOut == TimelineCoverAnimation.initialHold, let currentAsset {
+                withAnimation(.linear(duration: TimelineCoverAnimation.zoomDuration)) {
+                    coverScales[currentAsset.id] = TimelineCoverAnimation.zoomScale
+                }
+            }
+            do {
+                try await Task.sleep(for: .seconds(timeBeforeFadeOut))
+            } catch { return }
+            if let currentAsset {
+                withAnimation(.linear(duration: TimelineCoverAnimation.fadeDuration)) {
+                    coverOpacities[currentAsset.id] = 0
+                }
+            }
+            do {
+                try await Task.sleep(for: .seconds(TimelineCoverAnimation.fadeDuration))
+            } catch { return }
+            withAnimation(.linear(duration: TimelineCoverAnimation.fadeDuration)) {
+                coverOpacities[next.id] = 1
+            }
+            withAnimation(.linear(duration: TimelineCoverAnimation.zoomDuration)) {
+                coverScales[next.id] = TimelineCoverAnimation.zoomScale
+            }
+            do {
+                try await Task.sleep(for: .seconds(TimelineCoverAnimation.fadeDuration))
+            } catch { return }
+            withTransaction(transaction) {
+                currentIndex = nextIndex
+                incomingAsset = nil
+            }
+            timeBeforeFadeOut = TimelineCoverAnimation.initialHold
+        }
     }
 }
 

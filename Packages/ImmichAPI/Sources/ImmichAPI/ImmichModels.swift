@@ -284,13 +284,22 @@ public struct ImmichMemory: Codable, Hashable, Identifiable, Sendable {
     public let id: String
     public let ownerID: String
     public let memoryAt: Date
+    public let year: Int
     public let kind: ImmichMemoryKind
     public let assets: [ImmichMemoryAsset]
 
-    public init(id: String, ownerID: String, memoryAt: Date, kind: ImmichMemoryKind, assets: [ImmichMemoryAsset]) {
+    public init(
+        id: String,
+        ownerID: String,
+        memoryAt: Date,
+        year: Int,
+        kind: ImmichMemoryKind,
+        assets: [ImmichMemoryAsset]
+    ) {
         self.id = id
         self.ownerID = ownerID
         self.memoryAt = memoryAt
+        self.year = year
         self.kind = kind
         self.assets = assets
     }

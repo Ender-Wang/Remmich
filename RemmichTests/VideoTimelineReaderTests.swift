@@ -26,6 +26,42 @@ struct VideoTimelineReaderTests {
         #expect(october.map(\.id) == ["newest", "older"])
         #expect(try await reader.memories().isEmpty)
     }
+
+    @Test func memoryStacksKeepEveryVideoAndExcludeOtherMedia() async throws {
+        let reader = VideoTimelineReader(source: VideoMemoryFixture())
+        let memories = try await reader.memories()
+
+        #expect(memories.map(\.id) == ["memory"])
+        #expect(memories[0].assets.map(\.id) == ["video-1", "video-2"])
+    }
+}
+
+private actor VideoMemoryFixture: VideoReading {
+    func bucketSummaries(query _: TimelineQuery) async throws -> [TimelineBucketSummary] {
+        []
+    }
+
+    func assets(in _: TimelineBucketID, query _: TimelineQuery) async throws -> [TimelineAssetSummary] {
+        []
+    }
+
+    func videos(cursor _: String?) async throws -> VideoPage {
+        .init(assets: [], nextCursor: nil)
+    }
+
+    func memories() async throws -> [TimelineMemorySummary] {
+        let revision = Date(timeIntervalSince1970: 1)
+        return [.init(
+            id: "memory",
+            memoryAt: revision,
+            sourceYear: 2025,
+            assets: [
+                .init(id: "image", revision: revision, mediaKind: .image),
+                .init(id: "video-1", revision: revision, mediaKind: .video),
+                .init(id: "video-2", revision: revision, mediaKind: .video),
+            ]
+        )]
+    }
 }
 
 private actor VideoPageFixture: VideoReading {

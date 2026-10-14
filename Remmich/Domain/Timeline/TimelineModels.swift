@@ -134,7 +134,76 @@ nonisolated struct TimelineMemoryAssetSummary: Hashable, Identifiable, Sendable 
 nonisolated struct TimelineMemorySummary: Hashable, Identifiable, Sendable {
     let id: String
     let memoryAt: Date
+    let sourceYear: Int
     let assets: [TimelineMemoryAssetSummary]
+}
+
+nonisolated enum TimelineMemoryCatalog {
+    static func onThisDay(
+        _ memories: [TimelineMemorySummary],
+        relativeTo referenceDate: Date,
+        calendar: Calendar = .autoupdatingCurrent
+    ) -> [TimelineMemorySummary] {
+        let reference = calendar.dateComponents([.year, .month, .day], from: referenceDate)
+        guard let referenceYear = reference.year,
+              let referenceMonth = reference.month,
+              let referenceDay = reference.day
+        else { return [] }
+
+        var groups: [DayKey: MemoryGroup] = [:]
+        for memory in memories {
+            let components = calendar.dateComponents([.month, .day], from: memory.memoryAt)
+            guard components.month == referenceMonth,
+                  components.day == referenceDay,
+                  memory.sourceYear < referenceYear
+            else { continue }
+
+            let key = DayKey(year: memory.sourceYear, month: referenceMonth, day: referenceDay)
+            let sourceDate = calendar.date(from: DateComponents(
+                timeZone: calendar.timeZone,
+                year: memory.sourceYear,
+                month: referenceMonth,
+                day: referenceDay
+            )) ?? memory.memoryAt
+            var group = groups[key] ?? MemoryGroup(
+                id: memory.id,
+                memoryAt: sourceDate,
+                sourceYear: memory.sourceYear,
+                assets: [],
+                assetIDs: []
+            )
+            for asset in memory.assets where group.assetIDs.insert(asset.id).inserted {
+                group.assets.append(asset)
+            }
+            groups[key] = group
+        }
+
+        return groups.values
+            .filter { !$0.assets.isEmpty }
+            .map {
+                .init(
+                    id: $0.id,
+                    memoryAt: $0.memoryAt,
+                    sourceYear: $0.sourceYear,
+                    assets: $0.assets
+                )
+            }
+            .sorted { $0.memoryAt > $1.memoryAt }
+    }
+
+    private struct DayKey: Hashable {
+        let year: Int
+        let month: Int
+        let day: Int
+    }
+
+    private struct MemoryGroup {
+        let id: String
+        let memoryAt: Date
+        let sourceYear: Int
+        var assets: [TimelineMemoryAssetSummary]
+        var assetIDs: Set<String>
+    }
 }
 
 nonisolated struct TimelineLogicalPageID: Hashable, Identifiable, Sendable {

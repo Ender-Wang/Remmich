@@ -43,6 +43,7 @@ actor VideoTimelineReader: TimelineReading {
             return TimelineMemorySummary(
                 id: memory.id,
                 memoryAt: memory.memoryAt,
+                sourceYear: memory.sourceYear,
                 assets: videos
             )
         }

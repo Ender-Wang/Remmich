@@ -42,9 +42,9 @@ enum PreviewFixtures {
     ]
 
     static let memories: [FixtureMemory] = [
-        FixtureMemory(id: "memory-1", title: "One year ago", subtitle: "A bright afternoon", asset: assets[2]),
-        FixtureMemory(id: "memory-2", title: "City walks", subtitle: "September highlights", asset: assets[6]),
-        FixtureMemory(id: "memory-3", title: "By the water", subtitle: "Favorite moments", asset: assets[11]),
+        FixtureMemory(id: "memory-1", title: "One year ago", subtitle: "A bright afternoon", asset: assets[0]),
+        FixtureMemory(id: "memory-2", title: "One year ago", subtitle: "Another moment", asset: assets[7]),
+        FixtureMemory(id: "memory-3", title: "Two years ago", subtitle: "Favorite moments", asset: assets[14]),
     ]
 
     static let albums: [FixtureAlbum] = [

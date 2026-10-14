@@ -1,5 +1,13 @@
 import SwiftUI
 
+nonisolated enum TimelineCoverAnimation {
+    static let zoomScale = 1.1
+    static let zoomDuration = 6.0
+    static let fadeDuration = 3.0
+    static let overlapStep = 1.5
+    static let initialHold = 3.0
+}
+
 struct AssetGrid: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     let assets: [FixtureAsset]

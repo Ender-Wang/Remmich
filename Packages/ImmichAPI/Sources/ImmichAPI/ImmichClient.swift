@@ -493,6 +493,7 @@ public actor ImmichClient {
             id: response.id,
             ownerID: response.ownerId,
             memoryAt: response.memoryAt,
+            year: response.data.year,
             kind: kind,
             assets: response.assets.map { asset in
                 let mediaKind: ImmichTimelineMediaKind = switch asset._type {

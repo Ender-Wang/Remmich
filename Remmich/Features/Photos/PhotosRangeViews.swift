@@ -1552,7 +1552,7 @@ private struct PhotosRangeCard: View {
             coverOpacities = currentAsset.map { [$0.id: 1] } ?? [:]
             incomingAsset = nil
         }
-        var timeBeforeFadeOut = 3.0
+        var timeBeforeFadeOut = TimelineCoverAnimation.initialHold
         while !Task.isCancelled {
             withTransaction(transaction) {
                 incomingAsset = nil
@@ -1582,31 +1582,31 @@ private struct PhotosRangeCard: View {
             }
 
             // Spread the same 10% zoom across fade-in and fade-out; never freeze at the fade boundary.
-            if timeBeforeFadeOut == 3, let currentAsset {
-                withAnimation(.linear(duration: 6)) {
-                    coverScales[currentAsset.id] = 1.1
+            if timeBeforeFadeOut == TimelineCoverAnimation.initialHold, let currentAsset {
+                withAnimation(.linear(duration: TimelineCoverAnimation.zoomDuration)) {
+                    coverScales[currentAsset.id] = TimelineCoverAnimation.zoomScale
                 }
             }
             do {
                 try await Task.sleep(for: .seconds(timeBeforeFadeOut))
             } catch { return }
             if let currentAsset {
-                withAnimation(.linear(duration: 3)) {
+                withAnimation(.linear(duration: TimelineCoverAnimation.fadeDuration)) {
                     coverOpacities[currentAsset.id] = 0
                 }
             }
             do {
-                try await Task.sleep(for: .seconds(1.5))
+                try await Task.sleep(for: .seconds(TimelineCoverAnimation.overlapStep))
             } catch { return }
             // At two seconds into the outgoing fade, both incoming animations have run for 0.5 seconds.
-            withAnimation(.linear(duration: 3)) {
+            withAnimation(.linear(duration: TimelineCoverAnimation.fadeDuration)) {
                 coverOpacities[next.id] = 1
             }
-            withAnimation(.linear(duration: 6)) {
-                coverScales[next.id] = 1.1
+            withAnimation(.linear(duration: TimelineCoverAnimation.zoomDuration)) {
+                coverScales[next.id] = TimelineCoverAnimation.zoomScale
             }
             do {
-                try await Task.sleep(for: .seconds(1.5))
+                try await Task.sleep(for: .seconds(TimelineCoverAnimation.overlapStep))
             } catch { return }
             withTransaction(transaction) {
                 coverAssets = nextBatch
@@ -1615,7 +1615,7 @@ private struct PhotosRangeCard: View {
                 incomingAsset = nil
             }
             // Both values belong to the asset: promotion preserves its unfinished fade-in and zoom.
-            timeBeforeFadeOut = 1.5
+            timeBeforeFadeOut = TimelineCoverAnimation.overlapStep
         }
     }
 }

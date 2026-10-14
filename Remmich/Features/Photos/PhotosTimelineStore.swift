@@ -40,6 +40,7 @@ final class PhotosTimelineStore {
     }
 
     private let reader: any TimelineReading
+    private let now: () -> Date
     private var query: TimelineQuery
     private var generation: UInt64 = 0
     private var publicationRevision: UInt64 = 0
@@ -50,9 +51,14 @@ final class PhotosTimelineStore {
     private var refreshTask: Task<Void, Never>?
     private var memoryTask: Task<Void, Never>?
 
-    init(reader: any TimelineReading, query: TimelineQuery = .init()) {
+    init(
+        reader: any TimelineReading,
+        query: TimelineQuery = .init(),
+        now: @escaping () -> Date = { .now }
+    ) {
         self.reader = reader
         self.query = query
+        self.now = now
     }
 
     func load() async {
@@ -523,7 +529,13 @@ final class PhotosTimelineStore {
             do {
                 let loaded = try await reader.memories()
                 guard requestGeneration == generation else { return }
-                memories = loaded.filter { !$0.assets.isEmpty }
+                memories = TimelineMemoryCatalog.onThisDay(loaded, relativeTo: now())
+                let groupCount = memories.count
+                let stackedCount = memories.count(where: { $0.assets.count > 1 })
+                let assetCount = memories.reduce(into: 0) { $0 += $1.assets.count }
+                Self.logger.info(
+                    "Memory lane published generation=\(requestGeneration) raw=\(loaded.count) groups=\(groupCount) stackedGroups=\(stackedCount) assets=\(assetCount)"
+                )
                 memoryLaneState = memories.isEmpty ? .hidden : .loaded
             } catch {
                 guard requestGeneration == generation else { return }

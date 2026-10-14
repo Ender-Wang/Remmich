@@ -30,10 +30,14 @@ actor PreviewTimelineReader: TimelineReading, VideoReading {
         videoValues = rangeLibrary
             ? Self.rangeVideos()
             : PreviewFixtures.assets.filter { $0.kind == .video }.map(Self.map)
-        memoryValues = PreviewFixtures.memories.map { memory in
-            TimelineMemorySummary(
+        memoryValues = PreviewFixtures.memories.enumerated().map { index, memory in
+            let memoryAt = Date.now
+            let currentYear = calendar.component(.year, from: memoryAt)
+            let sourceYear = currentYear - (index < 2 ? 1 : 2)
+            return TimelineMemorySummary(
                 id: memory.id,
-                memoryAt: memory.asset.capturedAt,
+                memoryAt: memoryAt,
+                sourceYear: sourceYear,
                 assets: [
                     TimelineMemoryAssetSummary(
                         id: memory.asset.id,

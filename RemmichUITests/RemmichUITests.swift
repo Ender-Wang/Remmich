@@ -286,7 +286,12 @@ final class RemmichUITests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["photos-root"].waitForExistence(timeout: 5))
         let memory = app.descendants(matching: .any)["memory-memory-1"].firstMatch
         XCTAssertTrue(memory.waitForExistence(timeout: 5))
-        XCTAssertTrue(memory.label.contains("Memory"))
+        XCTAssertTrue(memory.label.contains("On This Day"))
+        XCTAssertTrue(memory.label.contains("2 items"))
+        let initialCover = memory.value as? String
+        XCTAssertTrue(["asset-0", "asset-7"].contains(initialCover))
+        let nextCover = initialCover == "asset-0" ? "asset-7" : "asset-0"
+        XCTAssertTrue(waitUntil(timeout: 15) { (memory.value as? String) == nextCover })
         XCTAssertFalse(app.buttons["timeline-jump-button"].exists)
         let video = app.descendants(matching: .any)["asset-asset-0"]
         XCTAssertTrue(video.waitForExistence(timeout: 2))
@@ -296,6 +301,16 @@ final class RemmichUITests: XCTestCase {
         let livePhoto = app.descendants(matching: .any)["asset-asset-5"]
         XCTAssertTrue(livePhoto.waitForExistence(timeout: 2))
         XCTAssertTrue(livePhoto.label.contains("Live Photo"))
+
+        tabButton("Videos", in: app).tap()
+        XCTAssertTrue(app.descendants(matching: .any)["videos-root"].waitForExistence(timeout: 5))
+        let videoMemories = app.descendants(matching: .any).matching(identifier: "memory-memory-1")
+        XCTAssertTrue(videoMemories.firstMatch.waitForExistence(timeout: 5))
+        guard let videoMemory = videoMemories.allElementsBoundByIndex.first(where: \.isHittable) else {
+            XCTFail("Expected a visible stacked video memory")
+            return
+        }
+        XCTAssertTrue(videoMemory.label.contains("2 items"))
     }
 
     @MainActor
