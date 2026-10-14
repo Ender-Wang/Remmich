@@ -1,0 +1,82 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build
+    runs-on: xcode-27
+    timeout-minutes: 45
+    env:
+      IPHONE_DESTINATION: platform=iOS Simulator,name=iPhone 17e,OS=27.0
+      DERIVED_DATA_PATH: ${{ github.workspace }}/.ci/DerivedData
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Report toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+          swiftformat --version
+
+      - name: Check formatting
+        run: |
+          swiftformat --lint --config .swiftformat \
+            Remmich \
+            RemmichTests \
+            RemmichUITests \
+            Packages/ImmichAPI/Sources \
+            Packages/ImmichAPI/Tests
+
+      - name: Boot iPhone simulator
+        run: |
+          xcrun simctl boot "iPhone 17e" || true
+          xcrun simctl bootstatus "iPhone 17e" -b
+
+      - name: Build app and test bundles
+        run: |
+          set -o pipefail
+          xcodebuild build-for-testing \
+            -project Remmich.xcodeproj \
+            -scheme Remmich \
+            -configuration Debug \
+            -destination "$IPHONE_DESTINATION" \
+            -derivedDataPath "$DERIVED_DATA_PATH" \
+            -skipPackagePluginValidation \
+            -jobs 6 \
+            -parallel-testing-enabled NO \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            | xcbeautify
+
+      - name: Archive test products
+        run: |
+          test -d "$DERIVED_DATA_PATH/Build/Products"
+          printf '%s\n' "$GITHUB_SHA" > "$DERIVED_DATA_PATH/Build/tested-revision"
+          tar -C "$DERIVED_DATA_PATH/Build" \
+            -czf "$RUNNER_TEMP/remmich-test-products.tar.gz" \
+            Products \
+            tested-revision
+
+      - name: Upload test products
+        uses: actions/upload-artifact@v4
+        with:
+          name: remmich-test-products
+          path: ${{ runner.temp }}/remmich-test-products.tar.gz
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Shut down simulator
+        if: ${{ always() }}
+        run: xcrun simctl shutdown all || true

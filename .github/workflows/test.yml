@@ -1,77 +1,86 @@
-name: Build & Test
+name: Tests
 
 on:
-  push:
-  pull_request:
-  workflow_dispatch:
+  workflow_run:
+    workflows: [Build]
+    types: [completed]
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: tests-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: true
 
 jobs:
   test:
-    name: Build and test
+    name: Tests
     runs-on: xcode-27
     timeout-minutes: 120
     env:
       IPHONE_DESTINATION: platform=iOS Simulator,name=iPhone 17e,OS=27.0
       IPAD_DESTINATION: platform=iOS Simulator,name=iPad Air 13-inch (M4),OS=27.0
+      TEST_PRODUCTS_PATH: ${{ github.workspace }}/.ci/TestProducts
 
     steps:
-      - name: Check out repository
+      - name: Require a successful build
+        env:
+          BUILD_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+        run: |
+          if [[ "$BUILD_CONCLUSION" != "success" ]]; then
+            echo "The triggering Build workflow concluded with: $BUILD_CONCLUSION"
+            exit 1
+          fi
+
+      - name: Download test products
+        uses: actions/download-artifact@v5
+        with:
+          name: remmich-test-products
+          path: ${{ runner.temp }}/RemmichBuildArtifact
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: Restore test products
+        id: test-products
+        run: |
+          mkdir -p "$TEST_PRODUCTS_PATH"
+          tar -C "$TEST_PRODUCTS_PATH" \
+            -xzf "$RUNNER_TEMP/RemmichBuildArtifact/remmich-test-products.tar.gz"
+          tested_revision="$(<"$TEST_PRODUCTS_PATH/tested-revision")"
+          if [[ ! "$tested_revision" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "The downloaded build artifact has an invalid tested revision."
+            exit 1
+          fi
+          xctestrun_path="$(find "$TEST_PRODUCTS_PATH/Products" -maxdepth 1 -name '*.xctestrun' -print -quit)"
+          if [[ -z "$xctestrun_path" ]]; then
+            echo "No xctestrun file was found in the downloaded build products."
+            exit 1
+          fi
+          echo "tested-revision=$tested_revision" >> "$GITHUB_OUTPUT"
+          echo "XCTESTRUN_PATH=$xctestrun_path" >> "$GITHUB_ENV"
+
+      - name: Check out tested revision
         uses: actions/checkout@v7
-
-      - name: Report toolchain
-        run: |
-          xcodebuild -version
-          swift --version
-          swiftformat --version
-
-      - name: Check formatting
-        run: |
-          swiftformat --lint --config .swiftformat \
-            Remmich \
-            RemmichTests \
-            RemmichUITests \
-            Packages/ImmichAPI/Sources \
-            Packages/ImmichAPI/Tests
+        with:
+          ref: ${{ steps.test-products.outputs.tested-revision }}
 
       - name: Test Immich API package
-        run: swift test --package-path Packages/ImmichAPI
+        run: swift test --jobs 6 --package-path Packages/ImmichAPI
 
       - name: Boot iPhone simulator
         run: |
           xcrun simctl boot "iPhone 17e" || true
           xcrun simctl bootstatus "iPhone 17e" -b
 
-      - name: Build app and test bundles
-        run: |
-          set -o pipefail
-          xcodebuild build-for-testing \
-            -project Remmich.xcodeproj \
-            -scheme Remmich \
-            -configuration Debug \
-            -destination "$IPHONE_DESTINATION" \
-            -derivedDataPath "$RUNNER_TEMP/RemmichDerivedData" \
-            -skipPackagePluginValidation \
-            COMPILER_INDEX_STORE_ENABLE=NO \
-            | xcbeautify
-
       - name: Test app logic
         run: |
           set -o pipefail
           xcodebuild test-without-building \
-            -project Remmich.xcodeproj \
-            -scheme Remmich \
-            -configuration Debug \
+            -xctestrun "$XCTESTRUN_PATH" \
             -destination "$IPHONE_DESTINATION" \
-            -derivedDataPath "$RUNNER_TEMP/RemmichDerivedData" \
             -resultBundlePath "$RUNNER_TEMP/RemmichUnitTests.xcresult" \
-            -skipPackagePluginValidation \
+            -jobs 6 \
             -parallel-testing-enabled NO \
             -only-testing:RemmichTests \
             COMPILER_INDEX_STORE_ENABLE=NO \
@@ -84,13 +93,10 @@ jobs:
           run_ui_tests() {
             local result_bundle="$1"
             xcodebuild test-without-building \
-              -project Remmich.xcodeproj \
-              -scheme Remmich \
-              -configuration Debug \
+              -xctestrun "$XCTESTRUN_PATH" \
               -destination "$IPHONE_DESTINATION" \
-              -derivedDataPath "$RUNNER_TEMP/RemmichDerivedData" \
               -resultBundlePath "$result_bundle" \
-              -skipPackagePluginValidation \
+              -jobs 6 \
               -parallel-testing-enabled NO \
               -only-testing:RemmichUITests \
               -test-timeouts-enabled YES \
@@ -133,13 +139,10 @@ jobs:
         run: |
           set -o pipefail
           xcodebuild test-without-building \
-            -project Remmich.xcodeproj \
-            -scheme Remmich \
-            -configuration Debug \
+            -xctestrun "$XCTESTRUN_PATH" \
             -destination "$IPAD_DESTINATION" \
-            -derivedDataPath "$RUNNER_TEMP/RemmichDerivedData" \
             -resultBundlePath "$RUNNER_TEMP/RemmichIPadLayoutTests.xcresult" \
-            -skipPackagePluginValidation \
+            -jobs 6 \
             -parallel-testing-enabled NO \
             -only-testing:RemmichUITests \
             -test-timeouts-enabled YES \
@@ -157,7 +160,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: remmich-test-results-${{ github.run_attempt }}
+          name: remmich-test-results-${{ github.event.workflow_run.id }}
           path: |
             ${{ runner.temp }}/Remmich*.xcresult
             ${{ runner.temp }}/Remmich*.log

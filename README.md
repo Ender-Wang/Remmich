@@ -6,7 +6,8 @@ A native, read-only Immich client for iPhone and iPad. Your library, with the pl
   <img src="https://img.shields.io/badge/Swift-6.2-orange?logo=swift" alt="Swift" />
   <img src="https://img.shields.io/badge/iOS-26.6%2B-black?logo=apple" alt="iOS 26.6+" />
   <img src=".github/assets/immich-read-only-badge.svg" alt="Read-only Immich" />
-  <a href="https://github.com/Ender-Wang/Remmich/actions/workflows/build-and-test.yml"><img src="https://github.com/Ender-Wang/Remmich/actions/workflows/build-and-test.yml/badge.svg" alt="Build &amp; Test" /></a>
+  <a href="https://github.com/Ender-Wang/Remmich/actions/workflows/build.yml"><img src="https://github.com/Ender-Wang/Remmich/actions/workflows/build.yml/badge.svg" alt="Build" /></a>
+  <a href="https://github.com/Ender-Wang/Remmich/actions/workflows/test.yml"><img src="https://github.com/Ender-Wang/Remmich/actions/workflows/test.yml/badge.svg" alt="Tests" /></a>
 </p>
 
 **Why Remmich exists:** Immich is an excellent self-hosted photo library, but its official mobile app is built with Flutter. Remmich explores a focused alternative: native SwiftUI navigation, adaptive iPad layouts, system materials, and Apple-platform interaction patterns while keeping the Immich library strictly read-only.
@@ -124,6 +125,6 @@ The updater prints a repository-relative checksum target. Schema provenance and 
 
 The project uses SwiftFormat as a pre-build check. Xcode may ask you once to trust the pinned Swift OpenAPI Generator build-tool plugin.
 
-GitHub Actions runs formatting, package tests, app unit tests, and simulator UI tests for every pushed commit and pull request. It can also be started manually from the Actions tab.
+GitHub Actions builds the app and test bundles once, then passes those products to a separate test workflow. Tests cover the API package, app logic, and iPhone simulator UI for every successful build; advisory iPad UI coverage runs without blocking the test result.
 
 True SSID matching requires the `com.apple.developer.networking.wifi-info` entitlement, which Apple does not provision for personal development teams. `Remmich/Remmich.entitlements` records the paid-team capability, but the personal-signing target intentionally does not attach it. Correctness does not depend on SSID: Personal Team builds validate the endpoint currently in use first, then the other saved endpoints in profile order, using one bounded authenticated `/users/me` identity check per candidate. Bursty path changes are debounced, stale evaluations cannot publish route state, and Remmich never substitutes `localhost`.
