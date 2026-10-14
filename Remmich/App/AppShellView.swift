@@ -214,37 +214,41 @@ struct AccountToolbarButton: ToolbarContent {
     @Environment(\.displayScale) private var displayScale
 
     let action: () -> Void
+    var showsOnPhone = false
 
+    @ToolbarContentBuilder
     var body: some ToolbarContent {
-        ToolbarItem(placement: .topBarTrailing) {
-            Button(action: action) {
-                Group {
-                    if let media {
-                        LazyImage(request: media.profileImageRequest(targetPixels: Int(32 * displayScale))) { state in
-                            if let image = state.image {
-                                image.resizable().scaledToFill()
-                            } else {
-                                Image(systemName: "person.crop.circle")
-                                    .resizable()
-                                    .scaledToFit()
+        if showsOnPhone || UIDevice.current.userInterfaceIdiom == .pad {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button(action: action) {
+                    Group {
+                        if let media {
+                            LazyImage(request: media.profileImageRequest(targetPixels: Int(32 * displayScale))) { state in
+                                if let image = state.image {
+                                    image.resizable().scaledToFill()
+                                } else {
+                                    Image(systemName: "person.crop.circle")
+                                        .resizable()
+                                        .scaledToFit()
+                                }
                             }
+                            .pipeline(media.pipeline ?? .shared)
+                            .onDisappear(.cancel)
+                        } else {
+                            Image(systemName: "person.crop.circle")
+                                .resizable()
+                                .scaledToFit()
                         }
-                        .pipeline(media.pipeline ?? .shared)
-                        .onDisappear(.cancel)
-                    } else {
-                        Image(systemName: "person.crop.circle")
-                            .resizable()
-                            .scaledToFit()
                     }
+                    .frame(width: 32, height: 32)
+                    .clipShape(Circle())
+                    .background(Circle().fill(.regularMaterial))
+                    .contentShape(Circle())
                 }
-                .frame(width: 32, height: 32)
-                .clipShape(Circle())
-                .background(Circle().fill(.regularMaterial))
-                .contentShape(Circle())
+                .buttonStyle(.plain)
+                .accessibilityLabel("Account")
+                .accessibilityIdentifier("account-button")
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Account")
-            .accessibilityIdentifier("account-button")
         }
     }
 }

@@ -24,20 +24,30 @@ final class RemmichUITests: XCTestCase {
         app.launch()
 
         XCTAssertTrue(app.descendants(matching: .any)["photos-root"].waitForExistence(timeout: 5))
+        assertAccountButtonVisibility(UIDevice.current.userInterfaceIdiom == .pad, in: app)
 
         tabButton("Videos", in: app).tap()
         let videos = app.descendants(matching: .any)["videos-root"]
         XCTAssertTrue(videos.waitForExistence(timeout: 5))
         XCTAssertTrue(app.descendants(matching: .any)["asset-asset-0"].waitForExistence(timeout: 5))
+        assertAccountButtonVisibility(UIDevice.current.userInterfaceIdiom == .pad, in: app)
 
         tabButton("Albums", in: app).tap()
         XCTAssertTrue(app.descendants(matching: .any)["albums-root"].waitForExistence(timeout: 2))
+        assertAccountButtonVisibility(UIDevice.current.userInterfaceIdiom == .pad, in: app)
 
         tabButton("Library", in: app).tap()
         XCTAssertTrue(app.descendants(matching: .any)["library-root"].waitForExistence(timeout: 2))
+        assertAccountButtonVisibility(true, in: app)
 
         tabButton("Search", in: app).tap()
         XCTAssertTrue(app.descendants(matching: .any)["search-root"].waitForExistence(timeout: 2))
+        assertAccountButtonVisibility(UIDevice.current.userInterfaceIdiom == .pad, in: app)
+
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            tabButton("Library", in: app).tap()
+            XCTAssertTrue(app.descendants(matching: .any)["library-root"].waitForExistence(timeout: 2))
+        }
 
         app.buttons["account-button"].firstMatch.tap()
         let accountSettings = app.descendants(matching: .any)["account-settings"]
@@ -61,6 +71,10 @@ final class RemmichUITests: XCTestCase {
         #else
             let app = XCUIApplication()
             app.launch()
+            if UIDevice.current.userInterfaceIdiom == .phone {
+                tabButton("Library", in: app).tap()
+                XCTAssertTrue(app.descendants(matching: .any)["library-root"].waitForExistence(timeout: 15))
+            }
             let accountButton = app.buttons["account-button"].firstMatch
             XCTAssertTrue(accountButton.waitForExistence(timeout: 15))
             accountButton.tap()
@@ -145,6 +159,16 @@ final class RemmichUITests: XCTestCase {
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
+    }
+
+    @MainActor
+    private func assertAccountButtonVisibility(_ visible: Bool, in app: XCUIApplication) {
+        let button = app.buttons["account-button"].firstMatch
+        if visible {
+            XCTAssertTrue(button.waitForExistence(timeout: 2))
+        } else {
+            XCTAssertFalse(button.waitForExistence(timeout: 0.5))
+        }
     }
 
     @MainActor

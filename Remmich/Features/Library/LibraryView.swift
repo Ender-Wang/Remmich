@@ -20,7 +20,7 @@ struct LibraryView: View {
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(.hidden, for: .navigationBar)
-        .toolbar { AccountToolbarButton(action: showAccount) }
+        .toolbar { AccountToolbarButton(action: showAccount, showsOnPhone: true) }
         .navigationDestination(for: FixtureCollection.self) { collection in
             CollectionDetailView(collection: collection)
         }
