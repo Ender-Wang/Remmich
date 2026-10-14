@@ -21,7 +21,6 @@ jobs:
     env:
       IPHONE_DESTINATION: platform=iOS Simulator,name=iPhone 17e,OS=27.0
       IPAD_DESTINATION: platform=iOS Simulator,name=iPad Air 13-inch (M4),OS=27.0
-      TEST_PRODUCTS_PATH: ${{ github.workspace }}/.ci/TestProducts
 
     steps:
       - name: Require a successful build
@@ -44,15 +43,16 @@ jobs:
       - name: Restore test products
         id: test-products
         run: |
-          mkdir -p "$TEST_PRODUCTS_PATH"
-          tar -C "$TEST_PRODUCTS_PATH" \
+          test_products_path="$RUNNER_TEMP/RemmichTestProducts"
+          mkdir -p "$test_products_path"
+          tar -C "$test_products_path" \
             -xzf "$RUNNER_TEMP/RemmichBuildArtifact/remmich-test-products.tar.gz"
-          tested_revision="$(<"$TEST_PRODUCTS_PATH/tested-revision")"
+          tested_revision="$(<"$test_products_path/tested-revision")"
           if [[ ! "$tested_revision" =~ ^[0-9a-f]{40}$ ]]; then
             echo "The downloaded build artifact has an invalid tested revision."
             exit 1
           fi
-          xctestrun_path="$(find "$TEST_PRODUCTS_PATH/Products" -maxdepth 1 -name '*.xctestrun' -print -quit)"
+          xctestrun_path="$(find "$test_products_path/Products" -maxdepth 1 -name '*.xctestrun' -print -quit)"
           if [[ -z "$xctestrun_path" ]]; then
             echo "No xctestrun file was found in the downloaded build products."
             exit 1
