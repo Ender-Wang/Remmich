@@ -658,17 +658,35 @@ private struct TimelineSectionView: View {
 }
 
 private struct TimelineMemoryLane: View {
+    private static let cardSpacing: CGFloat = 12
+    private static let edgeInset = cardSpacing / 2
+    private static let phoneFallbackCardWidth: CGFloat = 190
+    private static let padCardWidth: CGFloat = 200
+
     let memories: [TimelineMemorySummary]
     let media: MediaLibraryController
 
+    private var cardWidth: CGFloat {
+        guard UIDevice.current.userInterfaceIdiom == .phone else {
+            return Self.padCardWidth
+        }
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        guard let screen = (scenes.first { $0.activationState == .foregroundActive } ?? scenes.first)?.screen else {
+            return Self.phoneFallbackCardWidth
+        }
+        let portraitWidth = min(screen.bounds.width, screen.bounds.height)
+        return (portraitWidth - (Self.edgeInset * 2) - Self.cardSpacing) / 2
+    }
+
     var body: some View {
         ScrollView(.horizontal) {
-            LazyHStack(spacing: 12) {
+            LazyHStack(spacing: Self.cardSpacing) {
                 ForEach(memories) { memory in
-                    TimelineMemoryCard(memory: memory, media: media)
+                    TimelineMemoryCard(memory: memory, media: media, width: cardWidth)
                 }
             }
         }
+        .contentMargins(.horizontal, Self.edgeInset, for: .scrollContent)
         .scrollIndicators(.hidden)
         .accessibilityIdentifier("memory-lane")
     }
@@ -686,6 +704,7 @@ private struct TimelineMemoryCard: View {
 
     let memory: TimelineMemorySummary
     let media: MediaLibraryController
+    let width: CGFloat
 
     @State private var currentIndex = 0
     @State private var incomingAsset: TimelineMemoryAssetSummary?
@@ -719,14 +738,14 @@ private struct TimelineMemoryCard: View {
                         updatedAt: asset.revision,
                         derivative: .thumbnail,
                         targetPixels: .init(
-                            width: Int(190 * displayScale),
+                            width: Int(width * displayScale),
                             height: Int(120 * displayScale)
                         )
                     ),
                     media: media,
                     contentMode: .fill
                 )
-                .frame(width: 190, height: 120)
+                .frame(width: width, height: 120)
                 .opacity(opacity(for: asset))
                 .scaleEffect(scale(for: asset), anchor: .center)
                 .clipped()
@@ -750,7 +769,7 @@ private struct TimelineMemoryCard: View {
             .foregroundStyle(.white)
             .padding(12)
         }
-        .frame(width: 190, height: 120)
+        .frame(width: width, height: 120)
         .clipShape(.rect(cornerRadius: 18))
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("memory-\(memory.id)")
