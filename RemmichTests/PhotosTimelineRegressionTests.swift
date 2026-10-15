@@ -70,6 +70,9 @@ struct PhotosTimelineRegressionTests {
         #expect(TimelineGridOrder.columnCount(availableWidth: 393, minimumColumnWidth: 88) == 4)
         #expect(TimelineGridOrder.columnCount(availableWidth: 843, minimumColumnWidth: 120) == 6)
         #expect(TimelineGridOrder.columnCount(availableWidth: 320, minimumColumnWidth: 88) == 3)
+        #expect(TimelineGridOrder.columnCount(availableWidth: 402, minimumColumnWidth: 88, spacing: 12) == 4)
+        #expect(TimelineGridOrder.columnCount(availableWidth: 820, minimumColumnWidth: 120, spacing: 24) == 5)
+        #expect(TimelineGridOrder.columnCount(availableWidth: 1180, minimumColumnWidth: 120, spacing: 24) == 8)
     }
 
     @Test func rangeCardsRestAboveTheMeasuredTabBar() {

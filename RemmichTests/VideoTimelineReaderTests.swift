@@ -29,14 +29,6 @@ struct VideoTimelineReaderTests {
         #expect(TimelinePresentationLadder.selection(after: .finer, from: selection) == nil)
     }
 
-    @Test func naturalAspectRatiosAreBoundedAndInvalidMetadataFallsBackToSquare() {
-        #expect(TimelineAssetAspectRatio.displayValue(2) == 2)
-        #expect(TimelineAssetAspectRatio.displayValue(0) == 1)
-        #expect(TimelineAssetAspectRatio.displayValue(.nan) == 1)
-        #expect(TimelineAssetAspectRatio.displayValue(20) == 5)
-        #expect(TimelineAssetAspectRatio.displayValue(0.01) == 0.2)
-    }
-
     @Test func groupsAllSearchPagesIntoMonthsWithoutDuplicates() async throws {
         let reader = VideoTimelineReader(source: VideoPageFixture())
         let summaries = try await reader.bucketSummaries(query: .init())

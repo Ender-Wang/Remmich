@@ -6,6 +6,7 @@ struct ImmichThumbnail: View {
     let descriptor: MediaRequestDescriptor
     let media: MediaLibraryController
     var contentMode: ContentMode = .fill
+    var showsBackground = true
     var didLoad: (ImageContainer) -> Void = { _ in }
 
     @State private var retryID = 0
@@ -16,7 +17,9 @@ struct ImmichThumbnail: View {
             transaction: .init(animation: .easeOut(duration: 0.18))
         ) { state in
             ZStack {
-                Rectangle().fill(.quaternary)
+                if showsBackground {
+                    Rectangle().fill(.quaternary)
+                }
                 if let image = state.image, let container = state.imageContainer {
                     GeometryReader { geometry in
                         image

@@ -122,6 +122,10 @@ struct TimelineDayAssetSection: View {
 }
 
 struct TimelineAssetGrid: View {
+    private static let compactSpacing: CGFloat = 2
+    private static let phoneNaturalAspectRowSpacing: CGFloat = 12
+    private static let padNaturalAspectRowSpacing: CGFloat = 24
+
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     let assets: [TimelineAssetSummary]
     let media: MediaLibraryController
@@ -135,14 +139,25 @@ struct TimelineAssetGrid: View {
     }
 
     private var columnCount: Int {
-        TimelineGridOrder.columnCount(availableWidth: availableWidth, minimumColumnWidth: minimumColumnWidth)
+        TimelineGridOrder.columnCount(
+            availableWidth: availableWidth,
+            minimumColumnWidth: minimumColumnWidth,
+            spacing: itemSpacing
+        )
     }
 
     private var columns: [GridItem] {
         Array(
-            repeating: GridItem(.flexible(minimum: 0), spacing: 2, alignment: .bottom),
+            repeating: GridItem(.flexible(minimum: 0), spacing: itemSpacing),
             count: columnCount
         )
+    }
+
+    private var itemSpacing: CGFloat {
+        guard assetLayout == .naturalAspect else { return Self.compactSpacing }
+        return UIDevice.current.userInterfaceIdiom == .pad
+            ? Self.padNaturalAspectRowSpacing
+            : Self.phoneNaturalAspectRowSpacing
     }
 
     private var displaySlots: [TimelineGridDisplaySlot] {
@@ -160,7 +175,7 @@ struct TimelineAssetGrid: View {
     var body: some View {
         VStack(spacing: 0) {
             if availableWidth > 0 {
-                LazyVGrid(columns: columns, spacing: 2) {
+                LazyVGrid(columns: columns, spacing: itemSpacing) {
                     ForEach(displaySlots) { slot in
                         if let asset = slot.asset {
                             TimelineAssetThumbnail(
@@ -171,15 +186,9 @@ struct TimelineAssetGrid: View {
                                 viewportChanged: viewportChanged
                             )
                         } else {
-                            if assetLayout == .square {
-                                Color.clear
-                                    .aspectRatio(1, contentMode: .fit)
-                                    .accessibilityHidden(true)
-                            } else {
-                                Color.clear
-                                    .frame(height: 0)
-                                    .accessibilityHidden(true)
-                            }
+                            Color.clear
+                                .aspectRatio(1, contentMode: .fit)
+                                .accessibilityHidden(true)
                         }
                     }
                 }
@@ -199,8 +208,12 @@ private struct TimelineGridDisplaySlot: Identifiable {
 }
 
 nonisolated enum TimelineGridOrder {
-    static func columnCount(availableWidth: CGFloat, minimumColumnWidth: CGFloat) -> Int {
-        max(1, Int((availableWidth + 2) / (minimumColumnWidth + 2)))
+    static func columnCount(
+        availableWidth: CGFloat,
+        minimumColumnWidth: CGFloat,
+        spacing: CGFloat = 2
+    ) -> Int {
+        max(1, Int((availableWidth + spacing) / (minimumColumnWidth + spacing)))
     }
 
     static func displaySlots(itemCount: Int, columns: Int) -> [Int?] {
@@ -235,6 +248,8 @@ private struct TimelineAssetThumbnail: View {
             ImmichThumbnail(
                 descriptor: descriptor,
                 media: media,
+                contentMode: assetLayout == .square ? .fill : .fit,
+                showsBackground: assetLayout == .square,
                 didLoad: { media.retainTimelineThumbnail($0, descriptor: descriptor) }
             )
             .frame(width: proxy.size.width, height: proxy.size.height)
@@ -278,18 +293,13 @@ private struct TimelineAssetThumbnail: View {
                 viewportChanged(asset, visible)
             }
         }
-        .aspectRatio(displayAspectRatio, contentMode: .fit)
+        .aspectRatio(1, contentMode: .fit)
         .clipped()
         .contentShape(.rect)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityLabel)
         .accessibilityIdentifier("asset-\(asset.id)")
         .id(asset.id)
-    }
-
-    private var displayAspectRatio: CGFloat {
-        guard assetLayout == .naturalAspect else { return 1 }
-        return TimelineAssetAspectRatio.displayValue(asset.aspectRatio)
     }
 
     private var accessibilityLabel: String {
@@ -315,12 +325,5 @@ private struct TimelineAssetThumbnail: View {
 
     private static func targetPixels(for points: CGFloat, scale: CGFloat) -> Int {
         min(2048, max(1, Int((points * scale).rounded(.up))))
-    }
-}
-
-nonisolated enum TimelineAssetAspectRatio {
-    static func displayValue(_ value: Double) -> CGFloat {
-        guard value.isFinite, value > 0 else { return 1 }
-        return CGFloat(min(5.0, max(0.2, value)))
     }
 }
