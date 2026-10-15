@@ -7,6 +7,7 @@ struct ImmichThumbnail: View {
     let media: MediaLibraryController
     var contentMode: ContentMode = .fill
     var showsBackground = true
+    var imageCornerRadius: CGFloat = 0
     var didLoad: (ImageContainer) -> Void = { _ in }
 
     @State private var retryID = 0
@@ -25,6 +26,12 @@ struct ImmichThumbnail: View {
                         image
                             .resizable()
                             .aspectRatio(contentMode: contentMode)
+                            .clipShape(
+                                RoundedRectangle(
+                                    cornerRadius: imageCornerRadius,
+                                    style: .continuous
+                                )
+                            )
                             .frame(
                                 width: geometry.size.width,
                                 height: geometry.size.height,

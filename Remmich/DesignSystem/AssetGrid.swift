@@ -250,6 +250,9 @@ private struct TimelineAssetThumbnail: View {
                 media: media,
                 contentMode: assetLayout == .square ? .fill : .fit,
                 showsBackground: assetLayout == .square,
+                imageCornerRadius: assetLayout == .naturalAspect
+                    ? DesignMetrics.compactCornerRadius
+                    : 0,
                 didLoad: { media.retainTimelineThumbnail($0, descriptor: descriptor) }
             )
             .frame(width: proxy.size.width, height: proxy.size.height)

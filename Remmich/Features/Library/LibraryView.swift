@@ -46,7 +46,7 @@ private struct CollectionCard: View {
             .padding(12)
         }
         .aspectRatio(4 / 3, contentMode: .fit)
-        .clipShape(.rect(cornerRadius: 18))
+        .clipShape(.rect(cornerRadius: DesignMetrics.defaultCornerRadius))
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("collection-\(collection.id)")
     }

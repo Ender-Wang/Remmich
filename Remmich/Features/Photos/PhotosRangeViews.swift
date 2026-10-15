@@ -1481,14 +1481,20 @@ private struct PhotosRangeCard: View {
                     }
                 }
             }
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .clipShape(RoundedRectangle(
+                cornerRadius: DesignMetrics.defaultCornerRadius,
+                style: .continuous
+            ))
             .overlay {
                 LinearGradient(
                     colors: [.clear, .black.opacity(0.78)],
                     startPoint: .center,
                     endPoint: .bottom
                 )
-                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .clipShape(RoundedRectangle(
+                    cornerRadius: DesignMetrics.defaultCornerRadius,
+                    style: .continuous
+                ))
                 .allowsHitTesting(false)
             }
             .overlay(alignment: .bottomLeading) {
@@ -1505,7 +1511,10 @@ private struct PhotosRangeCard: View {
                 .allowsHitTesting(false)
             }
             .frame(maxWidth: .infinity)
-            .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .contentShape(RoundedRectangle(
+                cornerRadius: DesignMetrics.defaultCornerRadius,
+                style: .continuous
+            ))
             .onChange(of: currentAsset?.id, initial: true) { _, coverID in
                 onCoverChanged(coverID)
             }

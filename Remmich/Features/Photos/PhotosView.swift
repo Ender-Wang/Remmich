@@ -859,7 +859,7 @@ private struct TimelineMemoryCard: View {
             .padding(12)
         }
         .frame(width: width, height: 120)
-        .clipShape(.rect(cornerRadius: 18))
+        .clipShape(.rect(cornerRadius: DesignMetrics.defaultCornerRadius))
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("memory-\(memory.id)")
         .accessibilityValue(coverAccessibilityValue)

@@ -76,7 +76,7 @@ private struct AlbumCard: View {
         VStack(alignment: .leading, spacing: 8) {
             FixtureArtwork(palette: album.cover?.palette ?? .coast)
                 .aspectRatio(4 / 3, contentMode: .fill)
-                .clipShape(.rect(cornerRadius: 16))
+                .clipShape(.rect(cornerRadius: DesignMetrics.defaultCornerRadius))
                 .overlay(alignment: .topTrailing) {
                     if album.isShared {
                         Image(systemName: "person.2.fill")
