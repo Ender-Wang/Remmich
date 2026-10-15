@@ -18,6 +18,13 @@ struct TimelineRangeCatalogTests {
         #expect(PhotosPinchGesture(magnification: 1)?.direction == nil)
     }
 
+    @Test func scopedAssetGridPinchOnlyChangesItsItemLayout() {
+        #expect(TimelineAssetLayoutLadder.layout(after: .coarser, from: .square) == .naturalAspect)
+        #expect(TimelineAssetLayoutLadder.layout(after: .finer, from: .naturalAspect) == .square)
+        #expect(TimelineAssetLayoutLadder.layout(after: .finer, from: .square) == nil)
+        #expect(TimelineAssetLayoutLadder.layout(after: .coarser, from: .naturalAspect) == nil)
+    }
+
     @Test func weekRoutesRecordWhetherTheirDetailIsLibraryOrBucketOwned() throws {
         let bucketID = TimelineBucketID(rawValue: "2027-01-01")
         let day = TimelineCaptureDay(capturedAt: date("2027-01-01T12:00:00Z"))

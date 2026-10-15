@@ -112,6 +112,7 @@ struct AppShellView: View {
                     scrollToLatestRequest: groupedScrollRequests[.years, default: 0],
                     tabBarTop: tabBarTop,
                     store: groupedMediaStore,
+                    presentation: groupedMediaPresentation,
                     media: media,
                     showAccount: showAccount
                 )
@@ -124,6 +125,7 @@ struct AppShellView: View {
                     scrollToLatestRequest: groupedScrollRequests[.months, default: 0],
                     tabBarTop: tabBarTop,
                     store: groupedMediaStore,
+                    presentation: groupedMediaPresentation,
                     media: media,
                     showAccount: showAccount
                 )
@@ -136,6 +138,7 @@ struct AppShellView: View {
                     scrollToLatestRequest: groupedScrollRequests[.weeks, default: 0],
                     tabBarTop: tabBarTop,
                     store: groupedMediaStore,
+                    presentation: groupedMediaPresentation,
                     media: media,
                     showAccount: showAccount
                 )
@@ -206,6 +209,10 @@ struct AppShellView: View {
 
     private var groupedMediaStore: PhotosTimelineStore {
         groupedMediaOwner == .videos ? videos : photos
+    }
+
+    private var groupedMediaPresentation: PhotosPresentationState {
+        groupedMediaOwner == .videos ? videoPresentation : presentation
     }
 }
 

@@ -986,9 +986,12 @@ struct PhotosRangeAssetsView: View {
     let store: PhotosTimelineStore
     let media: MediaLibraryController
     var tabBarTop: CGFloat = 0
+    var assetLayout: PhotosAssetLayout = .square
+    var onPinch: ((PhotosPinchGesture) -> Void)?
     var visibilityChanged: (String, MediaRequestDescriptor?) -> Void = { _, _ in }
     var viewportChanged: (TimelineAssetSummary, Bool) -> Void = { _, _ in }
 
+    @State private var pinchInteraction = PhotosRangePinchInteraction()
     @State private var assets: [TimelineAssetSummary] = []
     @State private var isLoading = true
     @State private var loadFailed = false
@@ -997,6 +1000,9 @@ struct PhotosRangeAssetsView: View {
     @State private var didPositionInitially = false
     @State private var didSettleInitialViewport = false
     @State private var userHasScrolled = false
+    @State private var visibleAssets: [String: Date] = [:]
+    @State private var layoutAnchorID: String?
+    @State private var layoutRestoreTask: Task<Void, Never>?
 
     var body: some View {
         Group {
@@ -1019,6 +1025,10 @@ struct PhotosRangeAssetsView: View {
         }
         .task(id: LoadKey(route: route, request: loadRequest)) {
             await loadAssets()
+        }
+        .onDisappear {
+            layoutRestoreTask?.cancel()
+            layoutRestoreTask = nil
         }
     }
 
@@ -1070,6 +1080,15 @@ struct PhotosRangeAssetsView: View {
                     }
                 }
                 .scrollEdgeEffectHidden(for: .bottom)
+                .photosRangePinchGesture(
+                    interaction: pinchInteraction,
+                    onPinch: handlePinch
+                )
+                .accessibilityAction(named: layoutAccessibilityActionName) {
+                    let magnification = assetLayout == .square ? 0.6 : 1.5
+                    guard let gesture = PhotosPinchGesture(magnification: magnification) else { return }
+                    handlePinch(gesture)
+                }
                 .ignoresSafeArea(.container, edges: [.horizontal, .bottom])
                 .task(id: assets.map(\.id)) {
                     guard !didPositionInitially, !assets.isEmpty else { return }
@@ -1088,6 +1107,21 @@ struct PhotosRangeAssetsView: View {
                     proxy.scrollTo(PhotosRangeScrollAnchor.bottom, anchor: .bottom)
                     didSettleInitialViewport = true
                 }
+                .onChange(of: assetLayout) {
+                    guard let layoutAnchorID else { return }
+                    layoutRestoreTask?.cancel()
+                    layoutRestoreTask = Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(120))
+                        guard !Task.isCancelled else { return }
+                        var transaction = Transaction(animation: nil)
+                        transaction.disablesAnimations = true
+                        withTransaction(transaction) {
+                            proxy.scrollTo(layoutAnchorID, anchor: .center)
+                        }
+                        self.layoutAnchorID = nil
+                        layoutRestoreTask = nil
+                    }
+                }
                 .accessibilityIdentifier(route.assetGridAccessibilityID)
             }
         }
@@ -1101,9 +1135,10 @@ struct PhotosRangeAssetsView: View {
                     group: group,
                     media: media,
                     availableWidth: availableWidth,
+                    assetLayout: assetLayout,
                     accessibilityIdentifierPrefix: "timeline-range-day-section",
                     visibilityChanged: visibilityChanged,
-                    viewportChanged: viewportChanged
+                    viewportChanged: updateViewport
                 )
             }
         } else {
@@ -1111,10 +1146,40 @@ struct PhotosRangeAssetsView: View {
                 assets: assets,
                 media: media,
                 availableWidth: availableWidth,
+                assetLayout: assetLayout,
                 visibilityChanged: visibilityChanged,
-                viewportChanged: viewportChanged
+                viewportChanged: updateViewport
             )
         }
+    }
+
+    private var centerVisibleAssetID: String? {
+        let ordered = visibleAssets.sorted { $0.value < $1.value }
+        guard !ordered.isEmpty else { return nil }
+        return ordered[ordered.count / 2].key
+    }
+
+    private var layoutAccessibilityActionName: String {
+        assetLayout == .square
+            ? "Use Natural Aspect Layout"
+            : "Use Square Layout"
+    }
+
+    private func handlePinch(_ gesture: PhotosPinchGesture) {
+        guard TimelineAssetLayoutLadder.layout(after: gesture.direction, from: assetLayout) != nil else {
+            return
+        }
+        layoutAnchorID = centerVisibleAssetID
+        onPinch?(gesture)
+    }
+
+    private func updateViewport(_ asset: TimelineAssetSummary, visible: Bool) {
+        if visible {
+            visibleAssets[asset.id] = asset.capturedAt
+        } else {
+            visibleAssets.removeValue(forKey: asset.id)
+        }
+        viewportChanged(asset, visible)
     }
 
     private func loadAssets() async {
@@ -1126,6 +1191,8 @@ struct PhotosRangeAssetsView: View {
         didPositionInitially = false
         didSettleInitialViewport = false
         userHasScrolled = false
+        visibleAssets = [:]
+        layoutAnchorID = nil
 
         var buckets: [TimelineBucketID: [TimelineAssetSummary]] = [:]
         for bucketID in ids {

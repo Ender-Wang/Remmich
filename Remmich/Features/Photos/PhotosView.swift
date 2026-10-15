@@ -82,6 +82,19 @@ nonisolated struct TimelinePresentationSelection: Equatable {
     let assetLayout: PhotosAssetLayout
 }
 
+nonisolated enum TimelineAssetLayoutLadder {
+    static func layout(
+        after direction: PhotosPinchDirection,
+        from layout: PhotosAssetLayout
+    ) -> PhotosAssetLayout? {
+        switch (layout, direction) {
+        case (.square, .coarser): .naturalAspect
+        case (.naturalAspect, .finer): .square
+        default: nil
+        }
+    }
+}
+
 nonisolated enum TimelinePresentationLadder {
     static func selection(
         after direction: PhotosPinchDirection,
@@ -347,6 +360,8 @@ struct PhotosView: View {
             store: store,
             media: media,
             tabBarTop: tabBarTop,
+            assetLayout: presentation.preferences.assetLayout,
+            onPinch: pinchLibraryRange,
             visibilityChanged: updateVisibility,
             viewportChanged: updateViewport
         )
@@ -390,12 +405,31 @@ struct PhotosView: View {
     }
 
     private func pinchLibraryRange(_ gesture: PhotosPinchGesture) {
+        if !navigationPath.isEmpty {
+            let current = presentation.preferences.assetLayout
+            guard let next = TimelineAssetLayoutLadder.layout(
+                after: gesture.direction,
+                from: current
+            ) else { return }
+            do {
+                try presentation.setAssetLayout(next)
+            } catch {
+                Self.logger.error(
+                    "Failed to persist scoped \(contentName, privacy: .public) asset layout: \(error.localizedDescription, privacy: .public)"
+                )
+                return
+            }
+            Self.logger.info(
+                "\(contentName, privacy: .public) scoped pinch changed layout to \(next.rawValue, privacy: .public)"
+            )
+            return
+        }
+
         let current = TimelinePresentationSelection(
             range: libraryRange,
             assetLayout: presentation.preferences.assetLayout
         )
-        guard navigationPath.isEmpty,
-              let next = TimelinePresentationLadder.selection(after: gesture.direction, from: current)
+        guard let next = TimelinePresentationLadder.selection(after: gesture.direction, from: current)
         else { return }
 
         if next.range == .all, next.assetLayout != current.assetLayout {

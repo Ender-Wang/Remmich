@@ -370,6 +370,17 @@ final class RemmichUITests: XCTestCase {
     }
 
     @MainActor
+    private func refineTimeline(_ tab: String, in app: XCUIApplication) {
+        let buttons = app.buttons.matching(identifier: "timeline-test-\(tab.lowercased())-finer")
+        XCTAssertTrue(buttons.firstMatch.waitForExistence(timeout: 10))
+        guard let button = buttons.allElementsBoundByIndex.first(where: \.isHittable) else {
+            XCTFail("Expected the active \(tab) timeline refinement control")
+            return
+        }
+        button.tap()
+    }
+
+    @MainActor
     private func assertTimelineRange(_ range: String, tab: String, in app: XCUIApplication) {
         let status = app.staticTexts["timeline-test-\(tab.lowercased())-range"].firstMatch
         XCTAssertTrue(status.waitForExistence(timeout: 10))
@@ -661,7 +672,7 @@ final class RemmichUITests: XCTestCase {
     }
 
     @MainActor
-    func testTimelinePinchBackBehaviorMatchesAndScopedRouteIsInert() {
+    func testTimelinePinchBackBehaviorMatchesAndScopedRouteChangesAssetLayout() {
         let app = rangeApplication()
         app.launch()
 
@@ -698,22 +709,23 @@ final class RemmichUITests: XCTestCase {
             assertTimelineRange("month", tab: tab, in: app)
             app.buttons["timeline-range-back"].tap()
             assertTimelineRange("week", tab: tab, in: app)
-            if isPhotos {
-                XCTAssertTrue(weekButtons.firstMatch.waitForExistence(timeout: 10))
+            XCTAssertTrue(weekButtons.firstMatch.waitForExistence(timeout: 10))
 
-                let openWeek = app.buttons["timeline-test-photos-open-week"].firstMatch
-                XCTAssertTrue(openWeek.waitForExistence(timeout: 5))
-                openWeek.tap()
-                let scopedBar = app.navigationBars.matching(
-                    NSPredicate(format: "identifier BEGINSWITH %@", "Week of ")
-                ).firstMatch
-                XCTAssertTrue(scopedBar.waitForExistence(timeout: 10))
-                coarsenTimeline(tab, in: app)
-                XCTAssertTrue(scopedBar.waitForExistence(timeout: 3), "Pinch must be inert inside scoped drill-down")
-                assertTimelineRange("week", tab: tab, in: app)
-                app.buttons["timeline-range-back"].tap()
-                XCTAssertTrue(weekButtons.firstMatch.waitForExistence(timeout: 10))
-            }
+            let openWeek = app.buttons["timeline-test-\(tab.lowercased())-open-week"].firstMatch
+            XCTAssertTrue(openWeek.waitForExistence(timeout: 5))
+            openWeek.tap()
+            let scopedBar = app.navigationBars.matching(
+                NSPredicate(format: "identifier BEGINSWITH %@", "Week of ")
+            ).firstMatch
+            XCTAssertTrue(scopedBar.waitForExistence(timeout: 10))
+            refineTimeline(tab, in: app)
+            assertTimelineLayout("square", tab: tab, in: app)
+            XCTAssertTrue(scopedBar.waitForExistence(timeout: 3), "Layout pinch must keep the scoped route")
+            coarsenTimeline(tab, in: app)
+            assertTimelineLayout("naturalAspect", tab: tab, in: app)
+            assertTimelineRange("week", tab: tab, in: app)
+            app.buttons["timeline-range-back"].tap()
+            XCTAssertTrue(weekButtons.firstMatch.waitForExistence(timeout: 10))
 
             app.buttons["timeline-range-back"].tap()
             assertTimelineRange("day", tab: tab, in: app)
