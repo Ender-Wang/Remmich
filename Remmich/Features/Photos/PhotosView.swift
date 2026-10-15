@@ -688,6 +688,8 @@ private struct TimelineMemoryLane: View {
         }
         .contentMargins(.horizontal, Self.edgeInset, for: .scrollContent)
         .scrollIndicators(.hidden)
+        .frame(maxWidth: .infinity)
+        .ignoresSafeArea(.container, edges: .horizontal)
         .accessibilityIdentifier("memory-lane")
     }
 }
