@@ -44,6 +44,18 @@ extension PhotosRangeRoute {
     }
 }
 
+struct TimelineRangeNavigationTitle: View {
+    let title: String
+
+    var body: some View {
+        Text(title)
+            .font(.headline)
+            .lineLimit(1)
+            .accessibilityAddTraits(.isHeader)
+            .accessibilityIdentifier("timeline-range-title")
+    }
+}
+
 nonisolated enum PhotosWeekRouteOrigin: Hashable {
     case bucket
     case library

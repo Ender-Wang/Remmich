@@ -185,6 +185,13 @@ struct PhotosView: View {
                     .accessibilityIdentifier("timeline-range-back")
                 }
             }
+            if UIDevice.current.userInterfaceIdiom == .pad,
+               let title = navigationPath.last?.navigationTitle
+            {
+                ToolbarItem(placement: .principal) {
+                    TimelineRangeNavigationTitle(title: title)
+                }
+            }
             AccountToolbarButton(action: showAccount)
         }
         .onAppear { media.beginTimelinePresentation() }

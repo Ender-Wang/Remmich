@@ -718,6 +718,9 @@ final class RemmichUITests: XCTestCase {
                 NSPredicate(format: "identifier BEGINSWITH %@", "Week of ")
             ).firstMatch
             XCTAssertTrue(scopedBar.waitForExistence(timeout: 10))
+            if UIDevice.current.userInterfaceIdiom == .pad {
+                XCTAssertTrue(app.staticTexts["timeline-range-title"].waitForExistence(timeout: 5))
+            }
             refineTimeline(tab, in: app)
             assertTimelineLayout("square", tab: tab, in: app)
             XCTAssertTrue(scopedBar.waitForExistence(timeout: 3), "Layout pinch must keep the scoped route")

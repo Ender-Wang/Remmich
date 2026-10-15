@@ -82,6 +82,13 @@ struct PhotosGroupedTabView: View {
         .navigationTitle(route.navigationTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(.visible, for: .navigationBar)
+        .toolbar {
+            if UIDevice.current.userInterfaceIdiom == .pad {
+                ToolbarItem(placement: .principal) {
+                    TimelineRangeNavigationTitle(title: route.navigationTitle)
+                }
+            }
+        }
     }
 
     private func open(_ route: PhotosRangeRoute) {
