@@ -9,6 +9,7 @@ private struct PhotosChromeGeometry: Equatable {
 struct PhotosChromeTracker {
     private(set) var isCompact = false
     private var travel: CGFloat = 0
+    private var reachedLatestDuringCurrentScroll = false
 
     mutating func update(
         offsetDelta: CGFloat,
@@ -16,11 +17,21 @@ struct PhotosChromeTracker {
         userScrolling: Bool,
         programmaticJump: Bool
     ) -> Bool? {
+        if !userScrolling {
+            scrollingEnded()
+        }
         if bottomGap <= 24 {
             travel = 0
+            if userScrolling, offsetDelta >= 0 {
+                reachedLatestDuringCurrentScroll = true
+            }
             guard isCompact else { return nil }
             isCompact = false
             return false
+        }
+        guard !reachedLatestDuringCurrentScroll else {
+            travel = 0
+            return nil
         }
         guard userScrolling, !programmaticJump, abs(offsetDelta) >= 1 else {
             travel = 0
@@ -36,6 +47,11 @@ struct PhotosChromeTracker {
         guard next != isCompact else { return nil }
         isCompact = next
         return next
+    }
+
+    mutating func scrollingEnded() {
+        travel = 0
+        reachedLatestDuringCurrentScroll = false
     }
 }
 
@@ -399,7 +415,11 @@ struct PhotosView: View {
                     pinchLibraryRange(gesture)
                 })
                 .onScrollPhaseChange { _, phase in
-                    userScrollPhase = phase == .interacting || phase == .decelerating
+                    let isUserScrolling = phase == .interacting || phase == .decelerating
+                    userScrollPhase = isUserScrolling
+                    if !isUserScrolling {
+                        chromeTracker.scrollingEnded()
+                    }
                 }
                 .onScrollGeometryChange(for: PhotosChromeGeometry.self) { geometry in
                     let visibleBottom = geometry.contentOffset.y
