@@ -15,6 +15,28 @@ struct VideoTimelineReaderTests {
         #expect(TimelineLibraryRange.all.next(for: .finer) == nil)
     }
 
+    @Test func pinchTraversesAssetLayoutsBeforeDateGroups() throws {
+        var selection = TimelinePresentationSelection(range: .all, assetLayout: .square)
+
+        selection = try #require(TimelinePresentationLadder.selection(after: .coarser, from: selection))
+        #expect(selection == .init(range: .all, assetLayout: .naturalAspect))
+        selection = try #require(TimelinePresentationLadder.selection(after: .coarser, from: selection))
+        #expect(selection == .init(range: .day, assetLayout: .naturalAspect))
+        selection = try #require(TimelinePresentationLadder.selection(after: .finer, from: selection))
+        #expect(selection == .init(range: .all, assetLayout: .naturalAspect))
+        selection = try #require(TimelinePresentationLadder.selection(after: .finer, from: selection))
+        #expect(selection == .init(range: .all, assetLayout: .square))
+        #expect(TimelinePresentationLadder.selection(after: .finer, from: selection) == nil)
+    }
+
+    @Test func naturalAspectRatiosAreBoundedAndInvalidMetadataFallsBackToSquare() {
+        #expect(TimelineAssetAspectRatio.displayValue(2) == 2)
+        #expect(TimelineAssetAspectRatio.displayValue(0) == 1)
+        #expect(TimelineAssetAspectRatio.displayValue(.nan) == 1)
+        #expect(TimelineAssetAspectRatio.displayValue(20) == 5)
+        #expect(TimelineAssetAspectRatio.displayValue(0.01) == 0.2)
+    }
+
     @Test func groupsAllSearchPagesIntoMonthsWithoutDuplicates() async throws {
         let reader = VideoTimelineReader(source: VideoPageFixture())
         let summaries = try await reader.bucketSummaries(query: .init())

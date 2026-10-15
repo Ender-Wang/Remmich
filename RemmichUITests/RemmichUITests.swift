@@ -360,6 +360,12 @@ final class RemmichUITests: XCTestCase {
             XCTFail("Expected the active \(tab) timeline range control")
             return
         }
+        let range = app.staticTexts["timeline-test-\(tab.lowercased())-range"].firstMatch
+        let layout = app.staticTexts["timeline-test-\(tab.lowercased())-layout"].firstMatch
+        if range.label == "all", layout.label == "square" {
+            button.tap()
+            XCTAssertEqual(layout.label, "naturalAspect")
+        }
         button.tap()
     }
 
@@ -368,6 +374,39 @@ final class RemmichUITests: XCTestCase {
         let status = app.staticTexts["timeline-test-\(tab.lowercased())-range"].firstMatch
         XCTAssertTrue(status.waitForExistence(timeout: 10))
         XCTAssertEqual(status.label, range)
+    }
+
+    @MainActor
+    private func assertTimelineLayout(_ layout: String, tab: String, in app: XCUIApplication) {
+        let status = app.staticTexts["timeline-test-\(tab.lowercased())-layout"].firstMatch
+        XCTAssertTrue(status.waitForExistence(timeout: 10))
+        XCTAssertEqual(status.label, layout)
+    }
+
+    @MainActor
+    func testFirstTimelinePinchChangesPersistedAssetLayoutBeforeGrouping() {
+        let app = rangeApplication()
+        app.launch()
+
+        for tab in ["Photos", "Videos"] {
+            tabButton(tab, in: app).tap()
+            XCTAssertTrue(app.descendants(matching: .any)["\(tab.lowercased())-root"].waitForExistence(timeout: 10))
+            assertTimelineRange("all", tab: tab, in: app)
+            assertTimelineLayout("square", tab: tab, in: app)
+
+            let coarser = app.buttons["timeline-test-\(tab.lowercased())-coarser"].firstMatch
+            XCTAssertTrue(coarser.waitForExistence(timeout: 10))
+            coarser.tap()
+
+            assertTimelineRange("all", tab: tab, in: app)
+            assertTimelineLayout("naturalAspect", tab: tab, in: app)
+            coarser.tap()
+            assertTimelineRange("day", tab: tab, in: app)
+
+            app.buttons["timeline-range-back"].tap()
+            assertTimelineRange("all", tab: tab, in: app)
+            assertTimelineLayout("naturalAspect", tab: tab, in: app)
+        }
     }
 
     @MainActor

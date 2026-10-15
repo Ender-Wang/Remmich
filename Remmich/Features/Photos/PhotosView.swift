@@ -77,6 +77,33 @@ nonisolated enum TimelineLibraryRange: Int, CaseIterable {
     }
 }
 
+nonisolated struct TimelinePresentationSelection: Equatable {
+    let range: TimelineLibraryRange
+    let assetLayout: PhotosAssetLayout
+}
+
+nonisolated enum TimelinePresentationLadder {
+    static func selection(
+        after direction: PhotosPinchDirection,
+        from selection: TimelinePresentationSelection
+    ) -> TimelinePresentationSelection? {
+        switch (selection.range, selection.assetLayout, direction) {
+        case (.all, .square, .coarser):
+            TimelinePresentationSelection(range: .all, assetLayout: .naturalAspect)
+        case (.all, .naturalAspect, .finer):
+            TimelinePresentationSelection(range: .all, assetLayout: .square)
+        case (.all, .naturalAspect, .coarser):
+            TimelinePresentationSelection(range: .day, assetLayout: .naturalAspect)
+        case (.day, _, .finer):
+            TimelinePresentationSelection(range: .all, assetLayout: .naturalAspect)
+        default:
+            selection.range.next(for: direction).map {
+                TimelinePresentationSelection(range: $0, assetLayout: selection.assetLayout)
+            }
+        }
+    }
+}
+
 struct PhotosView: View {
     private static let logger = Logger(
         subsystem: "io.github.ender-wang.Remmich",
@@ -102,7 +129,9 @@ struct PhotosView: View {
     @State private var visibleAssets: [String: Date] = [:]
     @State private var viewportUpdateTask: Task<Void, Never>?
     @State private var rotationRestoreTask: Task<Void, Never>?
+    @State private var layoutRestoreTask: Task<Void, Never>?
     @State private var rotationAnchorID: String?
+    @State private var layoutAnchorID: String?
     @State private var timelineWidth: CGFloat = 0
     @State private var timelineBottomGap = CGFloat.infinity
     @State private var compactChrome = false
@@ -171,6 +200,7 @@ struct PhotosView: View {
         .onDisappear {
             viewportUpdateTask?.cancel()
             rotationRestoreTask?.cancel()
+            layoutRestoreTask?.cancel()
             latestJumpTask?.cancel()
             latestJumpTask = nil
             store.completeJump()
@@ -200,6 +230,10 @@ struct PhotosView: View {
                     Text(String(describing: libraryRange))
                         .opacity(0.01)
                         .accessibilityIdentifier("timeline-test-\(contentName.lowercased())-range")
+
+                    Text(presentation.preferences.assetLayout.rawValue)
+                        .opacity(0.01)
+                        .accessibilityIdentifier("timeline-test-\(contentName.lowercased())-layout")
 
                     Button {
                         uiTestPinch(.finer)
@@ -356,15 +390,33 @@ struct PhotosView: View {
     }
 
     private func pinchLibraryRange(_ gesture: PhotosPinchGesture) {
+        let current = TimelinePresentationSelection(
+            range: libraryRange,
+            assetLayout: presentation.preferences.assetLayout
+        )
         guard navigationPath.isEmpty,
-              let next = libraryRange.next(for: gesture.direction)
+              let next = TimelinePresentationLadder.selection(after: gesture.direction, from: current)
         else { return }
+
+        if next.range == .all, next.assetLayout != current.assetLayout {
+            layoutAnchorID = centerVisibleAssetID
+        }
+        do {
+            try presentation.setAssetLayout(next.assetLayout)
+        } catch {
+            Self.logger.error(
+                "Failed to persist \(contentName, privacy: .public) asset layout: \(error.localizedDescription, privacy: .public)"
+            )
+            return
+        }
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) {
-            libraryRange = next
+            libraryRange = next.range
         }
-        Self.logger.info("\(contentName, privacy: .public) pinch changed range to \(String(describing: next), privacy: .public)")
+        Self.logger.info(
+            "\(contentName, privacy: .public) pinch changed presentation to layout=\(next.assetLayout.rawValue, privacy: .public) range=\(String(describing: next.range), privacy: .public)"
+        )
     }
 
     private var timeline: some View {
@@ -383,6 +435,7 @@ struct PhotosView: View {
                                 store: store,
                                 media: media,
                                 availableWidth: timelineWidth,
+                                assetLayout: presentation.preferences.assetLayout,
                                 visibilityChanged: updateVisibility,
                                 viewportChanged: updateViewport
                             )
@@ -409,11 +462,15 @@ struct PhotosView: View {
                 .scrollPosition($timelinePosition)
                 .scrollEdgeEffectHidden(for: .bottom)
                 .simultaneousGesture(MagnifyGesture().onEnded { value in
-                    guard let gesture = PhotosPinchGesture(magnification: value.magnification),
-                          gesture.direction == .coarser
-                    else { return }
+                    guard let gesture = PhotosPinchGesture(magnification: value.magnification) else { return }
                     pinchLibraryRange(gesture)
                 })
+                .accessibilityAction(named: layoutAccessibilityActionName) {
+                    guard libraryRange == .all else { return }
+                    let magnification = presentation.preferences.assetLayout == .square ? 0.6 : 1.5
+                    guard let gesture = PhotosPinchGesture(magnification: magnification) else { return }
+                    pinchLibraryRange(gesture)
+                }
                 .onScrollPhaseChange { _, phase in
                     let isUserScrolling = phase == .interacting || phase == .decelerating
                     userScrollPhase = isUserScrolling
@@ -485,6 +542,21 @@ struct PhotosView: View {
                         rotationRestoreTask = nil
                     }
                 }
+                .onChange(of: presentation.preferences.assetLayout) {
+                    guard let layoutAnchorID else { return }
+                    layoutRestoreTask?.cancel()
+                    layoutRestoreTask = Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(120))
+                        guard !Task.isCancelled else { return }
+                        var transaction = Transaction(animation: nil)
+                        transaction.disablesAnimations = true
+                        withTransaction(transaction) {
+                            proxy.scrollTo(layoutAnchorID, anchor: .center)
+                        }
+                        self.layoutAnchorID = nil
+                        layoutRestoreTask = nil
+                    }
+                }
             }
             .onChange(of: scrollToLatestRequest) {
                 guard navigationPath.isEmpty,
@@ -542,10 +614,17 @@ struct PhotosView: View {
             && !store.memories.isEmpty
     }
 
+    private var centerVisibleAssetID: String? {
+        let ordered = visibleAssets.sorted { $0.value < $1.value }
+        guard !ordered.isEmpty else { return nil }
+        return ordered[ordered.count / 2].key
+    }
+
     private func updateChrome(old: PhotosChromeGeometry, new: PhotosChromeGeometry) {
         let programmaticJump = store.jumpTarget != nil
             || latestJumpTask != nil
             || rotationRestoreTask != nil
+            || layoutRestoreTask != nil
         if let compact = chromeTracker.update(
             offsetDelta: new.offset - old.offset,
             bottomGap: new.bottomGap,
@@ -554,6 +633,12 @@ struct PhotosView: View {
         ) {
             setCompactChrome(compact)
         }
+    }
+
+    private var layoutAccessibilityActionName: String {
+        presentation.preferences.assetLayout == .square
+            ? "Use Natural Aspect Layout"
+            : "Use Square Layout"
     }
 
     private func setCompactChrome(_ compact: Bool) {
@@ -598,6 +683,7 @@ private struct TimelineSectionView: View {
     let store: PhotosTimelineStore
     let media: MediaLibraryController
     let availableWidth: CGFloat
+    let assetLayout: PhotosAssetLayout
     let visibilityChanged: (String, MediaRequestDescriptor?) -> Void
     let viewportChanged: (TimelineAssetSummary, Bool) -> Void
 
@@ -621,6 +707,7 @@ private struct TimelineSectionView: View {
                             group: group,
                             media: media,
                             availableWidth: availableWidth,
+                            assetLayout: assetLayout,
                             visibilityChanged: visibilityChanged,
                             viewportChanged: viewportChanged
                         )

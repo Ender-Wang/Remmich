@@ -85,6 +85,7 @@ struct TimelineDayAssetSection: View {
     let group: TimelineDayGroup
     let media: MediaLibraryController
     let availableWidth: CGFloat
+    var assetLayout: PhotosAssetLayout = .square
     var accessibilityIdentifierPrefix = "timeline-day"
     var visibilityChanged: (String, MediaRequestDescriptor?) -> Void = { _, _ in }
     var viewportChanged: (TimelineAssetSummary, Bool) -> Void = { _, _ in }
@@ -99,6 +100,7 @@ struct TimelineDayAssetSection: View {
                 assets: group.assets,
                 media: media,
                 availableWidth: availableWidth,
+                assetLayout: assetLayout,
                 visibilityChanged: visibilityChanged,
                 viewportChanged: viewportChanged
             )
@@ -124,6 +126,7 @@ struct TimelineAssetGrid: View {
     let assets: [TimelineAssetSummary]
     let media: MediaLibraryController
     let availableWidth: CGFloat
+    var assetLayout: PhotosAssetLayout = .square
     var visibilityChanged: (String, MediaRequestDescriptor?) -> Void = { _, _ in }
     var viewportChanged: (TimelineAssetSummary, Bool) -> Void = { _, _ in }
 
@@ -136,7 +139,10 @@ struct TimelineAssetGrid: View {
     }
 
     private var columns: [GridItem] {
-        Array(repeating: GridItem(.flexible(minimum: 0), spacing: 2), count: columnCount)
+        Array(
+            repeating: GridItem(.flexible(minimum: 0), spacing: 2, alignment: .bottom),
+            count: columnCount
+        )
     }
 
     private var displaySlots: [TimelineGridDisplaySlot] {
@@ -160,13 +166,20 @@ struct TimelineAssetGrid: View {
                             TimelineAssetThumbnail(
                                 asset: asset,
                                 media: media,
+                                assetLayout: assetLayout,
                                 visibilityChanged: visibilityChanged,
                                 viewportChanged: viewportChanged
                             )
                         } else {
-                            Color.clear
-                                .aspectRatio(1, contentMode: .fit)
-                                .accessibilityHidden(true)
+                            if assetLayout == .square {
+                                Color.clear
+                                    .aspectRatio(1, contentMode: .fit)
+                                    .accessibilityHidden(true)
+                            } else {
+                                Color.clear
+                                    .frame(height: 0)
+                                    .accessibilityHidden(true)
+                            }
                         }
                     }
                 }
@@ -205,17 +218,19 @@ private struct TimelineAssetThumbnail: View {
     @Environment(\.displayScale) private var displayScale
     let asset: TimelineAssetSummary
     let media: MediaLibraryController
+    let assetLayout: PhotosAssetLayout
     let visibilityChanged: (String, MediaRequestDescriptor?) -> Void
     let viewportChanged: (TimelineAssetSummary, Bool) -> Void
 
     var body: some View {
         GeometryReader { proxy in
-            let pixels = max(1, Int((proxy.size.width * displayScale).rounded(.up)))
+            let widthPixels = Self.targetPixels(for: proxy.size.width, scale: displayScale)
+            let heightPixels = Self.targetPixels(for: proxy.size.height, scale: displayScale)
             let descriptor = MediaRequestDescriptor(
                 assetID: asset.id,
                 updatedAt: asset.thumbnailRevision,
                 derivative: .thumbnail,
-                targetPixels: .init(width: pixels, height: pixels)
+                targetPixels: .init(width: widthPixels, height: heightPixels)
             )
             ImmichThumbnail(
                 descriptor: descriptor,
@@ -263,13 +278,18 @@ private struct TimelineAssetThumbnail: View {
                 viewportChanged(asset, visible)
             }
         }
-        .aspectRatio(1, contentMode: .fit)
+        .aspectRatio(displayAspectRatio, contentMode: .fit)
         .clipped()
         .contentShape(.rect)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityLabel)
         .accessibilityIdentifier("asset-\(asset.id)")
         .id(asset.id)
+    }
+
+    private var displayAspectRatio: CGFloat {
+        guard assetLayout == .naturalAspect else { return 1 }
+        return TimelineAssetAspectRatio.displayValue(asset.aspectRatio)
     }
 
     private var accessibilityLabel: String {
@@ -291,5 +311,16 @@ private struct TimelineAssetThumbnail: View {
         guard let milliseconds else { return "" }
         let seconds = max(0, milliseconds / 1000)
         return String(format: "%d:%02d", seconds / 60, seconds % 60)
+    }
+
+    private static func targetPixels(for points: CGFloat, scale: CGFloat) -> Int {
+        min(2048, max(1, Int((points * scale).rounded(.up))))
+    }
+}
+
+nonisolated enum TimelineAssetAspectRatio {
+    static func displayValue(_ value: Double) -> CGFloat {
+        guard value.isFinite, value > 0 else { return 1 }
+        return CGFloat(min(5.0, max(0.2, value)))
     }
 }
