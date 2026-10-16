@@ -137,6 +137,45 @@ struct TimelineRangeCatalogTests {
         #expect(ordinaryRow.map(\.column) == [2, 1, 0])
     }
 
+    @Test func editorialCoverMotionUsesStaticDayFeatureAndStaggeredBroaderFeatures() throws {
+        let placements = TimelineRangeMosaicPlanner.placements(itemCount: 6, seed: 91)
+        let featured = try #require(placements.first { $0.isFeatured })
+        let ordinary = try #require(placements.first { !$0.isFeatured })
+        let dayFeature = TimelineRangeMosaicPlanner.motion(
+            level: .day,
+            placement: featured,
+            placementCount: placements.count,
+            seed: 91
+        )
+        let monthFeature = TimelineRangeMosaicPlanner.motion(
+            level: .month,
+            placement: featured,
+            placementCount: placements.count,
+            seed: 91
+        )
+        let monthOrdinary = TimelineRangeMosaicPlanner.motion(
+            level: .month,
+            placement: ordinary,
+            placementCount: placements.count,
+            seed: 91
+        )
+
+        #expect(!dayFeature.rotates)
+        #expect(monthFeature.rotates)
+        #expect(monthFeature.durationScale == 1.5)
+        #expect(monthOrdinary.durationScale == 1)
+        #expect(monthFeature.initialDelay >= 0)
+        #expect(monthFeature.initialDelay < TimelineCoverAnimation.cycleDuration)
+        #expect(Set(placements.map {
+            TimelineRangeMosaicPlanner.motion(
+                level: .week,
+                placement: $0,
+                placementCount: placements.count,
+                seed: 91
+            ).initialDelay
+        }).count == placements.count)
+    }
+
     private func occupiedCells(
         in placements: [TimelineRangeMosaicPlacement]
     ) -> Set<Int> {

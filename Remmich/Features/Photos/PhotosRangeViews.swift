@@ -1910,7 +1910,7 @@ private struct PhotosRangeCard: View {
                 onCoverChanged(coverID)
             }
             .onScrollVisibilityChange(threshold: 0.15) { isVisible = $0 }
-            .task(id: "\(isVisible):\(scenePhase):\(reduceMotion):\(store?.rangeCoverRevision ?? 0)") {
+            .task(id: "\(isVisible):\(scenePhase):\(reduceMotion):\(motion):\(store?.rangeCoverRevision ?? 0)") {
                 guard isVisible, scenePhase == .active else { return }
                 await runSlideshow()
             }
@@ -1952,15 +1952,22 @@ private struct PhotosRangeCard: View {
             coverOpacities = currentAsset.map { [$0.id: 1] } ?? [:]
             incomingAsset = nil
         }
-        guard !reduceMotion else { return }
-        var timeBeforeFadeOut = TimelineCoverAnimation.initialHold
+        guard !reduceMotion, motion.rotates else { return }
+        if motion.initialDelay > 0 {
+            do {
+                try await Task.sleep(for: .seconds(motion.initialDelay))
+            } catch { return }
+        }
+        let durationScale = max(0.1, motion.durationScale)
+        var timeBeforeFadeOut = TimelineCoverAnimation.initialHold * durationScale
+        var shouldStartCurrentZoom = true
         while !Task.isCancelled {
             withTransaction(transaction) {
                 incomingAsset = nil
                 coverScales = coverScales.filter { $0.key == currentAsset?.id }
                 coverOpacities = coverOpacities.filter { $0.key == currentAsset?.id }
             }
-            guard !reduceMotion else { return }
+            guard !reduceMotion, motion.rotates else { return }
 
             var nextBatch = coverAssets
             var nextBucket = bucketIndex
@@ -1983,31 +1990,32 @@ private struct PhotosRangeCard: View {
             }
 
             // Spread the same 10% zoom across fade-in and fade-out; never freeze at the fade boundary.
-            if timeBeforeFadeOut == TimelineCoverAnimation.initialHold, let currentAsset {
-                withAnimation(.linear(duration: TimelineCoverAnimation.zoomDuration)) {
+            if shouldStartCurrentZoom, let currentAsset {
+                withAnimation(.linear(duration: TimelineCoverAnimation.zoomDuration * durationScale)) {
                     coverScales[currentAsset.id] = TimelineCoverAnimation.zoomScale
                 }
+                shouldStartCurrentZoom = false
             }
             do {
                 try await Task.sleep(for: .seconds(timeBeforeFadeOut))
             } catch { return }
             if let currentAsset {
-                withAnimation(.linear(duration: TimelineCoverAnimation.fadeDuration)) {
+                withAnimation(.linear(duration: TimelineCoverAnimation.fadeDuration * durationScale)) {
                     coverOpacities[currentAsset.id] = 0
                 }
             }
             do {
-                try await Task.sleep(for: .seconds(TimelineCoverAnimation.overlapStep))
+                try await Task.sleep(for: .seconds(TimelineCoverAnimation.overlapStep * durationScale))
             } catch { return }
             // At two seconds into the outgoing fade, both incoming animations have run for 0.5 seconds.
-            withAnimation(.linear(duration: TimelineCoverAnimation.fadeDuration)) {
+            withAnimation(.linear(duration: TimelineCoverAnimation.fadeDuration * durationScale)) {
                 coverOpacities[next.id] = 1
             }
-            withAnimation(.linear(duration: TimelineCoverAnimation.zoomDuration)) {
+            withAnimation(.linear(duration: TimelineCoverAnimation.zoomDuration * durationScale)) {
                 coverScales[next.id] = TimelineCoverAnimation.zoomScale
             }
             do {
-                try await Task.sleep(for: .seconds(TimelineCoverAnimation.overlapStep))
+                try await Task.sleep(for: .seconds(TimelineCoverAnimation.overlapStep * durationScale))
             } catch { return }
             withTransaction(transaction) {
                 coverAssets = nextBatch
@@ -2016,7 +2024,7 @@ private struct PhotosRangeCard: View {
                 incomingAsset = nil
             }
             // Both values belong to the asset: promotion preserves its unfinished fade-in and zoom.
-            timeBeforeFadeOut = TimelineCoverAnimation.overlapStep
+            timeBeforeFadeOut = TimelineCoverAnimation.overlapStep * durationScale
         }
     }
 }
