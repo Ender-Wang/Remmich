@@ -10,6 +10,7 @@ struct AssetViewerView: View {
     let visibilityChanged: (Bool) -> Void
 
     @State private var session: AssetViewerSession
+    @State private var zoomedAssetID: String?
 
     init(
         route: AssetViewerRoute,
@@ -45,9 +46,19 @@ struct AssetViewerView: View {
         .navigationBarBackButtonHidden(true)
         .navigationTransition(.zoom(sourceID: route.selectedAsset.id, in: namespace))
         .ignoresSafeArea()
-        .task { await session.start() }
+        .task {
+            await session.start()
+            updateViewerPrefetch()
+        }
+        .onChange(of: session.selectedAssetID) { _, _ in
+            zoomedAssetID = nil
+            updateViewerPrefetch()
+        }
         .onAppear { visibilityChanged(true) }
-        .onDisappear { visibilityChanged(false) }
+        .onDisappear {
+            media.cancelViewerPrefetching()
+            visibilityChanged(false)
+        }
         .accessibilityIdentifier("asset-viewer")
     }
 
@@ -62,15 +73,20 @@ struct AssetViewerView: View {
                 AssetViewerFitPage(
                     asset: asset,
                     media: media,
+                    isSelected: asset.id == session.selectedAssetID,
                     targetPixels: .init(
                         width: Int(max(1, size.width * displayScale)),
                         height: Int(max(1, size.height * displayScale))
-                    )
+                    ),
+                    zoomChanged: { isZoomed in
+                        zoomedAssetID = isZoomed ? asset.id : nil
+                    }
                 )
                 .tag(asset.id)
             }
         }
         .tabViewStyle(.page(indexDisplayMode: .never))
+        .scrollDisabled(zoomedAssetID == session.selectedAssetID)
     }
 
     private var chrome: some View {
@@ -112,30 +128,52 @@ struct AssetViewerView: View {
             .safeAreaPadding(.bottom, 12)
         }
     }
+
+    private func updateViewerPrefetch() {
+        guard let selectedIndex = session.selectedIndex else {
+            media.cancelViewerPrefetching()
+            return
+        }
+        let lower = max(0, selectedIndex - 1)
+        let upper = min(session.assets.count, selectedIndex + 2)
+        let descriptors = session.assets[lower ..< upper]
+            .filter { $0.id != session.selectedAssetID }
+            .map {
+                MediaRequestDescriptor(
+                    assetID: $0.id,
+                    updatedAt: $0.thumbnailRevision,
+                    derivative: .preview,
+                    targetPixels: nil
+                )
+            }
+        media.updateViewerPrefetch(descriptors)
+    }
 }
 
 private struct AssetViewerFitPage: View {
     let asset: TimelineAssetSummary
     let media: MediaLibraryController
+    let isSelected: Bool
     let targetPixels: MediaPixelSize
+    let zoomChanged: (Bool) -> Void
 
     var body: some View {
         ZStack {
             Color.black
-            ImmichThumbnail(
-                descriptor: .init(
-                    assetID: asset.id,
-                    updatedAt: asset.thumbnailRevision,
-                    derivative: .preview,
-                    targetPixels: targetPixels
-                ),
-                media: media,
-                contentMode: .fit,
-                showsBackground: false
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-
             if asset.mediaKind == .video {
+                ImmichThumbnail(
+                    descriptor: .init(
+                        assetID: asset.id,
+                        updatedAt: asset.thumbnailRevision,
+                        derivative: .preview,
+                        targetPixels: targetPixels
+                    ),
+                    media: media,
+                    contentMode: .fit,
+                    showsBackground: false
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
                 Label("Video playback is added in the next viewer step", systemImage: "play.circle.fill")
                     .font(.footnote.weight(.semibold))
                     .padding(.horizontal, 14)
@@ -143,6 +181,14 @@ private struct AssetViewerFitPage: View {
                     .background(.regularMaterial, in: Capsule())
                     .padding(.bottom, 72)
                     .frame(maxHeight: .infinity, alignment: .bottom)
+            } else {
+                ZoomableStillImageView(
+                    asset: asset,
+                    media: media,
+                    targetPixels: targetPixels,
+                    isSelected: isSelected,
+                    zoomChanged: zoomChanged
+                )
             }
         }
         .accessibilityElement(children: .contain)

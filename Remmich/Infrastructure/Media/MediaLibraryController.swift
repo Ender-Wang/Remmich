@@ -21,6 +21,7 @@ final class MediaLibraryController {
 
     private var session: AccountSession?
     private var prefetcher: ImagePrefetcher?
+    private var viewerPrefetcher: ImagePrefetcher?
     private var residencyLoadTask: Task<Void, Never>?
     private var lastTimelinePlan = TimelineResidencyPlan.empty
     private var lastTimelineTargetPixels: MediaPixelSize?
@@ -39,6 +40,9 @@ final class MediaLibraryController {
             pipeline = Self.makePipeline(scope: nextScope)
             prefetcher = pipeline.map {
                 ImagePrefetcher(pipeline: $0, destination: .memoryCache, maxConcurrentRequestCount: 3)
+            }
+            viewerPrefetcher = pipeline.map {
+                ImagePrefetcher(pipeline: $0, destination: .memoryCache, maxConcurrentRequestCount: 2)
             }
             downloadService = MediaDownloadService(
                 token: session.accessToken,
@@ -134,6 +138,15 @@ final class MediaLibraryController {
 
     func cancelPrefetching() {
         prefetcher?.stopPrefetching()
+    }
+
+    func updateViewerPrefetch(_ descriptors: [MediaRequestDescriptor]) {
+        viewerPrefetcher?.stopPrefetching()
+        viewerPrefetcher?.startPrefetching(with: descriptors.compactMap(imageRequest))
+    }
+
+    func cancelViewerPrefetching() {
+        viewerPrefetcher?.stopPrefetching()
     }
 
     func updateTimelineResidency(
@@ -239,6 +252,7 @@ final class MediaLibraryController {
         Self.logger.notice("Memory warning received; purging decoded media caches")
         pipeline?.cache.removeAll(caches: .memory)
         prefetcher?.stopPrefetching()
+        viewerPrefetcher?.stopPrefetching()
         residencyLoadTask?.cancel()
         let residency = timelineResidency
         Task { await residency.handleMemoryPressure() }
@@ -247,6 +261,7 @@ final class MediaLibraryController {
     func handleBackgroundTransition() {
         Self.logger.info("App backgrounded; cancelling preload and releasing timeline pins")
         prefetcher?.stopPrefetching()
+        viewerPrefetcher?.stopPrefetching()
         residencyLoadTask?.cancel()
         let residency = timelineResidency
         Task { await residency.handleBackgroundTransition() }
@@ -260,6 +275,7 @@ final class MediaLibraryController {
 
     func clearAll() {
         prefetcher?.stopPrefetching()
+        viewerPrefetcher?.stopPrefetching()
         residencyLoadTask?.cancel()
         pipeline?.cache.removeAll()
         if let downloadService {
@@ -267,6 +283,7 @@ final class MediaLibraryController {
         }
         pipeline = nil
         prefetcher = nil
+        viewerPrefetcher = nil
         downloadService = nil
         session = nil
         scope = nil
