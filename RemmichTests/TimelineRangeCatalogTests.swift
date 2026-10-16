@@ -74,6 +74,90 @@ struct TimelineRangeCatalogTests {
         #expect(rows == [["Sep 26", "Sep 21"], ["Oct 2", "Sep 27"]])
     }
 
+    @Test func editorialMosaicPlansStableFeaturedTilesWithoutOverlaps() throws {
+        let keys = (0 ..< 16).map { "2026-10-\($0 + 1)" }
+        let first = TimelineRangeMosaicPlanner.blocks(keys: keys)
+        let second = TimelineRangeMosaicPlanner.blocks(keys: keys)
+
+        #expect(first == second)
+        #expect(first.flatMap(\.range).count == keys.count)
+        for block in first {
+            #expect(block.placements.map(\.itemIndex) == Array(0 ..< block.range.count))
+            let occupiedCells = block.placements.flatMap { placement in
+                (placement.row ..< placement.row + placement.rowSpan).flatMap { row in
+                    (placement.column ..< placement.column + placement.columnSpan).map { column in
+                        row * TimelineRangeMosaicPlanner.columns + column
+                    }
+                }
+            }
+            #expect(Set(occupiedCells).count == occupiedCells.count)
+            #expect(occupiedCells.allSatisfy { (0 ..< 9).contains($0) })
+            if block.range.count >= 4 {
+                #expect(block.placements.filter(\.isFeatured).count == 1)
+                let featured = try #require(block.placements.first { $0.isFeatured })
+                #expect(featured.columnSpan == 2 || featured.columnSpan == 3)
+                #expect(featured.columnSpan * featured.rowSpan >= 4)
+                #expect(occupiedCells.contains(4))
+            }
+        }
+    }
+
+    @Test func editorialMosaicKeepsShortFinalBlocksInOneCompactRow() {
+        for count in 1 ... 3 {
+            let placements = TimelineRangeMosaicPlanner.placements(itemCount: count, seed: 42)
+            #expect(placements.count == count)
+            #expect(placements.allSatisfy { $0.row == 0 && !$0.isFeatured })
+            #expect(occupiedCells(in: placements) == Set(0 ..< 3))
+        }
+        let twoItems = TimelineRangeMosaicPlanner.placements(itemCount: 2, seed: 42)
+        #expect(twoItems[0].column == 2)
+        #expect(twoItems[1].column == 0)
+        #expect(twoItems[1].columnSpan == 2)
+    }
+
+    @Test func editorialMosaicFillsEveryCellAndMatchesTimelineReadingOrder() {
+        for count in 4 ... 6 {
+            for seed in 0 ..< 16 {
+                let placements = TimelineRangeMosaicPlanner.placements(
+                    itemCount: count,
+                    seed: UInt64(seed)
+                )
+                #expect(occupiedCells(in: placements) == Set(0 ..< 9))
+                let orderedRanks = placements.sorted { $0.itemIndex < $1.itemIndex }
+                    .map(readingRank)
+                #expect(orderedRanks == orderedRanks.sorted())
+                if count == 5 {
+                    #expect(placements.contains { !$0.isFeatured && $0.columnSpan == 2 })
+                }
+            }
+        }
+
+        let ordinaryRow = TimelineRangeMosaicPlanner.placements(itemCount: 3, seed: 42)
+            .sorted { $0.itemIndex < $1.itemIndex }
+        #expect(ordinaryRow.map(\.column) == [2, 1, 0])
+    }
+
+    private func occupiedCells(
+        in placements: [TimelineRangeMosaicPlacement]
+    ) -> Set<Int> {
+        Set(placements.flatMap { placement in
+            (placement.row ..< placement.row + placement.rowSpan).flatMap { row in
+                (placement.column ..< placement.column + placement.columnSpan).map { column in
+                    row * TimelineRangeMosaicPlanner.columns + column
+                }
+            }
+        })
+    }
+
+    private func readingRank(_ placement: TimelineRangeMosaicPlacement) -> Int {
+        (placement.row ..< placement.row + placement.rowSpan).flatMap { row in
+            (placement.column ..< placement.column + placement.columnSpan).map { column in
+                row * TimelineRangeMosaicPlanner.columns
+                    + (TimelineRangeMosaicPlanner.columns - 1 - column)
+            }
+        }.min() ?? 0
+    }
+
     @Test(arguments: [CGFloat(402), CGFloat(390), CGFloat(375)])
     func phoneLandscapeCardsUseDeviceHeightMinusNavigationAndTwoGaps(_ deviceHeight: CGFloat) {
         #expect(TimelineRangeGridLayout.landscapeCardSide(

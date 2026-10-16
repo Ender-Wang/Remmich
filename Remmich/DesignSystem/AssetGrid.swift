@@ -6,6 +6,7 @@ nonisolated enum TimelineCoverAnimation {
     static let fadeDuration = 3.0
     static let overlapStep = 1.5
     static let initialHold = 3.0
+    static let cycleDuration = initialHold + overlapStep * 2
 }
 
 struct AssetGrid: View {

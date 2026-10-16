@@ -804,21 +804,21 @@ final class RemmichUITests: XCTestCase {
     }
 
     @MainActor
-    func testGroupedRangeLayoutsUseConsistentGeometryInPortrait() throws {
+    func testGroupedRangeMosaicsUseConsistentGeometryInPortrait() throws {
         try skipTransientSimulatorGeometry()
-        assertGroupedRangeLayouts(orientation: .portrait)
+        assertGroupedRangeMosaics(orientation: .portrait)
     }
 
     @MainActor
-    func testPhotosGroupedRangeLayoutsUseConsistentGeometryInLandscape() throws {
+    func testPhotosGroupedRangeMosaicsUseConsistentGeometryInLandscape() throws {
         try skipTransientSimulatorGeometry()
-        assertGroupedRangeLayouts(orientation: .landscapeLeft, tabs: ["Photos"])
+        assertGroupedRangeMosaics(orientation: .landscapeLeft, tabs: ["Photos"])
     }
 
     @MainActor
-    func testVideosGroupedRangeLayoutsUseConsistentGeometryInLandscape() throws {
+    func testVideosGroupedRangeMosaicsUseConsistentGeometryInLandscape() throws {
         try skipTransientSimulatorGeometry()
-        assertGroupedRangeLayouts(orientation: .landscapeLeft, tabs: ["Videos"])
+        assertGroupedRangeMosaics(orientation: .landscapeLeft, tabs: ["Videos"])
     }
 
     private func skipTransientSimulatorGeometry() throws {
@@ -830,7 +830,7 @@ final class RemmichUITests: XCTestCase {
     }
 
     @MainActor
-    private func assertGroupedRangeLayouts(
+    private func assertGroupedRangeMosaics(
         orientation: UIDeviceOrientation,
         tabs: [String] = ["Photos", "Videos"]
     ) {
@@ -851,23 +851,23 @@ final class RemmichUITests: XCTestCase {
             let rootID = tab == "Photos" ? "photos-root" : "videos-root"
             XCTAssertTrue(app.descendants(matching: .any)[rootID].waitForExistence(timeout: 10))
 
-            var expectedSide: CGFloat?
+            var expectedCell: CGFloat?
             for range in ranges {
                 coarsenTimeline(tab, in: app)
-                let side = assertGroupedRangeGeometry(
+                let cell = assertGroupedRangeMosaicGeometry(
                     prefix: range.prefix,
                     tab: tab,
                     range: range.name,
                     orientation: orientation,
                     in: app
                 )
-                if let expectedSide {
+                if let expectedCell {
                     XCTAssertEqual(
-                        side, expectedSide, accuracy: 3,
-                        "\(tab) \(range.name) cards changed size in \(orientation.rawValue)"
+                        cell, expectedCell, accuracy: 3,
+                        "\(tab) \(range.name) mosaic cells changed size in \(orientation.rawValue)"
                     )
                 } else {
-                    expectedSide = side
+                    expectedCell = cell
                 }
             }
             app.terminate()
@@ -875,7 +875,7 @@ final class RemmichUITests: XCTestCase {
     }
 
     @MainActor
-    func testGroupedTabPinchDoesNotChangeRangeOnSignedInDevice() throws {
+    func testGroupedTabPinchChangesRangeOnSignedInDevice() throws {
         #if targetEnvironment(simulator)
             throw XCTSkip("Uses the saved Immich account on the connected iPhone")
         #else
@@ -894,120 +894,69 @@ final class RemmichUITests: XCTestCase {
                 return
             }
             month.pinch(withScale: 0.6, velocity: -1)
-            XCTAssertTrue(month.waitForExistence(timeout: 10))
-            month.pinch(withScale: 1.5, velocity: 1)
-            XCTAssertTrue(month.waitForExistence(timeout: 10))
+            XCTAssertTrue(app.descendants(matching: .any)["timeline-years-root"].waitForExistence(timeout: 10))
+            selectRange("Months", in: app)
+            let restoredMonth = app.buttons.matching(NSPredicate(
+                format: "identifier BEGINSWITH %@", "timeline-month-"
+            )).firstMatch
+            XCTAssertTrue(restoredMonth.waitForExistence(timeout: 10))
+            restoredMonth.pinch(withScale: 1.5, velocity: 1)
+            XCTAssertTrue(app.descendants(matching: .any)["timeline-library-weeks-root"].waitForExistence(timeout: 10))
             selectRange("All Photos", in: app)
         #endif
     }
 
     @MainActor
-    func testGroupedTabsKeepTheirRangeAfterPinch() {
+    func testGroupedTabsPinchBetweenAdjacentRanges() {
         let app = rangeApplication()
         app.launch()
         XCTAssertTrue(app.descendants(matching: .any)["photos-root"].waitForExistence(timeout: 10))
         selectRange("Months", in: app)
         let month = app.buttons["timeline-month-2026-10-01"]
         XCTAssertTrue(month.waitForExistence(timeout: 5))
-        month.pinch(withScale: 0.6, velocity: -1)
-        XCTAssertTrue(month.waitForExistence(timeout: 5))
-        month.pinch(withScale: 1.5, velocity: 1)
-        XCTAssertTrue(month.waitForExistence(timeout: 5))
+        let coarser = app.buttons["timeline-test-grouped-coarser"]
+        XCTAssertTrue(coarser.waitForExistence(timeout: 5))
+        coarser.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["timeline-years-root"].waitForExistence(timeout: 10))
+
+        selectRange("Months", in: app)
+        let restoredMonth = app.buttons["timeline-month-2026-10-01"]
+        XCTAssertTrue(restoredMonth.waitForExistence(timeout: 5))
+        let finer = app.buttons["timeline-test-grouped-finer"]
+        XCTAssertTrue(finer.waitForExistence(timeout: 5))
+        finer.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["timeline-library-weeks-root"].waitForExistence(timeout: 10))
+
+        XCTAssertTrue(finer.waitForExistence(timeout: 5))
+        finer.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["photos-root"].waitForExistence(timeout: 10))
+        assertTimelineRange("day", tab: "Photos", in: app)
+        XCTAssertTrue(app.descendants(matching: .any)["timeline-library-days-root"].waitForExistence(timeout: 10))
     }
 
     @MainActor
-    func testRangeCardsStaySquareAndUseAdaptiveColumns() throws {
-        try skipTransientSimulatorGeometry()
-
+    func testEditorialMonthMosaicShowsFeaturedAndOrdinaryTiles() {
         let app = rangeApplication()
         app.launch()
         XCTAssertTrue(app.descendants(matching: .any)["photos-root"].waitForExistence(timeout: 10))
         selectRange("Months", in: app)
-        let card = app.buttons["timeline-month-2026-10-01"]
-        XCTAssertTrue(card.waitForExistence(timeout: 5))
-        assertRangeCardGeometry(card, in: app, landscape: false)
-        XCUIDevice.shared.orientation = .landscapeLeft
-        XCTAssertTrue(waitUntil { app.frame.width > app.frame.height })
-        let didSettleInLandscape = waitUntil { [self] in
-            let columns: CGFloat = UIDevice.current.userInterfaceIdiom == .pad ? 3 : 2
-            let expected = expectedRangeCardSide(in: app, columns: columns)
-            if UIDevice.current.userInterfaceIdiom == .phone {
-                let fittedSide = expectedPhoneLandscapeCardSide(in: app)
-                return abs(card.frame.width - fittedSide) < 3 && rangeCardFitsAboveNavigation(card, in: app)
+
+        let months = app.buttons.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@", "timeline-month-"
+        ))
+        XCTAssertTrue(months.firstMatch.waitForExistence(timeout: 10))
+        let settled = waitUntil(timeout: 10) {
+            let frames = months.allElementsBoundByIndex.map(\.frame).filter {
+                $0.width > 0 && $0.height > 0 && $0.intersects(app.frame)
             }
-            return abs(card.frame.width - expected) < 3
+            guard let smallestWidth = frames.map(\.width).min(),
+                  let largestWidth = frames.map(\.width).max(),
+                  let largestHeight = frames.map(\.height).max()
+            else { return false }
+            return largestWidth >= smallestWidth * 1.8
+                && largestHeight >= smallestWidth * 1.8
         }
-        XCTAssertTrue(
-            didSettleInLandscape,
-            "card=\(card.frame), app=\(app.frame), tabBar=\(app.tabBars.firstMatch.frame), expectedSide=\(expectedPhoneLandscapeCardSide(in: app))"
-        )
-        assertRangeCardGeometry(card, in: app, landscape: true)
-        let previousMonth = app.buttons["timeline-month-2026-09-01"]
-        XCTAssertTrue(previousMonth.waitForExistence(timeout: 5))
-        XCTAssertLessThan(card.frame.minX, previousMonth.frame.minX)
-        XCTAssertEqual(card.frame.minY, previousMonth.frame.minY, accuracy: 3)
-        if UIDevice.current.userInterfaceIdiom == .phone {
-            XCTAssertTrue(rangeCardFitsAboveNavigation(previousMonth, in: app))
-            XCTAssertEqual(card.frame.maxY, expectedPhoneLandscapeCardBottom(in: app), accuracy: 3)
-            XCTAssertGreaterThanOrEqual(card.frame.minY, app.frame.minY + 12)
-            for month in ["2026-08-01", "2026-07-01"] {
-                let olderCard = app.buttons["timeline-month-\(month)"]
-                if olderCard.exists {
-                    XCTAssertLessThanOrEqual(olderCard.frame.maxY, card.frame.minY - 40 + 3)
-                }
-            }
-        }
-        XCUIDevice.shared.orientation = .portrait
-        XCTAssertTrue(waitUntil { app.frame.width < app.frame.height })
-        XCTAssertTrue(waitUntil {
-            let columns: CGFloat = UIDevice.current.userInterfaceIdiom == .pad ? 2 : 1
-            let expected = self.expectedRangeCardSide(in: app, columns: columns)
-            return abs(card.frame.width - expected) < 3
-        })
-        assertRangeCardGeometry(card, in: app, landscape: false)
-        if UIDevice.current.userInterfaceIdiom == .pad {
-            XCTAssertTrue(previousMonth.waitForExistence(timeout: 5))
-            XCTAssertLessThan(card.frame.minX, previousMonth.frame.minX)
-            XCTAssertEqual(card.frame.minY, previousMonth.frame.minY, accuracy: 3)
-        }
-    }
-
-    @MainActor
-    private func assertRangeCardGeometry(_ card: XCUIElement, in app: XCUIApplication, landscape: Bool) {
-        let columns: CGFloat = UIDevice.current.userInterfaceIdiom == .pad ? (landscape ? 3 : 2) : (landscape ? 2 : 1)
-        XCTAssertEqual(card.frame.width, card.frame.height, accuracy: 2)
-        let widthBasedSide = expectedRangeCardSide(in: app, columns: columns)
-        if UIDevice.current.userInterfaceIdiom == .phone, landscape {
-            // Checking only an upper bound would let shrunken, unreadable cards pass.
-            XCTAssertEqual(card.frame.width, expectedPhoneLandscapeCardSide(in: app), accuracy: 3)
-            XCTAssertTrue(rangeCardFitsAboveNavigation(card, in: app))
-        } else {
-            XCTAssertEqual(card.frame.width, widthBasedSide, accuracy: 3)
-        }
-    }
-
-    @MainActor
-    private func expectedPhoneLandscapeCardSide(in app: XCUIApplication) -> CGFloat {
-        app.tabBars.firstMatch.frame.minY - app.frame.minY - 64 - 12 * 2
-    }
-
-    @MainActor
-    private func expectedPhoneLandscapeCardBottom(in app: XCUIApplication) -> CGFloat {
-        let measuredBarHeight = app.frame.maxY - app.tabBars.firstMatch.frame.minY
-        return app.frame.maxY - max(measuredBarHeight, 64) - 12
-    }
-
-    @MainActor
-    private func expectedRangeCardSide(in app: XCUIApplication, columns: CGFloat) -> CGFloat {
-        let edgeInset: CGFloat = UIDevice.current.userInterfaceIdiom == .pad ? 20 : 12
-        return (app.frame.width - edgeInset * 2 - 14 * (columns - 1)) / columns
-    }
-
-    @MainActor
-    private func rangeCardFitsAboveNavigation(_ card: XCUIElement, in app: XCUIApplication) -> Bool {
-        let top = app.frame.minY + 12
-        let bottom = expectedPhoneLandscapeCardBottom(in: app)
-        return card.frame.minY >= top - 3 && card.frame.maxY <= bottom + 3
+        XCTAssertTrue(settled, "Expected one enlarged editorial tile beside ordinary month tiles")
     }
 
     @MainActor
@@ -1017,13 +966,6 @@ final class RemmichUITests: XCTestCase {
         ))
         let tabBarTopProbe = app.staticTexts["timeline-test-tab-bar-top"]
         let isPhone = UIDevice.current.userInterfaceIdiom == .phone
-        let isLandscape = app.frame.width > app.frame.height
-        let columns: CGFloat = UIDevice.current.userInterfaceIdiom == .pad
-            ? (isLandscape ? 3 : 2)
-            : (isLandscape ? 2 : 1)
-        let expectedSide = isPhone && isLandscape
-            ? expectedPhoneLandscapeCardSide(in: app)
-            : expectedRangeCardSide(in: app, columns: columns)
         if isPhone {
             XCTAssertTrue(tabBarTopProbe.waitForExistence(timeout: 5))
         }
@@ -1031,9 +973,7 @@ final class RemmichUITests: XCTestCase {
         let settled = waitUntil(timeout: 10) {
             guard cards.firstMatch.exists else { return false }
             let visibleFrames = cards.allElementsBoundByIndex.map(\.frame).filter { frame in
-                abs(frame.width - expectedSide) < 3
-                    && abs(frame.height - expectedSide) < 3
-                    && frame.intersects(app.frame)
+                frame.width > 0 && frame.height > 0 && frame.intersects(app.frame)
             }
             guard let bottom = visibleFrames.map(\.maxY).max() else { return false }
             let expectedBottom: CGFloat
@@ -1058,53 +998,48 @@ final class RemmichUITests: XCTestCase {
     }
 
     @MainActor
-    private func assertGroupedRangeGeometry(
+    private func assertGroupedRangeMosaicGeometry(
         prefix: String,
         tab: String,
         range: String,
         orientation: UIDeviceOrientation,
         in app: XCUIApplication
     ) -> CGFloat {
-        let isLandscape = orientation.isLandscape
-        let columns: CGFloat = UIDevice.current.userInterfaceIdiom == .pad
-            ? (isLandscape ? 3 : 2)
-            : (isLandscape ? 2 : 1)
-        let expectedSide = UIDevice.current.userInterfaceIdiom == .phone && isLandscape
-            ? expectedPhoneLandscapeCardSide(in: app)
-            : expectedRangeCardSide(in: app, columns: columns)
         let edgeInset: CGFloat = UIDevice.current.userInterfaceIdiom == .pad ? 20 : 12
+        let spacing: CGFloat = 8
+        let expectedCell = (app.frame.width - edgeInset * 2 - spacing * 2) / 3
         let cards = app.descendants(matching: .any).matching(NSPredicate(
             format: "identifier BEGINSWITH %@", prefix
         ))
 
-        var settledFrame = CGRect.zero
         let settled = waitUntil(timeout: 15) {
             guard cards.firstMatch.exists else { return false }
             let frames = cards.allElementsBoundByIndex.map(\.frame).filter { frame in
-                abs(frame.width - frame.height) < 3
-                    && abs(frame.width - expectedSide) < 3
-                    && frame.intersects(app.frame)
+                frame.width > 0 && frame.height > 0 && frame.intersects(app.frame)
             }
-            guard let frame = frames.min(by: { $0.minX < $1.minX }) else { return false }
-            let expectedLeft = if UIDevice.current.userInterfaceIdiom == .phone, isLandscape {
-                app.frame.minX + (app.frame.width - expectedSide * columns - 14 * (columns - 1)) / 2
-            } else {
-                app.frame.minX + edgeInset
+            guard !frames.isEmpty else { return false }
+            let validDimensions = [
+                expectedCell,
+                expectedCell * 2 + spacing,
+                expectedCell * 3 + spacing * 2,
+            ]
+            return frames.allSatisfy { frame in
+                validDimensions.contains { abs(frame.width - $0) < 4 }
+                    && validDimensions.contains { abs(frame.height - $0) < 4 }
+                    && frame.minX >= app.frame.minX + edgeInset - 4
+                    && frame.maxX <= app.frame.maxX - edgeInset + 4
             }
-            guard abs(frame.minX - expectedLeft) < 4 else { return false }
-            settledFrame = frame
-            return true
         }
         if !settled {
             let detail = cards.firstMatch.exists
                 ? cards.allElementsBoundByIndex.map { "\($0.identifier):\($0.frame)" }.joined(separator: ", ")
                 : "no visible card"
             XCTFail(
-                "\(tab) \(range) cards have inconsistent \(orientation.rawValue) geometry; "
-                    + "expectedSide=\(expectedSide), card=\(detail)"
+                "\(tab) \(range) mosaic has inconsistent \(orientation.rawValue) geometry; "
+                    + "expectedCell=\(expectedCell), cards=\(detail)"
             )
         }
-        return settledFrame == .zero ? expectedSide : settledFrame.width
+        return expectedCell
     }
 
     @MainActor

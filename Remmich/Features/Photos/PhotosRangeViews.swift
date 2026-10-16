@@ -300,16 +300,17 @@ struct PhotosYearsView: View {
     let media: MediaLibraryController
     var scrollToLatestRequest = 0
     var tabBarTop: CGFloat = 0
-    var onSelect: ((PhotosRangeRoute) -> Void)?
+    var onSelect: ((PhotosRangeRoute, String?) -> Void)?
     var onPinch: ((PhotosPinchGesture) -> Void)?
 
     var body: some View {
         PhotosRangeCardGrid(
             items: TimelineRangeCatalog.years(from: store.bucketSummaries),
+            level: .year,
             scrollToLatestRequest: scrollToLatestRequest,
             tabBarTop: tabBarTop,
             onPinch: onPinch
-        ) { year in
+        ) { year, motion in
             PhotosBucketCoverButton(
                 route: .year(year.id),
                 accessibilityID: "timeline-year-\(year.id)",
@@ -319,6 +320,7 @@ struct PhotosYearsView: View {
                 bucketIDs: year.months.reversed().filter { $0.assetCount > 0 }.map(\.id),
                 store: store,
                 media: media,
+                motion: motion,
                 onSelect: onSelect,
                 onPinch: onPinch
             )
@@ -333,16 +335,17 @@ struct PhotosMonthsView: View {
     let media: MediaLibraryController
     var scrollToLatestRequest = 0
     var tabBarTop: CGFloat = 0
-    var onSelect: ((PhotosRangeRoute) -> Void)?
+    var onSelect: ((PhotosRangeRoute, String?) -> Void)?
     var onPinch: ((PhotosPinchGesture) -> Void)?
 
     var body: some View {
         PhotosRangeCardGrid(
             items: TimelineRangeCatalog.months(from: summaries),
+            level: .month,
             scrollToLatestRequest: scrollToLatestRequest,
             tabBarTop: tabBarTop,
             onPinch: onPinch
-        ) { month in
+        ) { month, motion in
             PhotosBucketCoverButton(
                 route: .month(month.id),
                 accessibilityID: "timeline-month-\(month.id.rawValue)",
@@ -353,6 +356,7 @@ struct PhotosMonthsView: View {
                 bucketIDs: month.assetCount > 0 ? [month.id] : [],
                 store: store,
                 media: media,
+                motion: motion,
                 onSelect: onSelect,
                 onPinch: onPinch
             )
@@ -367,7 +371,7 @@ struct PhotosLibraryDaysView: View {
     let media: MediaLibraryController
     let dayIconSystemImage: String
     var tabBarTop: CGFloat = 0
-    let onSelect: (PhotosRangeRoute) -> Void
+    let onSelect: (PhotosRangeRoute, String?) -> Void
     let onPinch: (PhotosPinchGesture) -> Void
 
     @State private var didSettleInitialViewport = false
@@ -425,7 +429,7 @@ struct PhotosLibraryDaysView: View {
                                 PhotosLibraryDayMonthSection(
                                     summary: summary, store: store, media: media,
                                     dayIconSystemImage: dayIconSystemImage,
-                                    columns: columns, cardSide: cardSide,
+                                    cardSide: cardSide,
                                     allMonths: allMonths,
                                     edgeInset: edgeInset,
                                     onSelect: onSelect,
@@ -506,25 +510,26 @@ private struct PhotosVisibleRangeSection<Content: View>: View {
 }
 
 private struct PhotosLibraryDayMonthSection: View {
-    @Environment(\.photosRangePinchInteraction) private var pinchInteraction
-
     let summary: TimelineBucketSummary
     let store: PhotosTimelineStore
     let media: MediaLibraryController
     let dayIconSystemImage: String
-    let columns: Int
     let cardSide: CGFloat
     let allMonths: [TimelineBucketSummary]
     let edgeInset: CGFloat
-    let onSelect: (PhotosRangeRoute) -> Void
+    let onSelect: (PhotosRangeRoute, String?) -> Void
     let onPinch: (PhotosPinchGesture) -> Void
 
     private struct Entry {
         let bucketID: TimelineBucketID
         let day: TimelineDayGroup
+
+        var key: String {
+            "\(bucketID.rawValue)-\(day.id.id)"
+        }
     }
 
-    private var packedRows: [[Entry?]] {
+    private var packedEntries: [Entry] {
         guard let monthIndex = allMonths.firstIndex(where: { $0.id == summary.id }),
               isLoaded(summary.id)
         else { return [] }
@@ -538,26 +543,29 @@ private struct PhotosLibraryDayMonthSection: View {
             last += 1
         }
 
-        let entries = allMonths[first ... last].flatMap { month in
+        return allMonths[first ... last].flatMap { month in
             guard let section = store.sectionsByID[month.id] else { return [Entry]() }
             return section.dayGroups.reversed().map { Entry(bucketID: month.id, day: $0) }
         }
-        return TimelineRangeGridLayout.displayRows(items: entries, columns: columns)
-            .filter { row in row.compactMap(\.self).first?.bucketID == summary.id }
+    }
+
+    private var mosaicBlocks: [(TimelineRangeMosaicBlockPlan, [Entry])] {
+        let entries = packedEntries
+        return TimelineRangeMosaicPlanner.blocks(keys: entries.map(\.key)).compactMap { block in
+            let items = Array(entries[block.range])
+            guard items.first?.bucketID == summary.id else { return nil }
+            return (block, items)
+        }
     }
 
     private var topSpacing: CGFloat {
-        guard !packedRows.isEmpty else { return 0 }
+        guard !mosaicBlocks.isEmpty else { return 0 }
         guard let monthIndex = allMonths.firstIndex(where: { $0.id == summary.id }) else {
             return edgeInset
         }
         return monthIndex > allMonths.startIndex && isLoaded(allMonths[monthIndex - 1].id)
-            ? interRowSpacing
+            ? TimelineRangeMosaicPlanner.spacing
             : edgeInset
-    }
-
-    private var interRowSpacing: CGFloat {
-        columns == 2 && UIDevice.current.userInterfaceIdiom == .phone ? 40 : 14
     }
 
     private func isLoaded(_ bucketID: TimelineBucketID) -> Bool {
@@ -570,34 +578,33 @@ private struct PhotosLibraryDayMonthSection: View {
     var body: some View {
         Group {
             if isLoaded(summary.id) {
-                let rows = packedRows
-                LazyVGrid(columns: Array(
-                    repeating: GridItem(.fixed(cardSide), spacing: 14), count: columns
-                ), alignment: columns == 2 && UIDevice.current.userInterfaceIdiom == .phone ? .center : .leading,
-                spacing: interRowSpacing) {
-                    ForEach(rows.indices, id: \.self) { row in
-                        ForEach(0 ..< columns, id: \.self) { column in
-                            if let entry = rows[row][column] {
-                                let day = entry.day
-                                PhotosRangeCard(
-                                    title: day.id.displayDate?.formatted(date: .abbreviated, time: .omitted)
-                                        ?? day.id.id,
-                                    count: day.assets.count,
-                                    systemImage: dayIconSystemImage,
-                                    assets: day.assets,
-                                    media: media
-                                )
-                                .photosRangeCardInteraction(
-                                    interaction: pinchInteraction,
-                                    onSelect: { onSelect(.day(entry.bucketID, day.id)) },
-                                    onPinch: onPinch
-                                )
-                                .accessibilityIdentifier(
-                                    "timeline-library-day-\(entry.bucketID.rawValue)-\(day.id.id)"
-                                )
-                            } else {
-                                Color.clear.aspectRatio(1, contentMode: .fit).accessibilityHidden(true)
-                            }
+                let blocks = mosaicBlocks
+                LazyVStack(spacing: TimelineRangeMosaicPlanner.spacing) {
+                    ForEach(blocks.indices, id: \.self) { blockIndex in
+                        let block = blocks[blockIndex]
+                        TimelineRangeMosaicBlock(
+                            items: block.1,
+                            plan: .init(
+                                range: 0 ..< block.1.count,
+                                placements: block.0.placements,
+                                seed: block.0.seed
+                            ),
+                            level: .day
+                        ) { entry, _, motion in
+                            let day = entry.day
+                            PhotosInlineRangeCardButton(
+                                route: .day(entry.bucketID, day.id),
+                                accessibilityID: "timeline-library-day-\(entry.bucketID.rawValue)-\(day.id.id)",
+                                title: day.id.displayDate?.formatted(date: .abbreviated, time: .omitted)
+                                    ?? day.id.id,
+                                count: day.assets.count,
+                                systemImage: dayIconSystemImage,
+                                assets: day.assets,
+                                media: media,
+                                motion: motion,
+                                onSelect: onSelect,
+                                onPinch: onPinch
+                            )
                         }
                     }
                 }
@@ -628,7 +635,7 @@ struct PhotosLibraryWeeksView: View {
     let media: MediaLibraryController
     var scrollToLatestRequest = 0
     var tabBarTop: CGFloat = 0
-    let onSelect: (PhotosRangeRoute) -> Void
+    let onSelect: (PhotosRangeRoute, String?) -> Void
     var onPinch: ((PhotosPinchGesture) -> Void)?
 
     @State private var didSettleInitialViewport = false
@@ -696,7 +703,6 @@ struct PhotosLibraryWeeksView: View {
                                     summary: summary,
                                     store: store,
                                     media: media,
-                                    columns: columns,
                                     cardSide: cardSide,
                                     allMonths: allMonths,
                                     edgeInset: edgeInset,
@@ -771,24 +777,25 @@ struct PhotosLibraryWeeksView: View {
 }
 
 private struct PhotosLibraryWeekMonthSection: View {
-    @Environment(\.photosRangePinchInteraction) private var pinchInteraction
-
     let summary: TimelineBucketSummary
     let store: PhotosTimelineStore
     let media: MediaLibraryController
-    let columns: Int
     let cardSide: CGFloat
     let allMonths: [TimelineBucketSummary]
     let edgeInset: CGFloat
-    let onSelect: (PhotosRangeRoute) -> Void
+    let onSelect: (PhotosRangeRoute, String?) -> Void
     let onPinch: ((PhotosPinchGesture) -> Void)?
 
     private struct Entry {
         let bucketID: TimelineBucketID
         let week: TimelineWeekGroup
+
+        var key: String {
+            "\(bucketID.rawValue)-\(week.id.id)"
+        }
     }
 
-    private var packedRows: [[Entry?]] {
+    private var packedEntries: [Entry] {
         guard let monthIndex = allMonths.firstIndex(where: { $0.id == summary.id }),
               isReady(monthIndex)
         else { return [] }
@@ -802,25 +809,28 @@ private struct PhotosLibraryWeekMonthSection: View {
             last += 1
         }
 
-        let entries = (first ... last).flatMap { index in
+        return (first ... last).flatMap { index in
             weeks(at: index).map { Entry(bucketID: allMonths[index].id, week: $0) }
         }
-        return TimelineRangeGridLayout.displayRows(items: entries, columns: columns)
-            .filter { row in row.compactMap(\.self).first?.bucketID == summary.id }
+    }
+
+    private var mosaicBlocks: [(TimelineRangeMosaicBlockPlan, [Entry])] {
+        let entries = packedEntries
+        return TimelineRangeMosaicPlanner.blocks(keys: entries.map(\.key)).compactMap { block in
+            let items = Array(entries[block.range])
+            guard items.first?.bucketID == summary.id else { return nil }
+            return (block, items)
+        }
     }
 
     private var topSpacing: CGFloat {
-        guard !packedRows.isEmpty else { return 0 }
+        guard !mosaicBlocks.isEmpty else { return 0 }
         guard let monthIndex = allMonths.firstIndex(where: { $0.id == summary.id }) else {
             return edgeInset
         }
         return monthIndex > allMonths.startIndex && isReady(monthIndex - 1)
-            ? interRowSpacing
+            ? TimelineRangeMosaicPlanner.spacing
             : edgeInset
-    }
-
-    private var interRowSpacing: CGFloat {
-        columns == 2 && UIDevice.current.userInterfaceIdiom == .phone ? 40 : 14
     }
 
     private func isLoaded(_ bucketID: TimelineBucketID) -> Bool {
@@ -875,33 +885,32 @@ private struct PhotosLibraryWeekMonthSection: View {
     }
 
     private func loaded() -> some View {
-        let rows = packedRows
-        return LazyVGrid(columns: Array(
-            repeating: GridItem(.fixed(cardSide), spacing: 14),
-            count: columns
-        ), alignment: columns == 2 && UIDevice.current.userInterfaceIdiom == .phone ? .center : .leading,
-        spacing: interRowSpacing) {
-            ForEach(rows.indices, id: \.self) { row in
-                ForEach(0 ..< columns, id: \.self) { column in
-                    if let entry = rows[row][column] {
-                        let week = entry.week
-                        PhotosRangeCard(
-                            title: "Week of \(week.id.startDate.formatted(date: .abbreviated, time: .omitted))",
-                            count: week.assetCount,
-                            systemImage: "calendar",
-                            assets: week.days.reversed().flatMap(\.assets),
-                            media: media
-                        )
-                        .photosRangeCardInteraction(
-                            interaction: pinchInteraction,
-                            onSelect: { onSelect(.week(entry.bucketID, week.id, .library)) },
-                            onPinch: onPinch
-                        )
-                        .accessibilityIdentifier("timeline-library-week-\(week.id.id)")
-                    } else {
-                        Color.clear.aspectRatio(1, contentMode: .fit)
-                            .accessibilityHidden(true)
-                    }
+        let blocks = mosaicBlocks
+        return LazyVStack(spacing: TimelineRangeMosaicPlanner.spacing) {
+            ForEach(blocks.indices, id: \.self) { blockIndex in
+                let block = blocks[blockIndex]
+                TimelineRangeMosaicBlock(
+                    items: block.1,
+                    plan: .init(
+                        range: 0 ..< block.1.count,
+                        placements: block.0.placements,
+                        seed: block.0.seed
+                    ),
+                    level: .week
+                ) { entry, _, motion in
+                    let week = entry.week
+                    PhotosInlineRangeCardButton(
+                        route: .week(entry.bucketID, week.id, .library),
+                        accessibilityID: "timeline-library-week-\(week.id.id)",
+                        title: "Week of \(week.id.startDate.formatted(date: .abbreviated, time: .omitted))",
+                        count: week.assetCount,
+                        systemImage: "calendar",
+                        assets: week.days.reversed().flatMap(\.assets),
+                        media: media,
+                        motion: motion,
+                        onSelect: onSelect,
+                        onPinch: onPinch
+                    )
                 }
             }
         }
@@ -1226,6 +1235,54 @@ struct PhotosRangeAssetsView: View {
     }
 }
 
+private struct PhotosInlineRangeCardButton: View {
+    @Environment(\.photosRangePinchInteraction) private var pinchInteraction
+
+    let route: PhotosRangeRoute
+    let accessibilityID: String
+    let title: String
+    let count: Int
+    let systemImage: String
+    let assets: [TimelineAssetSummary]
+    let media: MediaLibraryController
+    let motion: TimelineRangeCoverMotion
+    let onSelect: (PhotosRangeRoute, String?) -> Void
+    let onPinch: ((PhotosPinchGesture) -> Void)?
+
+    @State private var currentCoverID: String?
+
+    var body: some View {
+        PhotosRangeCard(
+            title: title,
+            count: count,
+            systemImage: systemImage,
+            assets: assets,
+            media: media,
+            motion: motion,
+            onCoverChanged: { currentCoverID = $0 }
+        )
+        .photosRangeCardInteraction(
+            interaction: pinchInteraction,
+            onSelect: { onSelect(route, currentCoverID) },
+            onPinch: onPinch
+        )
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(title), \(count.formatted()) items")
+        .accessibilityIdentifier(accessibilityID)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityValue(coverAccessibilityValue)
+    }
+
+    private var coverAccessibilityValue: String {
+        #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("-ui-testing-signed-in") {
+                return currentCoverID ?? ""
+            }
+        #endif
+        return ""
+    }
+}
+
 private struct PhotosBucketCoverButton: View {
     @Environment(\.photosRangePinchInteraction) private var pinchInteraction
 
@@ -1237,7 +1294,8 @@ private struct PhotosBucketCoverButton: View {
     let bucketIDs: [TimelineBucketID]
     let store: PhotosTimelineStore
     let media: MediaLibraryController
-    let onSelect: ((PhotosRangeRoute) -> Void)?
+    let motion: TimelineRangeCoverMotion
+    let onSelect: ((PhotosRangeRoute, String?) -> Void)?
     let onPinch: ((PhotosPinchGesture) -> Void)?
     @State private var currentCoverID = "loading"
 
@@ -1249,11 +1307,12 @@ private struct PhotosBucketCoverButton: View {
             media: media,
             bucketIDs: bucketIDs,
             store: store,
+            motion: motion,
             onCoverChanged: { currentCoverID = $0 ?? "loading" }
         )
         .photosRangeCardInteraction(
             interaction: pinchInteraction,
-            onSelect: { onSelect?(route) },
+            onSelect: { onSelect?(route, currentCoverID == "loading" ? nil : currentCoverID) },
             onPinch: onPinch
         )
         .accessibilityElement(children: .ignore)
@@ -1273,12 +1332,280 @@ private struct PhotosBucketCoverButton: View {
     }
 }
 
+nonisolated enum TimelineRangeMosaicLevel: Equatable, Sendable {
+    case day
+    case week
+    case month
+    case year
+}
+
+nonisolated struct TimelineRangeCoverMotion: Equatable, Sendable {
+    let rotates: Bool
+    let durationScale: Double
+    let initialDelay: Double
+
+    static let ordinary = TimelineRangeCoverMotion(
+        rotates: true,
+        durationScale: 1,
+        initialDelay: 0
+    )
+}
+
+nonisolated struct TimelineRangeMosaicPlacement: Equatable, Sendable {
+    let itemIndex: Int
+    let column: Int
+    let row: Int
+    let columnSpan: Int
+    let rowSpan: Int
+    let isFeatured: Bool
+}
+
+nonisolated struct TimelineRangeMosaicBlockPlan: Equatable, Sendable {
+    let range: Range<Int>
+    let placements: [TimelineRangeMosaicPlacement]
+    let seed: UInt64
+}
+
+nonisolated enum TimelineRangeMosaicPlanner {
+    static let columns = 3
+    static let spacing: CGFloat = 8
+
+    static func stableSeed(_ key: String) -> UInt64 {
+        key.utf8.reduce(14_695_981_039_346_656_037) { value, byte in
+            (value ^ UInt64(byte)) &* 1_099_511_628_211
+        }
+    }
+
+    static func blocks(keys: [String]) -> [TimelineRangeMosaicBlockPlan] {
+        guard !keys.isEmpty else { return [] }
+        var result: [TimelineRangeMosaicBlockPlan] = []
+        var start = 0
+        while start < keys.count {
+            let count = min(6, keys.count - start)
+            let range = start ..< start + count
+            let seed = stableSeed(keys[start])
+            result.append(.init(
+                range: range,
+                placements: placements(itemCount: count, seed: seed),
+                seed: seed
+            ))
+            start += count
+        }
+        return result
+    }
+
+    static func placements(itemCount: Int, seed: UInt64) -> [TimelineRangeMosaicPlacement] {
+        let count = min(max(0, itemCount), 6)
+        guard count > 0 else { return [] }
+        guard count >= 4 else {
+            switch count {
+            case 1:
+                return [.init(
+                    itemIndex: 0,
+                    column: 0,
+                    row: 0,
+                    columnSpan: 3,
+                    rowSpan: 1,
+                    isFeatured: false
+                )]
+            case 2:
+                return [
+                    .init(
+                        itemIndex: 0,
+                        column: 2,
+                        row: 0,
+                        columnSpan: 1,
+                        rowSpan: 1,
+                        isFeatured: false
+                    ),
+                    .init(
+                        itemIndex: 1,
+                        column: 0,
+                        row: 0,
+                        columnSpan: 2,
+                        rowSpan: 1,
+                        isFeatured: false
+                    ),
+                ]
+            default:
+                return (0 ..< count).map { index in
+                    .init(
+                        itemIndex: index,
+                        column: columns - 1 - index,
+                        row: 0,
+                        columnSpan: 1,
+                        rowSpan: 1,
+                        isFeatured: false
+                    )
+                }
+            }
+        }
+
+        struct Region {
+            let column: Int
+            let row: Int
+            let columnSpan: Int
+            let rowSpan: Int
+            let isFeatured: Bool
+        }
+
+        let variant = Int(seed % 4)
+        let featured: Region = if count == 4 {
+            switch variant {
+            case 0: .init(column: 0, row: 0, columnSpan: 2, rowSpan: 3, isFeatured: true)
+            case 1: .init(column: 1, row: 0, columnSpan: 2, rowSpan: 3, isFeatured: true)
+            case 2: .init(column: 0, row: 0, columnSpan: 3, rowSpan: 2, isFeatured: true)
+            default: .init(column: 0, row: 1, columnSpan: 3, rowSpan: 2, isFeatured: true)
+            }
+        } else {
+            switch variant {
+            case 0: .init(column: 0, row: 0, columnSpan: 2, rowSpan: 2, isFeatured: true)
+            case 1: .init(column: 1, row: 0, columnSpan: 2, rowSpan: 2, isFeatured: true)
+            case 2: .init(column: 0, row: 1, columnSpan: 2, rowSpan: 2, isFeatured: true)
+            case 3: .init(column: 1, row: 1, columnSpan: 2, rowSpan: 2, isFeatured: true)
+            case 4: .init(column: 0, row: 0, columnSpan: 2, rowSpan: 2, isFeatured: true)
+            default: .init(column: 1, row: 1, columnSpan: 2, rowSpan: 2, isFeatured: true)
+            }
+        }
+
+        let occupied = Set((featured.row ..< featured.row + featured.rowSpan).flatMap { row in
+            (featured.column ..< featured.column + featured.columnSpan).map { column in
+                row * columns + column
+            }
+        })
+        var regions = [featured]
+        var unoccupied = Set(0 ..< 9).subtracting(occupied)
+        if count == 5 {
+            let horizontalPairs = (0 ..< 3).flatMap { row in
+                (0 ..< columns - 1).compactMap { column -> (Int, Int)? in
+                    let leading = row * columns + column
+                    let trailing = leading + 1
+                    return unoccupied.contains(leading) && unoccupied.contains(trailing)
+                        ? (row, column)
+                        : nil
+                }
+            }
+            if !horizontalPairs.isEmpty {
+                let pair = horizontalPairs[Int((seed / 4) % UInt64(horizontalPairs.count))]
+                regions.append(.init(
+                    column: pair.1,
+                    row: pair.0,
+                    columnSpan: 2,
+                    rowSpan: 1,
+                    isFeatured: false
+                ))
+                unoccupied.remove(pair.0 * columns + pair.1)
+                unoccupied.remove(pair.0 * columns + pair.1 + 1)
+            }
+        }
+        for row in 0 ..< 3 {
+            for column in 0 ..< columns where unoccupied.contains(row * columns + column) {
+                regions.append(.init(
+                    column: column,
+                    row: row,
+                    columnSpan: 1,
+                    rowSpan: 1,
+                    isFeatured: false
+                ))
+            }
+        }
+
+        func readingRank(_ region: Region) -> Int {
+            (region.row ..< region.row + region.rowSpan).flatMap { row in
+                (region.column ..< region.column + region.columnSpan).map { column in
+                    row * columns + (columns - 1 - column)
+                }
+            }.min() ?? 0
+        }
+        regions.sort {
+            readingRank($0) < readingRank($1)
+        }
+        return regions.enumerated().map { index, region in
+            .init(
+                itemIndex: index,
+                column: region.column,
+                row: region.row,
+                columnSpan: region.columnSpan,
+                rowSpan: region.rowSpan,
+                isFeatured: region.isFeatured
+            )
+        }
+    }
+
+    static func motion(
+        level: TimelineRangeMosaicLevel,
+        placement: TimelineRangeMosaicPlacement,
+        placementCount: Int,
+        seed: UInt64
+    ) -> TimelineRangeCoverMotion {
+        if level == .day, placement.isFeatured {
+            return .init(rotates: false, durationScale: 1, initialDelay: 0)
+        }
+        let count = max(1, placementCount)
+        let offset = (placement.itemIndex + Int(seed % UInt64(count))) % count
+        let delay = TimelineCoverAnimation.cycleDuration * Double(offset) / Double(count)
+        return .init(
+            rotates: true,
+            durationScale: placement.isFeatured ? 1.5 : 1,
+            initialDelay: delay
+        )
+    }
+}
+
+private struct TimelineRangeMosaicBlock<Item, Content: View>: View {
+    let items: [Item]
+    let plan: TimelineRangeMosaicBlockPlan
+    let level: TimelineRangeMosaicLevel
+    @ViewBuilder let content: (Item, TimelineRangeMosaicPlacement, TimelineRangeCoverMotion) -> Content
+
+    private var rowCount: Int {
+        max(1, plan.placements.map { $0.row + $0.rowSpan }.max() ?? 1)
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            let cell = max(
+                1,
+                (geometry.size.width - TimelineRangeMosaicPlanner.spacing * 2)
+                    / CGFloat(TimelineRangeMosaicPlanner.columns)
+            )
+            ZStack(alignment: .topLeading) {
+                ForEach(plan.placements, id: \.itemIndex) { placement in
+                    let item = items[placement.itemIndex]
+                    let motion = TimelineRangeMosaicPlanner.motion(
+                        level: level,
+                        placement: placement,
+                        placementCount: plan.placements.count,
+                        seed: plan.seed
+                    )
+                    content(item, placement, motion)
+                        .frame(
+                            width: cell * CGFloat(placement.columnSpan)
+                                + TimelineRangeMosaicPlanner.spacing * CGFloat(placement.columnSpan - 1),
+                            height: cell * CGFloat(placement.rowSpan)
+                                + TimelineRangeMosaicPlanner.spacing * CGFloat(placement.rowSpan - 1)
+                        )
+                        .offset(
+                            x: CGFloat(placement.column) * (cell + TimelineRangeMosaicPlanner.spacing),
+                            y: CGFloat(placement.row) * (cell + TimelineRangeMosaicPlanner.spacing)
+                        )
+                }
+            }
+        }
+        .aspectRatio(
+            CGFloat(TimelineRangeMosaicPlanner.columns) / CGFloat(rowCount),
+            contentMode: .fit
+        )
+    }
+}
+
 private struct PhotosRangeCardGrid<Item: Identifiable, Content: View>: View where Item.ID: Sendable {
     let items: [Item]
+    let level: TimelineRangeMosaicLevel
     var scrollToLatestRequest = 0
     var tabBarTop: CGFloat = 0
     var onPinch: ((PhotosPinchGesture) -> Void)?
-    @ViewBuilder let content: (Item) -> Content
+    @ViewBuilder let content: (Item, TimelineRangeCoverMotion) -> Content
     @State private var didPositionInitially = false
     @State private var didSettleInitialViewport = false
     @State private var userHasScrolled = false
@@ -1292,13 +1619,7 @@ private struct PhotosRangeCardGrid<Item: Identifiable, Content: View>: View wher
     var body: some View {
         GeometryReader { geometry in
             let isPhone = UIDevice.current.userInterfaceIdiom == .phone
-            let columnCount = TimelineRangeGridLayout.columnCount(isPhone: isPhone, viewportSize: geometry.size)
-            let displaySlots = TimelineRangeGridLayout.displaySlots(
-                itemCount: items.count, columns: columnCount
-            )
-            let isPhoneLandscape = isPhone && columnCount == 2
             let edgeInset = TimelineRangeGridLayout.edgeInset(isPhone: isPhone)
-            let interRowSpacing: CGFloat = isPhoneLandscape ? 40 : 14
             let globalFrame = geometry.frame(in: .global)
             let bottomContentInset = TimelineRangeGridLayout.bottomContentInset(
                 frameBottom: globalFrame.maxY,
@@ -1310,45 +1631,32 @@ private struct PhotosRangeCardGrid<Item: Identifiable, Content: View>: View wher
                 hasBottomNavigation: isPhone
             )
             let navigationTop = globalFrame.maxY - bottomContentInset + edgeInset
-            let side = TimelineRangeGridLayout.cardSide(
-                viewportSize: geometry.size,
-                navigationTop: navigationTop,
-                columns: columnCount,
-                isPhone: isPhone,
-                edgeInset: edgeInset
-            )
-            let rowCount = displaySlots.count / columnCount
+            let keys = items.map { String(describing: $0.id) }
+            let blocks = TimelineRangeMosaicPlanner.blocks(keys: keys)
 
             let scrollView = ScrollViewReader { proxy in
                 ScrollView {
                     VStack(spacing: 0) {
-                        ForEach(0 ..< rowCount, id: \.self) { row in
+                        ForEach(blocks.indices, id: \.self) { blockIndex in
+                            let block = blocks[blockIndex]
+                            let blockItems = Array(items[block.range])
                             VStack(spacing: 0) {
-                                HStack(alignment: .top, spacing: 14) {
-                                    ForEach(0 ..< columnCount, id: \.self) { column in
-                                        let slot = row * columnCount + column
-                                        Group {
-                                            if let index = displaySlots[slot] {
-                                                content(items[index])
-                                                    .id(items[index].id)
-                                            } else {
-                                                Color.clear
-                                                    .aspectRatio(1, contentMode: .fit)
-                                                    .accessibilityHidden(true)
-                                            }
-                                        }
-                                        .frame(width: side, height: side)
-                                    }
+                                TimelineRangeMosaicBlock(items: blockItems, plan: .init(
+                                    range: 0 ..< blockItems.count,
+                                    placements: block.placements,
+                                    seed: block.seed
+                                ), level: level) { item, _, motion in
+                                    content(item, motion)
+                                        .id(item.id)
                                 }
-                                .frame(maxWidth: .infinity, alignment: isPhoneLandscape ? .center : .leading)
-                                if row == rowCount - 1 {
+                                if blockIndex == blocks.indices.last {
                                     Color.clear
                                         .frame(height: bottomContentInset)
                                         .accessibilityHidden(true)
                                 }
                             }
-                            .padding(.bottom, row == rowCount - 1 ? 0 : interRowSpacing)
-                            .id(PhotosRangeScrollAnchor.row(row))
+                            .padding(.bottom, blockIndex == blocks.indices.last ? 0 : TimelineRangeMosaicPlanner.spacing)
+                            .id(PhotosRangeScrollAnchor.row(blockIndex))
                         }
                     }
                     .frame(maxWidth: .infinity)
@@ -1366,8 +1674,8 @@ private struct PhotosRangeCardGrid<Item: Identifiable, Content: View>: View wher
                 .ignoresSafeArea(.container, edges: [.top, .horizontal, .bottom])
                 .photosRangePinchGesture(interaction: pinchInteraction, onPinch: onPinch)
                 .task(id: items.last?.id) {
-                    guard !didPositionInitially, rowCount > 0 else { return }
-                    proxy.scrollTo(PhotosRangeScrollAnchor.row(rowCount - 1), anchor: .bottom)
+                    guard !didPositionInitially, !blocks.isEmpty else { return }
+                    proxy.scrollTo(PhotosRangeScrollAnchor.row(blocks.count - 1), anchor: .bottom)
                     guard !Task.isCancelled else { return }
                     didPositionInitially = true
                 }
@@ -1378,14 +1686,14 @@ private struct PhotosRangeCardGrid<Item: Identifiable, Content: View>: View wher
                     try? await Task.sleep(for: .milliseconds(80))
                     guard !Task.isCancelled,
                           !didSettleInitialViewport || !userHasScrolled,
-                          rowCount > 0
+                          !blocks.isEmpty
                     else { return }
-                    proxy.scrollTo(PhotosRangeScrollAnchor.row(rowCount - 1), anchor: .bottom)
+                    proxy.scrollTo(PhotosRangeScrollAnchor.row(blocks.count - 1), anchor: .bottom)
                     didSettleInitialViewport = true
                 }
                 .onChange(of: scrollToLatestRequest) {
-                    guard rowCount > 0 else { return }
-                    proxy.scrollTo(PhotosRangeScrollAnchor.row(rowCount - 1), anchor: .bottom)
+                    guard !blocks.isEmpty else { return }
+                    proxy.scrollTo(PhotosRangeScrollAnchor.row(blocks.count - 1), anchor: .bottom)
                 }
             }
 
@@ -1498,6 +1806,7 @@ private struct PhotosRangeCard: View {
     let media: MediaLibraryController
     var bucketIDs: [TimelineBucketID] = []
     var store: PhotosTimelineStore?
+    var motion: TimelineRangeCoverMotion = .ordinary
     var onCoverChanged: (String?) -> Void = { _ in }
 
     @State private var coverAssets: [TimelineAssetSummary] = []
@@ -1521,9 +1830,12 @@ private struct PhotosRangeCard: View {
         return pair
     }
 
+    private var isFeatured: Bool {
+        !motion.rotates || motion.durationScale > 1
+    }
+
     var body: some View {
         Color.clear
-            .aspectRatio(1, contentMode: .fit)
             .overlay {
                 ZStack(alignment: .center) {
                     Rectangle().fill(.quaternary)
@@ -1579,14 +1891,14 @@ private struct PhotosRangeCard: View {
             .overlay(alignment: .bottomLeading) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
-                        .font(.title3.weight(.semibold))
+                        .font(isFeatured ? .title3.weight(.semibold) : .caption.weight(.semibold))
                         .lineLimit(2)
                     Text("\(count.formatted()) items")
-                        .font(.subheadline)
+                        .font(isFeatured ? .subheadline : .caption2)
                 }
                 .foregroundStyle(.white)
                 .shadow(color: .black.opacity(0.45), radius: 2, y: 1)
-                .padding(16)
+                .padding(isFeatured ? 16 : 8)
                 .allowsHitTesting(false)
             }
             .frame(maxWidth: .infinity)
@@ -1640,6 +1952,7 @@ private struct PhotosRangeCard: View {
             coverOpacities = currentAsset.map { [$0.id: 1] } ?? [:]
             incomingAsset = nil
         }
+        guard !reduceMotion else { return }
         var timeBeforeFadeOut = TimelineCoverAnimation.initialHold
         while !Task.isCancelled {
             withTransaction(transaction) {

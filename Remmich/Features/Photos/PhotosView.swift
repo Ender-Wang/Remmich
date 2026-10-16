@@ -82,6 +82,11 @@ nonisolated struct TimelinePresentationSelection: Equatable {
     let assetLayout: PhotosAssetLayout
 }
 
+nonisolated struct TimelineLibraryRangeRequest: Equatable {
+    let range: TimelineLibraryRange
+    let generation: Int
+}
+
 nonisolated enum TimelineAssetLayoutLadder {
     static func layout(
         after direction: PhotosPinchDirection,
@@ -131,6 +136,8 @@ struct PhotosView: View {
     @Binding var navigationPath: [PhotosRangeRoute]
     @Binding var tabBarTop: CGFloat
     var scrollToLatestRequest = 0
+    var requestedLibraryRange: TimelineLibraryRangeRequest?
+    var requestedLibraryRangeHandled: () -> Void = {}
     var contentName = "Photos"
     var rootAccessibilityID = "photos-root"
     let compactChromeChanged: (Bool) -> Void
@@ -216,6 +223,12 @@ struct PhotosView: View {
                 didPositionInitially = false
                 store.completeJump()
             }
+        }
+        .onChange(of: requestedLibraryRange, initial: true) { _, requestedLibraryRange in
+            guard let requestedLibraryRange else { return }
+            navigationPath.removeAll()
+            libraryRange = requestedLibraryRange.range
+            requestedLibraryRangeHandled()
         }
         .onDisappear {
             viewportUpdateTask?.cancel()
@@ -322,7 +335,7 @@ struct PhotosView: View {
               .date(byAdding: .day, value: 6, to: monthStart),
               let week = TimelineWeekID(day: TimelineCaptureDay(capturedAt: representativeDate))
         else { return }
-        selectRoute(.week(newest, week, .library))
+        selectRoute(.week(newest, week, .library), initialAssetID: nil)
     }
 
     @ViewBuilder
@@ -381,7 +394,7 @@ struct PhotosView: View {
         navigationPath.last?.navigationTitle ?? ""
     }
 
-    private func selectRoute(_ route: PhotosRangeRoute) {
+    private func selectRoute(_ route: PhotosRangeRoute, initialAssetID _: String?) {
         withAnimation(.smooth(duration: 0.25)) {
             navigationPath.append(route)
         }

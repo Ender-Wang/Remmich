@@ -28,6 +28,9 @@ struct AppShellView: View {
         store: UserDefaultsPresentationPreferencesStore(key: "video-presentation-preferences")
     )
     @State private var groupedScrollRequests: [NativeTabDestination: Int] = [:]
+    @State private var photosRangeRequest: TimelineLibraryRangeRequest?
+    @State private var videosRangeRequest: TimelineLibraryRangeRequest?
+    @State private var rangeRequestGeneration = 0
     @State private var photosPath: [PhotosRangeRoute] = []
     @State private var videosPath: [PhotosRangeRoute] = []
     @State private var albumsPath = NavigationPath()
@@ -64,6 +67,8 @@ struct AppShellView: View {
                         navigationPath: $photosPath,
                         tabBarTop: $tabBarTop,
                         scrollToLatestRequest: photosScrollRequest,
+                        requestedLibraryRange: photosRangeRequest,
+                        requestedLibraryRangeHandled: { photosRangeRequest = nil },
                         compactChromeChanged: { compact in
                             compactPhotosTabs = compact
                             if compact, selection == .photos {
@@ -83,6 +88,8 @@ struct AppShellView: View {
                         navigationPath: $videosPath,
                         tabBarTop: $tabBarTop,
                         scrollToLatestRequest: videosScrollRequest,
+                        requestedLibraryRange: videosRangeRequest,
+                        requestedLibraryRangeHandled: { videosRangeRequest = nil },
                         contentName: "Videos",
                         rootAccessibilityID: "videos-root",
                         compactChromeChanged: { compact in
@@ -114,6 +121,7 @@ struct AppShellView: View {
                     store: groupedMediaStore,
                     presentation: groupedMediaPresentation,
                     media: media,
+                    rangePinched: pinchGroupedRange,
                     showAccount: showAccount
                 )
                 .id(groupedMediaOwner)
@@ -127,6 +135,7 @@ struct AppShellView: View {
                     store: groupedMediaStore,
                     presentation: groupedMediaPresentation,
                     media: media,
+                    rangePinched: pinchGroupedRange,
                     showAccount: showAccount
                 )
                 .id(groupedMediaOwner)
@@ -140,6 +149,7 @@ struct AppShellView: View {
                     store: groupedMediaStore,
                     presentation: groupedMediaPresentation,
                     media: media,
+                    rangePinched: pinchGroupedRange,
                     showAccount: showAccount
                 )
                 .id(groupedMediaOwner)
@@ -196,6 +206,34 @@ struct AppShellView: View {
 
     private func showAccount() {
         showsAccount = true
+    }
+
+    private func pinchGroupedRange(_ kind: PhotosGroupedTabKind, _ gesture: PhotosPinchGesture) {
+        switch (kind, gesture.direction) {
+        case (.years, .finer):
+            selection = .months
+        case (.months, .coarser):
+            selection = .years
+        case (.months, .finer):
+            selection = .weeks
+        case (.weeks, .coarser):
+            selection = .months
+        case (.weeks, .finer):
+            rangeRequestGeneration &+= 1
+            let request = TimelineLibraryRangeRequest(
+                range: .day,
+                generation: rangeRequestGeneration
+            )
+            if groupedMediaOwner == .videos {
+                videosRangeRequest = request
+                selection = .videos
+            } else {
+                photosRangeRequest = request
+                selection = .photos
+            }
+        case (.years, .coarser):
+            break
+        }
     }
 
     private var compactTabOwner: NativeTabDestination? {

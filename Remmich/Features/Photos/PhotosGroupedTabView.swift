@@ -22,6 +22,7 @@ struct PhotosGroupedTabView: View {
     let store: PhotosTimelineStore
     let presentation: PhotosPresentationState
     let media: MediaLibraryController
+    let rangePinched: (PhotosGroupedTabKind, PhotosPinchGesture) -> Void
     let showAccount: () -> Void
 
     @State private var path: [PhotosRangeRoute] = []
@@ -34,7 +35,8 @@ struct PhotosGroupedTabView: View {
                     PhotosYearsView(
                         store: store, media: media,
                         scrollToLatestRequest: scrollToLatestRequest,
-                        tabBarTop: tabBarTop, onSelect: open
+                        tabBarTop: tabBarTop, onSelect: open,
+                        onPinch: pinchGroupedRange
                     )
                 case .months:
                     PhotosMonthsView(
@@ -43,13 +45,15 @@ struct PhotosGroupedTabView: View {
                         media: media,
                         scrollToLatestRequest: scrollToLatestRequest,
                         tabBarTop: tabBarTop,
-                        onSelect: open
+                        onSelect: open,
+                        onPinch: pinchGroupedRange
                     )
                 case .weeks:
                     PhotosLibraryWeeksView(
                         store: store, media: media,
                         scrollToLatestRequest: scrollToLatestRequest,
-                        tabBarTop: tabBarTop, onSelect: open
+                        tabBarTop: tabBarTop, onSelect: open,
+                        onPinch: pinchGroupedRange
                     )
                 }
             }
@@ -67,6 +71,9 @@ struct PhotosGroupedTabView: View {
             if !path.isEmpty {
                 path.removeAll()
             }
+        }
+        .overlay(alignment: .bottomTrailing) {
+            groupedRangeUITestControls
         }
     }
 
@@ -91,7 +98,7 @@ struct PhotosGroupedTabView: View {
         }
     }
 
-    private func open(_ route: PhotosRangeRoute) {
+    private func open(_ route: PhotosRangeRoute, initialAssetID _: String?) {
         path.append(route)
     }
 
@@ -108,5 +115,45 @@ struct PhotosGroupedTabView: View {
                 "Failed to persist grouped timeline asset layout: \(error.localizedDescription, privacy: .public)"
             )
         }
+    }
+
+    private func pinchGroupedRange(_ gesture: PhotosPinchGesture) {
+        rangePinched(kind, gesture)
+    }
+
+    @ViewBuilder
+    private var groupedRangeUITestControls: some View {
+        #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("-ui-testing-range-library") {
+                HStack(spacing: 0) {
+                    Button { uiTestPinch(.finer) } label: {
+                        Image(systemName: "plus.magnifyingglass")
+                            .opacity(0.01)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .accessibilityIdentifier("timeline-test-grouped-finer")
+
+                    Button { uiTestPinch(.coarser) } label: {
+                        Image(systemName: "minus.magnifyingglass")
+                            .opacity(0.01)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .accessibilityIdentifier("timeline-test-grouped-coarser")
+                }
+                .buttonStyle(.plain)
+                .padding(.trailing, 8)
+                .padding(.bottom, 76)
+            }
+        #else
+            EmptyView()
+        #endif
+    }
+
+    private func uiTestPinch(_ direction: PhotosPinchDirection) {
+        let magnification: CGFloat = direction == .coarser ? 0.6 : 1.5
+        guard let gesture = PhotosPinchGesture(magnification: magnification) else { return }
+        pinchGroupedRange(gesture)
     }
 }
