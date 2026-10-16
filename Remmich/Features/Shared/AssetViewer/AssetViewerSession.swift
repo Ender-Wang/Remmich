@@ -43,6 +43,7 @@ final class AssetViewerSession {
     private let loadBucket: BucketLoader?
     private var loadedBucketIDs: Set<TimelineBucketID> = []
     private var bucketByAssetID: [String: TimelineBucketID] = [:]
+    private var playbackPositions: [String: Double] = [:]
 
     init(
         route: AssetViewerRoute,
@@ -78,6 +79,18 @@ final class AssetViewerSession {
         guard assets.contains(where: { $0.id == assetID }) else { return }
         selectedAssetID = assetID
         await loadNeighborsIfNeeded()
+    }
+
+    func playbackPosition(for assetID: String) -> Double {
+        playbackPositions[assetID] ?? 0
+    }
+
+    func setPlaybackPosition(_ seconds: Double, for assetID: String) {
+        guard seconds.isFinite, seconds > 0 else {
+            playbackPositions.removeValue(forKey: assetID)
+            return
+        }
+        playbackPositions[assetID] = seconds
     }
 
     func loadNeighborsIfNeeded() async {

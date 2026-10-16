@@ -248,6 +248,14 @@ final class MediaLibraryController {
         return AVPlayerItem(url: media.fileURL)
     }
 
+    func releasePlayerItem(_ item: AVPlayerItem) {
+        guard let fileURL = (item.asset as? AVURLAsset)?.url,
+              fileURL.isFileURL,
+              let downloadService
+        else { return }
+        Task { await downloadService.removeTemporaryDownload(at: fileURL) }
+    }
+
     func handleMemoryPressure() {
         Self.logger.notice("Memory warning received; purging decoded media caches")
         pipeline?.cache.removeAll(caches: .memory)

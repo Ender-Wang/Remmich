@@ -78,6 +78,8 @@ struct AssetViewerView: View {
                         width: Int(max(1, size.width * displayScale)),
                         height: Int(max(1, size.height * displayScale))
                     ),
+                    resumePosition: { session.playbackPosition(for: asset.id) },
+                    savePosition: { session.setPlaybackPosition($0, for: asset.id) },
                     zoomChanged: { isZoomed in
                         zoomedAssetID = isZoomed ? asset.id : nil
                     }
@@ -155,32 +157,22 @@ private struct AssetViewerFitPage: View {
     let media: MediaLibraryController
     let isSelected: Bool
     let targetPixels: MediaPixelSize
+    let resumePosition: () -> Double
+    let savePosition: (Double) -> Void
     let zoomChanged: (Bool) -> Void
 
     var body: some View {
         ZStack {
             Color.black
             if asset.mediaKind == .video {
-                ImmichThumbnail(
-                    descriptor: .init(
-                        assetID: asset.id,
-                        updatedAt: asset.thumbnailRevision,
-                        derivative: .preview,
-                        targetPixels: targetPixels
-                    ),
+                NativeVideoPlayerView(
+                    asset: asset,
                     media: media,
-                    contentMode: .fit,
-                    showsBackground: false
+                    targetPixels: targetPixels,
+                    isSelected: isSelected,
+                    resumePosition: resumePosition,
+                    savePosition: savePosition
                 )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                Label("Video playback is added in the next viewer step", systemImage: "play.circle.fill")
-                    .font(.footnote.weight(.semibold))
-                    .padding(.horizontal, 14)
-                    .frame(height: 44)
-                    .background(.regularMaterial, in: Capsule())
-                    .padding(.bottom, 72)
-                    .frame(maxHeight: .infinity, alignment: .bottom)
             } else {
                 ZoomableStillImageView(
                     asset: asset,

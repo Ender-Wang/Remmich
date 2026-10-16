@@ -72,4 +72,11 @@ actor MediaDownloadService {
     func removeTemporaryDownloads() {
         try? fileManager.removeItem(at: directory)
     }
+
+    func removeTemporaryDownload(at fileURL: URL) {
+        let candidate = fileURL.standardizedFileURL
+        let root = directory.standardizedFileURL
+        guard candidate.deletingLastPathComponent() == root else { return }
+        try? fileManager.removeItem(at: candidate)
+    }
 }

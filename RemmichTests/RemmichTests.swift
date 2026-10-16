@@ -1261,6 +1261,38 @@ struct RemmichTests {
         await service.removeTemporaryDownloads()
     }
 
+    @Test func mediaDownloadRemovesOnlyItsOwnedTemporaryFile() async throws {
+        let source = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try Data("video".utf8).write(to: source)
+        let responseURL = try url("https://photos.example.com/api/assets/id/video/playback")
+        let transport = MediaDownloadTransport { _ in
+            let response = try #require(HTTPURLResponse(
+                url: responseURL,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "video/mp4"]
+            ))
+            return (source, response)
+        }
+        let service = MediaDownloadService(
+            token: "secret",
+            namespace: UUID().uuidString,
+            transport: transport
+        )
+        let downloaded = try await service.download(from: responseURL, fallbackFilename: "video.mp4")
+        let unrelated = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try Data("keep".utf8).write(to: unrelated)
+
+        await service.removeTemporaryDownload(at: unrelated)
+        #expect(FileManager.default.fileExists(atPath: unrelated.path))
+
+        await service.removeTemporaryDownload(at: downloaded.fileURL)
+        #expect(!FileManager.default.fileExists(atPath: downloaded.fileURL.path))
+
+        try? FileManager.default.removeItem(at: unrelated)
+        await service.removeTemporaryDownloads()
+    }
+
     @Test func multiThousandItemMediaIdentityBaseline() {
         let scope = MediaAccountScope(session: .fixture)
         let keys = (0 ..< 5000).map { index in
