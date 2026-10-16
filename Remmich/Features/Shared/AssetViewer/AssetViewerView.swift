@@ -131,7 +131,8 @@ struct AssetViewerView: View {
         TabView(selection: Binding(
             get: { session.selectedAssetID },
             set: { assetID in
-                Task { await session.select(assetID) }
+                guard session.selectImmediately(assetID) else { return }
+                Task { await session.loadNeighborsIfNeeded() }
             }
         )) {
             ForEach(session.assets) { asset in
@@ -192,7 +193,8 @@ struct AssetViewerView: View {
                         selectedAssetID: session.selectedAssetID,
                         media: media,
                         select: { assetID in
-                            Task { await session.select(assetID) }
+                            guard session.selectImmediately(assetID) else { return }
+                            Task { await session.loadNeighborsIfNeeded() }
                         }
                     )
                     .transition(.opacity)

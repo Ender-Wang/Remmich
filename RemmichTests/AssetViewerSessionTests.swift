@@ -86,6 +86,24 @@ struct AssetViewerSessionTests {
         #expect(session.assets.map(\.id) == ["scoped-1", "scoped-2"])
     }
 
+    @Test @MainActor func immediateSelectionTracksTheInteractivePagerWithoutWaitingForLoading() {
+        let newer = asset("newer", at: "2026-10-03T10:00:00Z")
+        let older = asset("older", at: "2026-10-02T10:00:00Z")
+        let session = AssetViewerSession(route: .init(
+            selectedAsset: newer,
+            initialAssets: [newer, older],
+            origin: .scoped(
+                route: .month(.init(rawValue: "2026-10-01")),
+                contentName: "Photos"
+            )
+        ))
+
+        #expect(session.selectImmediately(older.id))
+        #expect(session.selectedAssetID == older.id)
+        #expect(!session.selectImmediately("missing"))
+        #expect(session.selectedAssetID == older.id)
+    }
+
     @Test @MainActor func playbackPositionStaysScopedToItsAssetAndClearsAtStart() {
         let selected = asset("video-1", at: "2026-10-02T10:00:00Z")
         let session = AssetViewerSession(route: .init(

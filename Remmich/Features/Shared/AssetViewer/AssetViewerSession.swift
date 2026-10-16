@@ -76,9 +76,15 @@ final class AssetViewerSession {
     }
 
     func select(_ assetID: String) async {
-        guard assets.contains(where: { $0.id == assetID }) else { return }
-        selectedAssetID = assetID
+        guard selectImmediately(assetID) else { return }
         await loadNeighborsIfNeeded()
+    }
+
+    @discardableResult
+    func selectImmediately(_ assetID: String) -> Bool {
+        guard assets.contains(where: { $0.id == assetID }) else { return false }
+        selectedAssetID = assetID
+        return true
     }
 
     func playbackPosition(for assetID: String) -> Double {
