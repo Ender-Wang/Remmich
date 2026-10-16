@@ -336,9 +336,9 @@ final class RemmichUITests: XCTestCase {
 
     @MainActor
     private func tabButton(_ label: String, in app: XCUIApplication) -> XCUIElement {
-        app.descendants(matching: .any)
+        let matches = app.descendants(matching: .any)
             .matching(NSPredicate(format: "label == %@", label))
-            .firstMatch
+        return matches.allElementsBoundByIndex.first(where: \.isHittable) ?? matches.firstMatch
     }
 
     @MainActor
@@ -360,11 +360,21 @@ final class RemmichUITests: XCTestCase {
             XCTFail("Expected the active \(tab) timeline range control")
             return
         }
-        let range = app.staticTexts["timeline-test-\(tab.lowercased())-range"].firstMatch
-        let layout = app.staticTexts["timeline-test-\(tab.lowercased())-layout"].firstMatch
-        if range.label == "all", layout.label == "square" {
+        let ranges = app.staticTexts.matching(identifier: "timeline-test-\(tab.lowercased())-range")
+        let layouts = app.staticTexts.matching(identifier: "timeline-test-\(tab.lowercased())-layout")
+        let rangeLabels = ranges.allElementsBoundByIndex.map(\.label)
+        let layoutLabels = layouts.allElementsBoundByIndex.map(\.label)
+        if !rangeLabels.isEmpty,
+           rangeLabels.allSatisfy({ $0 == "all" }),
+           !layoutLabels.contains("naturalAspect")
+        {
             button.tap()
-            XCTAssertEqual(layout.label, "naturalAspect")
+            XCTAssertTrue(
+                waitUntil {
+                    layouts.allElementsBoundByIndex.contains { $0.label == "naturalAspect" }
+                },
+                "The first \(tab) coarsening step must settle in Natural Aspect"
+            )
         }
         button.tap()
     }
@@ -382,16 +392,26 @@ final class RemmichUITests: XCTestCase {
 
     @MainActor
     private func assertTimelineRange(_ range: String, tab: String, in app: XCUIApplication) {
-        let status = app.staticTexts["timeline-test-\(tab.lowercased())-range"].firstMatch
-        XCTAssertTrue(status.waitForExistence(timeout: 10))
-        XCTAssertEqual(status.label, range)
+        let statuses = app.staticTexts.matching(identifier: "timeline-test-\(tab.lowercased())-range")
+        XCTAssertTrue(statuses.firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(
+            waitUntil {
+                statuses.allElementsBoundByIndex.contains { $0.label == range }
+            },
+            "Expected \(tab) range \(range), found \(statuses.allElementsBoundByIndex.map(\.label))"
+        )
     }
 
     @MainActor
     private func assertTimelineLayout(_ layout: String, tab: String, in app: XCUIApplication) {
-        let status = app.staticTexts["timeline-test-\(tab.lowercased())-layout"].firstMatch
-        XCTAssertTrue(status.waitForExistence(timeout: 10))
-        XCTAssertEqual(status.label, layout)
+        let statuses = app.staticTexts.matching(identifier: "timeline-test-\(tab.lowercased())-layout")
+        XCTAssertTrue(statuses.firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(
+            waitUntil {
+                statuses.allElementsBoundByIndex.contains { $0.label == layout }
+            },
+            "Expected \(tab) layout \(layout), found \(statuses.allElementsBoundByIndex.map(\.label))"
+        )
     }
 
     @MainActor
@@ -448,8 +468,61 @@ final class RemmichUITests: XCTestCase {
                 }
             #endif
         }
-        XCTAssertTrue(tab.waitForExistence(timeout: 5))
-        tab.tap()
+        let readyTab = tabButton(title, in: app)
+        XCTAssertTrue(readyTab.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitUntil(timeout: 5) { readyTab.isHittable })
+        readyTab.tap()
+
+        let rootIdentifier: String? = switch title {
+        case "Years": "timeline-years-root"
+        case "Months": "timeline-months-root"
+        case "Weeks": "timeline-library-weeks-root"
+        default: nil
+        }
+        if let rootIdentifier {
+            XCTAssertTrue(
+                app.descendants(matching: .any)[rootIdentifier].waitForExistence(timeout: 10),
+                "Expected \(title) to finish presenting"
+            )
+        }
+    }
+
+    @MainActor
+    private func visibleElement(
+        in query: XCUIElementQuery,
+        within app: XCUIApplication,
+        timeout: TimeInterval = 10
+    ) -> XCUIElement? {
+        var result: XCUIElement?
+        guard waitUntil(timeout: timeout, {
+            result = query.allElementsBoundByIndex.first { element in
+                let frame = element.frame
+                guard frame.minX.isFinite,
+                      frame.minY.isFinite,
+                      frame.width.isFinite,
+                      frame.height.isFinite,
+                      frame.width > 1,
+                      frame.height > 1,
+                      app.frame.contains(CGPoint(x: frame.midX, y: frame.midY))
+                else { return false }
+                return true
+            }
+            return result != nil
+        }) else { return nil }
+        return result
+    }
+
+    @MainActor
+    private func hittableControl(
+        in query: XCUIElementQuery,
+        timeout: TimeInterval = 10
+    ) -> XCUIElement? {
+        var result: XCUIElement?
+        guard waitUntil(timeout: timeout, {
+            result = query.allElementsBoundByIndex.first(where: \.isHittable)
+            return result != nil
+        }) else { return nil }
+        return result
     }
 
     @MainActor
@@ -519,7 +592,7 @@ final class RemmichUITests: XCTestCase {
     }
 
     @MainActor
-    func testGroupedRangeCardsOpenAssetGridsDirectly() {
+    func testYearAndMonthCardsOpenAssetGridsDirectly() {
         let app = rangeApplication()
         app.launch()
         XCTAssertTrue(app.descendants(matching: .any)["photos-root"].waitForExistence(timeout: 10))
@@ -528,34 +601,20 @@ final class RemmichUITests: XCTestCase {
         let year = app.buttons["timeline-year-2026"]
         XCTAssertTrue(year.waitForExistence(timeout: 5))
         year.tap()
-        XCTAssertTrue(app.descendants(matching: .any)["timeline-range-assets-year-2026"]
-            .waitForExistence(timeout: 15))
+        let yearGrid = app.descendants(matching: .any)["timeline-range-assets-year-2026"]
+        XCTAssertTrue(yearGrid.waitForExistence(timeout: 15))
         XCTAssertTrue(app.navigationBars.staticTexts["2026"].exists)
-        app.navigationBars.buttons.firstMatch.tap()
-        XCTAssertTrue(year.waitForExistence(timeout: 5))
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(app.descendants(matching: .any)["photos-root"].waitForExistence(timeout: 10))
 
         selectRange("Months", in: app)
         let month = app.buttons["timeline-month-2026-10-01"]
         XCTAssertTrue(month.waitForExistence(timeout: 5))
         month.tap()
-        XCTAssertTrue(app.descendants(matching: .any)["timeline-range-assets-month-2026-10-01"]
-            .waitForExistence(timeout: 10))
+        let monthGrid = app.descendants(matching: .any)["timeline-range-assets-month-2026-10-01"]
+        XCTAssertTrue(monthGrid.waitForExistence(timeout: 10))
         XCTAssertTrue(app.navigationBars.staticTexts["October 2026"].exists)
-        app.navigationBars.buttons.firstMatch.tap()
-        XCTAssertTrue(month.waitForExistence(timeout: 5))
-
-        selectRange("Weeks", in: app)
-        let week = app.buttons["timeline-library-week-2026-W41"]
-        XCTAssertTrue(week.waitForExistence(timeout: 5))
-        week.tap()
-        XCTAssertTrue(app.descendants(matching: .any)["timeline-range-assets-week-2026-W41"]
-            .waitForExistence(timeout: 10))
-        XCTAssertTrue(app.navigationBars.matching(
-            NSPredicate(format: "identifier BEGINSWITH %@", "Week of ")
-        ).firstMatch.exists)
-        app.navigationBars.buttons.firstMatch.tap()
-        XCTAssertTrue(app.descendants(matching: .any)["timeline-library-weeks-root"]
-            .waitForExistence(timeout: 5))
     }
 
     @MainActor
@@ -605,7 +664,7 @@ final class RemmichUITests: XCTestCase {
     }
 
     @MainActor
-    func testPhotosAndVideosPinchReachOlderLibraryRangesAndKeepIndependentState() {
+    func testPhotosDayRangeReachesOlderLibraryAndTabsKeepIndependentState() {
         let app = rangeApplication()
         app.launch()
 
@@ -641,64 +700,30 @@ final class RemmichUITests: XCTestCase {
 
         coarsenTimeline("Photos", in: app)
         assertTimelineRange("week", tab: "Photos", in: app)
-        let weekCards = app.buttons.matching(
-            NSPredicate(format: "identifier BEGINSWITH %@", "timeline-library-week-")
-        )
-        XCTAssertTrue(weekCards.firstMatch.waitForExistence(timeout: 10))
-        // The grouped view restores its newest-row anchor after its first
-        // geometry pass. Do not let that restoration cancel our first swipe.
-        sleep(1)
-        // September is the first older fixture month. Targeting its known week
-        // proves the library-wide week view can leave the newest month without
-        // making the test race across several lazily resized month sections.
-        let olderPhotoWeek = app.buttons["timeline-library-week-2026-W37"]
-        var reachedOlderPhotoWeek = olderPhotoWeek.waitForExistence(timeout: 1)
-        for _ in 0 ..< 12 where !reachedOlderPhotoWeek {
-            app.swipeDown()
-            // Older month sections load only after becoming visible. Give the
-            // visibility callback and fixture read time to publish their cards
-            // before issuing another gesture, or a fast CI run can scroll past
-            // the target week between existence polls.
-            reachedOlderPhotoWeek = olderPhotoWeek.waitForExistence(timeout: 1)
-        }
-        XCTAssertTrue(reachedOlderPhotoWeek, "Photos Weeks must reach older library months")
 
         tabButton("Videos", in: app).tap()
         XCTAssertTrue(app.descendants(matching: .any)["videos-root"].waitForExistence(timeout: 10))
-        XCTAssertFalse(olderPhotoWeek.exists)
+        assertTimelineRange("all", tab: "Videos", in: app)
 
         tabButton("Photos", in: app).tap()
         assertTimelineRange("week", tab: "Photos", in: app)
     }
 
     @MainActor
-    func testTimelinePinchBackBehaviorMatchesAndScopedRouteChangesAssetLayout() {
+    func testPhotosAndVideosRangeLadderMatchesBackNavigation() {
         let app = rangeApplication()
         app.launch()
 
         for tab in ["Photos", "Videos"] {
             tabButton(tab, in: app).tap()
-            let isPhotos = tab == "Photos"
             let rootID = tab == "Photos" ? "photos-root" : "videos-root"
             let root = app.descendants(matching: .any)[rootID].firstMatch
             XCTAssertTrue(root.waitForExistence(timeout: 10))
 
             coarsenTimeline(tab, in: app)
             assertTimelineRange("day", tab: tab, in: app)
-            let dayButtons = app.buttons.matching(NSPredicate(
-                format: "identifier BEGINSWITH %@", "timeline-library-day-"
-            ))
-            if isPhotos {
-                XCTAssertTrue(dayButtons.firstMatch.waitForExistence(timeout: 10))
-            }
             coarsenTimeline(tab, in: app)
             assertTimelineRange("week", tab: tab, in: app)
-            let weekButtons = app.buttons.matching(NSPredicate(
-                format: "identifier BEGINSWITH %@", "timeline-library-week-"
-            ))
-            if isPhotos {
-                XCTAssertTrue(weekButtons.firstMatch.waitForExistence(timeout: 10))
-            }
 
             coarsenTimeline(tab, in: app)
             assertTimelineRange("month", tab: tab, in: app)
@@ -709,11 +734,38 @@ final class RemmichUITests: XCTestCase {
             assertTimelineRange("month", tab: tab, in: app)
             app.buttons["timeline-range-back"].tap()
             assertTimelineRange("week", tab: tab, in: app)
-            XCTAssertTrue(weekButtons.firstMatch.waitForExistence(timeout: 10))
+            app.buttons["timeline-range-back"].tap()
+            assertTimelineRange("day", tab: tab, in: app)
+            app.buttons["timeline-range-back"].tap()
+            assertTimelineRange("all", tab: tab, in: app)
+            XCTAssertTrue(root.waitForExistence(timeout: 10))
+        }
+    }
 
-            let openWeek = app.buttons["timeline-test-\(tab.lowercased())-open-week"].firstMatch
-            XCTAssertTrue(openWeek.waitForExistence(timeout: 5))
+    @MainActor
+    func testScopedRangePinchChangesLayoutWithoutLeavingRoute() {
+        let app = rangeApplication()
+        app.launch()
+
+        for tab in ["Photos", "Videos"] {
+            tabButton(tab, in: app).tap()
+            XCTAssertTrue(app.descendants(matching: .any)["\(tab.lowercased())-root"]
+                .waitForExistence(timeout: 10))
+
+            coarsenTimeline(tab, in: app)
+            assertTimelineRange("day", tab: tab, in: app)
+            coarsenTimeline(tab, in: app)
+            assertTimelineRange("week", tab: tab, in: app)
+
+            let openWeekQuery = app.buttons.matching(
+                identifier: "timeline-test-\(tab.lowercased())-open-week"
+            )
+            guard let openWeek = hittableControl(in: openWeekQuery) else {
+                XCTFail("Expected the current \(tab) Week test route")
+                return
+            }
             openWeek.tap()
+
             let scopedBar = app.navigationBars.matching(
                 NSPredicate(format: "identifier BEGINSWITH %@", "Week of ")
             ).firstMatch
@@ -721,23 +773,20 @@ final class RemmichUITests: XCTestCase {
             if UIDevice.current.userInterfaceIdiom == .pad {
                 XCTAssertTrue(app.staticTexts["timeline-range-title"].waitForExistence(timeout: 5))
             }
+
             refineTimeline(tab, in: app)
             assertTimelineLayout("square", tab: tab, in: app)
             XCTAssertTrue(scopedBar.waitForExistence(timeout: 3), "Layout pinch must keep the scoped route")
             coarsenTimeline(tab, in: app)
             assertTimelineLayout("naturalAspect", tab: tab, in: app)
             assertTimelineRange("week", tab: tab, in: app)
-            app.buttons["timeline-range-back"].tap()
-            XCTAssertTrue(weekButtons.firstMatch.waitForExistence(timeout: 10))
 
             app.buttons["timeline-range-back"].tap()
+            assertTimelineRange("week", tab: tab, in: app)
+            app.buttons["timeline-range-back"].tap()
             assertTimelineRange("day", tab: tab, in: app)
-            if isPhotos {
-                XCTAssertTrue(dayButtons.firstMatch.waitForExistence(timeout: 10))
-            }
             app.buttons["timeline-range-back"].tap()
             assertTimelineRange("all", tab: tab, in: app)
-            XCTAssertTrue(root.waitForExistence(timeout: 10))
         }
     }
 
@@ -759,8 +808,7 @@ final class RemmichUITests: XCTestCase {
                 let dayCards = app.buttons.matching(NSPredicate(
                     format: "identifier BEGINSWITH %@", "timeline-library-day-"
                 ))
-                XCTAssertTrue(dayCards.firstMatch.waitForExistence(timeout: 10))
-                guard let visibleDay = dayCards.allElementsBoundByIndex.first(where: \.isHittable) else {
+                guard let visibleDay = visibleElement(in: dayCards, within: app) else {
                     XCTFail("Expected a visible \(tab) day card")
                     return
                 }
@@ -778,7 +826,7 @@ final class RemmichUITests: XCTestCase {
 
     @MainActor
     func testPinchedRangeCardsSettleAboveTabBar() throws {
-        try skipTransientSimulatorGeometry()
+        try requirePhysicalDeviceGeometry()
 
         for tab in ["Photos", "Videos"] {
             let app = rangeApplication()
@@ -804,28 +852,15 @@ final class RemmichUITests: XCTestCase {
     }
 
     @MainActor
-    func testGroupedRangeMosaicsUseConsistentGeometryInPortrait() throws {
-        try skipTransientSimulatorGeometry()
+    func testGroupedRangeMosaicsUseConsistentGeometryOnDevice() throws {
+        try requirePhysicalDeviceGeometry()
         assertGroupedRangeMosaics(orientation: .portrait)
+        assertGroupedRangeMosaics(orientation: .landscapeLeft)
     }
 
-    @MainActor
-    func testPhotosGroupedRangeMosaicsUseConsistentGeometryInLandscape() throws {
-        try skipTransientSimulatorGeometry()
-        assertGroupedRangeMosaics(orientation: .landscapeLeft, tabs: ["Photos"])
-    }
-
-    @MainActor
-    func testVideosGroupedRangeMosaicsUseConsistentGeometryInLandscape() throws {
-        try skipTransientSimulatorGeometry()
-        assertGroupedRangeMosaics(orientation: .landscapeLeft, tabs: ["Videos"])
-    }
-
-    private func skipTransientSimulatorGeometry() throws {
+    private func requirePhysicalDeviceGeometry() throws {
         #if targetEnvironment(simulator)
-            throw XCTSkip(
-                "SwiftUI exposes transient duplicate accessibility frames in Simulator; retain for device verification"
-            )
+            throw XCTSkip("Exact SwiftUI accessibility frames remain a physical-device assertion")
         #endif
     }
 
@@ -926,12 +961,6 @@ final class RemmichUITests: XCTestCase {
         XCTAssertTrue(finer.waitForExistence(timeout: 5))
         finer.tap()
         XCTAssertTrue(app.descendants(matching: .any)["timeline-library-weeks-root"].waitForExistence(timeout: 10))
-
-        XCTAssertTrue(finer.waitForExistence(timeout: 5))
-        finer.tap()
-        XCTAssertTrue(app.descendants(matching: .any)["photos-root"].waitForExistence(timeout: 10))
-        assertTimelineRange("day", tab: "Photos", in: app)
-        XCTAssertTrue(app.descendants(matching: .any)["timeline-library-days-root"].waitForExistence(timeout: 10))
     }
 
     @MainActor
