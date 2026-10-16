@@ -186,12 +186,13 @@ struct PhotosView: View {
         }
         .navigationTitle(navigationTitle)
         .navigationBarTitleDisplayMode(.inline)
-        .navigationDestination(item: $viewerRoute) { route in
+        .fullScreenCover(item: $viewerRoute) { route in
             AssetViewerView(
                 route: route,
                 store: store,
                 media: media,
                 namespace: viewerNamespace,
+                close: { viewerRoute = nil },
                 visibilityChanged: viewerVisibilityChanged
             )
         }

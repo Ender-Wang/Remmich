@@ -67,6 +67,8 @@ struct NativeVideoPlayerView: View {
             pauseAndSavePosition()
         }
         .onDisappear { releasePlayer() }
+        .accessibilityLabel("Video player")
+        .accessibilityValue(player == nil ? (loading ? "Loading" : "Unavailable") : "Ready")
         .accessibilityIdentifier("asset-viewer-video-\(asset.id)")
     }
 
@@ -135,6 +137,7 @@ private struct NativePlayerController: UIViewControllerRepresentable {
         controller.entersFullScreenWhenPlaybackBegins = false
         controller.exitsFullScreenWhenPlaybackEnds = false
         controller.updatesNowPlayingInfoCenter = false
+        controller.view.accessibilityIdentifier = "asset-viewer-native-video-player"
         return controller
     }
 

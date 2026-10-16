@@ -71,19 +71,23 @@ struct PhotosGroupedTabView: View {
             .navigationDestination(for: PhotosRangeRoute.self) { route in
                 destination(route)
             }
-            .navigationDestination(item: $viewerRoute) { route in
+        }
+        .overlay {
+            if let viewerRoute {
                 AssetViewerView(
-                    route: route,
+                    route: viewerRoute,
                     store: store,
                     media: media,
                     namespace: viewerNamespace,
+                    close: { self.viewerRoute = nil },
                     visibilityChanged: viewerVisibilityChanged
                 )
+                .zIndex(1)
             }
         }
         .onChange(of: scrollToLatestRequest) {
             if !path.isEmpty {
-                path.removeAll()
+                path = []
             }
         }
         .overlay(alignment: .bottomTrailing) {

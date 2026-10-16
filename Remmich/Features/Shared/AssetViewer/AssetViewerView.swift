@@ -1,27 +1,31 @@
 import SwiftUI
 
 struct AssetViewerView: View {
-    @Environment(\.dismiss) private var dismiss
     @Environment(\.displayScale) private var displayScale
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let route: AssetViewerRoute
     let media: MediaLibraryController
     let namespace: Namespace.ID
+    let close: () -> Void
     let visibilityChanged: (Bool) -> Void
 
     @State private var session: AssetViewerSession
     @State private var zoomedAssetID: String?
+    @State private var chromeVisible = true
 
     init(
         route: AssetViewerRoute,
         store: PhotosTimelineStore,
         media: MediaLibraryController,
         namespace: Namespace.ID,
+        close: @escaping () -> Void,
         visibilityChanged: @escaping (Bool) -> Void
     ) {
         self.route = route
         self.media = media
         self.namespace = namespace
+        self.close = close
         self.visibilityChanged = visibilityChanged
         _session = State(initialValue: AssetViewerSession(
             route: route,
@@ -37,7 +41,10 @@ struct AssetViewerView: View {
             ZStack {
                 Color.black.ignoresSafeArea()
                 pages(size: geometry.size)
-                chrome
+                if chromeVisible {
+                    chrome
+                        .transition(.opacity)
+                }
             }
         }
         .foregroundStyle(.white)
@@ -52,6 +59,7 @@ struct AssetViewerView: View {
         }
         .onChange(of: session.selectedAssetID) { _, _ in
             zoomedAssetID = nil
+            chromeVisible = true
             updateViewerPrefetch()
         }
         .onAppear { visibilityChanged(true) }
@@ -59,7 +67,6 @@ struct AssetViewerView: View {
             media.cancelViewerPrefetching()
             visibilityChanged(false)
         }
-        .accessibilityIdentifier("asset-viewer")
     }
 
     private func pages(size: CGSize) -> some View {
@@ -82,7 +89,8 @@ struct AssetViewerView: View {
                     savePosition: { session.setPlaybackPosition($0, for: asset.id) },
                     zoomChanged: { isZoomed in
                         zoomedAssetID = isZoomed ? asset.id : nil
-                    }
+                    },
+                    toggleChrome: toggleChrome
                 )
                 .tag(asset.id)
             }
@@ -94,7 +102,7 @@ struct AssetViewerView: View {
     private var chrome: some View {
         VStack(spacing: 0) {
             HStack {
-                Button(action: dismiss.callAsFunction) {
+                Button(action: close) {
                     Image(systemName: "chevron.backward")
                         .font(.headline.weight(.semibold))
                         .frame(width: 44, height: 44)
@@ -150,6 +158,12 @@ struct AssetViewerView: View {
             }
         media.updateViewerPrefetch(descriptors)
     }
+
+    private func toggleChrome() {
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
+            chromeVisible.toggle()
+        }
+    }
 }
 
 private struct AssetViewerFitPage: View {
@@ -160,6 +174,7 @@ private struct AssetViewerFitPage: View {
     let resumePosition: () -> Double
     let savePosition: (Double) -> Void
     let zoomChanged: (Bool) -> Void
+    let toggleChrome: () -> Void
 
     var body: some View {
         ZStack {
@@ -179,7 +194,8 @@ private struct AssetViewerFitPage: View {
                     media: media,
                     targetPixels: targetPixels,
                     isSelected: isSelected,
-                    zoomChanged: zoomChanged
+                    zoomChanged: zoomChanged,
+                    toggleChrome: toggleChrome
                 )
             }
         }

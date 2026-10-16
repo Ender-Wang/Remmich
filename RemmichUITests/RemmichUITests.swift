@@ -314,6 +314,104 @@ final class RemmichUITests: XCTestCase {
     }
 
     @MainActor
+    func testPhotoViewerOpensExactAssetAdaptsToRotationAndRestoresTimeline() {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = ["-ui-testing-signed-in"]
+        app.launch()
+
+        let photos = app.descendants(matching: .any)["photos-root"]
+        let asset = app.descendants(matching: .any)["asset-asset-1"].firstMatch
+        XCTAssertTrue(photos.waitForExistence(timeout: 10))
+        XCTAssertTrue(asset.waitForExistence(timeout: 10))
+        asset.tap()
+
+        let page = app.descendants(matching: .any)["asset-viewer-page-asset-1"]
+        let still = app.descendants(matching: .any)["asset-viewer-still-asset-1"]
+        let filmstripAsset = app.descendants(matching: .any)["asset-viewer-filmstrip-asset-1"]
+        let back = app.buttons["asset-viewer-back"]
+        XCTAssertTrue(page.waitForExistence(timeout: 10))
+        XCTAssertTrue(still.waitForExistence(timeout: 10))
+        XCTAssertTrue(filmstripAsset.waitForExistence(timeout: 5))
+        XCTAssertTrue(back.exists)
+        XCTAssertFalse(app.tabBars.buttons["Photos"].exists)
+        XCTAssertFalse(app.buttons["Delete"].exists)
+        XCTAssertFalse(app.buttons["Favorite"].exists)
+        XCTAssertFalse(app.buttons["Adjust"].exists)
+
+        XCUIDevice.shared.orientation = .landscapeLeft
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            app.frame.width > app.frame.height
+                && page.exists
+                && page.frame.width > page.frame.height
+        })
+        XCTAssertTrue(back.isHittable)
+
+        back.tap()
+        XCTAssertTrue(photos.waitForExistence(timeout: 10))
+        XCTAssertTrue(asset.waitForExistence(timeout: 5))
+    }
+
+    @MainActor
+    func testVideoViewerUsesNativePlayerAndRestoresTimeline() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-ui-testing-signed-in"]
+        app.launch()
+
+        tabButton("Videos", in: app).tap()
+        let videos = app.descendants(matching: .any)["videos-root"]
+        let asset = app.descendants(matching: .any)["asset-asset-0"].firstMatch
+        XCTAssertTrue(videos.waitForExistence(timeout: 10))
+        XCTAssertTrue(asset.waitForExistence(timeout: 10))
+        asset.tap()
+
+        XCTAssertTrue(app.descendants(matching: .any)["asset-viewer-page-asset-0"]
+            .waitForExistence(timeout: 10))
+        let player = app.descendants(matching: .any)
+            .matching(identifier: "asset-viewer-video-asset-0")
+            .firstMatch
+        XCTAssertTrue(player.waitForExistence(timeout: 10))
+        XCTAssertTrue(waitUntil(timeout: 10) { player.value as? String == "Ready" })
+        XCTAssertFalse(app.tabBars.buttons["Videos"].exists)
+
+        app.buttons["asset-viewer-back"].tap()
+        XCTAssertTrue(videos.waitForExistence(timeout: 10))
+        XCTAssertTrue(asset.waitForExistence(timeout: 5))
+    }
+
+    @MainActor
+    func testScopedAssetViewerRestoresItsExactRangeGrid() {
+        let app = rangeApplication()
+        app.launch()
+        XCTAssertTrue(app.descendants(matching: .any)["photos-root"].waitForExistence(timeout: 10))
+
+        selectRange("Months", in: app)
+        let month = app.buttons["timeline-month-2026-10-01"]
+        XCTAssertTrue(month.waitForExistence(timeout: 10))
+        month.tap()
+
+        let grid = app.descendants(matching: .any)["timeline-range-assets-month-2026-10-01"]
+        let asset = app.descendants(matching: .any)["asset-range-2026-10-01-0"].firstMatch
+        XCTAssertTrue(grid.waitForExistence(timeout: 10))
+        XCTAssertTrue(asset.waitForExistence(timeout: 10))
+        asset.tap()
+
+        XCTAssertTrue(app.descendants(matching: .any)["asset-viewer-page-range-2026-10-01-0"]
+            .waitForExistence(timeout: 10))
+        XCTAssertTrue(app.descendants(matching: .any)["asset-viewer-filmstrip-range-2026-10-01-0"]
+            .waitForExistence(timeout: 5))
+
+        app.buttons["asset-viewer-back"].tap()
+        XCTAssertTrue(
+            app.descendants(matching: .any)["timeline-range-assets-month-2026-10-01"]
+                .waitForExistence(timeout: 10),
+            "Expected scoped grid after closing viewer"
+        )
+        XCTAssertTrue(app.descendants(matching: .any)["asset-range-2026-10-01-0"]
+            .waitForExistence(timeout: 5))
+    }
+
+    @MainActor
     func testPhotosTimelineEmptyState() {
         let app = XCUIApplication()
         app.launchArguments = ["-ui-testing-signed-in", "-ui-testing-photos-empty"]

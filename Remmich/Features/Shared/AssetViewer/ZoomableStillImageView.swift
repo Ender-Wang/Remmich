@@ -8,6 +8,7 @@ struct ZoomableStillImageView: View {
     let targetPixels: MediaPixelSize
     let isSelected: Bool
     let zoomChanged: (Bool) -> Void
+    let toggleChrome: () -> Void
 
     @State private var image: UIImage?
     @State private var failed = false
@@ -20,7 +21,8 @@ struct ZoomableStillImageView: View {
                 ZoomableImageScrollView(
                     image: image,
                     assetID: asset.id,
-                    zoomChanged: zoomChanged
+                    zoomChanged: zoomChanged,
+                    toggleChrome: toggleChrome
                 )
             } else if failed {
                 ContentUnavailableView(
@@ -90,9 +92,10 @@ private struct ZoomableImageScrollView: UIViewRepresentable {
     let image: UIImage
     let assetID: String
     let zoomChanged: (Bool) -> Void
+    let toggleChrome: () -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(zoomChanged: zoomChanged)
+        Coordinator(zoomChanged: zoomChanged, toggleChrome: toggleChrome)
     }
 
     func makeUIView(context: Context) -> ViewerZoomScrollView {
@@ -122,12 +125,20 @@ private struct ZoomableImageScrollView: UIViewRepresentable {
         )
         doubleTap.numberOfTapsRequired = 2
         scrollView.addGestureRecognizer(doubleTap)
+        let singleTap = UITapGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleSingleTap(_:))
+        )
+        singleTap.require(toFail: doubleTap)
+        scrollView.addGestureRecognizer(singleTap)
         context.coordinator.scrollView = scrollView
+        scrollView.accessibilityCustomActions = context.coordinator.accessibilityActions
         return scrollView
     }
 
     func updateUIView(_ scrollView: ViewerZoomScrollView, context: Context) {
         context.coordinator.zoomChanged = zoomChanged
+        context.coordinator.toggleChrome = toggleChrome
         if context.coordinator.assetID != assetID {
             context.coordinator.assetID = assetID
             scrollView.setZoomScale(1, animated: false)
@@ -144,9 +155,22 @@ private struct ZoomableImageScrollView: UIViewRepresentable {
         weak var scrollView: UIScrollView?
         var assetID: String?
         var zoomChanged: (Bool) -> Void
+        var toggleChrome: () -> Void
 
-        init(zoomChanged: @escaping (Bool) -> Void) {
+        init(
+            zoomChanged: @escaping (Bool) -> Void,
+            toggleChrome: @escaping () -> Void
+        ) {
             self.zoomChanged = zoomChanged
+            self.toggleChrome = toggleChrome
+        }
+
+        var accessibilityActions: [UIAccessibilityCustomAction] {
+            [
+                UIAccessibilityCustomAction(name: "Zoom In", target: self, selector: #selector(zoomIn)),
+                UIAccessibilityCustomAction(name: "Zoom Out", target: self, selector: #selector(zoomOut)),
+                UIAccessibilityCustomAction(name: "Reset Zoom", target: self, selector: #selector(resetZoom)),
+            ]
         }
 
         func viewForZooming(in _: UIScrollView) -> UIView? {
@@ -178,6 +202,31 @@ private struct ZoomableImageScrollView: UIViewRepresentable {
                 ),
                 animated: true
             )
+        }
+
+        @objc func handleSingleTap(_: UITapGestureRecognizer) {
+            guard let scrollView,
+                  scrollView.zoomScale <= scrollView.minimumZoomScale + 0.01
+            else { return }
+            toggleChrome()
+        }
+
+        @objc private func zoomIn() -> Bool {
+            guard let scrollView else { return false }
+            scrollView.setZoomScale(min(scrollView.zoomScale * 1.5, scrollView.maximumZoomScale), animated: true)
+            return true
+        }
+
+        @objc private func zoomOut() -> Bool {
+            guard let scrollView else { return false }
+            scrollView.setZoomScale(max(scrollView.zoomScale / 1.5, scrollView.minimumZoomScale), animated: true)
+            return true
+        }
+
+        @objc private func resetZoom() -> Bool {
+            guard let scrollView else { return false }
+            scrollView.setZoomScale(scrollView.minimumZoomScale, animated: true)
+            return true
         }
 
         private func centerImage(in scrollView: UIScrollView) {
