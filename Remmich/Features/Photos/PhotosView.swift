@@ -141,8 +141,10 @@ struct PhotosView: View {
     var contentName = "Photos"
     var rootAccessibilityID = "photos-root"
     let compactChromeChanged: (Bool) -> Void
+    var viewerVisibilityChanged: (Bool) -> Void = { _ in }
     let showAccount: () -> Void
 
+    @Namespace private var viewerNamespace
     @State private var timelinePosition = ScrollPosition(edge: .bottom)
     @State private var latestJumpTask: Task<Void, Never>?
     @State private var visibleDescriptors: [String: MediaRequestDescriptor] = [:]
@@ -160,6 +162,7 @@ struct PhotosView: View {
     @State private var didPositionInitially = false
     @State private var libraryRange: TimelineLibraryRange = .all
     @State private var initialAssetByRoute: [PhotosRangeRoute: String] = [:]
+    @State private var viewerRoute: AssetViewerRoute?
 
     var body: some View {
         Group {
@@ -183,6 +186,15 @@ struct PhotosView: View {
         }
         .navigationTitle(navigationTitle)
         .navigationBarTitleDisplayMode(.inline)
+        .navigationDestination(item: $viewerRoute) { route in
+            AssetViewerView(
+                route: route,
+                store: store,
+                media: media,
+                namespace: viewerNamespace,
+                visibilityChanged: viewerVisibilityChanged
+            )
+        }
         .toolbarBackground(navigationPath.isEmpty ? .hidden : .visible, for: .navigationBar)
         .toolbar {
             if !navigationPath.isEmpty || libraryRange != .all {
@@ -385,7 +397,15 @@ struct PhotosView: View {
             initialAssetID: initialAssetByRoute[route],
             onPinch: pinchLibraryRange,
             visibilityChanged: updateVisibility,
-            viewportChanged: updateViewport
+            viewportChanged: updateViewport,
+            transitionNamespace: viewerNamespace,
+            assetSelected: { asset, assets in
+                viewerRoute = AssetViewerRoute(
+                    selectedAsset: asset,
+                    initialAssets: assets,
+                    origin: .scoped(route: route, contentName: contentName)
+                )
+            }
         )
         .navigationTitle(route.navigationTitle)
         .navigationBarTitleDisplayMode(.inline)
@@ -501,7 +521,15 @@ struct PhotosView: View {
                                 availableWidth: timelineWidth,
                                 assetLayout: presentation.preferences.assetLayout,
                                 visibilityChanged: updateVisibility,
-                                viewportChanged: updateViewport
+                                viewportChanged: updateViewport,
+                                transitionNamespace: viewerNamespace,
+                                assetSelected: { asset, bucketID in
+                                    viewerRoute = AssetViewerRoute(
+                                        selectedAsset: asset,
+                                        initialAssets: [asset],
+                                        origin: .timeline(bucketID: bucketID, contentName: contentName)
+                                    )
+                                }
                             )
                             .id(section.id)
                             .onScrollVisibilityChange(threshold: 0.01) { visible in
@@ -750,6 +778,8 @@ private struct TimelineSectionView: View {
     let assetLayout: PhotosAssetLayout
     let visibilityChanged: (String, MediaRequestDescriptor?) -> Void
     let viewportChanged: (TimelineAssetSummary, Bool) -> Void
+    let transitionNamespace: Namespace.ID
+    let assetSelected: (TimelineAssetSummary, TimelineBucketID) -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -773,7 +803,9 @@ private struct TimelineSectionView: View {
                             availableWidth: availableWidth,
                             assetLayout: assetLayout,
                             visibilityChanged: visibilityChanged,
-                            viewportChanged: viewportChanged
+                            viewportChanged: viewportChanged,
+                            transitionNamespace: transitionNamespace,
+                            assetSelected: { asset in assetSelected(asset, section.id) }
                         )
                     }
                 }

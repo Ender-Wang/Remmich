@@ -90,6 +90,8 @@ struct TimelineDayAssetSection: View {
     var accessibilityIdentifierPrefix = "timeline-day"
     var visibilityChanged: (String, MediaRequestDescriptor?) -> Void = { _, _ in }
     var viewportChanged: (TimelineAssetSummary, Bool) -> Void = { _, _ in }
+    var transitionNamespace: Namespace.ID?
+    var assetSelected: (TimelineAssetSummary) -> Void = { _ in }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -103,7 +105,9 @@ struct TimelineDayAssetSection: View {
                 availableWidth: availableWidth,
                 assetLayout: assetLayout,
                 visibilityChanged: visibilityChanged,
-                viewportChanged: viewportChanged
+                viewportChanged: viewportChanged,
+                transitionNamespace: transitionNamespace,
+                assetSelected: assetSelected
             )
         }
         .id(group.id.id)
@@ -134,6 +138,8 @@ struct TimelineAssetGrid: View {
     var assetLayout: PhotosAssetLayout = .square
     var visibilityChanged: (String, MediaRequestDescriptor?) -> Void = { _, _ in }
     var viewportChanged: (TimelineAssetSummary, Bool) -> Void = { _, _ in }
+    var transitionNamespace: Namespace.ID?
+    var assetSelected: (TimelineAssetSummary) -> Void = { _ in }
 
     private var minimumColumnWidth: CGFloat {
         horizontalSizeClass == .regular ? 120 : 88
@@ -184,7 +190,9 @@ struct TimelineAssetGrid: View {
                                 media: media,
                                 assetLayout: assetLayout,
                                 visibilityChanged: visibilityChanged,
-                                viewportChanged: viewportChanged
+                                viewportChanged: viewportChanged,
+                                transitionNamespace: transitionNamespace,
+                                assetSelected: assetSelected
                             )
                         } else {
                             Color.clear
@@ -235,68 +243,76 @@ private struct TimelineAssetThumbnail: View {
     let assetLayout: PhotosAssetLayout
     let visibilityChanged: (String, MediaRequestDescriptor?) -> Void
     let viewportChanged: (TimelineAssetSummary, Bool) -> Void
+    let transitionNamespace: Namespace.ID?
+    let assetSelected: (TimelineAssetSummary) -> Void
 
     var body: some View {
-        GeometryReader { proxy in
-            let widthPixels = Self.targetPixels(for: proxy.size.width, scale: displayScale)
-            let heightPixels = Self.targetPixels(for: proxy.size.height, scale: displayScale)
-            let descriptor = MediaRequestDescriptor(
-                assetID: asset.id,
-                updatedAt: asset.thumbnailRevision,
-                derivative: .thumbnail,
-                targetPixels: .init(width: widthPixels, height: heightPixels)
-            )
-            ImmichThumbnail(
-                descriptor: descriptor,
-                media: media,
-                contentMode: assetLayout == .square ? .fill : .fit,
-                showsBackground: assetLayout == .square,
-                imageCornerRadius: assetLayout == .naturalAspect
-                    ? DesignMetrics.compactCornerRadius
-                    : 0,
-                didLoad: { media.retainTimelineThumbnail($0, descriptor: descriptor) }
-            )
-            .frame(width: proxy.size.width, height: proxy.size.height)
-            .overlay(alignment: .topTrailing) {
-                if asset.isFavorite {
-                    Image(systemName: "heart.fill")
-                        .foregroundStyle(.white)
-                        .padding(7)
-                        .shadow(radius: 2)
-                }
-            }
-            .overlay(alignment: .bottomLeading) {
-                HStack(spacing: 5) {
-                    if asset.livePhotoVideoID != nil {
-                        Image(systemName: "livephoto")
-                    }
-                    if asset.projectionType != nil {
-                        Image(systemName: "view.360")
-                    }
-                    if let stack = asset.stack, stack.assetCount > 1 {
-                        Label("\(stack.assetCount)", systemImage: "square.stack.3d.up.fill")
+        Button {
+            assetSelected(asset)
+        } label: {
+            GeometryReader { proxy in
+                let widthPixels = Self.targetPixels(for: proxy.size.width, scale: displayScale)
+                let heightPixels = Self.targetPixels(for: proxy.size.height, scale: displayScale)
+                let descriptor = MediaRequestDescriptor(
+                    assetID: asset.id,
+                    updatedAt: asset.thumbnailRevision,
+                    derivative: .thumbnail,
+                    targetPixels: .init(width: widthPixels, height: heightPixels)
+                )
+                ImmichThumbnail(
+                    descriptor: descriptor,
+                    media: media,
+                    contentMode: assetLayout == .square ? .fill : .fit,
+                    showsBackground: assetLayout == .square,
+                    imageCornerRadius: assetLayout == .naturalAspect
+                        ? DesignMetrics.compactCornerRadius
+                        : 0,
+                    didLoad: { media.retainTimelineThumbnail($0, descriptor: descriptor) }
+                )
+                .frame(width: proxy.size.width, height: proxy.size.height)
+                .overlay(alignment: .topTrailing) {
+                    if asset.isFavorite {
+                        Image(systemName: "heart.fill")
+                            .foregroundStyle(.white)
+                            .padding(7)
+                            .shadow(radius: 2)
                     }
                 }
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.white)
-                .padding(6)
-                .shadow(radius: 3)
-            }
-            .overlay(alignment: .bottomTrailing) {
-                if asset.mediaKind == .video {
-                    Label(Self.duration(asset.durationMilliseconds), systemImage: "play.fill")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .padding(6)
-                        .shadow(radius: 3)
+                .overlay(alignment: .bottomLeading) {
+                    HStack(spacing: 5) {
+                        if asset.livePhotoVideoID != nil {
+                            Image(systemName: "livephoto")
+                        }
+                        if asset.projectionType != nil {
+                            Image(systemName: "view.360")
+                        }
+                        if let stack = asset.stack, stack.assetCount > 1 {
+                            Label("\(stack.assetCount)", systemImage: "square.stack.3d.up.fill")
+                        }
+                    }
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(6)
+                    .shadow(radius: 3)
                 }
-            }
-            .onAppear { visibilityChanged(asset.id, descriptor) }
-            .onDisappear { visibilityChanged(asset.id, nil) }
-            .onScrollVisibilityChange(threshold: 0.5) { visible in
-                viewportChanged(asset, visible)
+                .overlay(alignment: .bottomTrailing) {
+                    if asset.mediaKind == .video {
+                        Label(Self.duration(asset.durationMilliseconds), systemImage: "play.fill")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .padding(6)
+                            .shadow(radius: 3)
+                    }
+                }
+                .onAppear { visibilityChanged(asset.id, descriptor) }
+                .onDisappear { visibilityChanged(asset.id, nil) }
+                .onScrollVisibilityChange(threshold: 0.5) { visible in
+                    viewportChanged(asset, visible)
+                }
             }
         }
+        .buttonStyle(.plain)
+        .assetViewerTransitionSource(assetID: asset.id, namespace: transitionNamespace)
         .aspectRatio(1, contentMode: .fit)
         .clipped()
         .contentShape(.rect)

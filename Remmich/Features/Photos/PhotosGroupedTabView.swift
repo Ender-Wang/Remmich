@@ -22,11 +22,15 @@ struct PhotosGroupedTabView: View {
     let store: PhotosTimelineStore
     let presentation: PhotosPresentationState
     let media: MediaLibraryController
+    let contentName: String
     let rangePinched: (PhotosGroupedTabKind, PhotosPinchGesture) -> Void
+    var viewerVisibilityChanged: (Bool) -> Void = { _ in }
     let showAccount: () -> Void
 
+    @Namespace private var viewerNamespace
     @State private var path: [PhotosRangeRoute] = []
     @State private var initialAssetByRoute: [PhotosRangeRoute: String] = [:]
+    @State private var viewerRoute: AssetViewerRoute?
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -67,6 +71,15 @@ struct PhotosGroupedTabView: View {
             .navigationDestination(for: PhotosRangeRoute.self) { route in
                 destination(route)
             }
+            .navigationDestination(item: $viewerRoute) { route in
+                AssetViewerView(
+                    route: route,
+                    store: store,
+                    media: media,
+                    namespace: viewerNamespace,
+                    visibilityChanged: viewerVisibilityChanged
+                )
+            }
         }
         .onChange(of: scrollToLatestRequest) {
             if !path.isEmpty {
@@ -86,7 +99,15 @@ struct PhotosGroupedTabView: View {
             tabBarTop: tabBarTop,
             assetLayout: presentation.preferences.assetLayout,
             initialAssetID: initialAssetByRoute[route],
-            onPinch: pinchAssetLayout
+            onPinch: pinchAssetLayout,
+            transitionNamespace: viewerNamespace,
+            assetSelected: { asset, assets in
+                viewerRoute = AssetViewerRoute(
+                    selectedAsset: asset,
+                    initialAssets: assets,
+                    origin: .scoped(route: route, contentName: contentName)
+                )
+            }
         )
         .navigationTitle(route.navigationTitle)
         .navigationBarTitleDisplayMode(.inline)

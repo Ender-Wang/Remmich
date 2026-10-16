@@ -37,12 +37,14 @@ struct AppShellView: View {
     @State private var libraryPath = NavigationPath()
     @State private var searchPath = NavigationPath()
     @State private var showsAccount = false
+    @State private var viewerPresented = false
 
     var body: some View {
         NativeAppTabShell(
             selection: $selection,
             tabBarTop: $tabBarTop,
             compactOwner: compactTabOwner,
+            isViewerPresented: viewerPresented,
             photosScrollRequest: photosScrollRequest,
             videosScrollRequest: videosScrollRequest,
             groupedScrollRequests: groupedScrollRequests,
@@ -75,6 +77,7 @@ struct AppShellView: View {
                                 groupedMediaOwner = .photos
                             }
                         },
+                        viewerVisibilityChanged: setViewerPresented,
                         showAccount: showAccount
                     )
                 }
@@ -98,6 +101,7 @@ struct AppShellView: View {
                                 groupedMediaOwner = .videos
                             }
                         },
+                        viewerVisibilityChanged: setViewerPresented,
                         showAccount: showAccount
                     )
                 }
@@ -121,7 +125,9 @@ struct AppShellView: View {
                     store: groupedMediaStore,
                     presentation: groupedMediaPresentation,
                     media: media,
+                    contentName: groupedMediaContentName,
                     rangePinched: pinchGroupedRange,
+                    viewerVisibilityChanged: setViewerPresented,
                     showAccount: showAccount
                 )
                 .id(groupedMediaOwner)
@@ -135,7 +141,9 @@ struct AppShellView: View {
                     store: groupedMediaStore,
                     presentation: groupedMediaPresentation,
                     media: media,
+                    contentName: groupedMediaContentName,
                     rangePinched: pinchGroupedRange,
+                    viewerVisibilityChanged: setViewerPresented,
                     showAccount: showAccount
                 )
                 .id(groupedMediaOwner)
@@ -149,7 +157,9 @@ struct AppShellView: View {
                     store: groupedMediaStore,
                     presentation: groupedMediaPresentation,
                     media: media,
+                    contentName: groupedMediaContentName,
                     rangePinched: pinchGroupedRange,
+                    viewerVisibilityChanged: setViewerPresented,
                     showAccount: showAccount
                 )
                 .id(groupedMediaOwner)
@@ -208,6 +218,10 @@ struct AppShellView: View {
         showsAccount = true
     }
 
+    private func setViewerPresented(_ presented: Bool) {
+        viewerPresented = presented
+    }
+
     private func pinchGroupedRange(_ kind: PhotosGroupedTabKind, _ gesture: PhotosPinchGesture) {
         switch (kind, gesture.direction) {
         case (.years, .finer):
@@ -251,6 +265,10 @@ struct AppShellView: View {
 
     private var groupedMediaPresentation: PhotosPresentationState {
         groupedMediaOwner == .videos ? videoPresentation : presentation
+    }
+
+    private var groupedMediaContentName: String {
+        groupedMediaOwner == .videos ? "Videos" : "Photos"
     }
 }
 

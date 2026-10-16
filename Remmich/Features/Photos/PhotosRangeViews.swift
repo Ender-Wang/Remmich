@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-enum PhotosRangeRoute: Hashable {
+nonisolated enum PhotosRangeRoute: Hashable, Sendable {
     case year(Int)
     case month(TimelineBucketID)
     case week(TimelineBucketID, TimelineWeekID, PhotosWeekRouteOrigin)
@@ -1030,6 +1030,8 @@ struct PhotosRangeAssetsView: View {
     var onPinch: ((PhotosPinchGesture) -> Void)?
     var visibilityChanged: (String, MediaRequestDescriptor?) -> Void = { _, _ in }
     var viewportChanged: (TimelineAssetSummary, Bool) -> Void = { _, _ in }
+    var transitionNamespace: Namespace.ID?
+    var assetSelected: (TimelineAssetSummary, [TimelineAssetSummary]) -> Void = { _, _ in }
 
     @State private var pinchInteraction = PhotosRangePinchInteraction()
     @State private var assets: [TimelineAssetSummary] = []
@@ -1179,7 +1181,9 @@ struct PhotosRangeAssetsView: View {
                     assetLayout: assetLayout,
                     accessibilityIdentifierPrefix: "timeline-range-day-section",
                     visibilityChanged: visibilityChanged,
-                    viewportChanged: updateViewport
+                    viewportChanged: updateViewport,
+                    transitionNamespace: transitionNamespace,
+                    assetSelected: { asset in assetSelected(asset, assets) }
                 )
             }
         } else {
@@ -1189,7 +1193,9 @@ struct PhotosRangeAssetsView: View {
                 availableWidth: availableWidth,
                 assetLayout: assetLayout,
                 visibilityChanged: visibilityChanged,
-                viewportChanged: updateViewport
+                viewportChanged: updateViewport,
+                transitionNamespace: transitionNamespace,
+                assetSelected: { asset in assetSelected(asset, assets) }
             )
         }
     }

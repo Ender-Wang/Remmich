@@ -31,6 +31,7 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
     @Binding var selection: NativeTabDestination
     @Binding var tabBarTop: CGFloat
     let compactOwner: NativeTabDestination?
+    let isViewerPresented: Bool
     let photosScrollRequest: Int
     let videosScrollRequest: Int
     let groupedScrollRequests: [NativeTabDestination: Int]
@@ -153,6 +154,10 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
             }
 
             guard let controller else { return }
+            if controller.tabBar.isHidden != next.isViewerPresented {
+                controller.tabBar.isHidden = next.isViewerPresented
+                controller.view.setNeedsLayout()
+            }
             isUpdatingTabs = true
             defer { isUpdatingTabs = false }
             let destinations = NativeTabLayout.destinations(compactOwner: next.compactOwner)
