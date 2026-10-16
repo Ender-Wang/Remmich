@@ -1033,9 +1033,14 @@ final class RemmichUITests: XCTestCase {
         orientation: UIDeviceOrientation,
         in app: XCUIApplication
     ) -> CGFloat {
-        let edgeInset: CGFloat = UIDevice.current.userInterfaceIdiom == .pad ? 20 : 12
+        let isPad = UIDevice.current.userInterfaceIdiom == .pad
+        let isLandscape = orientation == .landscapeLeft || orientation == .landscapeRight
+        let columns = isLandscape ? 4 : 3
+        let edgeInset: CGFloat = isPad ? 20 : 12
         let spacing: CGFloat = 8
-        let expectedCell = (app.frame.width - edgeInset * 2 - spacing * 2) / 3
+        let expectedCell = (
+            app.frame.width - edgeInset * 2 - spacing * CGFloat(columns - 1)
+        ) / CGFloat(columns)
         let cards = app.descendants(matching: .any).matching(NSPredicate(
             format: "identifier BEGINSWITH %@", prefix
         ))
@@ -1046,11 +1051,9 @@ final class RemmichUITests: XCTestCase {
                 frame.width > 0 && frame.height > 0 && frame.intersects(app.frame)
             }
             guard !frames.isEmpty else { return false }
-            let validDimensions = [
-                expectedCell,
-                expectedCell * 2 + spacing,
-                expectedCell * 3 + spacing * 2,
-            ]
+            let validDimensions = (1 ... columns).map { span in
+                expectedCell * CGFloat(span) + spacing * CGFloat(span - 1)
+            }
             return frames.allSatisfy { frame in
                 validDimensions.contains { abs(frame.width - $0) < 4 }
                     && validDimensions.contains { abs(frame.height - $0) < 4 }

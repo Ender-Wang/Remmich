@@ -402,6 +402,9 @@ struct PhotosLibraryDaysView: View {
                 isPhone: isPhone, viewportSize: geometry.size
             )
             let edgeInset = TimelineRangeGridLayout.edgeInset(isPhone: isPhone)
+            let mosaicLayout = TimelineRangeMosaicLayout.resolved(
+                viewportSize: geometry.size
+            )
             let globalFrame = geometry.frame(in: .global)
             let bottomContentInset = TimelineRangeGridLayout.bottomContentInset(
                 frameBottom: globalFrame.maxY,
@@ -432,6 +435,7 @@ struct PhotosLibraryDaysView: View {
                                     cardSide: cardSide,
                                     allMonths: allMonths,
                                     edgeInset: edgeInset,
+                                    mosaicLayout: mosaicLayout,
                                     onSelect: onSelect,
                                     onPinch: onPinch
                                 )
@@ -517,6 +521,7 @@ private struct PhotosLibraryDayMonthSection: View {
     let cardSide: CGFloat
     let allMonths: [TimelineBucketSummary]
     let edgeInset: CGFloat
+    let mosaicLayout: TimelineRangeMosaicLayout
     let onSelect: (PhotosRangeRoute, String?) -> Void
     let onPinch: (PhotosPinchGesture) -> Void
 
@@ -551,7 +556,10 @@ private struct PhotosLibraryDayMonthSection: View {
 
     private var mosaicBlocks: [(TimelineRangeMosaicBlockPlan, [Entry])] {
         let entries = packedEntries
-        return TimelineRangeMosaicPlanner.blocks(keys: entries.map(\.key)).compactMap { block in
+        return TimelineRangeMosaicPlanner.blocks(
+            keys: entries.map(\.key),
+            layout: mosaicLayout
+        ).compactMap { block in
             let items = Array(entries[block.range])
             guard items.first?.bucketID == summary.id else { return nil }
             return (block, items)
@@ -587,7 +595,8 @@ private struct PhotosLibraryDayMonthSection: View {
                             plan: .init(
                                 range: 0 ..< block.1.count,
                                 placements: block.0.placements,
-                                seed: block.0.seed
+                                seed: block.0.seed,
+                                layout: block.0.layout
                             ),
                             level: .day
                         ) { entry, _, motion in
@@ -673,6 +682,9 @@ struct PhotosLibraryWeeksView: View {
                 viewportSize: geometry.size
             )
             let edgeInset = TimelineRangeGridLayout.edgeInset(isPhone: isPhone)
+            let mosaicLayout = TimelineRangeMosaicLayout.resolved(
+                viewportSize: geometry.size
+            )
             let globalFrame = geometry.frame(in: .global)
             let bottomContentInset = TimelineRangeGridLayout.bottomContentInset(
                 frameBottom: globalFrame.maxY,
@@ -706,6 +718,7 @@ struct PhotosLibraryWeeksView: View {
                                     cardSide: cardSide,
                                     allMonths: allMonths,
                                     edgeInset: edgeInset,
+                                    mosaicLayout: mosaicLayout,
                                     onSelect: onSelect,
                                     onPinch: onPinch
                                 )
@@ -783,6 +796,7 @@ private struct PhotosLibraryWeekMonthSection: View {
     let cardSide: CGFloat
     let allMonths: [TimelineBucketSummary]
     let edgeInset: CGFloat
+    let mosaicLayout: TimelineRangeMosaicLayout
     let onSelect: (PhotosRangeRoute, String?) -> Void
     let onPinch: ((PhotosPinchGesture) -> Void)?
 
@@ -816,7 +830,10 @@ private struct PhotosLibraryWeekMonthSection: View {
 
     private var mosaicBlocks: [(TimelineRangeMosaicBlockPlan, [Entry])] {
         let entries = packedEntries
-        return TimelineRangeMosaicPlanner.blocks(keys: entries.map(\.key)).compactMap { block in
+        return TimelineRangeMosaicPlanner.blocks(
+            keys: entries.map(\.key),
+            layout: mosaicLayout
+        ).compactMap { block in
             let items = Array(entries[block.range])
             guard items.first?.bucketID == summary.id else { return nil }
             return (block, items)
@@ -894,7 +911,8 @@ private struct PhotosLibraryWeekMonthSection: View {
                     plan: .init(
                         range: 0 ..< block.1.count,
                         placements: block.0.placements,
-                        seed: block.0.seed
+                        seed: block.0.seed,
+                        layout: block.0.layout
                     ),
                     level: .week
                 ) { entry, _, motion in
@@ -1353,6 +1371,29 @@ nonisolated enum TimelineRangeMosaicLevel: Equatable, Sendable {
     case year
 }
 
+nonisolated enum TimelineRangeMosaicLayout: Equatable, Sendable {
+    case standard
+    case landscape
+
+    var columns: Int {
+        switch self {
+        case .standard: 3
+        case .landscape: 4
+        }
+    }
+
+    var blockCapacity: Int {
+        switch self {
+        case .standard: 6
+        case .landscape: 13
+        }
+    }
+
+    static func resolved(viewportSize: CGSize) -> Self {
+        viewportSize.width > viewportSize.height ? .landscape : .standard
+    }
+}
+
 nonisolated struct TimelineRangeCoverMotion: Equatable, Sendable {
     let rotates: Bool
     let durationScale: Double
@@ -1378,10 +1419,10 @@ nonisolated struct TimelineRangeMosaicBlockPlan: Equatable, Sendable {
     let range: Range<Int>
     let placements: [TimelineRangeMosaicPlacement]
     let seed: UInt64
+    let layout: TimelineRangeMosaicLayout
 }
 
 nonisolated enum TimelineRangeMosaicPlanner {
-    static let columns = 3
     static let spacing: CGFloat = 8
 
     static func stableSeed(_ key: String) -> UInt64 {
@@ -1390,25 +1431,46 @@ nonisolated enum TimelineRangeMosaicPlanner {
         }
     }
 
-    static func blocks(keys: [String]) -> [TimelineRangeMosaicBlockPlan] {
+    static func blocks(
+        keys: [String],
+        layout: TimelineRangeMosaicLayout = .standard
+    ) -> [TimelineRangeMosaicBlockPlan] {
         guard !keys.isEmpty else { return [] }
         var result: [TimelineRangeMosaicBlockPlan] = []
         var start = 0
         while start < keys.count {
-            let count = min(6, keys.count - start)
+            let count = min(layout.blockCapacity, keys.count - start)
             let range = start ..< start + count
             let seed = stableSeed(keys[start])
             result.append(.init(
                 range: range,
-                placements: placements(itemCount: count, seed: seed),
-                seed: seed
+                placements: placements(itemCount: count, seed: seed, layout: layout),
+                seed: seed,
+                layout: layout
             ))
             start += count
         }
         return result
     }
 
-    static func placements(itemCount: Int, seed: UInt64) -> [TimelineRangeMosaicPlacement] {
+    static func placements(
+        itemCount: Int,
+        seed: UInt64,
+        layout: TimelineRangeMosaicLayout = .standard
+    ) -> [TimelineRangeMosaicPlacement] {
+        switch layout {
+        case .standard:
+            standardPlacements(itemCount: itemCount, seed: seed)
+        case .landscape:
+            landscapePlacements(itemCount: itemCount, seed: seed)
+        }
+    }
+
+    private static func standardPlacements(
+        itemCount: Int,
+        seed: UInt64
+    ) -> [TimelineRangeMosaicPlacement] {
+        let columns = TimelineRangeMosaicLayout.standard.columns
         let count = min(max(0, itemCount), 6)
         guard count > 0 else { return [] }
         guard count >= 4 else {
@@ -1531,9 +1593,187 @@ nonisolated enum TimelineRangeMosaicPlanner {
                 }
             }.min() ?? 0
         }
+
         regions.sort {
             readingRank($0) < readingRank($1)
         }
+        return regions.enumerated().map { index, region in
+            .init(
+                itemIndex: index,
+                column: region.column,
+                row: region.row,
+                columnSpan: region.columnSpan,
+                rowSpan: region.rowSpan,
+                isFeatured: region.isFeatured
+            )
+        }
+    }
+
+    private static func landscapePlacements(
+        itemCount: Int,
+        seed: UInt64
+    ) -> [TimelineRangeMosaicPlacement] {
+        let columns = TimelineRangeMosaicLayout.landscape.columns
+        let count = min(max(0, itemCount), TimelineRangeMosaicLayout.landscape.blockCapacity)
+        guard count > 0 else { return [] }
+
+        struct Region {
+            var column: Int
+            var row: Int
+            let columnSpan: Int
+            let rowSpan: Int
+            let isFeatured: Bool
+        }
+
+        func partitions(length: Int, count: Int) -> [(start: Int, span: Int)] {
+            guard count > 0 else { return [] }
+            let base = length / count
+            let remainder = length % count
+            var start = 0
+            return (0 ..< count).map { index in
+                let span = base + (index < remainder ? 1 : 0)
+                defer { start += span }
+                return (start, span)
+            }
+        }
+
+        func readingRank(_ region: Region) -> Int {
+            (region.row ..< region.row + region.rowSpan).flatMap { row in
+                (region.column ..< region.column + region.columnSpan).map { column in
+                    row * columns + (columns - 1 - column)
+                }
+            }.min() ?? 0
+        }
+
+        func tiledRegions(
+            column: Int,
+            row: Int,
+            width: Int,
+            height: Int,
+            count: Int
+        ) -> [Region] {
+            if count <= height {
+                return partitions(length: height, count: count).map { segment in
+                    Region(
+                        column: column,
+                        row: row + segment.start,
+                        columnSpan: width,
+                        rowSpan: segment.span,
+                        isFeatured: false
+                    )
+                }
+            }
+
+            let splitRows = count - height
+            return (0 ..< height).flatMap { rowOffset -> [Region] in
+                if rowOffset < splitRows {
+                    return (0 ..< width).map { columnOffset in
+                        Region(
+                            column: column + columnOffset,
+                            row: row + rowOffset,
+                            columnSpan: 1,
+                            rowSpan: 1,
+                            isFeatured: false
+                        )
+                    }
+                }
+                return [Region(
+                    column: column,
+                    row: row + rowOffset,
+                    columnSpan: width,
+                    rowSpan: 1,
+                    isFeatured: false
+                )]
+            }
+        }
+
+        if count < 4 {
+            let rowRegions = partitions(length: columns, count: count).map { segment in
+                Region(
+                    column: segment.start,
+                    row: 0,
+                    columnSpan: segment.span,
+                    rowSpan: 1,
+                    isFeatured: false
+                )
+            }.sorted { readingRank($0) < readingRank($1) }
+            return rowRegions.enumerated().map { index, region in
+                .init(
+                    itemIndex: index,
+                    column: region.column,
+                    row: region.row,
+                    columnSpan: region.columnSpan,
+                    rowSpan: region.rowSpan,
+                    isFeatured: false
+                )
+            }
+        }
+
+        let ordinaryCount = count - 1
+        var regions: [Region]
+        if count == TimelineRangeMosaicLayout.landscape.blockCapacity {
+            let featureColumn = Int(seed % 3)
+            let featureRow = Int((seed / 3) % 3)
+            regions = [Region(
+                column: featureColumn,
+                row: featureRow,
+                columnSpan: 2,
+                rowSpan: 2,
+                isFeatured: true
+            )]
+            for row in 0 ..< columns {
+                for column in 0 ..< columns
+                    where !(featureColumn ..< featureColumn + 2).contains(column)
+                    || !(featureRow ..< featureRow + 2).contains(row)
+                {
+                    regions.append(.init(
+                        column: column,
+                        row: row,
+                        columnSpan: 1,
+                        rowSpan: 1,
+                        isFeatured: false
+                    ))
+                }
+            }
+        } else {
+            let lowerLeftCount = min(4, max(1, (ordinaryCount + 1) / 3))
+            let rightHalfCount = ordinaryCount - lowerLeftCount
+            regions = [Region(
+                column: 0,
+                row: 0,
+                columnSpan: 2,
+                rowSpan: 2,
+                isFeatured: true
+            )]
+            regions += tiledRegions(
+                column: 2,
+                row: 0,
+                width: 2,
+                height: 4,
+                count: rightHalfCount
+            )
+            regions += tiledRegions(
+                column: 0,
+                row: 2,
+                width: 2,
+                height: 2,
+                count: lowerLeftCount
+            )
+
+            let variant = Int(seed % 4)
+            regions = regions.map { region in
+                var transformed = region
+                if variant == 1 || variant == 3 {
+                    transformed.column = columns - region.column - region.columnSpan
+                }
+                if variant == 2 || variant == 3 {
+                    transformed.row = columns - region.row - region.rowSpan
+                }
+                return transformed
+            }
+        }
+        regions.sort { readingRank($0) < readingRank($1) }
+
         return regions.enumerated().map { index, region in
             .init(
                 itemIndex: index,
@@ -1578,10 +1818,12 @@ private struct TimelineRangeMosaicBlock<Item, Content: View>: View {
 
     var body: some View {
         GeometryReader { geometry in
+            let columns = plan.layout.columns
             let cell = max(
                 1,
-                (geometry.size.width - TimelineRangeMosaicPlanner.spacing * 2)
-                    / CGFloat(TimelineRangeMosaicPlanner.columns)
+                (geometry.size.width
+                    - TimelineRangeMosaicPlanner.spacing * CGFloat(columns - 1))
+                    / CGFloat(columns)
             )
             ZStack(alignment: .topLeading) {
                 ForEach(plan.placements, id: \.itemIndex) { placement in
@@ -1607,7 +1849,7 @@ private struct TimelineRangeMosaicBlock<Item, Content: View>: View {
             }
         }
         .aspectRatio(
-            CGFloat(TimelineRangeMosaicPlanner.columns) / CGFloat(rowCount),
+            CGFloat(plan.layout.columns) / CGFloat(rowCount),
             contentMode: .fit
         )
     }
@@ -1646,7 +1888,10 @@ private struct PhotosRangeCardGrid<Item: Identifiable, Content: View>: View wher
             )
             let navigationTop = globalFrame.maxY - bottomContentInset + edgeInset
             let keys = items.map { String(describing: $0.id) }
-            let blocks = TimelineRangeMosaicPlanner.blocks(keys: keys)
+            let mosaicLayout = TimelineRangeMosaicLayout.resolved(
+                viewportSize: geometry.size
+            )
+            let blocks = TimelineRangeMosaicPlanner.blocks(keys: keys, layout: mosaicLayout)
 
             let scrollView = ScrollViewReader { proxy in
                 ScrollView {
@@ -1658,7 +1903,8 @@ private struct PhotosRangeCardGrid<Item: Identifiable, Content: View>: View wher
                                 TimelineRangeMosaicBlock(items: blockItems, plan: .init(
                                     range: 0 ..< blockItems.count,
                                     placements: block.placements,
-                                    seed: block.seed
+                                    seed: block.seed,
+                                    layout: block.layout
                                 ), level: level) { item, _, motion in
                                     content(item, motion)
                                         .id(item.id)

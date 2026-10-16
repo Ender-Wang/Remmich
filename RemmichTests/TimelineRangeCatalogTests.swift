@@ -86,7 +86,7 @@ struct TimelineRangeCatalogTests {
             let occupiedCells = block.placements.flatMap { placement in
                 (placement.row ..< placement.row + placement.rowSpan).flatMap { row in
                     (placement.column ..< placement.column + placement.columnSpan).map { column in
-                        row * TimelineRangeMosaicPlanner.columns + column
+                        row * TimelineRangeMosaicLayout.standard.columns + column
                     }
                 }
             }
@@ -124,7 +124,7 @@ struct TimelineRangeCatalogTests {
                 )
                 #expect(occupiedCells(in: placements) == Set(0 ..< 9))
                 let orderedRanks = placements.sorted { $0.itemIndex < $1.itemIndex }
-                    .map(readingRank)
+                    .map { readingRank($0) }
                 #expect(orderedRanks == orderedRanks.sorted())
                 if count == 5 {
                     #expect(placements.contains { !$0.isFeatured && $0.columnSpan == 2 })
@@ -135,6 +135,74 @@ struct TimelineRangeCatalogTests {
         let ordinaryRow = TimelineRangeMosaicPlanner.placements(itemCount: 3, seed: 42)
             .sorted { $0.itemIndex < $1.itemIndex }
         #expect(ordinaryRow.map(\.column) == [2, 1, 0])
+    }
+
+    @Test func landscapeUsesFourByFourMosaicsWithTwoByTwoFeatures() throws {
+        #expect(TimelineRangeMosaicLayout.resolved(
+            viewportSize: .init(width: 1366, height: 1024)
+        ) == .landscape)
+        #expect(TimelineRangeMosaicLayout.resolved(
+            viewportSize: .init(width: 1024, height: 1366)
+        ) == .standard)
+        #expect(TimelineRangeMosaicLayout.resolved(
+            viewportSize: .init(width: 932, height: 430)
+        ) == .landscape)
+        #expect(TimelineRangeMosaicLayout.resolved(
+            viewportSize: .init(width: 430, height: 932)
+        ) == .standard)
+
+        let keys = (0 ..< 17).map { "range-\($0)" }
+        let blocks = TimelineRangeMosaicPlanner.blocks(keys: keys, layout: .landscape)
+        #expect(blocks.map(\.range.count) == [13, 4])
+
+        for count in 4 ... 13 {
+            for seed in 0 ..< 16 {
+                let placements = TimelineRangeMosaicPlanner.placements(
+                    itemCount: count,
+                    seed: UInt64(seed),
+                    layout: .landscape
+                )
+                #expect(occupiedCells(in: placements, layout: .landscape) == Set(0 ..< 16))
+                let featured = try #require(placements.first { $0.isFeatured })
+                #expect(featured.columnSpan == 2)
+                #expect(featured.rowSpan == 2)
+                let orderedRanks = placements.sorted { $0.itemIndex < $1.itemIndex }
+                    .map { readingRank($0, layout: .landscape) }
+                #expect(orderedRanks == orderedRanks.sorted())
+            }
+        }
+
+        let fullBlocks = (0 ..< 9).map { seed in
+            TimelineRangeMosaicPlanner.placements(
+                itemCount: 13,
+                seed: UInt64(seed),
+                layout: .landscape
+            )
+        }
+        #expect(fullBlocks.allSatisfy { placements in
+            placements.filter { !$0.isFeatured }.allSatisfy {
+                $0.columnSpan == 1 && $0.rowSpan == 1
+            }
+        })
+        #expect(Set(fullBlocks.compactMap { placements in
+            placements.first(where: \.isFeatured).map { "\($0.column):\($0.row)" }
+        }).count == 9)
+    }
+
+    @Test func landscapeShortMosaicsFillOneCompactFourCellRow() {
+        for count in 1 ... 3 {
+            let placements = TimelineRangeMosaicPlanner.placements(
+                itemCount: count,
+                seed: 42,
+                layout: .landscape
+            )
+            #expect(placements.count == count)
+            #expect(placements.allSatisfy { $0.row == 0 && !$0.isFeatured })
+            #expect(occupiedCells(in: placements, layout: .landscape) == Set(0 ..< 4))
+            let ranks = placements.sorted { $0.itemIndex < $1.itemIndex }
+                .map { readingRank($0, layout: .landscape) }
+            #expect(ranks == ranks.sorted())
+        }
     }
 
     @Test func editorialCoverMotionUsesStaticDayFeatureAndStaggeredBroaderFeatures() throws {
@@ -177,22 +245,26 @@ struct TimelineRangeCatalogTests {
     }
 
     private func occupiedCells(
-        in placements: [TimelineRangeMosaicPlacement]
+        in placements: [TimelineRangeMosaicPlacement],
+        layout: TimelineRangeMosaicLayout = .standard
     ) -> Set<Int> {
         Set(placements.flatMap { placement in
             (placement.row ..< placement.row + placement.rowSpan).flatMap { row in
                 (placement.column ..< placement.column + placement.columnSpan).map { column in
-                    row * TimelineRangeMosaicPlanner.columns + column
+                    row * layout.columns + column
                 }
             }
         })
     }
 
-    private func readingRank(_ placement: TimelineRangeMosaicPlacement) -> Int {
+    private func readingRank(
+        _ placement: TimelineRangeMosaicPlacement,
+        layout: TimelineRangeMosaicLayout = .standard
+    ) -> Int {
         (placement.row ..< placement.row + placement.rowSpan).flatMap { row in
             (placement.column ..< placement.column + placement.columnSpan).map { column in
-                row * TimelineRangeMosaicPlanner.columns
-                    + (TimelineRangeMosaicPlanner.columns - 1 - column)
+                row * layout.columns
+                    + (layout.columns - 1 - column)
             }
         }.min() ?? 0
     }
