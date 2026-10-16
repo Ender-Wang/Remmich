@@ -118,6 +118,73 @@ public struct ImmichVideoPage: Hashable, Sendable {
     public let nextCursor: String?
 }
 
+public struct ImmichAssetDetail: Hashable, Sendable {
+    public let id: String
+    public let capturedAt: Date
+    public let originalFileName: String
+    public let originalMimeType: String?
+    public let width: Int?
+    public let height: Int?
+    public let description: String?
+    public let cameraMake: String?
+    public let cameraModel: String?
+    public let lensModel: String?
+    public let fileSizeBytes: Int?
+    public let iso: Int?
+    public let focalLength: Double?
+    public let aperture: Double?
+    public let exposureTime: String?
+    public let latitude: Double?
+    public let longitude: Double?
+    public let city: String?
+    public let state: String?
+    public let country: String?
+
+    public init(
+        id: String,
+        capturedAt: Date,
+        originalFileName: String,
+        originalMimeType: String?,
+        width: Int?,
+        height: Int?,
+        description: String?,
+        cameraMake: String?,
+        cameraModel: String?,
+        lensModel: String?,
+        fileSizeBytes: Int?,
+        iso: Int?,
+        focalLength: Double?,
+        aperture: Double?,
+        exposureTime: String?,
+        latitude: Double?,
+        longitude: Double?,
+        city: String?,
+        state: String?,
+        country: String?
+    ) {
+        self.id = id
+        self.capturedAt = capturedAt
+        self.originalFileName = originalFileName
+        self.originalMimeType = originalMimeType
+        self.width = width
+        self.height = height
+        self.description = description
+        self.cameraMake = cameraMake
+        self.cameraModel = cameraModel
+        self.lensModel = lensModel
+        self.fileSizeBytes = fileSizeBytes
+        self.iso = iso
+        self.focalLength = focalLength
+        self.aperture = aperture
+        self.exposureTime = exposureTime
+        self.latitude = latitude
+        self.longitude = longitude
+        self.city = city
+        self.state = state
+        self.country = country
+    }
+}
+
 public struct ImmichTimelineQuery: Codable, Hashable, Sendable {
     public let order: ImmichTimelineOrder
     public let orderBy: ImmichTimelineOrderBy

@@ -29,6 +29,7 @@ struct RootView: View {
                     routeStatus: controller.routeStatus,
                     photos: controller.photos,
                     videos: controller.videos,
+                    assetDetails: controller.assetDetails,
                     presentation: presentation,
                     media: controller.media,
                     saveProfile: controller.saveConnectionProfile,

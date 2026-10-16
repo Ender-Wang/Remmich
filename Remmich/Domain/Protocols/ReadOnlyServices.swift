@@ -50,6 +50,10 @@ nonisolated protocol TimelineReading: Sendable {
     func memories() async throws -> [TimelineMemorySummary]
 }
 
+nonisolated protocol AssetDetailReading: Sendable {
+    func assetDetail(id: String) async throws -> AssetDetail
+}
+
 nonisolated struct VideoPage: Sendable {
     let assets: [TimelineAssetSummary]
     let nextCursor: String?

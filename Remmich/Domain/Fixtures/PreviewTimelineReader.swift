@@ -1,6 +1,6 @@
 import Foundation
 
-actor PreviewTimelineReader: TimelineReading, VideoReading {
+actor PreviewTimelineReader: TimelineReading, VideoReading, AssetDetailReading {
     enum Mode: Sendable {
         case loaded
         case empty
@@ -121,6 +121,35 @@ actor PreviewTimelineReader: TimelineReading, VideoReading {
     func videos(cursor: String?) async throws -> VideoPage {
         guard cursor == nil else { return VideoPage(assets: [], nextCursor: nil) }
         return VideoPage(assets: videoValues, nextCursor: nil)
+    }
+
+    func assetDetail(id: String) async throws -> AssetDetail {
+        let timelineAsset = buckets.lazy.flatMap(\.1).first { $0.id == id }
+            ?? videoValues.first { $0.id == id }
+        let isVideo = timelineAsset?.mediaKind == .video
+        let capturedAt = timelineAsset?.capturedAt ?? .now
+        return AssetDetail(
+            id: id,
+            capturedAt: capturedAt,
+            originalFileName: "\(id).\(isVideo ? "mp4" : "jpg")",
+            originalMimeType: isVideo ? "video/mp4" : "image/jpeg",
+            width: isVideo ? 3840 : 6048,
+            height: isVideo ? 2160 : 4024,
+            description: "A preview asset from the Remmich timeline.",
+            cameraMake: "NIKON",
+            cameraModel: "Z f",
+            lensModel: "NIKKOR Z 24-70mm f/2.8 VR S",
+            fileSizeBytes: isVideo ? 84_200_000 : 12_400_000,
+            iso: 400,
+            focalLength: 50,
+            aperture: 2.8,
+            exposureTime: "1/500",
+            latitude: 31.2304,
+            longitude: 121.4737,
+            city: "Shanghai",
+            state: "Shanghai",
+            country: "China"
+        )
     }
 
     private nonisolated static func map(_ asset: FixtureAsset) -> TimelineAssetSummary {

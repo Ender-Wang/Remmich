@@ -2,7 +2,7 @@ import Foundation
 import ImmichAPI
 import OSLog
 
-actor ImmichTimelineRepository: TimelineReading, VideoReading {
+actor ImmichTimelineRepository: TimelineReading, VideoReading, AssetDetailReading {
     private nonisolated static let logger = Logger(
         subsystem: "io.github.ender-wang.Remmich",
         category: "TimelineRepository"
@@ -170,6 +170,39 @@ actor ImmichTimelineRepository: TimelineReading, VideoReading {
                     )
                 },
                 nextCursor: page.nextCursor
+            )
+        } catch {
+            try requireCurrent(requestGeneration)
+            throw Self.map(error)
+        }
+    }
+
+    func assetDetail(id: String) async throws -> AssetDetail {
+        let (client, requestGeneration) = try requestContext()
+        do {
+            let detail = try await client.assetInfo(id: id)
+            try requireCurrent(requestGeneration)
+            return AssetDetail(
+                id: detail.id,
+                capturedAt: detail.capturedAt,
+                originalFileName: detail.originalFileName,
+                originalMimeType: detail.originalMimeType,
+                width: detail.width,
+                height: detail.height,
+                description: detail.description,
+                cameraMake: detail.cameraMake,
+                cameraModel: detail.cameraModel,
+                lensModel: detail.lensModel,
+                fileSizeBytes: detail.fileSizeBytes,
+                iso: detail.iso,
+                focalLength: detail.focalLength,
+                aperture: detail.aperture,
+                exposureTime: detail.exposureTime,
+                latitude: detail.latitude,
+                longitude: detail.longitude,
+                city: detail.city,
+                state: detail.state,
+                country: detail.country
             )
         } catch {
             try requireCurrent(requestGeneration)

@@ -29,6 +29,7 @@ final class AppSessionController {
     private(set) var connectionProfile = ConnectionProfile()
     let media = MediaLibraryController()
     let timeline: ImmichTimelineRepository
+    let assetDetails: any AssetDetailReading
     let photos: PhotosTimelineStore
     let videos: PhotosTimelineStore
 
@@ -84,6 +85,11 @@ final class AppSessionController {
             timeline
         }
         let videosReader: any VideoReading = if let previewReader {
+            previewReader
+        } else {
+            timeline
+        }
+        assetDetails = if let previewReader {
             previewReader
         } else {
             timeline

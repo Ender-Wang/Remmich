@@ -353,6 +353,101 @@ final class RemmichUITests: XCTestCase {
     }
 
     @MainActor
+    func testAssetViewerRespectsSafeAreasAndRevealsInfo() {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = ["-ui-testing-signed-in"]
+        app.launch()
+
+        let asset = app.descendants(matching: .any)["asset-asset-1"].firstMatch
+        XCTAssertTrue(asset.waitForExistence(timeout: 10))
+        asset.tap()
+
+        let back = app.buttons["asset-viewer-back"]
+        let info = app.buttons["asset-viewer-info"]
+        let share = app.buttons["asset-viewer-share"]
+        let download = app.buttons["asset-viewer-download"]
+        let locate = app.buttons["asset-viewer-locate"]
+        let position = app.staticTexts["asset-viewer-position"]
+        let filmstrip = app.descendants(matching: .any)["asset-viewer-filmstrip-asset-1"]
+        XCTAssertTrue(back.waitForExistence(timeout: 10))
+        XCTAssertTrue(info.waitForExistence(timeout: 5))
+        XCTAssertTrue(position.waitForExistence(timeout: 5))
+        XCTAssertTrue(share.exists)
+        XCTAssertTrue(download.exists)
+        XCTAssertTrue(locate.exists)
+        XCTAssertTrue(filmstrip.waitForExistence(timeout: 5))
+        XCTAssertGreaterThan(back.frame.minY, app.frame.minY + 20)
+        XCTAssertEqual(back.frame.midY, position.frame.midY, accuracy: 2)
+        XCTAssertEqual(back.frame.minX, share.frame.minX, accuracy: 2)
+        XCTAssertEqual(position.frame.maxX, locate.frame.maxX, accuracy: 2)
+        XCTAssertEqual(share.frame.midY, info.frame.midY, accuracy: 2)
+        XCTAssertEqual(info.frame.midY, download.frame.midY, accuracy: 2)
+        XCTAssertEqual(download.frame.midY, locate.frame.midY, accuracy: 2)
+        XCTAssertLessThan(info.frame.maxY, app.frame.maxY - 20)
+        XCTAssertLessThan(filmstrip.frame.maxY, info.frame.minY)
+
+        let still = app.descendants(matching: .any)["asset-viewer-still-asset-1"]
+        XCTAssertTrue(still.waitForExistence(timeout: 5))
+        still.tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { !app.buttons["asset-viewer-back"].isHittable })
+        still.tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { app.buttons["asset-viewer-back"].isHittable })
+
+        let dragStart = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.58))
+        let dragEnd = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        dragStart.press(forDuration: 0.05, thenDragTo: dragEnd)
+
+        XCTAssertTrue(app.descendants(matching: .any)["asset-viewer-info-panel"]
+            .waitForExistence(timeout: 10))
+        let metadata = app.descendants(matching: .any)["asset-viewer-metadata-card"]
+        let location = app.staticTexts["asset-viewer-location"]
+        XCTAssertTrue(metadata.waitForExistence(timeout: 10))
+        XCTAssertTrue(location.waitForExistence(timeout: 5))
+        XCTAssertTrue(metadata.frame.contains(location.frame))
+        XCTAssertFalse(filmstrip.exists)
+
+        metadata.tap()
+        XCTAssertEqual(info.value as? String, "Shown")
+
+        let cardSwipeStart = metadata.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
+        let cardSwipeEnd = metadata.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75))
+        cardSwipeStart.press(forDuration: 0.05, thenDragTo: cardSwipeEnd)
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            app.buttons["asset-viewer-info"].value as? String == "Hidden"
+        })
+
+        info.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["asset-viewer-info-panel"]
+            .waitForExistence(timeout: 10))
+
+        XCUIDevice.shared.orientation = .landscapeLeft
+        XCTAssertTrue(app.descendants(matching: .any)["asset-viewer-landscape-split"]
+            .waitForExistence(timeout: 10))
+
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.5)).tap()
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            app.buttons["asset-viewer-info"].value as? String == "Hidden"
+        })
+
+        let revealStart = app.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.62))
+        let revealEnd = app.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.5))
+        revealStart.press(forDuration: 0.05, thenDragTo: revealEnd)
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            app.buttons["asset-viewer-info"].value as? String == "Shown"
+        })
+
+        let hideStart = app.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.42))
+        let hideEnd = app.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.54))
+        hideStart.press(forDuration: 0.05, thenDragTo: hideEnd)
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            app.buttons["asset-viewer-info"].value as? String == "Hidden"
+        })
+        XCTAssertTrue(app.descendants(matching: .any)["asset-viewer-filmstrip-asset-1"]
+            .waitForExistence(timeout: 5))
+    }
+
+    @MainActor
     func testVideoViewerUsesNativePlayerAndRestoresTimeline() {
         let app = XCUIApplication()
         app.launchArguments = ["-ui-testing-signed-in"]

@@ -90,6 +90,29 @@ nonisolated struct TimelineAssetSummary: Hashable, Identifiable, Sendable {
     let thumbnailRevision: Date
 }
 
+nonisolated struct AssetDetail: Hashable, Identifiable, Sendable {
+    let id: String
+    let capturedAt: Date
+    let originalFileName: String
+    let originalMimeType: String?
+    let width: Int?
+    let height: Int?
+    let description: String?
+    let cameraMake: String?
+    let cameraModel: String?
+    let lensModel: String?
+    let fileSizeBytes: Int?
+    let iso: Int?
+    let focalLength: Double?
+    let aperture: Double?
+    let exposureTime: String?
+    let latitude: Double?
+    let longitude: Double?
+    let city: String?
+    let state: String?
+    let country: String?
+}
+
 nonisolated struct TimelineCaptureDay: Hashable, Identifiable, Sendable {
     let year: Int
     let month: Int

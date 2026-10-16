@@ -294,6 +294,46 @@ public actor ImmichClient {
         }
     }
 
+    public func assetInfo(id: String) async throws -> ImmichAssetDetail {
+        guard credential != nil else { throw ImmichAPIError.unauthorized }
+        guard !id.isEmpty else { throw ImmichAPIError.invalidResponse }
+        do {
+            let output = try await makeClient().getAssetInfo(.init(path: .init(id: id)))
+            let response: Components.Schemas.AssetResponseDto
+            switch output {
+            case let .ok(ok):
+                response = try ok.body.json
+            case let .undocumented(statusCode, _):
+                throw Self.map(status: statusCode)
+            }
+            let exif = response.exifInfo
+            return ImmichAssetDetail(
+                id: response.id,
+                capturedAt: response.localDateTime,
+                originalFileName: response.originalFileName,
+                originalMimeType: response.originalMimeType,
+                width: response.width,
+                height: response.height,
+                description: exif?.description,
+                cameraMake: exif?.make,
+                cameraModel: exif?.model,
+                lensModel: exif?.lensModel,
+                fileSizeBytes: exif?.fileSizeInByte,
+                iso: exif?.iso,
+                focalLength: exif?.focalLength,
+                aperture: exif?.fNumber,
+                exposureTime: exif?.exposureTime,
+                latitude: exif?.latitude,
+                longitude: exif?.longitude,
+                city: exif?.city,
+                state: exif?.state,
+                country: exif?.country
+            )
+        } catch {
+            throw Self.map(error)
+        }
+    }
+
     public func memories(query: ImmichMemoryQuery = .init()) async throws -> [ImmichMemory] {
         guard credential != nil else { throw ImmichAPIError.unauthorized }
         guard query.page > 0, query.size > 0 else { throw ImmichAPIError.invalidResponse }

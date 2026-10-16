@@ -22,6 +22,7 @@ struct PhotosGroupedTabView: View {
     let store: PhotosTimelineStore
     let presentation: PhotosPresentationState
     let media: MediaLibraryController
+    let assetDetails: any AssetDetailReading
     let contentName: String
     let rangePinched: (PhotosGroupedTabKind, PhotosPinchGesture) -> Void
     var viewerVisibilityChanged: (Bool) -> Void = { _ in }
@@ -78,6 +79,7 @@ struct PhotosGroupedTabView: View {
                     route: viewerRoute,
                     store: store,
                     media: media,
+                    assetDetails: assetDetails,
                     namespace: viewerNamespace,
                     close: { self.viewerRoute = nil },
                     visibilityChanged: viewerVisibilityChanged

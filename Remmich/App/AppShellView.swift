@@ -12,6 +12,7 @@ struct AppShellView: View {
     let routeStatus: ConnectionRouteStatus
     let photos: PhotosTimelineStore
     let videos: PhotosTimelineStore
+    let assetDetails: any AssetDetailReading
     let presentation: PhotosPresentationState
     let media: MediaLibraryController
     let saveProfile: (ConnectionProfileDraft) async -> ConnectionProfileSaveResult
@@ -66,6 +67,7 @@ struct AppShellView: View {
                         store: photos,
                         presentation: presentation,
                         media: media,
+                        assetDetails: assetDetails,
                         navigationPath: $photosPath,
                         tabBarTop: $tabBarTop,
                         scrollToLatestRequest: photosScrollRequest,
@@ -88,6 +90,7 @@ struct AppShellView: View {
                         store: videos,
                         presentation: videoPresentation,
                         media: media,
+                        assetDetails: assetDetails,
                         navigationPath: $videosPath,
                         tabBarTop: $tabBarTop,
                         scrollToLatestRequest: videosScrollRequest,
@@ -125,6 +128,7 @@ struct AppShellView: View {
                     store: groupedMediaStore,
                     presentation: groupedMediaPresentation,
                     media: media,
+                    assetDetails: assetDetails,
                     contentName: groupedMediaContentName,
                     rangePinched: pinchGroupedRange,
                     viewerVisibilityChanged: setViewerPresented,
@@ -141,6 +145,7 @@ struct AppShellView: View {
                     store: groupedMediaStore,
                     presentation: groupedMediaPresentation,
                     media: media,
+                    assetDetails: assetDetails,
                     contentName: groupedMediaContentName,
                     rangePinched: pinchGroupedRange,
                     viewerVisibilityChanged: setViewerPresented,
@@ -157,6 +162,7 @@ struct AppShellView: View {
                     store: groupedMediaStore,
                     presentation: groupedMediaPresentation,
                     media: media,
+                    assetDetails: assetDetails,
                     contentName: groupedMediaContentName,
                     rangePinched: pinchGroupedRange,
                     viewerVisibilityChanged: setViewerPresented,
@@ -329,6 +335,7 @@ extension EnvironmentValues {
         routeStatus: .waitingForNetwork,
         photos: store,
         videos: PhotosTimelineStore(reader: VideoTimelineReader(source: PreviewTimelineReader())),
+        assetDetails: PreviewTimelineReader(),
         presentation: .init(),
         media: .init(),
         saveProfile: { _ in .saved(profile: .init()) },

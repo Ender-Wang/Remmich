@@ -133,6 +133,7 @@ struct PhotosView: View {
     let store: PhotosTimelineStore
     let presentation: PhotosPresentationState
     let media: MediaLibraryController
+    let assetDetails: any AssetDetailReading
     @Binding var navigationPath: [PhotosRangeRoute]
     @Binding var tabBarTop: CGFloat
     var scrollToLatestRequest = 0
@@ -191,6 +192,7 @@ struct PhotosView: View {
                 route: route,
                 store: store,
                 media: media,
+                assetDetails: assetDetails,
                 namespace: viewerNamespace,
                 close: { viewerRoute = nil },
                 visibilityChanged: viewerVisibilityChanged
@@ -1082,6 +1084,7 @@ private struct TimelineRefreshError: View {
             store: store,
             presentation: .init(),
             media: .init(),
+            assetDetails: PreviewTimelineReader(),
             navigationPath: .constant([]),
             tabBarTop: .constant(0),
             compactChromeChanged: { _ in },
@@ -1097,6 +1100,7 @@ private struct TimelineRefreshError: View {
             store: store,
             presentation: .init(),
             media: .init(),
+            assetDetails: PreviewTimelineReader(),
             navigationPath: .constant([]),
             tabBarTop: .constant(0),
             compactChromeChanged: { _ in },
