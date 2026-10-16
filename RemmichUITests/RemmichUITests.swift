@@ -960,6 +960,34 @@ final class RemmichUITests: XCTestCase {
     }
 
     @MainActor
+    func testGroupedTileOpensWithItsVisibleCoverOnScreen() {
+        let app = rangeApplication()
+        app.launch()
+        XCTAssertTrue(app.descendants(matching: .any)["photos-root"].waitForExistence(timeout: 10))
+        selectRange("Months", in: app)
+
+        let month = app.buttons["timeline-month-2026-10-01"]
+        XCTAssertTrue(month.waitForExistence(timeout: 10))
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            guard let coverID = month.value as? String else { return false }
+            return !coverID.isEmpty && coverID != "loading"
+        })
+        let coverID = month.value as? String ?? ""
+        month.tap()
+
+        XCTAssertTrue(
+            app.descendants(matching: .any)["timeline-range-assets-month-2026-10-01"]
+                .waitForExistence(timeout: 10)
+        )
+        let focusedAsset = app.descendants(matching: .any)["asset-\(coverID)"]
+        XCTAssertTrue(focusedAsset.waitForExistence(timeout: 10))
+        XCTAssertTrue(
+            waitUntil(timeout: 5) { focusedAsset.frame.intersects(app.frame) },
+            "The cover visible at tap time should be immediately readable in the scoped timeline"
+        )
+    }
+
+    @MainActor
     private func assertBottomAnchoredCards(prefix: String, in app: XCUIApplication) {
         let cards = app.descendants(matching: .any).matching(NSPredicate(
             format: "identifier BEGINSWITH %@", prefix

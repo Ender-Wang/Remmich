@@ -26,6 +26,7 @@ struct PhotosGroupedTabView: View {
     let showAccount: () -> Void
 
     @State private var path: [PhotosRangeRoute] = []
+    @State private var initialAssetByRoute: [PhotosRangeRoute: String] = [:]
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -84,6 +85,7 @@ struct PhotosGroupedTabView: View {
             media: media,
             tabBarTop: tabBarTop,
             assetLayout: presentation.preferences.assetLayout,
+            initialAssetID: initialAssetByRoute[route],
             onPinch: pinchAssetLayout
         )
         .navigationTitle(route.navigationTitle)
@@ -98,7 +100,12 @@ struct PhotosGroupedTabView: View {
         }
     }
 
-    private func open(_ route: PhotosRangeRoute, initialAssetID _: String?) {
+    private func open(_ route: PhotosRangeRoute, initialAssetID: String?) {
+        if let initialAssetID {
+            initialAssetByRoute[route] = initialAssetID
+        } else {
+            initialAssetByRoute.removeValue(forKey: route)
+        }
         path.append(route)
     }
 

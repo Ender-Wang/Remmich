@@ -159,6 +159,7 @@ struct PhotosView: View {
     @State private var chromeTracker = PhotosChromeTracker()
     @State private var didPositionInitially = false
     @State private var libraryRange: TimelineLibraryRange = .all
+    @State private var initialAssetByRoute: [PhotosRangeRoute: String] = [:]
 
     var body: some View {
         Group {
@@ -381,6 +382,7 @@ struct PhotosView: View {
             media: media,
             tabBarTop: tabBarTop,
             assetLayout: presentation.preferences.assetLayout,
+            initialAssetID: initialAssetByRoute[route],
             onPinch: pinchLibraryRange,
             visibilityChanged: updateVisibility,
             viewportChanged: updateViewport
@@ -394,7 +396,12 @@ struct PhotosView: View {
         navigationPath.last?.navigationTitle ?? ""
     }
 
-    private func selectRoute(_ route: PhotosRangeRoute, initialAssetID _: String?) {
+    private func selectRoute(_ route: PhotosRangeRoute, initialAssetID: String?) {
+        if let initialAssetID {
+            initialAssetByRoute[route] = initialAssetID
+        } else {
+            initialAssetByRoute.removeValue(forKey: route)
+        }
         withAnimation(.smooth(duration: 0.25)) {
             navigationPath.append(route)
         }
@@ -403,6 +410,9 @@ struct PhotosView: View {
     private func navigateBack() {
         withAnimation(.smooth(duration: 0.25)) {
             if !navigationPath.isEmpty {
+                if let route = navigationPath.last {
+                    initialAssetByRoute.removeValue(forKey: route)
+                }
                 navigationPath = Array(navigationPath.dropLast())
             } else {
                 libraryRange = libraryRange.next(for: .finer) ?? .all

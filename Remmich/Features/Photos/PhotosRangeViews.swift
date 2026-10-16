@@ -1008,6 +1008,7 @@ struct PhotosRangeAssetsView: View {
     let media: MediaLibraryController
     var tabBarTop: CGFloat = 0
     var assetLayout: PhotosAssetLayout = .square
+    var initialAssetID: String?
     var onPinch: ((PhotosPinchGesture) -> Void)?
     var visibilityChanged: (String, MediaRequestDescriptor?) -> Void = { _, _ in }
     var viewportChanged: (TimelineAssetSummary, Bool) -> Void = { _, _ in }
@@ -1111,9 +1112,10 @@ struct PhotosRangeAssetsView: View {
                     handlePinch(gesture)
                 }
                 .ignoresSafeArea(.container, edges: [.horizontal, .bottom])
+                .opacity(initialAssetID == nil || didPositionInitially ? 1 : 0)
                 .task(id: assets.map(\.id)) {
                     guard !didPositionInitially, !assets.isEmpty else { return }
-                    proxy.scrollTo(PhotosRangeScrollAnchor.bottom, anchor: .bottom)
+                    positionInitialAsset(using: proxy)
                     didPositionInitially = true
                 }
                 .task(id: PhotosRangeViewportKey(
@@ -1125,7 +1127,7 @@ struct PhotosRangeAssetsView: View {
                     guard !Task.isCancelled,
                           !didSettleInitialViewport || !userHasScrolled
                     else { return }
-                    proxy.scrollTo(PhotosRangeScrollAnchor.bottom, anchor: .bottom)
+                    positionInitialAsset(using: proxy)
                     didSettleInitialViewport = true
                 }
                 .onChange(of: assetLayout) {
@@ -1184,6 +1186,18 @@ struct PhotosRangeAssetsView: View {
         assetLayout == .square
             ? "Use Natural Aspect Layout"
             : "Use Square Layout"
+    }
+
+    private func positionInitialAsset(using proxy: ScrollViewProxy) {
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            if let initialAssetID, assets.contains(where: { $0.id == initialAssetID }) {
+                proxy.scrollTo(initialAssetID, anchor: .center)
+            } else {
+                proxy.scrollTo(PhotosRangeScrollAnchor.bottom, anchor: .bottom)
+            }
+        }
     }
 
     private func handlePinch(_ gesture: PhotosPinchGesture) {
