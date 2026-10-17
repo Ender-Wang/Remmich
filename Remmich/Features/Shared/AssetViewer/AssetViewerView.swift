@@ -24,8 +24,14 @@ struct AssetViewerView: View {
     private let controlVisualSize: CGFloat = 44
     private let topChromeHeight: CGFloat = 60
     private let bottomActionsHeight: CGFloat = 56
-    private let bottomChromeHeight: CGFloat = 124
+    private let filmstripHeight: CGFloat = 52
+    private let filmstripActionsGap: CGFloat = 16
+    private let mediaFilmstripGap: CGFloat = 12
     private let infoGap: CGFloat = 12
+
+    private var bottomChromeHeight: CGFloat {
+        mediaFilmstripGap + filmstripHeight + filmstripActionsGap + controlHitSize
+    }
 
     init(
         route: AssetViewerRoute,
@@ -166,6 +172,8 @@ struct AssetViewerView: View {
                     isLandscape: isLandscape,
                     infoProgress: infoProgress
                 )
+                .frame(width: contentSize.width, height: contentSize.height)
+                .clipped()
                 .padding(contentInsets)
                 .tag(asset.id)
             }
@@ -316,7 +324,6 @@ struct AssetViewerView: View {
                 bottomActions
                     .padding(.horizontal, 16)
             }
-            .padding(.bottom, 12)
         }
     }
 
