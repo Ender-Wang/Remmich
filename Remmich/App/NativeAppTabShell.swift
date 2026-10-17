@@ -74,6 +74,7 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
         private var parent: NativeAppTabShell
         private var installedTabs: [NativeTabDestination]?
         private var isUpdatingTabs = false
+        private var tabBarShouldBeHidden = false
 
         private lazy var photosController = mediaHostingController(rootView: parent.photos)
         private lazy var videosController = mediaHostingController(rootView: parent.videos)
@@ -154,9 +155,9 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
             }
 
             guard let controller else { return }
-            if controller.tabBar.isHidden != next.isViewerPresented {
-                controller.tabBar.isHidden = next.isViewerPresented
-                controller.view.setNeedsLayout()
+            if tabBarShouldBeHidden != next.isViewerPresented {
+                tabBarShouldBeHidden = next.isViewerPresented
+                setTabBarHidden(next.isViewerPresented, in: controller, animated: animated)
             }
             isUpdatingTabs = true
             defer { isUpdatingTabs = false }
@@ -171,6 +172,43 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
             let intendedTab = tab(for: next.selection)
             if controller.selectedTab !== intendedTab {
                 controller.selectedTab = intendedTab
+            }
+        }
+
+        private func setTabBarHidden(
+            _ hidden: Bool,
+            in controller: UITabBarController,
+            animated: Bool
+        ) {
+            let tabBar = controller.tabBar
+            let currentAlpha = CGFloat(tabBar.layer.presentation()?.opacity ?? Float(tabBar.alpha))
+            tabBar.layer.removeAllAnimations()
+            tabBar.alpha = currentAlpha
+
+            guard animated, !UIAccessibility.isReduceMotionEnabled else {
+                tabBar.isHidden = hidden
+                tabBar.alpha = 1
+                controller.view.setNeedsLayout()
+                return
+            }
+
+            tabBar.isHidden = false
+            controller.view.setNeedsLayout()
+            controller.view.layoutIfNeeded()
+
+            UIView.animate(
+                withDuration: 0.28,
+                delay: 0,
+                options: [.beginFromCurrentState, .curveEaseInOut, .allowUserInteraction]
+            ) {
+                tabBar.alpha = hidden ? 0 : 1
+            } completion: { [weak self, weak controller] finished in
+                guard finished, let self, let controller,
+                      tabBarShouldBeHidden == hidden
+                else { return }
+                controller.tabBar.isHidden = hidden
+                controller.tabBar.alpha = 1
+                controller.view.setNeedsLayout()
             }
         }
 

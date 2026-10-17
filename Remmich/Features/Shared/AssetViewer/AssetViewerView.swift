@@ -24,6 +24,7 @@ struct AssetViewerView: View {
     @State private var pagerWindowCenterID: String
     @State private var pagerPhase: ScrollPhase = .idle
     @State private var pagerSelectionTask: Task<Void, Never>?
+    @State private var isDismissing = false
 
     private let controlHitSize: CGFloat = 44
     private let controlVisualSize: CGFloat = 44
@@ -148,7 +149,6 @@ struct AssetViewerView: View {
         }
         .foregroundStyle(.primary)
         .toolbar(.hidden, for: .navigationBar)
-        .toolbar(.hidden, for: .tabBar)
         .navigationBarBackButtonHidden(true)
         .navigationTransition(.zoom(sourceID: route.selectedAsset.id, in: namespace))
         .task {
@@ -319,7 +319,7 @@ struct AssetViewerView: View {
                             systemImage: "chevron.backward",
                             label: "Back",
                             identifier: "asset-viewer-back",
-                            action: close
+                            action: beginDismissal
                         )
 
                         Spacer()
@@ -550,11 +550,21 @@ struct AssetViewerView: View {
                     topInset: topInset
                 ) {
                     infoDragTranslation = 0
-                    close()
+                    beginDismissal()
                 } else {
                     settleInfoGesture(visible: false)
                 }
             }
+    }
+
+    private func beginDismissal() {
+        guard !isDismissing else { return }
+        isDismissing = true
+        visibilityChanged(false)
+        Task { @MainActor in
+            await Task.yield()
+            close()
+        }
     }
 
     private func isOutsideViewerContent(
