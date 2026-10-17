@@ -147,7 +147,6 @@ struct AssetViewerView: View {
         }
         .onChange(of: session.selectedAssetID) { _, _ in
             zoomedAssetID = nil
-            chromeVisible = true
             updateViewerPrefetch()
         }
         .onAppear { visibilityChanged(true) }
