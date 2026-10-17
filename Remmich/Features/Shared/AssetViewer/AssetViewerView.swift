@@ -91,17 +91,22 @@ struct AssetViewerView: View {
                     ),
                     height: max(1, fullGeometry.size.height - topInset - bottomInset)
                 )
+                let viewerInsets = EdgeInsets(
+                    top: viewerRect.minY,
+                    leading: viewerRect.minX,
+                    bottom: max(0, fullGeometry.size.height - viewerRect.maxY),
+                    trailing: max(0, fullGeometry.size.width - viewerRect.maxX)
+                )
 
                 ZStack {
                     Color(uiColor: .systemBackground)
                     viewerContent(
-                        size: viewerRect.size,
+                        contentSize: viewerRect.size,
+                        contentInsets: viewerInsets,
                         requestSize: fullGeometry.size,
                         isLandscape: fullGeometry.size.width > fullGeometry.size.height,
                         infoProgress: infoProgress
                     )
-                    .frame(width: viewerRect.width, height: viewerRect.height)
-                    .position(x: viewerRect.midX, y: viewerRect.midY)
                     chrome(infoProgress: infoProgress)
                         .frame(width: safeRect.width, height: safeRect.height)
                         .position(x: safeRect.midX, y: safeRect.midY)
@@ -146,7 +151,8 @@ struct AssetViewerView: View {
     }
 
     private func viewerContent(
-        size: CGSize,
+        contentSize: CGSize,
+        contentInsets: EdgeInsets,
         requestSize: CGSize,
         isLandscape: Bool,
         infoProgress: CGFloat
@@ -155,11 +161,12 @@ struct AssetViewerView: View {
             ForEach(session.assets) { asset in
                 viewerPage(
                     asset: asset,
-                    size: size,
+                    size: contentSize,
                     requestSize: requestSize,
                     isLandscape: isLandscape,
                     infoProgress: infoProgress
                 )
+                .padding(contentInsets)
                 .tag(asset.id)
             }
         }
