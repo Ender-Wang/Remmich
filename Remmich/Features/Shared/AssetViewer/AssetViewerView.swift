@@ -669,6 +669,8 @@ private struct AssetViewerFilmstrip: View {
     @Environment(\.displayScale) private var displayScale
     @Environment(\.colorScheme) private var colorScheme
 
+    @State private var hasPositionedSelection = false
+
     let assets: [TimelineAssetSummary]
     let selectedAssetID: String
     let media: MediaLibraryController
@@ -716,17 +718,41 @@ private struct AssetViewerFilmstrip: View {
             }
             .scrollIndicators(.hidden)
             .frame(height: 52)
-            .onChange(of: selectedAssetID, initial: true) { _, selectedAssetID in
-                withAnimation(.snappy(duration: 0.2)) {
+            .task(id: positionRequest) {
+                await Task.yield()
+                guard !Task.isCancelled,
+                      assets.contains(where: { $0.id == selectedAssetID })
+                else { return }
+
+                if hasPositionedSelection {
+                    withAnimation(.snappy(duration: 0.2)) {
+                        proxy.scrollTo(selectedAssetID, anchor: .center)
+                    }
+                } else {
                     proxy.scrollTo(selectedAssetID, anchor: .center)
+                    hasPositionedSelection = true
                 }
             }
         }
     }
 
+    private var positionRequest: FilmstripPositionRequest {
+        FilmstripPositionRequest(
+            selectedAssetID: selectedAssetID,
+            selectedIndex: assets.firstIndex { $0.id == selectedAssetID },
+            assetCount: assets.count
+        )
+    }
+
     private var selectionStroke: Color {
         colorScheme == .dark ? .white : .black
     }
+}
+
+private struct FilmstripPositionRequest: Hashable {
+    let selectedAssetID: String
+    let selectedIndex: Int?
+    let assetCount: Int
 }
 
 extension View {
