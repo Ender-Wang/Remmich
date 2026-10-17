@@ -74,10 +74,14 @@ struct AssetViewerInfoView: View {
             }
 
             VStack(spacing: 0) {
-                Text(detail.capturedAt.formatted(date: .long, time: .shortened))
-                    .font(.headline)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(16)
+                Text(TimelineCaptureDateFormatting.string(
+                    from: detail.capturedAt,
+                    dateStyle: .long,
+                    timeStyle: .short
+                ))
+                .font(.headline)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(16)
 
                 Divider().overlay(Color.primary.opacity(0.16))
 

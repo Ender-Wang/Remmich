@@ -323,7 +323,11 @@ private struct TimelineAssetThumbnail: View {
     }
 
     private var accessibilityLabel: String {
-        var values = [asset.capturedAt.formatted(date: .abbreviated, time: .shortened)]
+        var values = [TimelineCaptureDateFormatting.string(
+            from: asset.capturedAt,
+            dateStyle: .medium,
+            timeStyle: .short
+        )]
         values.append(asset.mediaKind == .video ? "Video" : "Photo")
         if asset.isFavorite {
             values.append("Favorite")

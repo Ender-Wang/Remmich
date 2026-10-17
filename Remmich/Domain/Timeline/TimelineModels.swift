@@ -1,5 +1,24 @@
 import Foundation
 
+nonisolated enum TimelineCaptureDateFormatting {
+    static func string(
+        from date: Date,
+        dateStyle: DateFormatter.Style,
+        timeStyle: DateFormatter.Style,
+        locale: Locale = .autoupdatingCurrent
+    ) -> String {
+        let formatter = DateFormatter()
+        var calendar = Calendar.autoupdatingCurrent
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        formatter.calendar = calendar
+        formatter.locale = locale
+        formatter.timeZone = calendar.timeZone
+        formatter.dateStyle = dateStyle
+        formatter.timeStyle = timeStyle
+        return formatter.string(from: date)
+    }
+}
+
 nonisolated enum TimelineOrder: Hashable, Sendable {
     case ascending
     case descending

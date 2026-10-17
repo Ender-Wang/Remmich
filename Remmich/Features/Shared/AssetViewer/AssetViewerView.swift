@@ -139,8 +139,10 @@ struct AssetViewerView: View {
             await session.start()
             updateViewerPrefetch()
         }
-        .task(id: showsInfo ? session.selectedAssetID : nil) {
-            guard showsInfo else { return }
+        .task(id: AssetDetailLoadRequest(
+            assetID: session.selectedAssetID,
+            includesNeighbors: showsInfo
+        )) {
             await loadSelectedAssetDetail()
         }
         .onChange(of: session.selectedAssetID) { _, _ in
@@ -282,26 +284,43 @@ struct AssetViewerView: View {
 
     private func chrome(infoProgress: CGFloat) -> some View {
         VStack(spacing: 0) {
-            HStack {
-                glassCircleButton(
-                    systemImage: "chevron.backward",
-                    label: "Back",
-                    identifier: "asset-viewer-back",
-                    action: close
-                )
+            GeometryReader { geometry in
+                ZStack {
+                    HStack {
+                        glassCircleButton(
+                            systemImage: "chevron.backward",
+                            label: "Back",
+                            identifier: "asset-viewer-back",
+                            action: close
+                        )
 
-                Spacer()
+                        Spacer()
 
-                if let selectedIndex = session.selectedIndex {
-                    Text("\(selectedIndex + 1) of \(session.assets.count)")
-                        .font(.subheadline.weight(.semibold))
-                        .padding(.horizontal, 14)
-                        .frame(height: controlVisualSize)
-                        .glassEffect(.regular, in: Capsule())
-                        .frame(height: controlHitSize)
-                        .accessibilityIdentifier("asset-viewer-position")
+                        if let selectedIndex = session.selectedIndex {
+                            Text("\(selectedIndex + 1)/\(session.assets.count)")
+                                .font(.subheadline.weight(.semibold))
+                                .monospacedDigit()
+                                .padding(.horizontal, 14)
+                                .frame(height: controlVisualSize)
+                                .glassEffect(.regular, in: Capsule())
+                                .frame(height: controlHitSize)
+                                .accessibilityLabel(
+                                    "Asset \(selectedIndex + 1) of \(session.assets.count)"
+                                )
+                                .accessibilityIdentifier("asset-viewer-position")
+                        }
+                    }
+
+                    if let selectedAsset = session.selectedAsset {
+                        assetContextHeader(for: selectedAsset)
+                            .frame(
+                                maxWidth: min(240, max(120, geometry.size.width - 200))
+                            )
+                            .accessibilityIdentifier("asset-viewer-context")
+                    }
                 }
             }
+            .frame(height: controlHitSize)
             .padding(.horizontal, 16)
             .padding(.top, 8)
 
@@ -325,6 +344,54 @@ struct AssetViewerView: View {
                     .padding(.horizontal, 16)
             }
         }
+    }
+
+    private func assetContextHeader(for asset: TimelineAssetSummary) -> some View {
+        let location = selectedAssetLocation
+        let capturedAt = selectedAssetDetail?.capturedAt ?? asset.capturedAt
+        return VStack(spacing: 0) {
+            if let location {
+                Text(location)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+
+            Text(TimelineCaptureDateFormatting.string(
+                from: capturedAt,
+                dateStyle: .medium,
+                timeStyle: .short
+            ))
+            .font(location == nil ? .subheadline.weight(.semibold) : .caption)
+            .foregroundStyle(location == nil ? .primary : .secondary)
+            .lineLimit(1)
+        }
+        .padding(.horizontal, 14)
+        .frame(height: controlVisualSize)
+        .glassEffect(.regular, in: Capsule())
+        .accessibilityElement(children: .combine)
+    }
+
+    private var selectedAssetDetail: AssetDetail? {
+        guard case let .loaded(detail)? = detailStates[session.selectedAssetID] else {
+            return nil
+        }
+        return detail
+    }
+
+    private var selectedAssetLocation: String? {
+        let location = [
+            selectedAssetDetail?.city,
+            selectedAssetDetail?.state,
+            selectedAssetDetail?.country,
+        ]
+        .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+        .first?
+        .split(separator: ",", maxSplits: 1)
+        .first?
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        return location?.isEmpty == false ? location : nil
     }
 
     private var bottomActions: some View {
@@ -598,12 +665,20 @@ struct AssetViewerView: View {
         detailStates[assetID] = .loading
         do {
             let detail = try await assetDetails.assetDetail(id: assetID)
-            guard !Task.isCancelled, showsInfo else { return }
+            guard !Task.isCancelled else { return }
             detailStates[assetID] = .loaded(detail)
         } catch is CancellationError {
+            if case .loading? = detailStates[assetID] {
+                detailStates[assetID] = .idle
+            }
             return
         } catch {
-            guard !Task.isCancelled, showsInfo else { return }
+            guard !Task.isCancelled else {
+                if case .loading? = detailStates[assetID] {
+                    detailStates[assetID] = .idle
+                }
+                return
+            }
             detailStates[assetID] = .failed(error.localizedDescription)
         }
     }
@@ -617,6 +692,11 @@ struct AssetViewerView: View {
         detailStates[assetID] = .idle
         Task { await loadAssetDetail(assetID) }
     }
+}
+
+private struct AssetDetailLoadRequest: Hashable {
+    let assetID: String
+    let includesNeighbors: Bool
 }
 
 private struct AssetViewerFitPage: View {
@@ -708,7 +788,11 @@ private struct AssetViewerFilmstrip: View {
                             }
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel(asset.capturedAt.formatted(date: .abbreviated, time: .shortened))
+                        .accessibilityLabel(TimelineCaptureDateFormatting.string(
+                            from: asset.capturedAt,
+                            dateStyle: .medium,
+                            timeStyle: .short
+                        ))
                         .accessibilityAddTraits(asset.id == selectedAssetID ? .isSelected : [])
                         .accessibilityIdentifier("asset-viewer-filmstrip-\(asset.id)")
                         .id(asset.id)
