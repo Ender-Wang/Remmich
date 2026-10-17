@@ -19,6 +19,11 @@ struct AssetViewerView: View {
     @State private var neighborLoadTask: Task<Void, Never>?
     @State private var infoContentHeight: CGFloat = 220
     @State private var infoDragTranslation: CGFloat = 0
+    @State private var viewerPreviewTargetPixels: MediaPixelSize?
+    @State private var pagerPosition: String?
+    @State private var pagerWindowCenterID: String
+    @State private var pagerPhase: ScrollPhase = .idle
+    @State private var pagerSelectionTask: Task<Void, Never>?
 
     private let controlHitSize: CGFloat = 44
     private let controlVisualSize: CGFloat = 44
@@ -28,6 +33,7 @@ struct AssetViewerView: View {
     private let filmstripActionsGap: CGFloat = 16
     private let mediaFilmstripGap: CGFloat = 12
     private let infoGap: CGFloat = 12
+    private let pagerWindowRadius = 3
 
     private var bottomChromeHeight: CGFloat {
         mediaFilmstripGap + filmstripHeight + filmstripActionsGap + controlHitSize
@@ -55,6 +61,8 @@ struct AssetViewerView: View {
                 await store.rangeCoverAssets(in: bucketID)
             }
         ))
+        _pagerPosition = State(initialValue: route.selectedAsset.id)
+        _pagerWindowCenterID = State(initialValue: route.selectedAsset.id)
     }
 
     var body: some View {
@@ -69,6 +77,10 @@ struct AssetViewerView: View {
                     fullFrame: fullFrame
                 )
                 let fullRect = CGRect(origin: .zero, size: fullGeometry.size)
+                let previewTargetPixels = MediaPixelSize(
+                    width: Int(max(1, fullGeometry.size.width * displayScale)),
+                    height: Int(max(1, fullGeometry.size.height * displayScale))
+                )
                 let safeRect = CGRect(
                     x: safeInsets.leading,
                     y: safeInsets.top,
@@ -127,6 +139,10 @@ struct AssetViewerView: View {
                         topInset: viewerRect.minY
                     )
                 )
+                .task(id: previewTargetPixels) {
+                    viewerPreviewTargetPixels = previewTargetPixels
+                    updateViewerPrefetch()
+                }
             }
             .ignoresSafeArea(.container, edges: .all)
         }
@@ -145,13 +161,20 @@ struct AssetViewerView: View {
         )) {
             await loadSelectedAssetDetail()
         }
-        .onChange(of: session.selectedAssetID) { _, _ in
+        .onChange(of: session.selectedAssetID) { _, newAssetID in
             zoomedAssetID = nil
             updateViewerPrefetch()
+            if pagerPosition != newAssetID {
+                pagerPosition = newAssetID
+            }
+            if !pagerWindowAssets.contains(where: { $0.id == newAssetID }) {
+                pagerWindowCenterID = newAssetID
+            }
         }
         .onAppear { visibilityChanged(true) }
         .onDisappear {
             neighborLoadTask?.cancel()
+            pagerSelectionTask?.cancel()
             media.cancelViewerPrefetching()
             visibilityChanged(false)
         }
@@ -164,23 +187,39 @@ struct AssetViewerView: View {
         isLandscape: Bool,
         infoProgress: CGFloat
     ) -> some View {
-        TabView(selection: selectionBinding) {
-            ForEach(session.assets) { asset in
-                viewerPage(
-                    asset: asset,
-                    size: contentSize,
-                    requestSize: requestSize,
-                    isLandscape: isLandscape,
-                    infoProgress: infoProgress
-                )
-                .frame(width: contentSize.width, height: contentSize.height)
-                .clipped()
-                .padding(contentInsets)
-                .tag(asset.id)
+        ScrollView(.horizontal) {
+            LazyHStack(spacing: 0) {
+                ForEach(pagerWindowAssets) { asset in
+                    viewerPage(
+                        asset: asset,
+                        size: contentSize,
+                        requestSize: requestSize,
+                        isLandscape: isLandscape,
+                        infoProgress: infoProgress
+                    )
+                    .frame(width: contentSize.width, height: contentSize.height)
+                    .clipped()
+                    .padding(contentInsets)
+                    .id(asset.id)
+                }
+            }
+            .scrollTargetLayout()
+        }
+        .scrollIndicators(.hidden)
+        .scrollTargetBehavior(.paging)
+        .scrollPosition(id: $pagerPosition)
+        .scrollDisabled(zoomedAssetID == session.selectedAssetID)
+        .onChange(of: pagerPosition) { _, assetID in
+            schedulePagerSelectionSync(assetID)
+        }
+        .onScrollPhaseChange { _, phase in
+            pagerPhase = phase
+            if phase == .idle {
+                schedulePagerSelectionSync(pagerPosition)
+            } else {
+                pagerSelectionTask?.cancel()
             }
         }
-        .tabViewStyle(.page(indexDisplayMode: .never))
-        .scrollDisabled(zoomedAssetID == session.selectedAssetID)
     }
 
     @ViewBuilder
@@ -246,16 +285,6 @@ struct AssetViewerView: View {
             .animation(infoAnimation, value: showsInfo)
             .animation(infoAnimation, value: infoContentHeight)
         }
-    }
-
-    private var selectionBinding: Binding<String> {
-        Binding(
-            get: { session.selectedAssetID },
-            set: { assetID in
-                guard session.selectImmediately(assetID) else { return }
-                scheduleNeighborLoading(for: assetID)
-            }
-        )
     }
 
     private func mediaPage(
@@ -331,8 +360,7 @@ struct AssetViewerView: View {
                     selectedAssetID: session.selectedAssetID,
                     media: media,
                     select: { assetID in
-                        guard session.selectImmediately(assetID) else { return }
-                        scheduleNeighborLoading(for: assetID)
+                        pagerPosition = assetID
                     }
                 )
                 .opacity(1 - infoProgress)
@@ -565,20 +593,22 @@ struct AssetViewerView: View {
     }
 
     private func updateViewerPrefetch() {
-        guard let selectedIndex = session.selectedIndex else {
+        guard let selectedIndex = session.selectedIndex,
+              let viewerPreviewTargetPixels
+        else {
             media.cancelViewerPrefetching()
             return
         }
-        let lower = max(0, selectedIndex - 1)
-        let upper = min(session.assets.count, selectedIndex + 2)
-        let descriptors = session.assets[lower ..< upper]
-            .filter { $0.id != session.selectedAssetID }
+        let descriptors = [-1, 1, -2, 2]
+            .compactMap { offset -> TimelineAssetSummary? in
+                let index = selectedIndex + offset
+                guard session.assets.indices.contains(index) else { return nil }
+                return session.assets[index]
+            }
             .map {
-                MediaRequestDescriptor(
-                    assetID: $0.id,
-                    updatedAt: $0.thumbnailRevision,
-                    derivative: .preview,
-                    targetPixels: nil
+                MediaLibraryController.viewerPreviewDescriptor(
+                    for: $0,
+                    targetPixels: viewerPreviewTargetPixels
                 )
             }
         media.updateViewerPrefetch(descriptors)
@@ -590,6 +620,47 @@ struct AssetViewerView: View {
             try? await Task.sleep(for: .milliseconds(220))
             guard !Task.isCancelled, session.selectedAssetID == assetID else { return }
             await session.loadNeighborsIfNeeded()
+        }
+    }
+
+    private func schedulePagerSelectionSync(_ assetID: String?) {
+        pagerSelectionTask?.cancel()
+        guard let assetID, assetID != session.selectedAssetID else { return }
+        pagerSelectionTask = Task { @MainActor in
+            await Task.yield()
+            guard !Task.isCancelled,
+                  pagerPhase == .idle,
+                  pagerPosition == assetID
+            else { return }
+            guard session.selectImmediately(assetID) else { return }
+            recenterPagerWindowIfNeeded(on: assetID)
+            scheduleNeighborLoading(for: assetID)
+        }
+    }
+
+    private var pagerWindowAssets: ArraySlice<TimelineAssetSummary> {
+        let centerIndex = session.assets.firstIndex(where: { $0.id == pagerWindowCenterID })
+            ?? session.selectedIndex
+            ?? session.assets.startIndex
+        let lower = max(session.assets.startIndex, centerIndex - pagerWindowRadius)
+        let upper = min(session.assets.endIndex, centerIndex + pagerWindowRadius + 1)
+        return session.assets[lower ..< upper]
+    }
+
+    private func recenterPagerWindowIfNeeded(on assetID: String) {
+        let window = pagerWindowAssets
+        guard pagerWindowCenterID != assetID,
+              let selectedIndex = session.assets.firstIndex(where: { $0.id == assetID }),
+              let lower = window.indices.first,
+              let upper = window.indices.last,
+              selectedIndex - lower <= 1 || upper - selectedIndex <= 1
+        else { return }
+
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            pagerWindowCenterID = assetID
+            pagerPosition = assetID
         }
     }
 
@@ -726,7 +797,6 @@ private struct AssetViewerFitPage: View {
                     asset: asset,
                     media: media,
                     targetPixels: targetPixels,
-                    isSelected: isSelected,
                     zoomChanged: zoomChanged,
                     toggleChrome: toggleChrome
                 )

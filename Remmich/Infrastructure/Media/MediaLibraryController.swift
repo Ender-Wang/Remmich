@@ -7,6 +7,11 @@ import OSLog
 @MainActor
 @Observable
 final class MediaLibraryController {
+    struct ViewerPreviewCacheEntry {
+        let image: UIImage
+        let isFinal: Bool
+    }
+
     private nonisolated static let logger = Logger(
         subsystem: "io.github.ender-wang.Remmich",
         category: "MediaPerformance"
@@ -22,6 +27,7 @@ final class MediaLibraryController {
     private var session: AccountSession?
     private var prefetcher: ImagePrefetcher?
     private var viewerPrefetcher: ImagePrefetcher?
+    private var viewerPrefetchRequests: [MediaRequestDescriptor: ImageRequest] = [:]
     private var residencyLoadTask: Task<Void, Never>?
     private var lastTimelinePlan = TimelineResidencyPlan.empty
     private var lastTimelineTargetPixels: MediaPixelSize?
@@ -82,10 +88,39 @@ final class MediaLibraryController {
             request.thumbnail = .init(
                 size: .init(width: pixels.width, height: pixels.height),
                 unit: .pixels,
-                contentMode: .aspectFill
+                contentMode: descriptor.derivative == .thumbnail ? .aspectFill : .aspectFit
             )
         }
         return request
+    }
+
+    nonisolated static func viewerPreviewDescriptor(
+        for asset: TimelineAssetSummary,
+        targetPixels: MediaPixelSize
+    ) -> MediaRequestDescriptor {
+        MediaRequestDescriptor(
+            assetID: asset.id,
+            updatedAt: asset.thumbnailRevision,
+            derivative: .preview,
+            targetPixels: targetPixels
+        )
+    }
+
+    func cachedViewerPreview(
+        for asset: TimelineAssetSummary,
+        targetPixels: MediaPixelSize
+    ) -> ViewerPreviewCacheEntry? {
+        guard let pipeline,
+              let request = imageRequest(for: Self.viewerPreviewDescriptor(
+                  for: asset,
+                  targetPixels: targetPixels
+              )),
+              let container = pipeline.cache.cachedImage(for: request, caches: [.memory])
+        else { return nil }
+        return ViewerPreviewCacheEntry(
+            image: container.image,
+            isFinal: !container.isPreview
+        )
     }
 
     func profileImageRequest(targetPixels: Int) -> ImageRequest? {
@@ -141,12 +176,30 @@ final class MediaLibraryController {
     }
 
     func updateViewerPrefetch(_ descriptors: [MediaRequestDescriptor]) {
-        viewerPrefetcher?.stopPrefetching()
-        viewerPrefetcher?.startPrefetching(with: descriptors.compactMap(imageRequest))
+        let desired = descriptors.compactMap { descriptor -> (MediaRequestDescriptor, ImageRequest)? in
+            imageRequest(for: descriptor).map { (descriptor, $0) }
+        }
+        let desiredDescriptors = Set(desired.map(\.0))
+        let previousDescriptors = Set(viewerPrefetchRequests.keys)
+        let removedRequests = viewerPrefetchRequests
+            .filter { !desiredDescriptors.contains($0.key) }
+            .map(\.value)
+        let addedRequests = desired
+            .filter { !previousDescriptors.contains($0.0) }
+            .map(\.1)
+
+        if !removedRequests.isEmpty {
+            viewerPrefetcher?.stopPrefetching(with: removedRequests)
+        }
+        if !addedRequests.isEmpty {
+            viewerPrefetcher?.startPrefetching(with: addedRequests)
+        }
+        viewerPrefetchRequests = Dictionary(uniqueKeysWithValues: desired)
     }
 
     func cancelViewerPrefetching() {
         viewerPrefetcher?.stopPrefetching()
+        viewerPrefetchRequests.removeAll()
     }
 
     func updateTimelineResidency(
@@ -265,7 +318,7 @@ final class MediaLibraryController {
         Self.logger.notice("Memory warning received; purging decoded media caches")
         pipeline?.cache.removeAll(caches: .memory)
         prefetcher?.stopPrefetching()
-        viewerPrefetcher?.stopPrefetching()
+        cancelViewerPrefetching()
         residencyLoadTask?.cancel()
         let residency = timelineResidency
         Task { await residency.handleMemoryPressure() }
@@ -274,7 +327,7 @@ final class MediaLibraryController {
     func handleBackgroundTransition() {
         Self.logger.info("App backgrounded; cancelling preload and releasing timeline pins")
         prefetcher?.stopPrefetching()
-        viewerPrefetcher?.stopPrefetching()
+        cancelViewerPrefetching()
         residencyLoadTask?.cancel()
         let residency = timelineResidency
         Task { await residency.handleBackgroundTransition() }
@@ -288,7 +341,7 @@ final class MediaLibraryController {
 
     func clearAll() {
         prefetcher?.stopPrefetching()
-        viewerPrefetcher?.stopPrefetching()
+        cancelViewerPrefetching()
         residencyLoadTask?.cancel()
         pipeline?.cache.removeAll()
         if let downloadService {

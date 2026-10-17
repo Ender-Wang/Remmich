@@ -956,6 +956,79 @@ struct RemmichTests {
         #expect(descriptor.cacheKey(in: .init(session: first)) != preview.cacheKey(in: .init(session: first)))
     }
 
+    @Test func viewerPreviewUsesOneSizedIdentityForPrefetchAndDisplay() {
+        let asset = Self.timelineAsset(id: "viewer-asset")
+        let targetPixels = MediaPixelSize(width: 1206, height: 2622)
+        let prefetch = MediaLibraryController.viewerPreviewDescriptor(
+            for: asset,
+            targetPixels: targetPixels
+        )
+        let display = MediaLibraryController.viewerPreviewDescriptor(
+            for: asset,
+            targetPixels: targetPixels
+        )
+
+        #expect(prefetch == display)
+        #expect(display.derivative == .preview)
+        #expect(display.targetPixels == targetPixels)
+    }
+
+    @Test @MainActor func viewerPreviewCanSeedRecreatedPageFromMemory() throws {
+        let media = MediaLibraryController()
+        media.configure(session: .fixture, activeEndpoint: AccountSession.fixture.apiURL)
+        let asset = Self.timelineAsset(id: "viewer-memory-asset")
+        let targetPixels = MediaPixelSize(width: 1206, height: 2622)
+        let descriptor = MediaLibraryController.viewerPreviewDescriptor(
+            for: asset,
+            targetPixels: targetPixels
+        )
+        let request = try #require(media.imageRequest(for: descriptor))
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 12, height: 18)).image { context in
+            UIColor.systemBlue.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 12, height: 18))
+        }
+        let pipeline = try #require(media.pipeline)
+        pipeline.cache.storeCachedImage(
+            ImageContainer(image: image),
+            for: request,
+            caches: [.memory]
+        )
+
+        let cached = try #require(media.cachedViewerPreview(
+            for: asset,
+            targetPixels: targetPixels
+        ))
+        #expect(cached.image === image)
+        #expect(cached.isFinal)
+    }
+
+    @Test @MainActor func progressiveViewerPreviewDoesNotSuppressFinalLoad() throws {
+        let media = MediaLibraryController()
+        media.configure(session: .fixture, activeEndpoint: AccountSession.fixture.apiURL)
+        let asset = Self.timelineAsset(id: "viewer-progressive-asset")
+        let targetPixels = MediaPixelSize(width: 1206, height: 2622)
+        let descriptor = MediaLibraryController.viewerPreviewDescriptor(
+            for: asset,
+            targetPixels: targetPixels
+        )
+        let request = try #require(media.imageRequest(for: descriptor))
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 12, height: 18)).image { context in
+            UIColor.systemBlue.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 12, height: 18))
+        }
+        var progressive = ImageContainer(image: image)
+        progressive.isPreview = true
+        let pipeline = try #require(media.pipeline)
+        pipeline.cache.storeCachedImage(progressive, for: request, caches: [.memory])
+
+        let cached = try #require(media.cachedViewerPreview(
+            for: asset,
+            targetPixels: targetPixels
+        ))
+        #expect(cached.image === image)
+        #expect(!cached.isFinal)
+    }
+
     @Test @MainActor func reusedThumbnailRequestHasDistinctIdentityAndBoundedDecode() throws {
         let media = MediaLibraryController()
         media.configure(session: .fixture, activeEndpoint: AccountSession.fixture.apiURL)

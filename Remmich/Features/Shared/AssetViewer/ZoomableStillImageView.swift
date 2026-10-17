@@ -6,12 +6,33 @@ struct ZoomableStillImageView: View {
     let asset: TimelineAssetSummary
     let media: MediaLibraryController
     let targetPixels: MediaPixelSize
-    let isSelected: Bool
     let zoomChanged: (Bool) -> Void
     let toggleChrome: () -> Void
 
     @State private var image: UIImage?
     @State private var failed = false
+    @State private var loadedTargetPixels: MediaPixelSize?
+
+    init(
+        asset: TimelineAssetSummary,
+        media: MediaLibraryController,
+        targetPixels: MediaPixelSize,
+        zoomChanged: @escaping (Bool) -> Void,
+        toggleChrome: @escaping () -> Void
+    ) {
+        self.asset = asset
+        self.media = media
+        self.targetPixels = targetPixels
+        self.zoomChanged = zoomChanged
+        self.toggleChrome = toggleChrome
+
+        let cachedPreview = media.cachedViewerPreview(
+            for: asset,
+            targetPixels: targetPixels
+        )
+        _image = State(initialValue: cachedPreview?.image)
+        _loadedTargetPixels = State(initialValue: cachedPreview?.isFinal == true ? targetPixels : nil)
+    }
 
     var body: some View {
         ZStack {
@@ -36,51 +57,48 @@ struct ZoomableStillImageView: View {
             }
         }
         .task(id: loadID) {
-            await loadProgressively()
+            await loadPreview()
         }
         .onDisappear { zoomChanged(false) }
         .accessibilityIdentifier("asset-viewer-still-\(asset.id)")
     }
 
     private var loadID: String {
-        "\(asset.id)|\(targetPixels.width)x\(targetPixels.height)|\(isSelected)"
+        "\(asset.id)|\(targetPixels.width)x\(targetPixels.height)"
     }
 
-    private func loadProgressively() async {
-        failed = false
+    private func loadPreview() async {
+        guard loadedTargetPixels != targetPixels else { return }
+        if failed {
+            failed = false
+        }
         do {
-            if image == nil {
-                image = try await load(.preview)
-            }
-            guard isSelected, !Task.isCancelled else { return }
-            image = try await load(.fullSize)
+            let loadedImage = try await loadPreviewImage()
+            guard !Task.isCancelled else { return }
+            image = loadedImage
+            loadedTargetPixels = targetPixels
         } catch is CancellationError {
             return
         } catch {
-            failed = image == nil
+            if image == nil {
+                failed = true
+            }
         }
     }
 
-    private func load(_ derivative: MediaDerivative) async throws -> UIImage {
-        let requestPixels = if derivative == .fullSize {
-            MediaPixelSize(
-                width: min(6144, targetPixels.width * 3),
-                height: min(6144, targetPixels.height * 3)
-            )
-        } else {
-            targetPixels
-        }
+    private func loadPreviewImage() async throws -> UIImage {
         guard let pipeline = media.pipeline,
-              let request = media.imageRequest(for: .init(
-                  assetID: asset.id,
-                  updatedAt: asset.thumbnailRevision,
-                  derivative: derivative,
-                  targetPixels: requestPixels
-              ))
+              let request = media.imageRequest(
+                  for: MediaLibraryController.viewerPreviewDescriptor(
+                      for: asset,
+                      targetPixels: targetPixels
+                  )
+              )
         else {
             throw AssetViewerImageError.unavailable
         }
-        return try await pipeline.image(for: request)
+        let response = try await pipeline.imageTask(with: request).response
+        return response.image
     }
 }
 
@@ -141,8 +159,9 @@ private struct ZoomableImageScrollView: UIViewRepresentable {
         context.coordinator.toggleChrome = toggleChrome
         if context.coordinator.assetID != assetID {
             context.coordinator.assetID = assetID
+            context.coordinator.isResettingZoom = true
             scrollView.setZoomScale(1, animated: false)
-            zoomChanged(false)
+            context.coordinator.isResettingZoom = false
         }
         if context.coordinator.imageView.image !== image {
             context.coordinator.imageView.image = image
@@ -154,6 +173,7 @@ private struct ZoomableImageScrollView: UIViewRepresentable {
         let imageView = UIImageView()
         weak var scrollView: UIScrollView?
         var assetID: String?
+        var isResettingZoom = false
         var zoomChanged: (Bool) -> Void
         var toggleChrome: () -> Void
 
@@ -179,6 +199,7 @@ private struct ZoomableImageScrollView: UIViewRepresentable {
 
         func scrollViewDidZoom(_ scrollView: UIScrollView) {
             centerImage(in: scrollView)
+            guard !isResettingZoom else { return }
             zoomChanged(scrollView.zoomScale > scrollView.minimumZoomScale + 0.01)
         }
 

@@ -353,6 +353,28 @@ final class RemmichUITests: XCTestCase {
     }
 
     @MainActor
+    func testPhotoViewerPagesBackAndForthWithoutLosingSelection() {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = ["-ui-testing-signed-in"]
+        app.launch()
+
+        let asset = app.descendants(matching: .any)["asset-asset-1"].firstMatch
+        XCTAssertTrue(asset.waitForExistence(timeout: 10))
+        asset.tap()
+
+        let first = app.descendants(matching: .any)["asset-viewer-page-asset-1"]
+        let second = app.descendants(matching: .any)["asset-viewer-page-asset-2"]
+        XCTAssertTrue(first.waitForExistence(timeout: 10))
+
+        first.swipeLeft()
+        XCTAssertTrue(waitUntil(timeout: 5) { second.isHittable })
+        second.swipeRight()
+        XCTAssertTrue(waitUntil(timeout: 5) { first.isHittable })
+        XCTAssertTrue(app.buttons["asset-viewer-back"].isHittable)
+    }
+
+    @MainActor
     func testAssetViewerRespectsSafeAreasAndRevealsInfo() {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
