@@ -9,9 +9,9 @@ enum AssetViewerDetailState: Equatable {
 
 struct AssetViewerInfoView: View {
     let state: AssetViewerDetailState
-    let bottomClearance: CGFloat
+    let anchorsContentToBottom: Bool
+    let contentHeightChanged: (CGFloat) -> Void
     let retry: () -> Void
-    let dismiss: () -> Void
 
     var body: some View {
         GeometryReader { geometry in
@@ -20,7 +20,7 @@ struct AssetViewerInfoView: View {
                     switch state {
                     case .idle, .loading:
                         ProgressView("Loading information…")
-                            .tint(.white)
+                            .tint(.primary)
                             .frame(maxWidth: .infinity, minHeight: 220)
                     case let .loaded(detail):
                         details(detail)
@@ -37,15 +37,25 @@ struct AssetViewerInfoView: View {
                     }
                 }
                 .padding(.horizontal, 16)
-                .padding(.top, 16)
-                .padding(.bottom, bottomClearance)
-                .frame(minHeight: geometry.size.height, alignment: .bottom)
+                .background {
+                    GeometryReader { contentGeometry in
+                        Color.clear.preference(
+                            key: AssetViewerInfoContentHeightKey.self,
+                            value: contentGeometry.size.height
+                        )
+                    }
+                }
+                .frame(
+                    minHeight: geometry.size.height,
+                    alignment: anchorsContentToBottom ? .bottom : .top
+                )
             }
             .scrollIndicators(.hidden)
             .scrollBounceBehavior(.basedOnSize)
         }
-        .background(.black)
-        .foregroundStyle(.white)
+        .onPreferenceChange(AssetViewerInfoContentHeightKey.self, perform: contentHeightChanged)
+        .background(Color(uiColor: .systemBackground))
+        .foregroundStyle(.primary)
         .accessibilityIdentifier("asset-viewer-info-panel")
     }
 
@@ -69,7 +79,7 @@ struct AssetViewerInfoView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(16)
 
-                Divider().overlay(.white.opacity(0.16))
+                Divider().overlay(Color.primary.opacity(0.16))
 
                 HStack(spacing: 12) {
                     Text(detail.originalFileName)
@@ -81,12 +91,12 @@ struct AssetViewerInfoView: View {
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 10)
                         .frame(minHeight: 28)
-                        .background(.white.opacity(0.1), in: Capsule())
+                        .background(Color.primary.opacity(0.1), in: Capsule())
                 }
                 .padding(16)
 
                 if let summary = equipmentSummary(for: detail) {
-                    Divider().overlay(.white.opacity(0.16))
+                    Divider().overlay(Color.primary.opacity(0.16))
                     Text(summary)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
@@ -96,7 +106,7 @@ struct AssetViewerInfoView: View {
                 }
 
                 if !exposureFacts(for: detail).isEmpty {
-                    Divider().overlay(.white.opacity(0.16))
+                    Divider().overlay(Color.primary.opacity(0.16))
                     ViewThatFits(in: .horizontal) {
                         HStack(spacing: 0) {
                             exposureFactViews(for: detail)
@@ -112,7 +122,7 @@ struct AssetViewerInfoView: View {
                 }
 
                 if let location = locationSummary(for: detail) {
-                    Divider().overlay(.white.opacity(0.16))
+                    Divider().overlay(Color.primary.opacity(0.16))
                     Label(location, systemImage: "location.fill")
                         .font(.subheadline)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -125,21 +135,10 @@ struct AssetViewerInfoView: View {
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("asset-viewer-metadata-card")
         }
-        .simultaneousGesture(dismissGesture)
     }
 
     private var infoSurface: some ShapeStyle {
         Color(uiColor: .secondarySystemBackground)
-    }
-
-    private var dismissGesture: some Gesture {
-        DragGesture(minimumDistance: 12)
-            .onChanged { value in
-                guard value.translation.height >= 24,
-                      value.translation.height > abs(value.translation.width) * 1.2
-                else { return }
-                dismiss()
-            }
     }
 
     private func typeBadge(for detail: AssetDetail) -> String {
@@ -196,12 +195,12 @@ struct AssetViewerInfoView: View {
                 Text(fact.0)
                     .font(.caption2)
                 Text(fact.1)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.primary)
             }
             .frame(maxWidth: .infinity)
             if index < exposureFacts(for: detail).count - 1 {
                 Divider()
-                    .overlay(.white.opacity(0.16))
+                    .overlay(Color.primary.opacity(0.16))
                     .frame(height: 28)
             }
         }
@@ -212,6 +211,14 @@ struct AssetViewerInfoView: View {
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
         return values.isEmpty ? nil : values.removingDuplicates().joined(separator: ", ")
+    }
+}
+
+private struct AssetViewerInfoContentHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 

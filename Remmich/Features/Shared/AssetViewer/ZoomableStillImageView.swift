@@ -15,7 +15,7 @@ struct ZoomableStillImageView: View {
 
     var body: some View {
         ZStack {
-            Color.black
+            Color(uiColor: .systemBackground)
 
             if let image {
                 ZoomableImageScrollView(
@@ -32,7 +32,7 @@ struct ZoomableStillImageView: View {
                 .foregroundStyle(.secondary)
             } else {
                 ProgressView()
-                    .tint(.white)
+                    .tint(.primary)
             }
         }
         .task(id: loadID) {
@@ -100,7 +100,7 @@ private struct ZoomableImageScrollView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> ViewerZoomScrollView {
         let scrollView = ViewerZoomScrollView()
-        scrollView.backgroundColor = .black
+        scrollView.backgroundColor = .systemBackground
         scrollView.delegate = context.coordinator
         scrollView.minimumZoomScale = 1
         scrollView.maximumZoomScale = 5
@@ -114,7 +114,7 @@ private struct ZoomableImageScrollView: UIViewRepresentable {
 
         let imageView = context.coordinator.imageView
         imageView.contentMode = .scaleAspectFit
-        imageView.backgroundColor = .black
+        imageView.backgroundColor = .systemBackground
         imageView.isUserInteractionEnabled = true
         scrollView.addSubview(imageView)
         scrollView.zoomTarget = imageView

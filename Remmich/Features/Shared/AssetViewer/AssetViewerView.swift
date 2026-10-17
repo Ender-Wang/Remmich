@@ -15,10 +15,17 @@ struct AssetViewerView: View {
     @State private var zoomedAssetID: String?
     @State private var chromeVisible = true
     @State private var showsInfo = false
-    @State private var detailState = AssetViewerDetailState.idle
+    @State private var detailStates: [String: AssetViewerDetailState] = [:]
+    @State private var neighborLoadTask: Task<Void, Never>?
+    @State private var infoContentHeight: CGFloat = 220
+    @State private var infoDragTranslation: CGFloat = 0
 
     private let controlHitSize: CGFloat = 44
     private let controlVisualSize: CGFloat = 44
+    private let topChromeHeight: CGFloat = 60
+    private let bottomActionsHeight: CGFloat = 56
+    private let bottomChromeHeight: CGFloat = 124
+    private let infoGap: CGFloat = 12
 
     init(
         route: AssetViewerRoute,
@@ -45,19 +52,74 @@ struct AssetViewerView: View {
     }
 
     var body: some View {
-        GeometryReader { geometry in
-            ZStack {
-                Color.black.ignoresSafeArea()
-                viewerContent(size: geometry.size)
-                chrome
-                    .opacity(chromeVisible ? 1 : 0)
-                    .allowsHitTesting(chromeVisible)
-                    .accessibilityHidden(!chromeVisible)
-                    .animation(.easeInOut(duration: 0.2), value: chromeVisible)
+        GeometryReader { safeGeometry in
+            GeometryReader { fullGeometry in
+                let infoProgress = infoPresentationProgress
+                let safeFrame = safeGeometry.frame(in: .global)
+                let fullFrame = fullGeometry.frame(in: .global)
+                let safeInsets = resolvedSafeAreaInsets(
+                    safeGeometry: safeGeometry,
+                    safeFrame: safeFrame,
+                    fullFrame: fullFrame
+                )
+                let fullRect = CGRect(origin: .zero, size: fullGeometry.size)
+                let safeRect = CGRect(
+                    x: safeInsets.leading,
+                    y: safeInsets.top,
+                    width: max(1, fullGeometry.size.width - safeInsets.leading - safeInsets.trailing),
+                    height: max(1, fullGeometry.size.height - safeInsets.top - safeInsets.bottom)
+                )
+                let layoutProgress = chromeVisible ? 1 : infoProgress
+                let topInset = chromeVisible
+                    ? safeInsets.top + topChromeHeight
+                    : (safeInsets.top + topChromeHeight) * infoProgress
+                let shownInfoBottomInset = bottomActionsHeight + infoGap
+                let bottomInset = chromeVisible
+                    ? safeInsets.bottom + interpolated(
+                        from: bottomChromeHeight,
+                        to: shownInfoBottomInset,
+                        progress: infoProgress
+                    )
+                    : (safeInsets.bottom + shownInfoBottomInset) * infoProgress
+                let viewerRect = CGRect(
+                    x: safeInsets.leading * layoutProgress,
+                    y: topInset,
+                    width: max(
+                        1,
+                        fullGeometry.size.width
+                            - (safeInsets.leading + safeInsets.trailing) * layoutProgress
+                    ),
+                    height: max(1, fullGeometry.size.height - topInset - bottomInset)
+                )
+
+                ZStack {
+                    Color(uiColor: .systemBackground)
+                    viewerContent(
+                        size: viewerRect.size,
+                        requestSize: fullGeometry.size,
+                        isLandscape: fullGeometry.size.width > fullGeometry.size.height,
+                        infoProgress: infoProgress
+                    )
+                    .frame(width: viewerRect.width, height: viewerRect.height)
+                    .position(x: viewerRect.midX, y: viewerRect.midY)
+                    chrome(infoProgress: infoProgress)
+                        .frame(width: safeRect.width, height: safeRect.height)
+                        .position(x: safeRect.midX, y: safeRect.midY)
+                        .opacity(chromeVisible ? 1 : infoProgress)
+                        .allowsHitTesting(chromeVisible || showsInfo)
+                        .accessibilityHidden(!chromeVisible && !showsInfo)
+                }
+                .simultaneousGesture(
+                    verticalViewerGesture(
+                        viewportSize: fullRect.size,
+                        contentSize: viewerRect.size,
+                        topInset: viewerRect.minY
+                    )
+                )
             }
-            .simultaneousGesture(infoRevealGesture)
+            .ignoresSafeArea(.container, edges: .all)
         }
-        .foregroundStyle(.white)
+        .foregroundStyle(.primary)
         .toolbar(.hidden, for: .navigationBar)
         .toolbar(.hidden, for: .tabBar)
         .navigationBarBackButtonHidden(true)
@@ -73,84 +135,30 @@ struct AssetViewerView: View {
         .onChange(of: session.selectedAssetID) { _, _ in
             zoomedAssetID = nil
             chromeVisible = true
-            detailState = .idle
             updateViewerPrefetch()
         }
         .onAppear { visibilityChanged(true) }
         .onDisappear {
+            neighborLoadTask?.cancel()
             media.cancelViewerPrefetching()
             visibilityChanged(false)
         }
     }
 
-    @ViewBuilder
-    private func viewerContent(size: CGSize) -> some View {
-        let isLandscape = size.width > size.height
-        if isLandscape {
-            let mediaWidth = showsInfo ? size.width / 2 : size.width
-            HStack(spacing: 0) {
-                pages(size: .init(width: mediaWidth, height: size.height))
-                    .frame(width: mediaWidth)
-
-                if showsInfo {
-                    AssetViewerInfoView(
-                        state: detailState,
-                        bottomClearance: 76,
-                        retry: retryDetail,
-                        dismiss: { setInfoVisible(false) }
-                    )
-                    .frame(width: size.width / 2)
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .animation(infoAnimation, value: showsInfo)
-            .accessibilityIdentifier(showsInfo ? "asset-viewer-landscape-split" : "asset-viewer-landscape")
-        } else {
-            let mediaHeight = showsInfo ? max(220, size.height * 0.43) : size.height
-            VStack(spacing: 0) {
-                pages(size: .init(width: size.width, height: mediaHeight))
-                    .frame(height: mediaHeight)
-
-                if showsInfo {
-                    AssetViewerInfoView(
-                        state: detailState,
-                        bottomClearance: 76,
-                        retry: retryDetail,
-                        dismiss: { setInfoVisible(false) }
-                    )
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
-            }
-            .frame(maxHeight: .infinity, alignment: .top)
-            .animation(infoAnimation, value: showsInfo)
-        }
-    }
-
-    private func pages(size: CGSize) -> some View {
-        TabView(selection: Binding(
-            get: { session.selectedAssetID },
-            set: { assetID in
-                guard session.selectImmediately(assetID) else { return }
-                Task { await session.loadNeighborsIfNeeded() }
-            }
-        )) {
+    private func viewerContent(
+        size: CGSize,
+        requestSize: CGSize,
+        isLandscape: Bool,
+        infoProgress: CGFloat
+    ) -> some View {
+        TabView(selection: selectionBinding) {
             ForEach(session.assets) { asset in
-                AssetViewerFitPage(
+                viewerPage(
                     asset: asset,
-                    media: media,
-                    isSelected: asset.id == session.selectedAssetID,
-                    dismissesInfo: showsInfo,
-                    targetPixels: .init(
-                        width: Int(max(1, size.width * displayScale)),
-                        height: Int(max(1, size.height * displayScale))
-                    ),
-                    resumePosition: { session.playbackPosition(for: asset.id) },
-                    savePosition: { session.setPlaybackPosition($0, for: asset.id) },
-                    zoomChanged: { isZoomed in
-                        zoomedAssetID = isZoomed ? asset.id : nil
-                    },
-                    toggleChrome: mediaTapped
+                    size: size,
+                    requestSize: requestSize,
+                    isLandscape: isLandscape,
+                    infoProgress: infoProgress
                 )
                 .tag(asset.id)
             }
@@ -159,7 +167,105 @@ struct AssetViewerView: View {
         .scrollDisabled(zoomedAssetID == session.selectedAssetID)
     }
 
-    private var chrome: some View {
+    @ViewBuilder
+    private func viewerPage(
+        asset: TimelineAssetSummary,
+        size: CGSize,
+        requestSize: CGSize,
+        isLandscape: Bool,
+        infoProgress: CGFloat
+    ) -> some View {
+        if isLandscape {
+            let targetInfoWidth = size.width / 2
+            let infoWidth = targetInfoWidth * infoProgress
+            let mediaWidth = size.width - infoWidth
+            HStack(spacing: 0) {
+                mediaPage(asset: asset, requestSize: requestSize)
+                    .frame(width: mediaWidth, height: size.height)
+
+                ZStack(alignment: .leading) {
+                    AssetViewerInfoView(
+                        state: detailState(for: asset.id),
+                        anchorsContentToBottom: true,
+                        contentHeightChanged: { updateInfoContentHeight($0, for: asset.id) },
+                        retry: { retryDetail(for: asset.id) }
+                    )
+                    .frame(width: targetInfoWidth)
+                }
+                .frame(width: infoWidth, height: size.height, alignment: .leading)
+                .clipped()
+                .accessibilityHidden(
+                    infoProgress < 0.5 || asset.id != session.selectedAssetID
+                )
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .animation(infoAnimation, value: showsInfo)
+            .accessibilityIdentifier(infoProgress > 0.5 ? "asset-viewer-landscape-split" : "asset-viewer-landscape")
+        } else {
+            let maxInfoHeight = max(0, size.height - 220 - infoGap)
+            let targetInfoHeight = min(maxInfoHeight, infoContentHeight)
+            let infoHeight = targetInfoHeight * infoProgress
+            let gap = infoGap * infoProgress
+            let mediaHeight = max(220, size.height - infoHeight - gap)
+            VStack(spacing: gap) {
+                mediaPage(asset: asset, requestSize: requestSize)
+                    .frame(height: mediaHeight)
+
+                ZStack(alignment: .top) {
+                    AssetViewerInfoView(
+                        state: detailState(for: asset.id),
+                        anchorsContentToBottom: false,
+                        contentHeightChanged: { updateInfoContentHeight($0, for: asset.id) },
+                        retry: { retryDetail(for: asset.id) }
+                    )
+                    .frame(height: targetInfoHeight)
+                }
+                .frame(height: infoHeight, alignment: .top)
+                .clipped()
+                .accessibilityHidden(
+                    infoProgress < 0.5 || asset.id != session.selectedAssetID
+                )
+            }
+            .frame(maxHeight: .infinity, alignment: .top)
+            .animation(infoAnimation, value: showsInfo)
+            .animation(infoAnimation, value: infoContentHeight)
+        }
+    }
+
+    private var selectionBinding: Binding<String> {
+        Binding(
+            get: { session.selectedAssetID },
+            set: { assetID in
+                guard session.selectImmediately(assetID) else { return }
+                scheduleNeighborLoading(for: assetID)
+            }
+        )
+    }
+
+    private func mediaPage(
+        asset: TimelineAssetSummary,
+        requestSize: CGSize
+    ) -> some View {
+        AssetViewerFitPage(
+            asset: asset,
+            media: media,
+            isSelected: asset.id == session.selectedAssetID,
+            dismissesInfo: showsInfo,
+            targetPixels: .init(
+                width: Int(max(1, requestSize.width * displayScale)),
+                height: Int(max(1, requestSize.height * displayScale))
+            ),
+            resumePosition: { session.playbackPosition(for: asset.id) },
+            savePosition: { session.setPlaybackPosition($0, for: asset.id) },
+            zoomChanged: { isZoomed in
+                guard asset.id == session.selectedAssetID else { return }
+                zoomedAssetID = isZoomed ? asset.id : nil
+            },
+            toggleChrome: mediaTapped
+        )
+    }
+
+    private func chrome(infoProgress: CGFloat) -> some View {
         VStack(spacing: 0) {
             HStack {
                 glassCircleButton(
@@ -187,22 +293,22 @@ struct AssetViewerView: View {
             Spacer()
 
             VStack(spacing: 16) {
-                if !showsInfo {
-                    AssetViewerFilmstrip(
-                        assets: session.assets,
-                        selectedAssetID: session.selectedAssetID,
-                        media: media,
-                        select: { assetID in
-                            guard session.selectImmediately(assetID) else { return }
-                            Task { await session.loadNeighborsIfNeeded() }
-                        }
-                    )
-                    .transition(.opacity)
-                }
+                AssetViewerFilmstrip(
+                    assets: session.assets,
+                    selectedAssetID: session.selectedAssetID,
+                    media: media,
+                    select: { assetID in
+                        guard session.selectImmediately(assetID) else { return }
+                        scheduleNeighborLoading(for: assetID)
+                    }
+                )
+                .opacity(1 - infoProgress)
+                .allowsHitTesting(infoProgress < 0.5)
+                .accessibilityHidden(infoProgress >= 0.5)
 
                 bottomActions
+                    .padding(.horizontal, 16)
             }
-            .padding(.horizontal, 16)
             .padding(.bottom, 12)
         }
     }
@@ -219,35 +325,30 @@ struct AssetViewerView: View {
 
                 Spacer(minLength: 12)
 
-                ZStack {
-                    HStack(spacing: 0) {
-                        Button {
-                            setInfoVisible(!showsInfo)
-                        } label: {
-                            Image(systemName: showsInfo ? "info.circle.fill" : "info.circle")
-                                .frame(width: controlHitSize, height: controlHitSize)
-                        }
-                        .accessibilityLabel(showsInfo ? "Hide Info" : "Show Info")
-                        .accessibilityValue(showsInfo ? "Shown" : "Hidden")
-                        .accessibilityIdentifier("asset-viewer-info")
-
-                        Button {} label: {
-                            Image(systemName: "square.and.arrow.down")
-                                .frame(width: controlHitSize, height: controlHitSize)
-                        }
-                        .disabled(true)
-                        .accessibilityLabel("Download")
-                        .accessibilityHint("Coming in a later update")
-                        .accessibilityIdentifier("asset-viewer-download")
+                HStack(spacing: 0) {
+                    Button {
+                        setInfoVisible(!showsInfo)
+                    } label: {
+                        Image(systemName: showsInfo ? "info.circle.fill" : "info.circle")
+                            .frame(width: controlHitSize, height: controlHitSize)
                     }
-                    .font(.title2.weight(.semibold))
-                    .buttonStyle(.plain)
+                    .accessibilityLabel(showsInfo ? "Hide Info" : "Show Info")
+                    .accessibilityValue(showsInfo ? "Shown" : "Hidden")
+                    .accessibilityIdentifier("asset-viewer-info")
+
+                    Button {} label: {
+                        Image(systemName: "square.and.arrow.down")
+                            .frame(width: controlHitSize, height: controlHitSize)
+                    }
+                    .disabled(true)
+                    .accessibilityLabel("Download")
+                    .accessibilityHint("Coming in a later update")
+                    .accessibilityIdentifier("asset-viewer-download")
                 }
-                .background {
-                    Color.clear
-                        .frame(height: controlVisualSize)
-                        .glassEffect(.regular, in: Capsule())
-                }
+                .font(.title2.weight(.semibold))
+                .buttonStyle(.plain)
+                .frame(width: controlHitSize * 2, height: controlVisualSize)
+                .glassEffect(.regular, in: Capsule())
 
                 Spacer(minLength: 12)
 
@@ -301,15 +402,86 @@ struct AssetViewerView: View {
         .accessibilityIdentifier(identifier)
     }
 
-    private var infoRevealGesture: some Gesture {
-        DragGesture(minimumDistance: 20)
-            .onEnded { value in
-                guard zoomedAssetID == nil,
-                      abs(value.translation.height) > abs(value.translation.width) * 1.2,
-                      abs(value.translation.height) >= 36
+    private func verticalViewerGesture(
+        viewportSize: CGSize,
+        contentSize: CGSize,
+        topInset: CGFloat
+    ) -> some Gesture {
+        DragGesture(minimumDistance: 8)
+            .onChanged { value in
+                guard !reduceMotion,
+                      zoomedAssetID == nil,
+                      abs(value.translation.height) > abs(value.translation.width) * 1.2
                 else { return }
-                setInfoVisible(value.translation.height < 0)
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    infoDragTranslation = showsInfo
+                        ? max(0, value.translation.height)
+                        : min(0, value.translation.height)
+                }
             }
+            .onEnded { value in
+                guard zoomedAssetID == nil else {
+                    settleInfoGesture(visible: showsInfo)
+                    return
+                }
+                let isVertical = abs(value.translation.height) > abs(value.translation.width) * 1.2
+                let crossesThreshold = abs(value.translation.height) >= 36
+                guard isVertical, crossesThreshold else {
+                    settleInfoGesture(visible: showsInfo)
+                    return
+                }
+
+                if value.translation.height < 0 {
+                    settleInfoGesture(visible: true)
+                } else if !showsInfo || isOutsideViewerContent(
+                    value.startLocation,
+                    viewportSize: viewportSize,
+                    contentSize: contentSize,
+                    topInset: topInset
+                ) {
+                    infoDragTranslation = 0
+                    close()
+                } else {
+                    settleInfoGesture(visible: false)
+                }
+            }
+    }
+
+    private func isOutsideViewerContent(
+        _ location: CGPoint,
+        viewportSize _: CGSize,
+        contentSize: CGSize,
+        topInset: CGFloat
+    ) -> Bool {
+        location.y < topInset || location.y > topInset + contentSize.height
+    }
+
+    private var infoPresentationProgress: CGFloat {
+        guard !reduceMotion else { return showsInfo ? 1 : 0 }
+        let revealDistance: CGFloat = 160
+        let progress = showsInfo
+            ? 1 - max(0, infoDragTranslation) / revealDistance
+            : max(0, -infoDragTranslation) / revealDistance
+        return min(1, max(0, progress))
+    }
+
+    private func interpolated(from start: CGFloat, to end: CGFloat, progress: CGFloat) -> CGFloat {
+        start + (end - start) * progress
+    }
+
+    private func resolvedSafeAreaInsets(
+        safeGeometry: GeometryProxy,
+        safeFrame: CGRect,
+        fullFrame: CGRect
+    ) -> EdgeInsets {
+        EdgeInsets(
+            top: max(safeGeometry.safeAreaInsets.top, safeFrame.minY - fullFrame.minY, 0),
+            leading: max(safeGeometry.safeAreaInsets.leading, safeFrame.minX - fullFrame.minX, 0),
+            bottom: max(safeGeometry.safeAreaInsets.bottom, fullFrame.maxY - safeFrame.maxY, 0),
+            trailing: max(safeGeometry.safeAreaInsets.trailing, fullFrame.maxX - safeFrame.maxX, 0)
+        )
     }
 
     private func updateViewerPrefetch() {
@@ -332,9 +504,25 @@ struct AssetViewerView: View {
         media.updateViewerPrefetch(descriptors)
     }
 
+    private func scheduleNeighborLoading(for assetID: String) {
+        neighborLoadTask?.cancel()
+        neighborLoadTask = Task {
+            try? await Task.sleep(for: .milliseconds(220))
+            guard !Task.isCancelled, session.selectedAssetID == assetID else { return }
+            await session.loadNeighborsIfNeeded()
+        }
+    }
+
+    private func updateInfoContentHeight(_ height: CGFloat, for assetID: String) {
+        guard assetID == session.selectedAssetID else { return }
+        let measuredHeight = ceil(height)
+        guard measuredHeight > 0, abs(measuredHeight - infoContentHeight) >= 1 else { return }
+        infoContentHeight = measuredHeight
+    }
+
     private func toggleChrome() {
         guard !showsInfo else { return }
-        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
+        withAnimation(mediaFrameAnimation) {
             chromeVisible.toggle()
         }
     }
@@ -349,8 +537,19 @@ struct AssetViewerView: View {
 
     private func setInfoVisible(_ visible: Bool) {
         guard visible != showsInfo else { return }
-        chromeVisible = true
         withAnimation(infoAnimation) {
+            chromeVisible = true
+            infoDragTranslation = 0
+            showsInfo = visible
+        }
+    }
+
+    private func settleInfoGesture(visible: Bool) {
+        if visible {
+            chromeVisible = true
+        }
+        withAnimation(infoAnimation) {
+            infoDragTranslation = 0
             showsInfo = visible
         }
     }
@@ -359,24 +558,50 @@ struct AssetViewerView: View {
         reduceMotion ? nil : .spring(duration: 0.38, bounce: 0.08)
     }
 
+    private var mediaFrameAnimation: Animation? {
+        reduceMotion ? nil : .easeInOut(duration: 0.28)
+    }
+
     private func loadSelectedAssetDetail() async {
         let assetID = session.selectedAssetID
-        detailState = .loading
-        do {
-            let detail = try await assetDetails.assetDetail(id: assetID)
+        await loadAssetDetail(assetID)
+        guard !Task.isCancelled, session.selectedAssetID == assetID, showsInfo,
+              let selectedIndex = session.selectedIndex
+        else { return }
+
+        let neighborIndices = [selectedIndex - 1, selectedIndex + 1]
+            .filter(session.assets.indices.contains)
+        for index in neighborIndices {
+            await loadAssetDetail(session.assets[index].id)
             guard !Task.isCancelled, session.selectedAssetID == assetID, showsInfo else { return }
-            detailState = .loaded(detail)
-        } catch is CancellationError {
-            return
-        } catch {
-            guard !Task.isCancelled, session.selectedAssetID == assetID, showsInfo else { return }
-            detailState = .failed(error.localizedDescription)
         }
     }
 
-    private func retryDetail() {
-        detailState = .idle
-        Task { await loadSelectedAssetDetail() }
+    private func loadAssetDetail(_ assetID: String) async {
+        if case .loaded? = detailStates[assetID] {
+            return
+        }
+        detailStates[assetID] = .loading
+        do {
+            let detail = try await assetDetails.assetDetail(id: assetID)
+            guard !Task.isCancelled, showsInfo else { return }
+            detailStates[assetID] = .loaded(detail)
+        } catch is CancellationError {
+            return
+        } catch {
+            guard !Task.isCancelled, showsInfo else { return }
+            detailStates[assetID] = .failed(error.localizedDescription)
+        }
+    }
+
+    private func detailState(for assetID: String) -> AssetViewerDetailState {
+        detailStates[assetID] ?? .idle
+    }
+
+    private func retryDetail(for assetID: String) {
+        guard assetID == session.selectedAssetID else { return }
+        detailStates[assetID] = .idle
+        Task { await loadAssetDetail(assetID) }
     }
 }
 
@@ -393,7 +618,7 @@ private struct AssetViewerFitPage: View {
 
     var body: some View {
         ZStack {
-            Color.black
+            Color(uiColor: .systemBackground)
             if asset.mediaKind == .video {
                 NativeVideoPlayerView(
                     asset: asset,
@@ -417,15 +642,6 @@ private struct AssetViewerFitPage: View {
                 Color.clear
                     .contentShape(.rect)
                     .onTapGesture(perform: toggleChrome)
-                    .highPriorityGesture(
-                        DragGesture(minimumDistance: 12)
-                            .onChanged { value in
-                                guard value.translation.height >= 24,
-                                      value.translation.height > abs(value.translation.width) * 1.2
-                                else { return }
-                                toggleChrome()
-                            }
-                    )
                     .accessibilityHidden(true)
             }
         }
@@ -437,6 +653,7 @@ private struct AssetViewerFitPage: View {
 
 private struct AssetViewerFilmstrip: View {
     @Environment(\.displayScale) private var displayScale
+    @Environment(\.colorScheme) private var colorScheme
 
     let assets: [TimelineAssetSummary]
     let selectedAssetID: String
@@ -468,7 +685,10 @@ private struct AssetViewerFilmstrip: View {
                             .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
                             .overlay {
                                 RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                    .stroke(asset.id == selectedAssetID ? .white : .clear, lineWidth: 2)
+                                    .stroke(
+                                        asset.id == selectedAssetID ? selectionStroke : .clear,
+                                        lineWidth: 2
+                                    )
                             }
                         }
                         .buttonStyle(.plain)
@@ -482,13 +702,16 @@ private struct AssetViewerFilmstrip: View {
             }
             .scrollIndicators(.hidden)
             .frame(height: 52)
-            .background(.black.opacity(0.78))
             .onChange(of: selectedAssetID, initial: true) { _, selectedAssetID in
                 withAnimation(.snappy(duration: 0.2)) {
                     proxy.scrollTo(selectedAssetID, anchor: .center)
                 }
             }
         }
+    }
+
+    private var selectionStroke: Color {
+        colorScheme == .dark ? .white : .black
     }
 }
 
