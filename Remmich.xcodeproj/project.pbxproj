@@ -106,6 +106,7 @@
 				F84699403066C25E00C68930 /* Sources */,
 				F84699413066C25E00C68930 /* Frameworks */,
 				F84699423066C25E00C68930 /* Resources */,
+				C5D6E7F8091A2B3C4D5E6F70 /* Embed Git Revision */,
 			);
 			buildRules = (
 			);
@@ -231,6 +232,27 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
+		C5D6E7F8091A2B3C4D5E6F70 /* Embed Git Revision */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			name = "Embed Git Revision";
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/RemmichBuildInfo.plist",
+			);
+			shellPath = /bin/sh;
+			shellScript = (
+				"REVISION=$(/usr/bin/git -C \"$SRCROOT\" rev-parse --short=7 HEAD 2>/dev/null || true)",
+				"if [ -z \"$REVISION\" ]; then",
+				"    REVISION=unknown",
+				"fi",
+				"",
+				"OUTPUT=\"$SCRIPT_OUTPUT_FILE_0\"",
+				"/bin/mkdir -p \"$(/usr/bin/dirname \"$OUTPUT\")\"",
+				"/usr/bin/plutil -create xml1 \"$OUTPUT\"",
+				"/usr/bin/plutil -insert GitCommit -string \"$REVISION\" \"$OUTPUT\"",
+				"",
+			);
+		};
 		A1B2C3D4E5F60718293A4B5C /* SwiftFormat */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;

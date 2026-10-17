@@ -220,7 +220,15 @@ struct AccountSettingsView: View {
     }
 
     private var appBuild: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "Unknown"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "Unknown"
+        guard let buildInfoURL = Bundle.main.url(forResource: "RemmichBuildInfo", withExtension: "plist"),
+              let buildInfo = NSDictionary(contentsOf: buildInfoURL),
+              let revision = buildInfo["GitCommit"] as? String,
+              revision != "unknown"
+        else {
+            return build
+        }
+        return "\(build) (\(revision))"
     }
 
     private var ssidEntitlementEnabled: Bool {
