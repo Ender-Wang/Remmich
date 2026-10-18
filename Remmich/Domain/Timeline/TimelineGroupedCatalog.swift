@@ -61,12 +61,21 @@ nonisolated struct TimelineGroupedCatalog: Sendable {
 /// same stable catalog until the store is reset or its summaries change.
 nonisolated struct TimelineGroupedCatalogCache: Sendable {
     private(set) var catalogs: [TimelineGroupedCatalogLevel: TimelineGroupedCatalog] = [:]
+    private var contributions: [TimelineGroupedCatalogLevel: [TimelineBucketID: [TimelineGroupedCatalogEntry]]] = [:]
+    private var summarySignature: [TimelineBucketSummary] = []
 
     func catalog(for level: TimelineGroupedCatalogLevel) -> TimelineGroupedCatalog {
         catalogs[level] ?? .empty(level: level)
     }
 
     mutating func replaceSummaryCatalogs(with summaries: [TimelineBucketSummary]) {
+        if summarySignature != summaries {
+            contributions[.day] = [:]
+            contributions[.week] = [:]
+            catalogs[.day] = nil
+            catalogs[.week] = nil
+            summarySignature = summaries
+        }
         let months = TimelineRangeCatalog.months(from: summaries)
         replace(
             level: .month,
@@ -98,6 +107,25 @@ nonisolated struct TimelineGroupedCatalogCache: Sendable {
         )
     }
 
+    mutating func replaceContribution(
+        level: TimelineGroupedCatalogLevel,
+        ownerBucketID: TimelineBucketID,
+        entries: [TimelineGroupedCatalogEntry],
+        loadedBucketIDs: Set<TimelineBucketID>,
+        allBucketIDs: Set<TimelineBucketID>
+    ) {
+        contributions[level, default: [:]][ownerBucketID] = entries
+        let combined = contributions[level, default: [:]].values
+            .flatMap(\.self)
+            .sorted { $0.stableKey < $1.stableKey }
+        replace(
+            level: level,
+            entries: combined,
+            loadedBucketIDs: loadedBucketIDs,
+            hasMoreOlderHistory: !allBucketIDs.isSubset(of: loadedBucketIDs)
+        )
+    }
+
     mutating func replace(
         level: TimelineGroupedCatalogLevel,
         entries: [TimelineGroupedCatalogEntry],
@@ -116,5 +144,7 @@ nonisolated struct TimelineGroupedCatalogCache: Sendable {
 
     mutating func reset() {
         catalogs = [:]
+        contributions = [:]
+        summarySignature = []
     }
 }

@@ -267,6 +267,33 @@ final class PhotosTimelineStore {
         }
     }
 
+    func prepareGroupedCatalog(
+        _ level: TimelineGroupedCatalogLevel,
+        owner: PhotosLibraryRangeBrowseOwner
+    ) async {
+        guard level == .day || level == .week,
+              let newestBucketID = bucketSummaries.first?.id
+        else { return }
+        beginLibraryRangeBrowsing(owner: owner, newestBucketID: newestBucketID)
+        await loadLibraryRangeBucket(
+            newestBucketID,
+            owner: owner,
+            includingPreviousMonth: level == .week
+        )
+    }
+
+    func loadNextOlderGroupedCatalogPage(
+        _ level: TimelineGroupedCatalogLevel,
+        owner: PhotosLibraryRangeBrowseOwner
+    ) async {
+        guard level == .day || level == .week else { return }
+        let loaded = groupedCatalog(for: level).loadedBucketIDs
+        let loadedIndexes = bucketSummaries.indices.filter { loaded.contains(bucketSummaries[$0].id) }
+        let nextIndex = (loadedIndexes.max() ?? -1) + 1
+        guard bucketSummaries.indices.contains(nextIndex) else { return }
+        await loadLibraryRangeBucket(bucketSummaries[nextIndex].id, owner: owner)
+    }
+
     func rangeCoverAssets(in bucketID: TimelineBucketID) async -> [TimelineAssetSummary] {
         if let section = sectionsByID[bucketID], case .loaded = section.loadState {
             return section.assets
@@ -435,6 +462,7 @@ final class PhotosTimelineStore {
             rawAssetsByID[bucketID] = assets
             sectionsByID[bucketID]?.loadState = .loaded
             reconcileCrossBucketDuplicates(forceRevisionFor: bucketID)
+            updateGroupedCatalogContributions(loadedBucketID: bucketID)
         } catch {
             guard requestGeneration == generation,
                   bucketRequestRevisions[bucketID] == requestRevision
@@ -624,6 +652,82 @@ final class PhotosTimelineStore {
             section.contentRevision = publicationRevision
             sectionsByID[summary.id] = section
         }
+    }
+
+    private func updateGroupedCatalogContributions(loadedBucketID: TimelineBucketID) {
+        updateDayCatalogContribution(for: loadedBucketID)
+        updateWeekCatalogContribution(for: loadedBucketID)
+        if let newerBucketID = TimelineRangeCatalog.adjacentMonth(
+            to: loadedBucketID,
+            offset: 1,
+            in: bucketSummaries
+        ) {
+            updateWeekCatalogContribution(for: newerBucketID)
+        }
+    }
+
+    private func updateDayCatalogContribution(for bucketID: TimelineBucketID) {
+        guard let section = sectionsByID[bucketID], case .loaded = section.loadState else { return }
+        groupedCatalogs.replaceContribution(
+            level: .day,
+            ownerBucketID: bucketID,
+            entries: section.dayGroups.map { day in
+                TimelineGroupedCatalogEntry(
+                    id: .day(bucketID, day.id),
+                    assetCount: day.assets.count,
+                    owningBucketIDs: [bucketID],
+                    assets: day.assets
+                )
+            },
+            loadedBucketIDs: loadedGroupedBucketIDs,
+            allBucketIDs: Set(bucketSummaries.map(\.id))
+        )
+    }
+
+    private func updateWeekCatalogContribution(for bucketID: TimelineBucketID) {
+        guard let current = sectionsByID[bucketID], case .loaded = current.loadState else { return }
+        let previousID = TimelineRangeCatalog.adjacentMonth(
+            to: bucketID,
+            offset: -1,
+            in: bucketSummaries
+        )
+        let previous = previousID.flatMap { sectionsByID[$0] }
+        if previousID != nil {
+            guard let previous, case .loaded = previous.loadState else { return }
+        }
+        let weeks = TimelineRangeCatalog.libraryWeeks(
+            endingIn: bucketID,
+            current: current,
+            previous: previous,
+            hasNextMonth: TimelineRangeCatalog.adjacentMonth(
+                to: bucketID,
+                offset: 1,
+                in: bucketSummaries
+            ) != nil
+        )
+        groupedCatalogs.replaceContribution(
+            level: .week,
+            ownerBucketID: bucketID,
+            entries: weeks.map { week in
+                TimelineGroupedCatalogEntry(
+                    id: .week(bucketID, week.id),
+                    assetCount: week.assetCount,
+                    owningBucketIDs: [previousID, bucketID].compactMap(\.self),
+                    assets: week.days.reversed().flatMap(\.assets)
+                )
+            },
+            loadedBucketIDs: loadedGroupedBucketIDs,
+            allBucketIDs: Set(bucketSummaries.map(\.id))
+        )
+    }
+
+    private var loadedGroupedBucketIDs: Set<TimelineBucketID> {
+        Set(sectionsByID.compactMap { bucketID, section in
+            if case .loaded = section.loadState {
+                return bucketID
+            }
+            return nil
+        })
     }
 
     private func cancelInFlightWork() {
