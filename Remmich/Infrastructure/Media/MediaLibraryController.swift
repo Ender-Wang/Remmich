@@ -37,6 +37,7 @@ final class MediaLibraryController {
     private var cumulativePreloadCancellationCount = 0
     private var timelinePresentationStartedAt: Date?
     private var didLogFirstTimelineThumbnail = false
+    private var warmedThumbnailURLs: [String: URL] = [:]
 
     func configure(session: AccountSession, activeEndpoint: URL?) {
         let nextScope = MediaAccountScope(session: session)
@@ -77,6 +78,26 @@ final class MediaLibraryController {
                 return ImageRequest(id: "ui-fixture-\(descriptor.assetID)", data: { data })
             }
         #endif
+        if descriptor.derivative == .thumbnail,
+           let scope,
+           let fileURL = warmedThumbnailURLs[Self.warmedThumbnailKey(
+               assetID: descriptor.assetID,
+               revision: descriptor.updatedAt
+           )]
+        {
+            var request = ImageRequest(
+                id: descriptor.cacheKey(in: scope),
+                data: { try Data(contentsOf: fileURL) }
+            )
+            if let pixels = descriptor.targetPixels {
+                request.thumbnail = .init(
+                    size: .init(width: pixels.width, height: pixels.height),
+                    unit: .pixels,
+                    contentMode: .aspectFill
+                )
+            }
+            return request
+        }
         guard let scope, let session, let activeAPIURL,
               let url = Self.mediaURL(for: descriptor, apiURL: activeAPIURL)
         else { return nil }
@@ -200,6 +221,16 @@ final class MediaLibraryController {
     func cancelViewerPrefetching() {
         viewerPrefetcher?.stopPrefetching()
         viewerPrefetchRequests.removeAll()
+    }
+
+    func registerWarmedThumbnails(_ thumbnails: [LibraryThumbnailCache.AvailableThumbnail]) {
+        warmedThumbnailURLs = Dictionary(uniqueKeysWithValues: thumbnails.map {
+            ("\($0.assetID)|\($0.sourceRevision)", $0.fileURL)
+        })
+    }
+
+    func clearRegisteredWarmedThumbnails() {
+        warmedThumbnailURLs.removeAll()
     }
 
     func updateTimelineResidency(
@@ -359,6 +390,7 @@ final class MediaLibraryController {
         activeResidencyPreloadGeneration = nil
         timelinePresentationStartedAt = nil
         didLogFirstTimelineThumbnail = false
+        warmedThumbnailURLs.removeAll()
         residencyScopeGeneration += 1
         let residency = timelineResidency
         let scopeGeneration = residencyScopeGeneration
@@ -418,6 +450,10 @@ final class MediaLibraryController {
             derivative: .thumbnail,
             targetPixels: targetPixels
         )
+    }
+
+    private nonisolated static func warmedThumbnailKey(assetID: String, revision: Date) -> String {
+        "\(assetID)|\(revision.ISO8601Format())"
     }
 
     private nonisolated static func preloadAssets(

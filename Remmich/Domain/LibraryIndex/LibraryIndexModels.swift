@@ -92,6 +92,10 @@ nonisolated struct LibraryIndexStorageReport: Equatable, Sendable {
     let metadataBytes: Int64
     let derivativeBytes: Int64
     let derivativeCount: Int
+    let downloadBytes: Int64
+    let downloadCount: Int
+    let originalBytes: Int64
+    let playbackBytes: Int64
 }
 
 nonisolated protocol LibraryIndexStoring: Sendable {

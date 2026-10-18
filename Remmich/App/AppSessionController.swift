@@ -63,7 +63,7 @@ final class AppSessionController {
         timeline: ImmichTimelineRepository = .init()
     ) {
         self.timeline = timeline
-        libraryIndex = LibraryIndexController(source: timeline)
+        libraryIndex = LibraryIndexController(source: timeline, media: media)
         let arguments = ProcessInfo.processInfo.arguments
         photosForegroundRetryEnabled = !arguments.contains("-ui-testing-photos-retry")
         let previewMode: PreviewTimelineReader.Mode = if arguments.contains("-ui-testing-photos-empty") {
@@ -541,7 +541,7 @@ final class AppSessionController {
 
     private func startLibraryIndexing(session: AccountSession) {
         guard !ProcessInfo.processInfo.arguments.contains("-ui-testing-signed-in") else { return }
-        libraryIndex.start(session: session)
+        libraryIndex.start(session: session, endpoint: activeRoute?.endpoint ?? session.apiURL)
     }
 
     private static func message(for error: Error) -> String {

@@ -187,6 +187,21 @@ struct AccountSettingsView: View {
                     countStyle: .binary
                 )
             )
+            LabeledContent(
+                "Timeline thumbnails",
+                value: "\(libraryIndex.storageReport.derivativeCount.formatted()) cached · \(ByteCountFormatter.string(fromByteCount: libraryIndex.storageReport.derivativeBytes, countStyle: .binary))"
+            )
+            LabeledContent(
+                "Downloads",
+                value: "\(libraryIndex.storageReport.downloadCount.formatted()) files · \(ByteCountFormatter.string(fromByteCount: libraryIndex.storageReport.downloadBytes, countStyle: .binary))"
+            )
+            Toggle(
+                "Warm timeline thumbnails",
+                isOn: Binding(
+                    get: { libraryIndex.thumbnailWarmingEnabled },
+                    set: { libraryIndex.setThumbnailWarmingEnabled($0) }
+                )
+            )
             HStack {
                 if libraryIndex.status == .paused {
                     Button("Resume") { libraryIndex.resume() }
@@ -201,6 +216,9 @@ struct AccountSettingsView: View {
             HStack {
                 Button("Sync Now") { libraryIndex.syncNow() }
                 Button("Full Sync & Verify") { libraryIndex.fullSyncAndVerify() }
+            }
+            Button("Clear Thumbnails", role: .destructive) {
+                libraryIndex.clearThumbnails()
             }
             Text("The metadata index is account-scoped and remains available when thumbnail bytes are cleared.")
                 .font(.footnote)

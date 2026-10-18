@@ -333,8 +333,22 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
             }
         return .init(
             metadataBytes: metadataBytes,
-            derivativeBytes: snapshot?.derivatives.reduce(0) { $0 + $1.byteCount } ?? 0,
-            derivativeCount: snapshot?.derivatives.count ?? 0
+            derivativeBytes: snapshot?.derivatives
+                .filter { [.thumbnail, .preview, .fullSize].contains($0.derivative) }
+                .reduce(0) { $0 + $1.byteCount } ?? 0,
+            derivativeCount: snapshot?.derivatives
+                .filter { [.thumbnail, .preview, .fullSize].contains($0.derivative) }.count ?? 0,
+            downloadBytes: snapshot?.derivatives
+                .filter { [.original, .videoPlayback].contains($0.derivative) }
+                .reduce(0) { $0 + $1.byteCount } ?? 0,
+            downloadCount: snapshot?.derivatives
+                .filter { [.original, .videoPlayback].contains($0.derivative) }.count ?? 0,
+            originalBytes: snapshot?.derivatives
+                .filter { $0.derivative == .original }
+                .reduce(0) { $0 + $1.byteCount } ?? 0,
+            playbackBytes: snapshot?.derivatives
+                .filter { $0.derivative == .videoPlayback }
+                .reduce(0) { $0 + $1.byteCount } ?? 0
         )
     }
 
@@ -660,8 +674,15 @@ private final nonisolated class SQLiteConnection {
     func execute(_ sql: String, _ values: [SQLiteValue] = []) throws {
         let statement = try prepare(sql)
         try statement.bind(values)
-        guard sqlite3_step(statement.handle) == SQLITE_DONE else {
-            throw Self.error(handle)
+        while true {
+            switch sqlite3_step(statement.handle) {
+            case SQLITE_ROW:
+                continue
+            case SQLITE_DONE:
+                return
+            default:
+                throw Self.error(handle)
+            }
         }
     }
 
