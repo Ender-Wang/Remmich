@@ -17,7 +17,7 @@ struct AppShellView: View {
     let media: MediaLibraryController
     let libraryIndex: LibraryIndexController
     let saveProfile: (ConnectionProfileDraft) async -> ConnectionProfileSaveResult
-    let signOut: () async -> Void
+    let signOut: (Bool) async -> Void
 
     @State private var selection: NativeTabDestination = .photos
     @State private var tabSelectionState = NativeTabSelectionState()
@@ -350,6 +350,6 @@ extension EnvironmentValues {
         media: .init(),
         libraryIndex: LibraryIndexController(source: PreviewTimelineReader()),
         saveProfile: { _ in .saved(profile: .init()) },
-        signOut: {}
+        signOut: { _ in }
     )
 }

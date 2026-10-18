@@ -190,7 +190,10 @@ final class AppSessionController {
         }
     }
 
-    func signOut() async {
+    func signOut(deleteLocalData: Bool = false) async {
+        if deleteLocalData {
+            await libraryIndex.deleteCurrentAccountData()
+        }
         libraryIndex.clearSession()
         routeGeneration += 1
         activeRoute = nil

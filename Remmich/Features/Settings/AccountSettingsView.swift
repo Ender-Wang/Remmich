@@ -8,7 +8,7 @@ struct AccountSettingsView: View {
     let routeStatus: ConnectionRouteStatus
     let libraryIndex: LibraryIndexController
     let saveProfile: (ConnectionProfileDraft) async -> ConnectionProfileSaveResult
-    let signOut: () async -> Void
+    let signOut: (Bool) async -> Void
     let close: (() -> Void)?
 
     @State private var profile: ConnectionProfile
@@ -16,6 +16,8 @@ struct AccountSettingsView: View {
     @State private var externalAddresses: String
     @State private var isSaving = false
     @State private var saveError: String?
+    @State private var showsSignOutChoices = false
+    @State private var pendingAccountDeletion: StoredLibraryAccount?
 
     init(
         session: AccountSession,
@@ -24,7 +26,7 @@ struct AccountSettingsView: View {
         routeStatus: ConnectionRouteStatus,
         libraryIndex: LibraryIndexController,
         saveProfile: @escaping (ConnectionProfileDraft) async -> ConnectionProfileSaveResult,
-        signOut: @escaping () async -> Void,
+        signOut: @escaping (Bool) async -> Void,
         close: (() -> Void)? = nil
     ) {
         self.session = session
@@ -112,12 +114,7 @@ struct AccountSettingsView: View {
                     VStack(alignment: .leading, spacing: 18) {
                         Label("Remmich never changes data on your Immich server.", systemImage: "lock.shield")
                             .foregroundStyle(.secondary)
-                        Button("Sign Out", role: .destructive) {
-                            Task {
-                                await signOut()
-                                closePanel()
-                            }
-                        }
+                        Button("Sign Out", role: .destructive) { showsSignOutChoices = true }
                     }
                 }
                 .padding(.horizontal, 24)
@@ -139,6 +136,39 @@ struct AccountSettingsView: View {
         } message: {
             Text(saveError ?? "")
         }
+        .confirmationDialog(
+            "Sign Out",
+            isPresented: $showsSignOutChoices,
+            titleVisibility: .visible
+        ) {
+            Button("Sign Out and Keep Local Data") { performSignOut(deleteLocalData: false) }
+            Button("Sign Out and Delete Local Data", role: .destructive) {
+                performSignOut(deleteLocalData: true)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Keeping local data lets this account resume without rebuilding its index and cached thumbnails.")
+        }
+        .alert(
+            "Delete Stored Account Data?",
+            isPresented: Binding(
+                get: { pendingAccountDeletion != nil },
+                set: {
+                    if !$0 {
+                        pendingAccountDeletion = nil
+                    }
+                }
+            ),
+            presenting: pendingAccountDeletion
+        ) { account in
+            Button("Delete", role: .destructive) {
+                Task { await libraryIndex.deleteStoredAccount(namespace: account.namespace) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { account in
+            Text("This removes the local index and cached media for \(account.serverIdentity). It does not change the Immich server.")
+        }
+        .task { libraryIndex.refreshStoredAccounts() }
     }
 
     private func closePanel() {
@@ -223,7 +253,44 @@ struct AccountSettingsView: View {
             Text("The metadata index is account-scoped and remains available when thumbnail bytes are cleared.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
+            if !retainedAccounts.isEmpty {
+                Divider()
+                Text("Stored account data")
+                    .font(.subheadline.weight(.semibold))
+                ForEach(retainedAccounts) { account in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(Self.accountLabel(account))
+                            .font(.subheadline)
+                        Text(
+                            "\(account.indexedAssetCount.formatted()) indexed assets · \(account.derivativeCount.formatted()) cached files · \(ByteCountFormatter.string(fromByteCount: account.derivativeBytes, countStyle: .binary))"
+                        )
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        Button("Delete Local Data", role: .destructive) {
+                            pendingAccountDeletion = account
+                        }
+                        .font(.footnote.weight(.semibold))
+                    }
+                }
+            }
         }
+    }
+
+    private var retainedAccounts: [StoredLibraryAccount] {
+        let currentNamespace = MediaAccountScope(session: session).cacheNamespace
+        return libraryIndex.storedAccounts.filter { $0.namespace != currentNamespace }
+    }
+
+    private func performSignOut(deleteLocalData: Bool) {
+        Task {
+            await signOut(deleteLocalData)
+            closePanel()
+        }
+    }
+
+    private static func accountLabel(_ account: StoredLibraryAccount) -> String {
+        let server = URL(string: account.serverIdentity)?.host ?? account.serverIdentity
+        return "\(server) · \(account.userID.prefix(8))"
     }
 
     private var libraryIndexStatus: String {
@@ -344,6 +411,6 @@ struct AccountSettingsView: View {
         routeStatus: .connected,
         libraryIndex: LibraryIndexController(source: PreviewTimelineReader()),
         saveProfile: { _ in .saved(profile: .init()) },
-        signOut: {}
+        signOut: { _ in }
     )
 }

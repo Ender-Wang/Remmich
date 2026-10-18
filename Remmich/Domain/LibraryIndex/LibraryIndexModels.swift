@@ -98,6 +98,20 @@ nonisolated struct LibraryIndexStorageReport: Equatable, Sendable {
     let playbackBytes: Int64
 }
 
+nonisolated struct StoredLibraryAccount: Equatable, Identifiable, Sendable {
+    let namespace: String
+    let serverIdentity: String
+    let userID: String
+    let indexedAssetCount: Int
+    let derivativeBytes: Int64
+    let derivativeCount: Int
+    let createdAt: Date
+
+    var id: String {
+        namespace
+    }
+}
+
 nonisolated struct LibraryIndexGenerationCleanup: Equatable, Sendable {
     let generation: Int64
     let removedGenerations: Int
@@ -150,6 +164,8 @@ nonisolated protocol LibraryIndexStoring: Sendable {
     func upsert(derivatives: [LibraryIndexDerivativeRecord], scope: MediaAccountScope) async throws
     func clearDerivatives(scope: MediaAccountScope, kinds: Set<MediaDerivative>) async throws
     func storageReport(scope: MediaAccountScope) async throws -> LibraryIndexStorageReport
+    func storedAccounts() async throws -> [StoredLibraryAccount]
+    func removeAccount(namespace: String) async throws
 }
 
 extension TimelineMediaKind {

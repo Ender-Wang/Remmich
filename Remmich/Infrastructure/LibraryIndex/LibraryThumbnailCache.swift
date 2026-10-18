@@ -82,6 +82,13 @@ actor LibraryThumbnailCache {
         try await store.clearDerivatives(scope: scope, kinds: [.thumbnail, .preview, .fullSize])
     }
 
+    func removeAccount(namespace: String) throws {
+        let directory = rootURL.appending(path: namespace, directoryHint: .isDirectory)
+        if FileManager.default.fileExists(atPath: directory.path) {
+            try FileManager.default.removeItem(at: directory)
+        }
+    }
+
     func availableThumbnails(scope: MediaAccountScope) async throws -> [AvailableThumbnail] {
         guard let snapshot = try await store.snapshot(scope: scope) else { return [] }
         return snapshot.derivatives.compactMap { record in

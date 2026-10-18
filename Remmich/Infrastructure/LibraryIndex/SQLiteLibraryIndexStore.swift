@@ -439,6 +439,62 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
         )
     }
 
+    func storedAccounts() async throws -> [StoredLibraryAccount] {
+        let database = try database()
+        try migrate(database)
+        return try database.query(
+            """
+            SELECT scopes.scope, scopes.server_identity, scopes.user_id,
+                   COALESCE((
+                       SELECT COUNT(*) FROM assets
+                       WHERE assets.scope = scopes.scope
+                         AND assets.generation = (
+                             SELECT accepted_generation FROM sync_state
+                             WHERE sync_state.scope = scopes.scope
+                         )
+                         AND assets.tombstone = 0
+                   ), 0),
+                   COALESCE((
+                       SELECT SUM(byte_count) FROM derivatives
+                       WHERE derivatives.scope = scopes.scope
+                   ), 0),
+                   COALESCE((
+                       SELECT COUNT(*) FROM derivatives
+                       WHERE derivatives.scope = scopes.scope
+                   ), 0),
+                   scopes.created_at
+            FROM scopes
+            ORDER BY scopes.created_at DESC
+            """
+        ) { row in
+            StoredLibraryAccount(
+                namespace: row.text(0),
+                serverIdentity: row.text(1),
+                userID: row.text(2),
+                indexedAssetCount: row.int(3),
+                derivativeBytes: row.int64(4),
+                derivativeCount: row.int(5),
+                createdAt: row.date(6)
+            )
+        }
+    }
+
+    func removeAccount(namespace: String) async throws {
+        let database = try database()
+        try migrate(database)
+        try database.transaction {
+            for table in ["derivatives", "grouped_catalogs", "assets", "generations", "sync_state", "scopes"] {
+                try database.execute(
+                    "DELETE FROM \(table) WHERE scope = ?",
+                    [.text(namespace)]
+                )
+            }
+        }
+        try database.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        try database.execute("VACUUM")
+        try database.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    }
+
     func schemaVersion() async throws -> Int {
         let database = try database()
         try migrate(database)

@@ -32,6 +32,7 @@ final class LibraryIndexController {
         originalBytes: 0,
         playbackBytes: 0
     )
+    private(set) var storedAccounts: [StoredLibraryAccount] = []
     private(set) var thumbnailWarmingEnabled = UserDefaults.standard.bool(
         forKey: "library-index-thumbnail-warming"
     )
@@ -84,6 +85,7 @@ final class LibraryIndexController {
             expectedAssetCount = 0
             startedAt = nil
         }
+        refreshStoredAccounts()
         run(fullReconciliation: false)
     }
 
@@ -129,6 +131,58 @@ final class LibraryIndexController {
             try? await thumbnailCache.clearThumbnails(scope: scope)
             media?.clearRegisteredWarmedThumbnails()
             storageReport = await (try? store.storageReport(scope: scope)) ?? storageReport
+        }
+    }
+
+    func refreshStoredAccounts() {
+        Task {
+            storedAccounts = await (try? store.storedAccounts()) ?? storedAccounts
+        }
+    }
+
+    func deleteCurrentAccountData() async {
+        guard let scope else { return }
+        suspend()
+        do {
+            try await thumbnailCache.removeAccount(namespace: scope.cacheNamespace)
+            try await store.removeAccount(namespace: scope.cacheNamespace)
+            media?.clearRegisteredWarmedThumbnails()
+            storageReport = .init(
+                metadataBytes: 0,
+                derivativeBytes: 0,
+                derivativeCount: 0,
+                downloadBytes: 0,
+                downloadCount: 0,
+                originalBytes: 0,
+                playbackBytes: 0
+            )
+            storedAccounts = try await store.storedAccounts()
+            Self.logger.info(
+                "Removed current account library data scope=\(scope.cacheNamespace.prefix(8), privacy: .private)"
+            )
+        } catch {
+            Self.logger.error(
+                "Failed to remove current account library data error=\(Self.message(for: error), privacy: .public)"
+            )
+        }
+    }
+
+    func deleteStoredAccount(namespace: String) async {
+        guard namespace != scope?.cacheNamespace else {
+            await deleteCurrentAccountData()
+            return
+        }
+        do {
+            try await thumbnailCache.removeAccount(namespace: namespace)
+            try await store.removeAccount(namespace: namespace)
+            storedAccounts = try await store.storedAccounts()
+            Self.logger.info(
+                "Removed retained account library data scope=\(namespace.prefix(8), privacy: .private)"
+            )
+        } catch {
+            Self.logger.error(
+                "Failed to remove retained account library data error=\(Self.message(for: error), privacy: .public)"
+            )
         }
     }
 
@@ -196,6 +250,7 @@ final class LibraryIndexController {
                 status = .upToDate
                 lastUpdatedAt = Date()
                 storageReport = try await store.storageReport(scope: scope)
+                storedAccounts = try await store.storedAccounts()
                 try? await thumbnailCache.reconcile(scope: scope)
                 if let thumbnails = try? await thumbnailCache.availableThumbnails(scope: scope) {
                     media?.registerWarmedThumbnails(thumbnails)
