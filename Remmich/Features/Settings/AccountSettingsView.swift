@@ -1,6 +1,15 @@
 import SwiftUI
 
 struct AccountSettingsView: View {
+    private enum SettingsPage: String, CaseIterable, Identifiable {
+        case account = "Account"
+        case library = "Index & Cache"
+
+        var id: Self {
+            self
+        }
+    }
+
     @Environment(\.dismiss) private var dismiss
 
     let session: AccountSession
@@ -19,6 +28,7 @@ struct AccountSettingsView: View {
     @State private var showsSignOutChoices = false
     @State private var pendingAccountDeletion: StoredLibraryAccount?
     @State private var libraryIndexClock = Date()
+    @State private var selectedPage = SettingsPage.account
 
     init(
         session: AccountSession,
@@ -51,76 +61,28 @@ struct AccountSettingsView: View {
                 Button("Done") { closePanel() }
                     .buttonStyle(.glass)
             }
-            .padding(24)
+            .padding(.horizontal, 24)
+            .padding(.top, 24)
+            .padding(.bottom, 16)
+
+            Picker("Settings Page", selection: $selectedPage) {
+                ForEach(SettingsPage.allCases) { page in
+                    Text(page.rawValue)
+                        .tag(page)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(.horizontal, 24)
+            .padding(.bottom, 16)
+            .accessibilityIdentifier("settings-page-picker")
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 28) {
-                    accountSection("Account") {
-                        LabeledContent("User", value: session.userEmail)
-                        LabeledContent("Server", value: activeRoute?.endpoint.absoluteString ?? routeStatusLabel)
-                        LabeledContent("Immich version", value: session.serverVersion.description)
-                        LabeledContent("Access", value: "Read only")
-                    }
-
-                    accountSection("Active connection") {
-                        LabeledContent(
-                            "Route",
-                            value: activeRoute?.kind.rawValue.capitalized ?? "None"
-                        )
-                        LabeledContent("Status", value: routeStatusLabel)
-                        if routeStatus != .connected {
-                            Text(routeStatusDetail)
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-
-                    accountSection("Application") {
-                        LabeledContent("Remmich version", value: appVersion)
-                        LabeledContent("Build", value: appBuild)
-                    }
-
-                    libraryIndexSection
-
-                    accountSection("Automatic switching") {
-                        if ssidEntitlementEnabled {
-                            TextField("Preferred Wi-Fi name", text: $profile.preferredSSID)
-                                .textInputAutocapitalization(.never)
-                                .autocorrectionDisabled()
-                        }
-                        TextField("Local server address", text: $localAddress)
-                            .textContentType(.URL)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                        TextField("External addresses, one per line", text: $externalAddresses, axis: .vertical)
-                            .textContentType(.URL)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .lineLimit(2 ... 5)
-                        Button {
-                            validateAndSaveProfile()
-                        } label: {
-                            if isSaving {
-                                ProgressView()
-                            } else {
-                                Text("Save Connection Profile")
-                            }
-                        }
-                        .disabled(isSaving)
-                        Text(connectionProfileHelp)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    VStack(alignment: .leading, spacing: 18) {
-                        Label("Remmich never changes data on your Immich server.", systemImage: "lock.shield")
-                            .foregroundStyle(.secondary)
-                        Button("Sign Out", role: .destructive) { showsSignOutChoices = true }
-                    }
-                }
-                .padding(.horizontal, 24)
-                .padding(.bottom, 24)
+                selectedPageContent
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 24)
             }
+            .id(selectedPage)
         }
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 32))
         .accessibilityElement(children: .contain)
@@ -170,8 +132,8 @@ struct AccountSettingsView: View {
             Text("This removes the local index and cached media for \(account.serverIdentity). It does not change the Immich server.")
         }
         .task { libraryIndex.refreshStoredAccounts() }
-        .task(id: libraryIndex.status == .indexing) {
-            guard libraryIndex.status == .indexing else {
+        .task(id: updatesLibraryIndexClock) {
+            guard updatesLibraryIndexClock else {
                 libraryIndexClock = Date()
                 return
             }
@@ -183,6 +145,50 @@ struct AccountSettingsView: View {
                 libraryIndexClock = Date()
             }
         }
+    }
+
+    @ViewBuilder
+    private var selectedPageContent: some View {
+        switch selectedPage {
+        case .account:
+            accountPage
+        case .library:
+            libraryPage
+        }
+    }
+
+    private var accountPage: some View {
+        VStack(alignment: .leading, spacing: 28) {
+            accountSection("Account") {
+                settingsValue("User", value: session.userEmail)
+                settingsValue("Server", value: activeRoute?.endpoint.absoluteString ?? routeStatusLabel)
+                settingsValue("Immich version", value: session.serverVersion.description)
+            }
+
+            connectionSection
+
+            VStack(alignment: .leading, spacing: 18) {
+                Label("Remmich never changes data on your Immich server.", systemImage: "lock.shield")
+                    .foregroundStyle(.secondary)
+                Button("Sign Out", role: .destructive) { showsSignOutChoices = true }
+            }
+
+            Text("Remmich \(appVersion) · build \(appBuild)")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .multilineTextAlignment(.center)
+        }
+    }
+
+    private var libraryPage: some View {
+        VStack(alignment: .leading, spacing: 28) {
+            libraryIndexSection
+        }
+    }
+
+    private var updatesLibraryIndexClock: Bool {
+        selectedPage == .library && libraryIndex.status == .indexing
     }
 
     private func closePanel() {
@@ -199,15 +205,62 @@ struct AccountSettingsView: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: 18) {
             Text(title)
-                .font(.headline)
-                .foregroundStyle(.secondary)
+                .font(.title3.weight(.bold))
+                .foregroundStyle(.primary)
             content()
+        }
+    }
+
+    private var connectionSection: some View {
+        accountSection("Connection") {
+            settingsValue(
+                "Route",
+                value: activeRoute?.kind.rawValue.capitalized ?? "None"
+            )
+            settingsValue("Status", value: routeStatusLabel)
+            if routeStatus != .connected {
+                Text(routeStatusDetail)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            Divider()
+
+            Text("Connection Profile")
+                .font(.subheadline.weight(.bold))
+            if ssidEntitlementEnabled {
+                TextField("Preferred Wi-Fi name", text: $profile.preferredSSID)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+            }
+            TextField("Local server address", text: $localAddress)
+                .textContentType(.URL)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            TextField("External addresses, one per line", text: $externalAddresses, axis: .vertical)
+                .textContentType(.URL)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .lineLimit(2 ... 5)
+            Button {
+                validateAndSaveProfile()
+            } label: {
+                if isSaving {
+                    ProgressView()
+                } else {
+                    Text("Save Connection Profile")
+                }
+            }
+            .disabled(isSaving)
+            Text(connectionProfileHelp)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
         }
     }
 
     private var libraryIndexSection: some View {
         accountSection("Library Index & Cache") {
-            LabeledContent("Index status", value: libraryIndexStatus)
+            settingsValue("Index status", value: libraryIndexStatus)
             if libraryIndex.expectedAssetCount > 0 {
                 ProgressView(value: libraryIndex.fractionCompleted)
                     .accessibilityLabel("Library indexing progress")
@@ -236,21 +289,23 @@ struct AccountSettingsView: View {
                 }
             }
             .font(.footnote.monospacedDigit())
-            LabeledContent(
+            settingsValue(
                 "Timeline thumbnails",
                 value: "\(libraryIndex.storageReport.derivativeCount.formatted()) cached · \(ByteCountFormatter.string(fromByteCount: libraryIndex.storageReport.derivativeBytes, countStyle: .binary))"
             )
-            LabeledContent(
+            settingsValue(
                 "Downloads",
                 value: "\(libraryIndex.storageReport.downloadCount.formatted()) files · \(ByteCountFormatter.string(fromByteCount: libraryIndex.storageReport.downloadBytes, countStyle: .binary))"
             )
             Toggle(
-                "Warm timeline thumbnails",
                 isOn: Binding(
                     get: { libraryIndex.thumbnailWarmingEnabled },
                     set: { libraryIndex.setThumbnailWarmingEnabled($0) }
                 )
-            )
+            ) {
+                Text("Warm timeline thumbnails")
+                    .bold()
+            }
             HStack {
                 if libraryIndex.status == .paused {
                     Button("Resume") { libraryIndex.resume() }
@@ -274,8 +329,8 @@ struct AccountSettingsView: View {
                 .foregroundStyle(.secondary)
             if !retainedAccounts.isEmpty {
                 Divider()
-                Text("Stored account data")
-                    .font(.subheadline.weight(.semibold))
+                Text("Stored Account Data")
+                    .font(.subheadline.weight(.bold))
                 ForEach(retainedAccounts) { account in
                     VStack(alignment: .leading, spacing: 6) {
                         Text(Self.accountLabel(account))
@@ -323,9 +378,19 @@ struct AccountSettingsView: View {
     private func libraryIndexDetail(_ label: String, value: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(label)
+                .bold()
             Spacer(minLength: 8)
             Text(value)
                 .multilineTextAlignment(.trailing)
+        }
+    }
+
+    private func settingsValue(_ label: String, value: String) -> some View {
+        LabeledContent {
+            Text(value)
+        } label: {
+            Text(label)
+                .bold()
         }
     }
 
