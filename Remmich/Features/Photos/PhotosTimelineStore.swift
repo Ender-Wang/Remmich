@@ -47,6 +47,9 @@ final class PhotosTimelineStore {
     private var publicationRevision: UInt64 = 0
     private var bucketRequestRevisions: [TimelineBucketID: UInt64] = [:]
     private var rawAssetsByID: [TimelineBucketID: [TimelineAssetSummary]] = [:]
+    private var residencyAssetsByID: [String: TimelineAssetSummary] = [:]
+    private var residencyPages: [TimelineLogicalPage] = []
+    private var residencyPageIndexByAssetID: [String: Int] = [:]
     private var bucketTasks: [TimelineBucketID: Task<Void, Never>] = [:]
     private var rangeCardCoverCache: [TimelineBucketID: [TimelineAssetSummary]] = [:]
     private var rangeCardCoverTasks: [TimelineBucketID: Task<[TimelineAssetSummary]?, Never>] = [:]
@@ -165,51 +168,38 @@ final class PhotosTimelineStore {
     }
 
     func residencyPlan(visibleAssetIDs: Set<String>) -> TimelineResidencyPlan {
-        let loadedSections = sections.filter {
-            if case .loaded = $0.loadState {
-                return true
-            }
-            return false
-        }
-        let assetsByID = Dictionary(
-            loadedSections.flatMap(\.assets).map { ($0.id, $0) },
-            uniquingKeysWith: { first, _ in first }
-        )
-        let orderedPages = loadedSections.flatMap(\.logicalPages)
-        guard !orderedPages.isEmpty else { return .empty }
+        guard !residencyPages.isEmpty else { return .empty }
 
-        var visiblePageIndexes = Set(orderedPages.indices.filter { index in
-            !visibleAssetIDs.isDisjoint(with: orderedPages[index].assetIDs)
-        })
+        var visiblePageIndexes = Set(visibleAssetIDs.compactMap { residencyPageIndexByAssetID[$0] })
         if visiblePageIndexes.isEmpty,
            let anchorID = visibleAnchor?.assetID,
-           let index = orderedPages.firstIndex(where: { $0.assetIDs.contains(anchorID) })
+           let index = residencyPageIndexByAssetID[anchorID]
         {
             visiblePageIndexes.insert(index)
         }
         if visiblePageIndexes.isEmpty {
-            visiblePageIndexes.insert(orderedPages.startIndex)
+            visiblePageIndexes.insert(residencyPages.startIndex)
         }
 
         var neighborhoodIndexes = visiblePageIndexes
         for index in visiblePageIndexes {
-            if index > orderedPages.startIndex {
+            if index > residencyPages.startIndex {
                 neighborhoodIndexes.insert(index - 1)
             }
-            if index + 1 < orderedPages.endIndex {
+            if index + 1 < residencyPages.endIndex {
                 neighborhoodIndexes.insert(index + 1)
             }
         }
 
-        let newestIDs = orderedPages.prefix(2).flatMap(\.assetIDs)
-        let viewportIDs = neighborhoodIndexes.sorted().flatMap { orderedPages[$0].assetIDs }
-        let visibleIDs = visiblePageIndexes.sorted().flatMap { orderedPages[$0].assetIDs }
+        let newestIDs = residencyPages.prefix(2).flatMap(\.assetIDs)
+        let viewportIDs = neighborhoodIndexes.sorted().flatMap { residencyPages[$0].assetIDs }
+        let visibleIDs = visiblePageIndexes.sorted().flatMap { residencyPages[$0].assetIDs }
         let upcomingIDs = viewportIDs.filter { !visibleIDs.contains($0) }
 
         return TimelineResidencyPlan(
-            newestAssets: Self.assets(for: newestIDs, from: assetsByID),
-            viewportAssets: Self.assets(for: viewportIDs, from: assetsByID),
-            prefetchAssets: Self.assets(for: upcomingIDs, from: assetsByID)
+            newestAssets: Self.assets(for: newestIDs, from: residencyAssetsByID),
+            viewportAssets: Self.assets(for: viewportIDs, from: residencyAssetsByID),
+            prefetchAssets: Self.assets(for: upcomingIDs, from: residencyAssetsByID)
         )
     }
 
@@ -437,6 +427,9 @@ final class PhotosTimelineStore {
         rangeVisibleBucketID = nil
         bucketRequestRevisions = [:]
         rawAssetsByID = [:]
+        residencyAssetsByID = [:]
+        residencyPages = []
+        residencyPageIndexByAssetID = [:]
     }
 
     private var isTerminalInitialFailure: Bool {
@@ -711,6 +704,27 @@ final class PhotosTimelineStore {
             section.contentRevision = publicationRevision
             sectionsByID[summary.id] = section
         }
+        rebuildResidencyCatalog()
+    }
+
+    private func rebuildResidencyCatalog() {
+        let loadedSections = sections.filter {
+            if case .loaded = $0.loadState {
+                return true
+            }
+            return false
+        }
+        residencyAssetsByID = Dictionary(
+            loadedSections.flatMap(\.assets).map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        residencyPages = loadedSections.flatMap(\.logicalPages)
+        residencyPageIndexByAssetID = Dictionary(
+            residencyPages.enumerated().flatMap { index, page in
+                page.assetIDs.map { ($0, index) }
+            },
+            uniquingKeysWith: { first, _ in first }
+        )
     }
 
     private func updateGroupedCatalogContributions(loadedBucketID: TimelineBucketID) {

@@ -6,6 +6,19 @@ private struct PhotosChromeGeometry: Equatable {
     let bottomGap: CGFloat
 }
 
+@MainActor
+private final class TimelineViewportRuntime {
+    var isTimelineActive = false
+    var visibleDescriptors: [String: MediaRequestDescriptor] = [:]
+    var visibleAssets: [String: Date] = [:]
+    var viewportUpdateTask: Task<Void, Never>?
+    var timelineBottomGap = CGFloat.infinity
+    var userScrollPhase = false
+    var chromeTracker = PhotosChromeTracker()
+    var lastResidencyPlan = TimelineResidencyPlan.empty
+    var lastResidencyTarget: MediaPixelSize?
+}
+
 struct PhotosChromeTracker {
     private(set) var isCompact = false
     private var travel: CGFloat = 0
@@ -141,20 +154,15 @@ struct PhotosView: View {
     @Namespace private var viewerNamespace
     @State private var timelinePosition = ScrollPosition(edge: .bottom)
     @State private var latestJumpTask: Task<Void, Never>?
-    @State private var visibleDescriptors: [String: MediaRequestDescriptor] = [:]
-    @State private var visibleAssets: [String: Date] = [:]
+    @State private var viewportRuntime = TimelineViewportRuntime()
     @State private var timelineSections: [TimelineSection] = []
-    @State private var viewportUpdateTask: Task<Void, Never>?
     @State private var timelineResumeTask: Task<Void, Never>?
     @State private var rotationRestoreTask: Task<Void, Never>?
     @State private var layoutRestoreTask: Task<Void, Never>?
     @State private var rotationAnchorID: String?
     @State private var layoutAnchorID: String?
     @State private var timelineWidth: CGFloat = 0
-    @State private var timelineBottomGap = CGFloat.infinity
     @State private var compactChrome = false
-    @State private var userScrollPhase = false
-    @State private var chromeTracker = PhotosChromeTracker()
     @State private var didPositionInitially = false
     @State private var libraryRange: TimelineLibraryRange = .all
     @State private var initialAssetByRoute: [PhotosRangeRoute: String] = [:]
@@ -212,10 +220,13 @@ struct PhotosView: View {
             }
             AccountToolbarButton(action: showAccount)
         }
-        .onAppear { media.beginTimelinePresentation() }
+        .onAppear {
+            viewportRuntime.isTimelineActive = isTimelineActive
+            media.beginTimelinePresentation()
+        }
         .task { await store.load() }
         .onChange(
-            of: store.sections.map { "\($0.id.rawValue):\($0.contentRevision)" },
+            of: sectionRevisionKeys,
             initial: true
         ) {
             guard isTimelineActive else { return }
@@ -223,6 +234,7 @@ struct PhotosView: View {
             scheduleViewportUpdate()
         }
         .onChange(of: isTimelineActive) { _, isVisible in
+            viewportRuntime.isTimelineActive = isVisible
             timelineResumeTask?.cancel()
             if isVisible {
                 timelineResumeTask = Task { @MainActor in
@@ -238,8 +250,8 @@ struct PhotosView: View {
                     timelineResumeTask = nil
                 }
             } else {
-                viewportUpdateTask?.cancel()
-                viewportUpdateTask = nil
+                viewportRuntime.viewportUpdateTask?.cancel()
+                viewportRuntime.viewportUpdateTask = nil
                 timelineResumeTask = nil
             }
         }
@@ -263,6 +275,7 @@ struct PhotosView: View {
                     store.completeJump()
                     return
                 }
+                resetViewportTracking()
                 var scrollTransaction = Transaction(animation: nil)
                 scrollTransaction.disablesAnimations = true
                 withTransaction(scrollTransaction) {
@@ -278,7 +291,8 @@ struct PhotosView: View {
             requestedLibraryRangeHandled()
         }
         .onDisappear {
-            viewportUpdateTask?.cancel()
+            viewportRuntime.viewportUpdateTask?.cancel()
+            viewportRuntime.viewportUpdateTask = nil
             timelineResumeTask?.cancel()
             rotationRestoreTask?.cancel()
             layoutRestoreTask?.cancel()
@@ -564,7 +578,7 @@ struct PhotosView: View {
                                 section: section,
                                 store: store,
                                 media: media,
-                                isActive: isTimelineActive,
+                                viewportRuntime: viewportRuntime,
                                 availableWidth: timelineWidth,
                                 assetLayout: presentation.preferences.assetLayout,
                                 visibilityChanged: updateVisibility,
@@ -578,6 +592,7 @@ struct PhotosView: View {
                                     )
                                 }
                             )
+                            .equatable()
                             .id(section.id)
                             .onScrollVisibilityChange(threshold: 0.01) { visible in
                                 guard isTimelineActive, visible else { return }
@@ -612,9 +627,9 @@ struct PhotosView: View {
                 }
                 .onScrollPhaseChange { _, phase in
                     let isUserScrolling = phase == .interacting || phase == .decelerating
-                    userScrollPhase = isUserScrolling
+                    viewportRuntime.userScrollPhase = isUserScrolling
                     if !isUserScrolling {
-                        chromeTracker.scrollingEnded()
+                        viewportRuntime.chromeTracker.scrollingEnded()
                     }
                 }
                 .onScrollGeometryChange(for: PhotosChromeGeometry.self) { geometry in
@@ -627,7 +642,7 @@ struct PhotosView: View {
                     )
                 } action: { old, new in
                     guard isTimelineActive else { return }
-                    timelineBottomGap = new.bottomGap
+                    viewportRuntime.timelineBottomGap = new.bottomGap
                     updateChrome(old: old, new: new)
                     if new.bottomGap <= 24, store.jumpTarget == latestScrollTarget {
                         store.completeJump()
@@ -669,7 +684,7 @@ struct PhotosView: View {
                     timelineWidth = newSize.width
                     guard oldSize.width > 0, abs(oldSize.width - newSize.width) > 20 else { return }
                     if rotationRestoreTask == nil {
-                        rotationAnchorID = visibleAssets.max(by: { $0.value < $1.value })?.key
+                        rotationAnchorID = viewportRuntime.visibleAssets.max(by: { $0.value < $1.value })?.key
                     }
                     rotationRestoreTask?.cancel()
                     rotationRestoreTask = Task { @MainActor in
@@ -704,7 +719,7 @@ struct PhotosView: View {
                 else { return }
                 guard let latest = latestScrollTarget else { return }
                 guard latestJumpTask == nil else { return }
-                guard timelineBottomGap > 24 else { return }
+                guard viewportRuntime.timelineBottomGap > 24 else { return }
                 rotationRestoreTask?.cancel()
                 rotationRestoreTask = nil
                 rotationAnchorID = nil
@@ -715,6 +730,7 @@ struct PhotosView: View {
                         store.completeJump()
                         return
                     }
+                    resetViewportTracking()
                     var transaction = Transaction(animation: nil)
                     transaction.disablesAnimations = true
                     withTransaction(transaction) {
@@ -746,6 +762,12 @@ struct PhotosView: View {
         store.sections.first?.id
     }
 
+    private var sectionRevisionKeys: [String] {
+        store.sections.map { section in
+            section.id.rawValue + ":" + String(section.contentRevision)
+        }
+    }
+
     private var memoryBackdropVisible: Bool {
         !compactChrome
             && navigationPath.isEmpty
@@ -755,7 +777,7 @@ struct PhotosView: View {
     }
 
     private var centerVisibleAssetID: String? {
-        let ordered = visibleAssets.sorted { $0.value < $1.value }
+        let ordered = viewportRuntime.visibleAssets.sorted { $0.value < $1.value }
         guard !ordered.isEmpty else { return nil }
         return ordered[ordered.count / 2].key
     }
@@ -765,10 +787,10 @@ struct PhotosView: View {
             || latestJumpTask != nil
             || rotationRestoreTask != nil
             || layoutRestoreTask != nil
-        if let compact = chromeTracker.update(
+        if let compact = viewportRuntime.chromeTracker.update(
             offsetDelta: new.offset - old.offset,
             bottomGap: new.bottomGap,
-            userScrolling: userScrollPhase,
+            userScrolling: viewportRuntime.userScrollPhase,
             programmaticJump: programmaticJump
         ) {
             setCompactChrome(compact)
@@ -792,46 +814,74 @@ struct PhotosView: View {
         descriptor: MediaRequestDescriptor?
     ) {
         guard isTimelineActive else { return }
-        visibleDescriptors[assetID] = descriptor
+        viewportRuntime.visibleDescriptors[assetID] = descriptor
         scheduleViewportUpdate()
     }
 
     private func updateViewport(_ asset: TimelineAssetSummary, visible: Bool) {
         guard isTimelineActive else { return }
         if visible {
-            visibleAssets[asset.id] = asset.capturedAt
+            viewportRuntime.visibleAssets[asset.id] = asset.capturedAt
         } else {
-            visibleAssets.removeValue(forKey: asset.id)
+            viewportRuntime.visibleAssets.removeValue(forKey: asset.id)
         }
+        scheduleViewportUpdate()
     }
 
     private func scheduleViewportUpdate() {
         guard isTimelineActive else { return }
-        viewportUpdateTask?.cancel()
-        viewportUpdateTask = Task { @MainActor in
+        viewportRuntime.viewportUpdateTask?.cancel()
+        viewportRuntime.viewportUpdateTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(120))
             guard !Task.isCancelled, isTimelineActive,
-                  let target = visibleDescriptors.values.compactMap(\.targetPixels).max(by: {
+                  let target = viewportRuntime.visibleDescriptors.values.compactMap(\.targetPixels).max(by: {
                       $0.width * $0.height < $1.width * $1.height
                   })
             else { return }
-            let plan = store.residencyPlan(visibleAssetIDs: Set(visibleDescriptors.keys))
+            let plan = store.residencyPlan(
+                visibleAssetIDs: Set(viewportRuntime.visibleAssets.keys)
+            )
+            guard plan != viewportRuntime.lastResidencyPlan
+                || target != viewportRuntime.lastResidencyTarget
+            else { return }
+            viewportRuntime.lastResidencyPlan = plan
+            viewportRuntime.lastResidencyTarget = target
             media.updateTimelineResidency(plan, targetPixels: target)
         }
     }
+
+    private func resetViewportTracking() {
+        viewportRuntime.viewportUpdateTask?.cancel()
+        viewportRuntime.viewportUpdateTask = nil
+        viewportRuntime.visibleDescriptors.removeAll(keepingCapacity: true)
+        viewportRuntime.visibleAssets.removeAll(keepingCapacity: true)
+        viewportRuntime.lastResidencyPlan = .empty
+        viewportRuntime.lastResidencyTarget = nil
+    }
 }
 
-private struct TimelineSectionView: View {
+private struct TimelineSectionView: View, Equatable {
     let section: TimelineSection
     let store: PhotosTimelineStore
     let media: MediaLibraryController
-    let isActive: Bool
+    let viewportRuntime: TimelineViewportRuntime
     let availableWidth: CGFloat
     let assetLayout: PhotosAssetLayout
     let visibilityChanged: (String, MediaRequestDescriptor?) -> Void
     let viewportChanged: (TimelineAssetSummary, Bool) -> Void
     let transitionNamespace: Namespace.ID
     let assetSelected: (TimelineAssetSummary, TimelineBucketID) -> Void
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.section.summary == rhs.section.summary
+            && lhs.section.loadState == rhs.section.loadState
+            && lhs.section.contentRevision == rhs.section.contentRevision
+            && lhs.availableWidth == rhs.availableWidth
+            && lhs.assetLayout == rhs.assetLayout
+            && lhs.store === rhs.store
+            && lhs.media === rhs.media
+            && lhs.viewportRuntime === rhs.viewportRuntime
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -841,7 +891,7 @@ private struct TimelineSectionView: View {
                 ProgressView()
                     .frame(maxWidth: .infinity, minHeight: 88)
                     .task {
-                        guard isActive else { return }
+                        guard viewportRuntime.isTimelineActive else { return }
                         await store.loadBucket(section.id)
                     }
             case .loaded:
