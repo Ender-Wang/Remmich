@@ -1,6 +1,6 @@
 import Foundation
 
-nonisolated enum LibraryIndexMediaScope: String, Codable, Hashable, Sendable {
+nonisolated enum LibraryIndexMediaScope: String, Codable, CaseIterable, Hashable, Sendable {
     case photos
     case videos
 }
@@ -91,6 +91,7 @@ nonisolated struct LibraryIndexSnapshot: Sendable {
 nonisolated protocol LibraryIndexStoring: Sendable {
     func prepare(scope: MediaAccountScope) async throws
     func beginGeneration(scope: MediaAccountScope) async throws -> Int64
+    func beginReconciliation(scope: MediaAccountScope) async throws -> Int64
     func upsert(
         assets: [LibraryIndexAssetRecord],
         generation: Int64,
@@ -98,6 +99,11 @@ nonisolated protocol LibraryIndexStoring: Sendable {
     ) async throws
     func replace(
         groups: [LibraryIndexGroupRecord],
+        generation: Int64,
+        scope: MediaAccountScope
+    ) async throws
+    func removeAssets(
+        in bucketKeys: Set<String>,
         generation: Int64,
         scope: MediaAccountScope
     ) async throws
@@ -116,7 +122,7 @@ nonisolated protocol LibraryIndexStoring: Sendable {
 }
 
 extension TimelineMediaKind {
-    var libraryIndexKind: LibraryIndexAssetKind {
+    nonisolated var libraryIndexKind: LibraryIndexAssetKind {
         switch self {
         case .image: .image
         case .video: .video

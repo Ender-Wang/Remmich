@@ -29,6 +29,17 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
     }
 
     func beginGeneration(scope: MediaAccountScope) async throws -> Int64 {
+        try beginGeneration(scope: scope, copiesAcceptedGeneration: true)
+    }
+
+    func beginReconciliation(scope: MediaAccountScope) async throws -> Int64 {
+        try beginGeneration(scope: scope, copiesAcceptedGeneration: false)
+    }
+
+    private func beginGeneration(
+        scope: MediaAccountScope,
+        copiesAcceptedGeneration: Bool
+    ) throws -> Int64 {
         let database = try preparedDatabase(scope: scope)
         let generation = try (database.scalarInt64(
             "SELECT COALESCE(MAX(generation), 0) + 1 FROM generations WHERE scope = ?",
@@ -38,6 +49,47 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
             "INSERT INTO generations(scope, generation, state, started_at) VALUES(?, ?, 'building', ?)",
             [.text(scope.cacheNamespace), .int64(generation), .double(Date().timeIntervalSince1970)]
         )
+        if copiesAcceptedGeneration,
+           let accepted = try database.scalarInt64(
+               "SELECT accepted_generation FROM sync_state WHERE scope = ?",
+               [.text(scope.cacheNamespace)]
+           )
+        {
+            try database.transaction {
+                try database.execute(
+                    """
+                    INSERT INTO assets(
+                        scope, asset_id, owner_id, kind, live_photo_video_id,
+                        captured_at, uploaded_at, updated_at, checksum, width, height,
+                        aspect_ratio, duration_ms, is_favorite, visibility, is_trashed,
+                        is_offline, bucket_key, day_key, week_key, month_key, year_key,
+                        generation, tombstone
+                    )
+                    SELECT scope, asset_id, owner_id, kind, live_photo_video_id,
+                           captured_at, uploaded_at, updated_at, checksum, width, height,
+                           aspect_ratio, duration_ms, is_favorite, visibility, is_trashed,
+                           is_offline, bucket_key, day_key, week_key, month_key, year_key,
+                           ?, tombstone
+                    FROM assets WHERE scope = ? AND generation = ?
+                    """,
+                    [.int64(generation), .text(scope.cacheNamespace), .int64(accepted)]
+                )
+                try database.execute(
+                    """
+                    INSERT INTO grouped_catalogs(
+                        scope, generation, media_scope, level, group_key,
+                        interval_start, interval_end, asset_count, owning_buckets,
+                        cover_asset_ids, mosaic_seed
+                    )
+                    SELECT scope, ?, media_scope, level, group_key,
+                           interval_start, interval_end, asset_count, owning_buckets,
+                           cover_asset_ids, mosaic_seed
+                    FROM grouped_catalogs WHERE scope = ? AND generation = ?
+                    """,
+                    [.int64(generation), .text(scope.cacheNamespace), .int64(accepted)]
+                )
+            }
+        }
         return generation
     }
 
@@ -128,6 +180,24 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
                         .date(group.intervalStart), .date(group.intervalEnd), .int(group.assetCount),
                         .text(buckets), .text(covers), .text(String(group.mosaicSeed)),
                     ]
+                )
+            }
+        }
+    }
+
+    func removeAssets(
+        in bucketKeys: Set<String>,
+        generation: Int64,
+        scope: MediaAccountScope
+    ) async throws {
+        guard !bucketKeys.isEmpty else { return }
+        let database = try preparedDatabase(scope: scope)
+        try requireBuildingGeneration(generation, scope: scope, database: database)
+        try database.transaction {
+            for bucketKey in bucketKeys {
+                try database.execute(
+                    "DELETE FROM assets WHERE scope = ? AND generation = ? AND bucket_key = ?",
+                    [.text(scope.cacheNamespace), .int64(generation), .text(bucketKey)]
                 )
             }
         }

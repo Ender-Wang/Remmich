@@ -33,6 +33,8 @@ final class AppSessionController {
     let photos: PhotosTimelineStore
     let videos: PhotosTimelineStore
 
+    private let libraryIndexStore: SQLiteLibraryIndexStore
+    private let libraryIndexSynchronizer: LibraryIndexSynchronizer
     private let service: any ServerReading & SessionManaging & RouteValidating
     private let sessionStore: any SessionStoring
     private let profileStore: ConnectionProfileStore
@@ -50,6 +52,7 @@ final class AppSessionController {
     private var isRestoringSession = false
     private var routeGeneration = 0
     private var pendingPathChangeTask: Task<Void, Never>?
+    private var libraryIndexTask: Task<Void, Never>?
 
     init(
         service: any ServerReading & SessionManaging & RouteValidating = ImmichServiceAdapter(),
@@ -62,6 +65,12 @@ final class AppSessionController {
         timeline: ImmichTimelineRepository = .init()
     ) {
         self.timeline = timeline
+        let libraryIndexStore = SQLiteLibraryIndexStore()
+        self.libraryIndexStore = libraryIndexStore
+        libraryIndexSynchronizer = LibraryIndexSynchronizer(
+            source: timeline,
+            store: libraryIndexStore
+        )
         let arguments = ProcessInfo.processInfo.arguments
         photosForegroundRetryEnabled = !arguments.contains("-ui-testing-photos-retry")
         let previewMode: PreviewTimelineReader.Mode = if arguments.contains("-ui-testing-photos-empty") {
@@ -182,12 +191,15 @@ final class AppSessionController {
             }
             Self.routeLogger.info("Connected directly to \(session.apiURL.absoluteString, privacy: .public)")
             state = .signedIn(session)
+            startLibraryIndexing(session: session)
         } catch {
             state = .failed(message: Self.message(for: error), server: server)
         }
     }
 
     func signOut() async {
+        libraryIndexTask?.cancel()
+        libraryIndexTask = nil
         routeGeneration += 1
         activeRoute = nil
         routeStatus = .waitingForNetwork
@@ -333,6 +345,7 @@ final class AppSessionController {
                 photos.routeDidChange(isReachable: true)
                 videos.routeDidChange(isReachable: true)
             }
+            startLibraryIndexing(session: session)
             Self.routeLogger.info(
                 "Activated \(route.kind.rawValue, privacy: .public) endpoint \(route.endpoint.absoluteString, privacy: .public)"
             )
@@ -432,6 +445,7 @@ final class AppSessionController {
                 photos.routeDidChange(isReachable: true)
                 videos.routeDidChange(isReachable: true)
             }
+            startLibraryIndexing(session: session)
             Self.routeLogger.info(
                 "Restored direct endpoint \(session.apiURL.absoluteString, privacy: .public)"
             )
@@ -500,6 +514,8 @@ final class AppSessionController {
         routeGeneration += 1
         activeRoute = nil
         routeStatus = .waitingForNetwork
+        libraryIndexTask?.cancel()
+        libraryIndexTask = nil
         media.clearAll()
         await timeline.clear()
         photos.reset()
@@ -515,6 +531,8 @@ final class AppSessionController {
     }
 
     func handleBackgroundTransition() {
+        libraryIndexTask?.cancel()
+        libraryIndexTask = nil
         media.handleBackgroundTransition()
     }
 
@@ -525,7 +543,32 @@ final class AppSessionController {
         if photosForegroundRetryEnabled {
             photos.foregrounded()
         }
+        if case let .signedIn(session) = state, routeStatus == .connected {
+            startLibraryIndexing(session: session)
+        }
         media.handleForegroundTransition()
+    }
+
+    private func startLibraryIndexing(session: AccountSession) {
+        guard !ProcessInfo.processInfo.arguments.contains("-ui-testing-signed-in") else { return }
+        libraryIndexTask?.cancel()
+        let scope = MediaAccountScope(session: session)
+        let synchronizer = libraryIndexSynchronizer
+        libraryIndexTask = Task {
+            do {
+                var result = try await synchronizer.synchronizeRecent(scope: scope)
+                while result.hasMoreHistory, !Task.isCancelled {
+                    await Task.yield()
+                    result = try await synchronizer.resumeHistorical(scope: scope)
+                }
+            } catch is CancellationError {
+                // Route and lifecycle transitions intentionally cancel the active generation.
+            } catch {
+                Self.routeLogger.error(
+                    "Library index synchronization failed: \(Self.message(for: error), privacy: .public)"
+                )
+            }
+        }
     }
 
     private static func message(for error: Error) -> String {
