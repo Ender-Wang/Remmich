@@ -50,6 +50,12 @@ nonisolated protocol TimelineReading: Sendable {
     func memories() async throws -> [TimelineMemorySummary]
 }
 
+/// Readers that have already materialized their complete result set while
+/// producing bucket summaries can seed grouped catalogs without more I/O.
+nonisolated protocol CompleteTimelineCatalogReading: TimelineReading {
+    func completeCatalogAssets() async -> [TimelineBucketID: [TimelineAssetSummary]]
+}
+
 nonisolated protocol AssetDetailReading: Sendable {
     func assetDetail(id: String) async throws -> AssetDetail
 }

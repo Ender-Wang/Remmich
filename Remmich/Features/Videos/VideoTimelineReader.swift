@@ -2,7 +2,7 @@ import Foundation
 
 /// Materializes Immich's video-only search into the same month-bucket contract
 /// used by Photos, so the two tabs share the timeline, pinch, and jump UI.
-actor VideoTimelineReader: TimelineReading {
+actor VideoTimelineReader: CompleteTimelineCatalogReading {
     private let source: any VideoReading
     private var assetsByBucket: [TimelineBucketID: [TimelineAssetSummary]] = [:]
 
@@ -34,6 +34,10 @@ actor VideoTimelineReader: TimelineReading {
 
     func assets(in bucketID: TimelineBucketID, query _: TimelineQuery) async throws -> [TimelineAssetSummary] {
         assetsByBucket[bucketID] ?? []
+    }
+
+    func completeCatalogAssets() -> [TimelineBucketID: [TimelineAssetSummary]] {
+        assetsByBucket
     }
 
     func memories() async throws -> [TimelineMemorySummary] {

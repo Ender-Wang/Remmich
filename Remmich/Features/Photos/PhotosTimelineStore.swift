@@ -400,6 +400,9 @@ final class PhotosTimelineStore {
             let summaries = try await reader.bucketSummaries(query: query)
             guard requestGeneration == generation else { return }
             publishSummaries(summaries)
+            if let completeReader = reader as? any CompleteTimelineCatalogReading {
+                await seedCompleteGroupedCatalogs(with: completeReader.completeCatalogAssets())
+            }
             Self.logger.info(
                 "Initial summaries published generation=\(requestGeneration) count=\(summaries.count)"
             )
@@ -663,6 +666,72 @@ final class PhotosTimelineStore {
             in: bucketSummaries
         ) {
             updateWeekCatalogContribution(for: newerBucketID)
+        }
+    }
+
+    private func seedCompleteGroupedCatalogs(
+        with assetsByBucket: [TimelineBucketID: [TimelineAssetSummary]]
+    ) {
+        let allBucketIDs = Set(bucketSummaries.map(\.id))
+        let sections = Dictionary(uniqueKeysWithValues: bucketSummaries.map { summary in
+            let assets = assetsByBucket[summary.id, default: []]
+            return (
+                summary.id,
+                TimelineSection(
+                    summary: summary,
+                    assets: assets,
+                    loadState: .loaded,
+                    contentRevision: 0
+                )
+            )
+        })
+
+        for summary in bucketSummaries {
+            guard let section = sections[summary.id] else { continue }
+            groupedCatalogs.replaceContribution(
+                level: .day,
+                ownerBucketID: summary.id,
+                entries: section.dayGroups.map { day in
+                    TimelineGroupedCatalogEntry(
+                        id: .day(summary.id, day.id),
+                        assetCount: day.assets.count,
+                        owningBucketIDs: [summary.id],
+                        assets: day.assets
+                    )
+                },
+                loadedBucketIDs: allBucketIDs,
+                allBucketIDs: allBucketIDs
+            )
+
+            let previousID = TimelineRangeCatalog.adjacentMonth(
+                to: summary.id,
+                offset: -1,
+                in: bucketSummaries
+            )
+            let weeks = TimelineRangeCatalog.libraryWeeks(
+                endingIn: summary.id,
+                current: section,
+                previous: previousID.flatMap { sections[$0] },
+                hasNextMonth: TimelineRangeCatalog.adjacentMonth(
+                    to: summary.id,
+                    offset: 1,
+                    in: bucketSummaries
+                ) != nil
+            )
+            groupedCatalogs.replaceContribution(
+                level: .week,
+                ownerBucketID: summary.id,
+                entries: weeks.map { week in
+                    TimelineGroupedCatalogEntry(
+                        id: .week(summary.id, week.id),
+                        assetCount: week.assetCount,
+                        owningBucketIDs: [previousID, summary.id].compactMap(\.self),
+                        assets: week.days.reversed().flatMap(\.assets)
+                    )
+                },
+                loadedBucketIDs: allBucketIDs,
+                allBucketIDs: allBucketIDs
+            )
         }
     }
 

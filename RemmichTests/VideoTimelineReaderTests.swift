@@ -34,6 +34,8 @@ struct VideoTimelineReaderTests {
         let summaries = try await reader.bucketSummaries(query: .init())
         #expect(summaries.map(\.id.rawValue) == ["2026-10-01", "2026-09-01"])
         #expect(summaries.map(\.assetCount) == [2, 1])
+        let completeAssets = await reader.completeCatalogAssets()
+        #expect(completeAssets.values.flatMap(\.self).count == 3)
         let october = try await reader.assets(
             in: TimelineBucketID(rawValue: "2026-10-01"), query: .init()
         )
