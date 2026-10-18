@@ -190,6 +190,60 @@ struct LibraryIndexStoreTests {
         #expect(try await store.snapshot(scope: scope)?.assets.map(\.id) == ["first", "second"])
     }
 
+    @Test func listsAndRemovesOnlyTheSelectedStoredAccount() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        let first = Self.scope(userID: "retained-one")
+        let second = Self.scope(userID: "retained-two")
+        let now = Date(timeIntervalSince1970: 1000)
+
+        for (scope, assetID) in [(first, "first"), (second, "second")] {
+            let generation = try await store.beginGeneration(scope: scope)
+            try await store.upsert(
+                assets: [Self.asset(id: assetID)],
+                generation: generation,
+                scope: scope
+            )
+            try await store.upsert(
+                derivatives: [
+                    .init(
+                        assetID: assetID,
+                        derivative: .thumbnail,
+                        pixelSize: .init(width: 256, height: 256),
+                        sourceRevision: "revision",
+                        relativeFileKey: "thumbnail/\(assetID).jpg",
+                        byteCount: 1024,
+                        digest: "digest",
+                        isVerified: true,
+                        lastAccessedAt: now,
+                        completedAt: now
+                    ),
+                ],
+                scope: scope
+            )
+            _ = try await store.acceptGeneration(
+                generation,
+                watermark: nil,
+                historicalCursor: nil,
+                expectedAssetCount: 1,
+                scope: scope
+            )
+        }
+
+        let accounts = try await store.storedAccounts()
+        #expect(accounts.count == 2)
+        #expect(accounts.allSatisfy { $0.indexedAssetCount == 1 })
+        #expect(accounts.allSatisfy { $0.derivativeCount == 1 && $0.derivativeBytes == 1024 })
+
+        try await store.removeAccount(namespace: first.cacheNamespace)
+
+        let remaining = try await store.storedAccounts()
+        #expect(remaining.map(\.namespace) == [second.cacheNamespace])
+        #expect(try await store.snapshot(scope: second)?.assets.map(\.id) == ["second"])
+        #expect(try await store.snapshot(scope: second)?.derivatives.count == 1)
+    }
+
     private static func scope(userID: String) -> MediaAccountScope {
         MediaAccountScope(session: .init(
             apiURL: URL(string: "https://example.com/api")!,

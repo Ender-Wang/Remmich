@@ -140,6 +140,38 @@ struct LibraryIndexSynchronizationTests {
         #expect(snapshot.assets.map(\.id) == ["asset"])
     }
 
+    @Test func removingAccountCacheDeletesOnlyItsNamespace() async throws {
+        let fixture = try IndexFixture()
+        defer { fixture.cleanup() }
+        let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        let cache = LibraryThumbnailCache(store: store, rootURL: fixture.cacheURL)
+        let selected = Self.scope
+        let other = try MediaAccountScope(session: .init(
+            apiURL: #require(URL(string: "https://other.example/api")),
+            accessToken: "token",
+            userID: "other-user",
+            userEmail: "other@example.com",
+            name: "Other",
+            isAdmin: false,
+            serverVersion: .init(major: 3, minor: 2, patch: 0, prerelease: nil)
+        ))
+        let selectedDirectory = fixture.cacheURL.appending(
+            path: selected.cacheNamespace,
+            directoryHint: .isDirectory
+        )
+        let otherDirectory = fixture.cacheURL.appending(
+            path: other.cacheNamespace,
+            directoryHint: .isDirectory
+        )
+        try FileManager.default.createDirectory(at: selectedDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: otherDirectory, withIntermediateDirectories: true)
+
+        try await cache.removeAccount(namespace: selected.cacheNamespace)
+
+        #expect(!FileManager.default.fileExists(atPath: selectedDirectory.path))
+        #expect(FileManager.default.fileExists(atPath: otherDirectory.path))
+    }
+
     private static let scope = MediaAccountScope(session: .fixture)
 
     private static func asset(
