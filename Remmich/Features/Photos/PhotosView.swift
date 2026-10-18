@@ -969,8 +969,15 @@ private struct TimelineMemoryLane: View {
     var body: some View {
         ScrollView(.horizontal) {
             LazyHStack(spacing: Self.cardSpacing) {
-                ForEach(memories) { memory in
-                    TimelineMemoryCard(memory: memory, media: media, width: cardWidth)
+                ForEach(Array(memories.enumerated()), id: \.element.id) { entry in
+                    TimelineMemoryCard(
+                        memory: entry.element,
+                        media: media,
+                        width: cardWidth,
+                        initialDelay: TimelineCoverAnimation.cycleDuration
+                            * Double(entry.offset)
+                            / Double(max(1, memories.count))
+                    )
                 }
             }
         }
@@ -995,6 +1002,7 @@ private struct TimelineMemoryCard: View {
     let memory: TimelineMemorySummary
     let media: MediaLibraryController
     let width: CGFloat
+    let initialDelay: Double
 
     @State private var currentIndex = 0
     @State private var incomingAsset: TimelineMemoryAssetSummary?
@@ -1066,7 +1074,7 @@ private struct TimelineMemoryCard: View {
         .accessibilityValue(coverAccessibilityValue)
         .onAppear { isPresented = true }
         .onDisappear { isPresented = false }
-        .task(id: "\(isPresented):\(scenePhase):\(reduceMotion):\(slideshowID)") {
+        .task(id: "\(isPresented):\(scenePhase):\(reduceMotion):\(slideshowID):\(initialDelay)") {
             guard isPresented, scenePhase == .active else { return }
             Self.logger.info(
                 "Memory slideshow evaluated id=\(memory.id, privacy: .public) assets=\(memory.assets.count) reduceMotion=\(reduceMotion)"
@@ -1103,6 +1111,12 @@ private struct TimelineMemoryCard: View {
             coverScales = currentAsset.map { [$0.id: 1] } ?? [:]
             coverOpacities = currentAsset.map { [$0.id: 1] } ?? [:]
             incomingAsset = nil
+        }
+        guard !reduceMotion, memory.assets.count > 1 else { return }
+        if initialDelay > 0 {
+            do {
+                try await Task.sleep(for: .seconds(initialDelay))
+            } catch { return }
         }
 
         var timeBeforeFadeOut = TimelineCoverAnimation.initialHold
