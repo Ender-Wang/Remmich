@@ -6,6 +6,7 @@ struct AccountSettingsView: View {
     let session: AccountSession
     let activeRoute: ActiveConnectionRoute?
     let routeStatus: ConnectionRouteStatus
+    let libraryIndex: LibraryIndexController
     let saveProfile: (ConnectionProfileDraft) async -> ConnectionProfileSaveResult
     let signOut: () async -> Void
     let close: (() -> Void)?
@@ -21,6 +22,7 @@ struct AccountSettingsView: View {
         profile: ConnectionProfile,
         activeRoute: ActiveConnectionRoute?,
         routeStatus: ConnectionRouteStatus,
+        libraryIndex: LibraryIndexController,
         saveProfile: @escaping (ConnectionProfileDraft) async -> ConnectionProfileSaveResult,
         signOut: @escaping () async -> Void,
         close: (() -> Void)? = nil
@@ -28,6 +30,7 @@ struct AccountSettingsView: View {
         self.session = session
         self.activeRoute = activeRoute
         self.routeStatus = routeStatus
+        self.libraryIndex = libraryIndex
         self.saveProfile = saveProfile
         self.signOut = signOut
         self.close = close
@@ -73,6 +76,8 @@ struct AccountSettingsView: View {
                         LabeledContent("Remmich version", value: appVersion)
                         LabeledContent("Build", value: appBuild)
                     }
+
+                    libraryIndexSection
 
                     accountSection("Automatic switching") {
                         if ssidEntitlementEnabled {
@@ -154,6 +159,75 @@ struct AccountSettingsView: View {
                 .foregroundStyle(.secondary)
             content()
         }
+    }
+
+    private var libraryIndexSection: some View {
+        accountSection("Library Index & Cache") {
+            LabeledContent("Status", value: libraryIndexStatus)
+            if libraryIndex.expectedAssetCount > 0 {
+                ProgressView(value: libraryIndex.fractionCompleted)
+                    .accessibilityLabel("Library indexing progress")
+                    .accessibilityValue(libraryIndexProgressText)
+                Text(libraryIndexProgressText)
+                    .font(.footnote.monospacedDigit())
+                if let elapsed = libraryIndex.elapsed {
+                    LabeledContent("Elapsed", value: Self.duration(elapsed))
+                }
+                if let remaining = libraryIndex.estimatedRemaining {
+                    LabeledContent("Estimated remaining", value: "About \(Self.duration(remaining))")
+                }
+            }
+            if let lastUpdatedAt = libraryIndex.lastUpdatedAt {
+                LabeledContent("Last sync", value: lastUpdatedAt.formatted(date: .abbreviated, time: .shortened))
+            }
+            LabeledContent(
+                "Metadata index",
+                value: ByteCountFormatter.string(
+                    fromByteCount: libraryIndex.storageReport.metadataBytes,
+                    countStyle: .binary
+                )
+            )
+            HStack {
+                if libraryIndex.status == .paused {
+                    Button("Resume") { libraryIndex.resume() }
+                } else {
+                    Button("Pause") { libraryIndex.pause() }
+                        .disabled(libraryIndex.status != .indexing)
+                }
+                if case .failed = libraryIndex.status {
+                    Button("Retry") { libraryIndex.retry() }
+                }
+            }
+            HStack {
+                Button("Sync Now") { libraryIndex.syncNow() }
+                Button("Full Sync & Verify") { libraryIndex.fullSyncAndVerify() }
+            }
+            Text("The metadata index is account-scoped and remains available when thumbnail bytes are cleared.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var libraryIndexStatus: String {
+        switch libraryIndex.status {
+        case .idle: "Waiting"
+        case .indexing: "Indexing"
+        case .paused: "Paused"
+        case .upToDate: "Up to date"
+        case let .failed(message): "Failed: \(message)"
+        }
+    }
+
+    private var libraryIndexProgressText: String {
+        let percentage = Int((libraryIndex.fractionCompleted * 100).rounded())
+        return "\(libraryIndex.indexedAssetCount.formatted()) of \(libraryIndex.expectedAssetCount.formatted()) assets indexed · \(percentage)%"
+    }
+
+    private static func duration(_ seconds: TimeInterval) -> String {
+        let formatter = DateComponentsFormatter()
+        formatter.allowedUnits = seconds >= 3600 ? [.hour, .minute] : seconds >= 60 ? [.minute, .second] : [.second]
+        formatter.unitsStyle = .abbreviated
+        return formatter.string(from: max(0, seconds)) ?? "0 sec"
     }
 
     private func validateAndSaveProfile() {
@@ -250,6 +324,7 @@ struct AccountSettingsView: View {
         profile: .init(),
         activeRoute: .init(kind: .external, endpoint: URL(string: "https://immich.example/api")!),
         routeStatus: .connected,
+        libraryIndex: LibraryIndexController(source: PreviewTimelineReader()),
         saveProfile: { _ in .saved(profile: .init()) },
         signOut: {}
     )

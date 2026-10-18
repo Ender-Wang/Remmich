@@ -32,6 +32,7 @@ struct RootView: View {
                     assetDetails: controller.assetDetails,
                     presentation: presentation,
                     media: controller.media,
+                    libraryIndex: controller.libraryIndex,
                     saveProfile: controller.saveConnectionProfile,
                     signOut: controller.signOut
                 )

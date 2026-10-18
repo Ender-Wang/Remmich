@@ -88,6 +88,12 @@ nonisolated struct LibraryIndexSnapshot: Sendable {
     let syncState: LibraryIndexSyncState
 }
 
+nonisolated struct LibraryIndexStorageReport: Equatable, Sendable {
+    let metadataBytes: Int64
+    let derivativeBytes: Int64
+    let derivativeCount: Int
+}
+
 nonisolated protocol LibraryIndexStoring: Sendable {
     func prepare(scope: MediaAccountScope) async throws
     func beginGeneration(scope: MediaAccountScope) async throws -> Int64
@@ -119,6 +125,7 @@ nonisolated protocol LibraryIndexStoring: Sendable {
     func setLastError(_ message: String?, scope: MediaAccountScope) async throws
     func upsert(derivatives: [LibraryIndexDerivativeRecord], scope: MediaAccountScope) async throws
     func clearDerivatives(scope: MediaAccountScope, kinds: Set<MediaDerivative>) async throws
+    func storageReport(scope: MediaAccountScope) async throws -> LibraryIndexStorageReport
 }
 
 extension TimelineMediaKind {

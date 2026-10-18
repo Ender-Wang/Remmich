@@ -324,6 +324,20 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
         )
     }
 
+    func storageReport(scope: MediaAccountScope) async throws -> LibraryIndexStorageReport {
+        let snapshot = try await snapshot(scope: scope)
+        let metadataBytes = [databaseURL, URL(fileURLWithPath: databaseURL.path + "-wal")]
+            .reduce(Int64(0)) { total, url in
+                let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+                return total + ((attributes?[.size] as? NSNumber)?.int64Value ?? 0)
+            }
+        return .init(
+            metadataBytes: metadataBytes,
+            derivativeBytes: snapshot?.derivatives.reduce(0) { $0 + $1.byteCount } ?? 0,
+            derivativeCount: snapshot?.derivatives.count ?? 0
+        )
+    }
+
     func schemaVersion() async throws -> Int {
         let database = try database()
         try migrate(database)

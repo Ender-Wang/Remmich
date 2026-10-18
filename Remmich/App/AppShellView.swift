@@ -15,6 +15,7 @@ struct AppShellView: View {
     let assetDetails: any AssetDetailReading
     let presentation: PhotosPresentationState
     let media: MediaLibraryController
+    let libraryIndex: LibraryIndexController
     let saveProfile: (ConnectionProfileDraft) async -> ConnectionProfileSaveResult
     let signOut: () async -> Void
 
@@ -209,6 +210,7 @@ struct AppShellView: View {
                             profile: profile,
                             activeRoute: activeRoute,
                             routeStatus: routeStatus,
+                            libraryIndex: libraryIndex,
                             saveProfile: saveProfile,
                             signOut: signOut,
                             close: { showsAccount = false }
@@ -346,6 +348,7 @@ extension EnvironmentValues {
         assetDetails: PreviewTimelineReader(),
         presentation: .init(),
         media: .init(),
+        libraryIndex: LibraryIndexController(source: PreviewTimelineReader()),
         saveProfile: { _ in .saved(profile: .init()) },
         signOut: {}
     )
