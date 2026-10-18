@@ -27,6 +27,8 @@ struct AccountSettingsView: View {
     @State private var saveError: String?
     @State private var showsSignOutChoices = false
     @State private var pendingAccountDeletion: StoredLibraryAccount?
+    @State private var showsThumbnailRebuildConfirmation = false
+    @State private var showsThumbnailClearConfirmation = false
     @State private var libraryIndexClock = Date()
     @State private var selectedPage = SettingsPage.account
 
@@ -58,7 +60,7 @@ struct AccountSettingsView: View {
                 Text("Remmich")
                     .font(.title.bold())
                 Spacer()
-                Button("Done") { closePanel() }
+                Button("Close") { closePanel() }
                     .buttonStyle(.glass)
             }
             .padding(.horizontal, 24)
@@ -131,6 +133,30 @@ struct AccountSettingsView: View {
         } message: { account in
             Text("This removes the local index and cached media for \(account.serverIdentity). It does not change the Immich server.")
         }
+        .confirmationDialog(
+            "Rebuild Thumbnail Cache?",
+            isPresented: $showsThumbnailRebuildConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Rebuild Thumbnail Cache", role: .destructive) {
+                libraryIndex.rebuildThumbnailCache()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Remmich keeps the current cache available while downloading and verifying fresh thumbnails, then replaces it only after the rebuild succeeds. It does not change the Immich server.")
+        }
+        .confirmationDialog(
+            "Clear Thumbnail Cache?",
+            isPresented: $showsThumbnailClearConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Clear Thumbnails", role: .destructive) {
+                libraryIndex.clearThumbnails()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes all locally cached timeline thumbnails and turns off Auto-warm Timeline Thumbnails. It does not change the Immich server or metadata index.")
+        }
         .task { libraryIndex.refreshStoredAccounts() }
         .task(id: updatesLibraryIndexClock) {
             guard updatesLibraryIndexClock else {
@@ -159,7 +185,7 @@ struct AccountSettingsView: View {
 
     private var accountPage: some View {
         VStack(alignment: .leading, spacing: 28) {
-            accountSection("Account") {
+            VStack(alignment: .leading, spacing: 18) {
                 settingsValue("User", value: session.userEmail)
                 settingsValue("Server", value: activeRoute?.endpoint.absoluteString ?? routeStatusLabel)
                 settingsValue("Immich version", value: session.serverVersion.description)
@@ -188,7 +214,8 @@ struct AccountSettingsView: View {
     }
 
     private var updatesLibraryIndexClock: Bool {
-        selectedPage == .library && libraryIndex.status == .indexing
+        selectedPage == .library
+            && (libraryIndex.status == .indexing || libraryIndex.thumbnailWarmingStatus == .warming)
     }
 
     private func closePanel() {
@@ -259,7 +286,7 @@ struct AccountSettingsView: View {
     }
 
     private var libraryIndexSection: some View {
-        accountSection("Library Index & Cache") {
+        VStack(alignment: .leading, spacing: 18) {
             settingsValue("Index status", value: libraryIndexStatus)
             if libraryIndex.expectedAssetCount > 0 {
                 ProgressView(value: libraryIndex.fractionCompleted)
@@ -278,34 +305,21 @@ struct AccountSettingsView: View {
                     )
                 }
                 libraryIndexDetail(
-                    "Metadata index (~8 MB / 10K assets)",
+                    "Index database",
                     value: ByteCountFormatter.string(
                         fromByteCount: libraryIndex.storageReport.metadataBytes,
-                        countStyle: .binary
+                        countStyle: .file
                     )
                 )
+                if let libraryIndexDatabaseSizeEstimate {
+                    Text(libraryIndexDatabaseSizeEstimate)
+                    Text("Index only → with thumbnail inventory")
+                }
                 if libraryIndex.expectedAssetCount > 0 {
                     Text(libraryIndexMediaBreakdown)
                 }
             }
             .font(.footnote.monospacedDigit())
-            settingsValue(
-                "Timeline thumbnails",
-                value: "\(libraryIndex.storageReport.derivativeCount.formatted()) cached · \(ByteCountFormatter.string(fromByteCount: libraryIndex.storageReport.derivativeBytes, countStyle: .binary))"
-            )
-            settingsValue(
-                "Downloads",
-                value: "\(libraryIndex.storageReport.downloadCount.formatted()) files · \(ByteCountFormatter.string(fromByteCount: libraryIndex.storageReport.downloadBytes, countStyle: .binary))"
-            )
-            Toggle(
-                isOn: Binding(
-                    get: { libraryIndex.thumbnailWarmingEnabled },
-                    set: { libraryIndex.setThumbnailWarmingEnabled($0) }
-                )
-            ) {
-                Text("Warm timeline thumbnails")
-                    .bold()
-            }
             HStack {
                 if libraryIndex.status == .paused {
                     Button("Resume") { libraryIndex.resume() }
@@ -319,10 +333,60 @@ struct AccountSettingsView: View {
             }
             HStack {
                 Button("Sync Now") { libraryIndex.syncNow() }
+                Spacer(minLength: 16)
                 Button("Rebuild & Verify Index") { libraryIndex.fullSyncAndVerify() }
             }
+            .frame(maxWidth: .infinity)
+
+            Divider()
+
+            settingsValue("Thumbnail cache", value: thumbnailWarmingStatus)
+            if libraryIndex.thumbnailWarmingStatus != .off,
+               libraryIndex.thumbnailWarmingEligibleCount > 0
+            {
+                ProgressView(value: libraryIndex.thumbnailWarmingFractionCompleted)
+                    .accessibilityLabel("Timeline thumbnail caching progress")
+                    .accessibilityValue(thumbnailWarmingProgressText)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(thumbnailWarmingProgressText)
+                    thumbnailWarmingTiming
+                    thumbnailCacheLastSync
+                    Text(thumbnailCacheInventory)
+                    if let thumbnailCacheSizeEstimate {
+                        Text(thumbnailCacheSizeEstimate)
+                    }
+                }
+                .font(.footnote.monospacedDigit())
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    thumbnailCacheLastSync
+                    Text(thumbnailCacheInventory)
+                    if let thumbnailCacheSizeEstimate {
+                        Text(thumbnailCacheSizeEstimate)
+                    }
+                }
+                .font(.footnote.monospacedDigit())
+            }
+            Toggle(
+                isOn: Binding(
+                    get: { libraryIndex.thumbnailWarmingEnabled },
+                    set: { libraryIndex.setThumbnailWarmingEnabled($0) }
+                )
+            ) {
+                Text("Auto-warm Timeline Thumbnails")
+                    .bold()
+            }
+            HStack {
+                Button("Sync Cache Now") { libraryIndex.syncThumbnailCache() }
+                Spacer(minLength: 16)
+                Button("Rebuild Cache", role: .destructive) {
+                    showsThumbnailRebuildConfirmation = true
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .disabled(libraryIndex.thumbnailWarmingStatus == .warming)
             Button("Clear Thumbnails", role: .destructive) {
-                libraryIndex.clearThumbnails()
+                showsThumbnailClearConfirmation = true
             }
             Text("The metadata index is account-scoped and remains available when thumbnail bytes are cleared.")
                 .font(.footnote)
@@ -336,7 +400,7 @@ struct AccountSettingsView: View {
                         Text(Self.accountLabel(account))
                             .font(.subheadline)
                         Text(
-                            "\(account.indexedAssetCount.formatted()) indexed assets · \(account.derivativeCount.formatted()) cached files · \(ByteCountFormatter.string(fromByteCount: account.derivativeBytes, countStyle: .binary))"
+                            "\(account.indexedAssetCount.formatted()) indexed assets · \(account.derivativeCount.formatted()) cached files · \(ByteCountFormatter.string(fromByteCount: account.derivativeBytes, countStyle: .file))"
                         )
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -357,6 +421,33 @@ struct AccountSettingsView: View {
 
     private var libraryIndexTiming: some View {
         libraryIndexTiming(at: libraryIndex.status == .indexing ? libraryIndexClock : Date())
+    }
+
+    private var thumbnailWarmingTiming: some View {
+        let date = libraryIndex.thumbnailWarmingStatus == .warming ? libraryIndexClock : Date()
+        return Group {
+            if let elapsed = libraryIndex.thumbnailWarmingElapsed(at: date) {
+                let label = if let remaining = libraryIndex.thumbnailWarmingEstimatedRemaining(at: date) {
+                    "Elapsed (\(Self.duration(remaining)) remaining)"
+                } else {
+                    "Elapsed"
+                }
+                libraryIndexDetail(label, value: Self.duration(elapsed))
+            }
+        }
+        .transaction { transaction in
+            transaction.animation = nil
+        }
+    }
+
+    @ViewBuilder
+    private var thumbnailCacheLastSync: some View {
+        if let lastUpdatedAt = libraryIndex.thumbnailWarmingLastUpdatedAt {
+            libraryIndexDetail(
+                "Last sync",
+                value: lastUpdatedAt.formatted(date: .abbreviated, time: .shortened)
+            )
+        }
     }
 
     private func libraryIndexTiming(at date: Date) -> some View {
@@ -423,6 +514,67 @@ struct AccountSettingsView: View {
 
     private var libraryIndexMediaBreakdown: String {
         "\(libraryIndex.indexedPhotoCount.formatted()) photos, \(libraryIndex.indexedVideoCount.formatted()) videos"
+    }
+
+    private var libraryIndexDatabaseSizeEstimate: String? {
+        let count = libraryIndex.indexedAssetCount
+        let bytes = libraryIndex.storageReport.metadataBytes
+        guard count > 0, bytes > 0 else { return nil }
+        let accumulatedBytesPerTenThousand = Int64(
+            (Double(bytes) / Double(count) * 10000).rounded()
+        )
+        let indexOnlyBytesPerTenThousand: Int64 = 8_400_000
+        let accumulated = max(indexOnlyBytesPerTenThousand, accumulatedBytesPerTenThousand)
+        let indexOnlyLabel = ByteCountFormatter.string(
+            fromByteCount: indexOnlyBytesPerTenThousand,
+            countStyle: .file
+        )
+        let accumulatedLabel = ByteCountFormatter.string(
+            fromByteCount: accumulated,
+            countStyle: .file
+        )
+        return "~\(indexOnlyLabel)–\(accumulatedLabel) / 10K assets"
+    }
+
+    private var thumbnailWarmingStatus: String {
+        switch libraryIndex.thumbnailWarmingStatus {
+        case .off: "Off"
+        case .waiting: "Waiting"
+        case .warming: "Caching"
+        case .upToDate: "Up to date"
+        case let .failed(message): message
+        }
+    }
+
+    private var thumbnailWarmingProgressText: String {
+        let percentage = Int((libraryIndex.thumbnailWarmingFractionCompleted * 100).rounded())
+        return "\(percentage)% (\(libraryIndex.thumbnailWarmingCachedCount.formatted())/\(libraryIndex.thumbnailWarmingEligibleCount.formatted())) thumbnails cached"
+    }
+
+    private var thumbnailCacheInventory: String {
+        let hasLiveInventory = libraryIndex.thumbnailWarmingEligibleCount > 0
+        let count = hasLiveInventory
+            ? libraryIndex.thumbnailWarmingCachedCount
+            : libraryIndex.storageReport.derivativeCount
+        let bytes = hasLiveInventory
+            ? libraryIndex.thumbnailWarmingCachedBytes
+            : libraryIndex.storageReport.derivativeBytes
+        return "\(count.formatted()) cached · \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))"
+    }
+
+    private var thumbnailCacheSizeEstimate: String? {
+        let hasLiveInventory = libraryIndex.thumbnailWarmingEligibleCount > 0
+        let count = hasLiveInventory
+            ? libraryIndex.thumbnailWarmingCachedCount
+            : libraryIndex.storageReport.derivativeCount
+        let bytes = hasLiveInventory
+            ? libraryIndex.thumbnailWarmingCachedBytes
+            : libraryIndex.storageReport.derivativeBytes
+        guard count > 0, bytes > 0 else { return nil }
+        let bytesPerTenThousand = Int64(
+            (Double(bytes) / Double(count) * 10000).rounded()
+        )
+        return "~\(ByteCountFormatter.string(fromByteCount: bytesPerTenThousand, countStyle: .file)) / 10K assets"
     }
 
     private static func duration(_ seconds: TimeInterval) -> String {

@@ -136,6 +136,40 @@ struct LibraryIndexSynchronizationTests {
         #expect(report.playbackBytes == 400)
     }
 
+    @Test func thumbnailManifestOperationsPreserveOtherDerivativeKinds() async throws {
+        let fixture = try IndexFixture()
+        defer { fixture.cleanup() }
+        let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        let generation = try await store.beginGeneration(scope: Self.scope)
+        _ = try await store.acceptGeneration(
+            generation,
+            watermark: nil,
+            historicalCursor: nil,
+            expectedAssetCount: 0,
+            scope: Self.scope
+        )
+        try await store.upsert(
+            derivatives: [
+                Self.derivative(.thumbnail, bytes: 100, assetID: "old-thumbnail"),
+                Self.derivative(.preview, bytes: 200, assetID: "kept-preview"),
+            ],
+            scope: Self.scope
+        )
+
+        let replacement = Self.derivative(.thumbnail, bytes: 300, assetID: "new-thumbnail")
+        try await store.replace(derivatives: [replacement], kind: .thumbnail, scope: Self.scope)
+
+        let derivatives = try #require(try await store.snapshot(scope: Self.scope)).derivatives
+        #expect(derivatives.filter { $0.derivative == .thumbnail }.map(\.assetID) == ["new-thumbnail"])
+        #expect(derivatives.filter { $0.derivative == .preview }.map(\.assetID) == ["kept-preview"])
+
+        let cache = LibraryThumbnailCache(store: store, rootURL: fixture.cacheURL)
+        try await cache.clearThumbnails(scope: Self.scope)
+        let cleared = try #require(try await store.snapshot(scope: Self.scope)).derivatives
+        #expect(cleared.allSatisfy { $0.derivative != .thumbnail })
+        #expect(cleared.filter { $0.derivative == .preview }.map(\.assetID) == ["kept-preview"])
+    }
+
     @Test func missingDerivativeFileIsRemovedFromManifestWithoutTouchingIndex() async throws {
         let fixture = try IndexFixture()
         defer { fixture.cleanup() }
@@ -163,6 +197,112 @@ struct LibraryIndexSynchronizationTests {
         let snapshot = try #require(try await store.snapshot(scope: Self.scope))
         #expect(snapshot.derivatives.isEmpty)
         #expect(snapshot.assets.map(\.id) == ["asset"])
+    }
+
+    @Test func thumbnailWarmingReportsAlreadyCachedAssetsAsComplete() async throws {
+        let fixture = try IndexFixture()
+        defer { fixture.cleanup() }
+        let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        let asset = Self.record(id: "asset", bucket: "2026-10-01")
+        let generation = try await store.beginGeneration(scope: Self.scope)
+        try await store.upsert(assets: [asset], generation: generation, scope: Self.scope)
+        _ = try await store.acceptGeneration(
+            generation,
+            watermark: nil,
+            historicalCursor: nil,
+            expectedAssetCount: 1,
+            scope: Self.scope
+        )
+        try await store.upsert(
+            derivatives: [
+                .init(
+                    assetID: asset.id,
+                    derivative: .thumbnail,
+                    pixelSize: nil,
+                    sourceRevision: asset.updatedAt.ISO8601Format(),
+                    relativeFileKey: "thumbnail/asset.jpg",
+                    byteCount: 100,
+                    digest: "digest",
+                    isVerified: true,
+                    lastAccessedAt: .now,
+                    completedAt: .now
+                ),
+            ],
+            scope: Self.scope
+        )
+        let cache = LibraryThumbnailCache(store: store, rootURL: fixture.cacheURL)
+        let recorder = ThumbnailWarmProgressRecorder()
+
+        let result = try await cache.warm(
+            assets: [asset],
+            scope: Self.scope,
+            endpoint: #require(URL(string: "https://example.com/api")),
+            accessToken: "token"
+        ) { progress in
+            await recorder.append(progress)
+        }
+
+        #expect(result == .init(
+            processedCount: 0,
+            pendingCount: 0,
+            cachedCount: 1,
+            cachedBytes: 100,
+            eligibleCount: 1
+        ))
+        #expect(await recorder.values == [result])
+    }
+
+    @Test func failedThumbnailRebuildKeepsExistingCache() async throws {
+        let fixture = try IndexFixture()
+        defer { fixture.cleanup() }
+        let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        let asset = Self.record(id: "asset", bucket: "2026-10-01")
+        let generation = try await store.beginGeneration(scope: Self.scope)
+        try await store.upsert(assets: [asset], generation: generation, scope: Self.scope)
+        _ = try await store.acceptGeneration(
+            generation,
+            watermark: nil,
+            historicalCursor: nil,
+            expectedAssetCount: 1,
+            scope: Self.scope
+        )
+        let thumbnailDirectory = fixture.cacheURL
+            .appending(path: Self.scope.cacheNamespace, directoryHint: .isDirectory)
+            .appending(path: MediaDerivative.thumbnail.rawValue, directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: thumbnailDirectory, withIntermediateDirectories: true)
+        let existingFile = thumbnailDirectory.appending(path: "existing.bin")
+        try Data("existing".utf8).write(to: existingFile)
+        let existingRecord = try LibraryIndexDerivativeRecord(
+            assetID: asset.id,
+            derivative: .thumbnail,
+            pixelSize: nil,
+            sourceRevision: asset.updatedAt.ISO8601Format(),
+            relativeFileKey: "thumbnail/existing.bin",
+            byteCount: Int64(Data(contentsOf: existingFile).count),
+            digest: "existing-digest",
+            isVerified: true,
+            lastAccessedAt: .now,
+            completedAt: .now
+        )
+        try await store.upsert(derivatives: [existingRecord], scope: Self.scope)
+        let cache = LibraryThumbnailCache(store: store, rootURL: fixture.cacheURL)
+
+        await #expect(throws: (any Error).self) {
+            _ = try await cache.rebuild(
+                assets: [asset],
+                scope: Self.scope,
+                endpoint: #require(URL(string: "remmich-test://server/api")),
+                accessToken: "token"
+            )
+        }
+
+        #expect(FileManager.default.fileExists(atPath: existingFile.path))
+        let derivatives = try #require(try await store.snapshot(scope: Self.scope)).derivatives
+        let thumbnail = try #require(derivatives.first { $0.derivative == .thumbnail })
+        #expect(thumbnail.assetID == existingRecord.assetID)
+        #expect(thumbnail.relativeFileKey == existingRecord.relativeFileKey)
+        #expect(thumbnail.digest == existingRecord.digest)
+        #expect(thumbnail.byteCount == existingRecord.byteCount)
     }
 
     @Test func removingAccountCacheDeletesOnlyItsNamespace() async throws {
@@ -290,10 +430,11 @@ struct LibraryIndexSynchronizationTests {
 
     private static func derivative(
         _ kind: MediaDerivative,
-        bytes: Int64
+        bytes: Int64,
+        assetID: String? = nil
     ) -> LibraryIndexDerivativeRecord {
         .init(
-            assetID: "asset-\(kind.rawValue)",
+            assetID: assetID ?? "asset-\(kind.rawValue)",
             derivative: kind,
             pixelSize: nil,
             sourceRevision: "revision",
@@ -311,6 +452,14 @@ private actor IndexProgressRecorder {
     private(set) var values: [LibraryIndexProgress] = []
 
     func append(_ progress: LibraryIndexProgress) {
+        values.append(progress)
+    }
+}
+
+private actor ThumbnailWarmProgressRecorder {
+    private(set) var values: [LibraryThumbnailCache.WarmProgress] = []
+
+    func append(_ progress: LibraryThumbnailCache.WarmProgress) {
         values.append(progress)
     }
 }

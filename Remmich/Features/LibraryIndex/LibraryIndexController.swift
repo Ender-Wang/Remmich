@@ -18,6 +18,14 @@ final class LibraryIndexController {
         case failed(String)
     }
 
+    enum ThumbnailWarmingStatus: Equatable {
+        case off
+        case waiting
+        case warming
+        case upToDate
+        case failed(String)
+    }
+
     private(set) var status: Status = .idle
     private(set) var indexedAssetCount = 0
     private(set) var indexedPhotoCount = 0
@@ -39,6 +47,15 @@ final class LibraryIndexController {
     private(set) var thumbnailWarmingEnabled = UserDefaults.standard.bool(
         forKey: "library-index-thumbnail-warming"
     )
+    private(set) var thumbnailWarmingStatus: ThumbnailWarmingStatus = .off
+    private(set) var thumbnailWarmingCachedCount = 0
+    private(set) var thumbnailWarmingCachedBytes: Int64 = 0
+    private(set) var thumbnailWarmingEligibleCount = 0
+    private(set) var thumbnailWarmingProcessedCount = 0
+    private(set) var thumbnailWarmingPendingCount = 0
+    private(set) var thumbnailWarmingStartedAt: Date?
+    private(set) var thumbnailWarmingCompletedElapsed: TimeInterval?
+    private(set) var thumbnailWarmingLastUpdatedAt: Date?
 
     private let store: SQLiteLibraryIndexStore
     private let synchronizer: LibraryIndexSynchronizer
@@ -51,6 +68,8 @@ final class LibraryIndexController {
     private var warmingTask: Task<Void, Never>?
     private var lastPublishedAt = Date.distantPast
     private var runID: UInt64 = 0
+    private var warmingRunID: UInt64 = 0
+    private var lastWarmingLoggedMilestone = -1
 
     init(
         source: any TimelineReading,
@@ -61,6 +80,7 @@ final class LibraryIndexController {
         self.media = media
         synchronizer = LibraryIndexSynchronizer(source: source, store: store)
         thumbnailCache = LibraryThumbnailCache(store: store)
+        thumbnailWarmingStatus = thumbnailWarmingEnabled ? .waiting : .off
     }
 
     var fractionCompleted: Double {
@@ -74,6 +94,14 @@ final class LibraryIndexController {
 
     var estimatedRemaining: TimeInterval? {
         estimatedRemaining(at: Date())
+    }
+
+    var thumbnailWarmingFractionCompleted: Double {
+        guard thumbnailWarmingEligibleCount > 0 else { return 0 }
+        return min(
+            1,
+            max(0, Double(thumbnailWarmingCachedCount) / Double(thumbnailWarmingEligibleCount))
+        )
     }
 
     func elapsed(at date: Date) -> TimeInterval? {
@@ -93,6 +121,25 @@ final class LibraryIndexController {
         return elapsed * Double(expectedAssetCount - indexedAssetCount) / Double(indexedAssetCount)
     }
 
+    func thumbnailWarmingElapsed(at date: Date) -> TimeInterval? {
+        if thumbnailWarmingStatus == .warming, let thumbnailWarmingStartedAt {
+            return date.timeIntervalSince(thumbnailWarmingStartedAt)
+        }
+        return thumbnailWarmingCompletedElapsed
+    }
+
+    func thumbnailWarmingEstimatedRemaining(at date: Date) -> TimeInterval? {
+        guard let elapsed = thumbnailWarmingElapsed(at: date),
+              thumbnailWarmingProcessedCount > 0,
+              thumbnailWarmingPendingCount > thumbnailWarmingProcessedCount
+        else {
+            return nil
+        }
+        return elapsed
+            * Double(thumbnailWarmingPendingCount - thumbnailWarmingProcessedCount)
+            / Double(thumbnailWarmingProcessedCount)
+    }
+
     func start(session: AccountSession, endpoint: URL) {
         let nextScope = MediaAccountScope(session: session)
         suspend()
@@ -105,6 +152,7 @@ final class LibraryIndexController {
             indexedVideoCount = 0
             expectedAssetCount = 0
             startedAt = nil
+            thumbnailWarmingLastUpdatedAt = nil
         }
         refreshStoredAccounts()
         run(fullReconciliation: false)
@@ -143,16 +191,41 @@ final class LibraryIndexController {
         thumbnailWarmingEnabled = enabled
         UserDefaults.standard.set(enabled, forKey: "library-index-thumbnail-warming")
         if enabled {
+            thumbnailWarmingStatus = .waiting
             warmThumbnails()
+        } else {
+            cancelThumbnailWarming(reason: "disabled")
+            thumbnailWarmingStatus = .off
         }
     }
 
+    func syncThumbnailCache() {
+        warmThumbnails(manual: true)
+    }
+
+    func rebuildThumbnailCache() {
+        warmThumbnails(manual: true, rebuild: true)
+    }
+
     func clearThumbnails() {
+        thumbnailWarmingEnabled = false
+        UserDefaults.standard.set(false, forKey: "library-index-thumbnail-warming")
+        cancelThumbnailWarming(reason: "clear-thumbnails")
+        thumbnailWarmingStatus = .off
         guard let scope else { return }
         Task {
             try? await thumbnailCache.clearThumbnails(scope: scope)
             media?.clearRegisteredWarmedThumbnails()
             storageReport = await (try? store.storageReport(scope: scope)) ?? storageReport
+            thumbnailWarmingCachedCount = 0
+            thumbnailWarmingCachedBytes = 0
+            thumbnailWarmingEligibleCount = 0
+            thumbnailWarmingProcessedCount = 0
+            thumbnailWarmingPendingCount = 0
+            thumbnailWarmingStartedAt = nil
+            thumbnailWarmingCompletedElapsed = nil
+            thumbnailWarmingLastUpdatedAt = nil
+            thumbnailWarmingStatus = .off
         }
     }
 
@@ -178,6 +251,12 @@ final class LibraryIndexController {
                 originalBytes: 0,
                 playbackBytes: 0
             )
+            thumbnailWarmingCachedCount = 0
+            thumbnailWarmingCachedBytes = 0
+            thumbnailWarmingEligibleCount = 0
+            thumbnailWarmingProcessedCount = 0
+            thumbnailWarmingPendingCount = 0
+            thumbnailWarmingLastUpdatedAt = nil
             storedAccounts = try await store.storedAccounts()
             Self.logger.info(
                 "Removed current account library data scope=\(scope.cacheNamespace.prefix(8), privacy: .private)"
@@ -211,9 +290,8 @@ final class LibraryIndexController {
     func suspend() {
         runID &+= 1
         task?.cancel()
-        warmingTask?.cancel()
         task = nil
-        warmingTask = nil
+        cancelThumbnailWarming(reason: "suspended")
         if status == .indexing {
             status = .idle
         }
@@ -232,6 +310,15 @@ final class LibraryIndexController {
         startedAt = nil
         completedElapsed = nil
         lastUpdatedAt = nil
+        thumbnailWarmingCachedCount = 0
+        thumbnailWarmingCachedBytes = 0
+        thumbnailWarmingEligibleCount = 0
+        thumbnailWarmingProcessedCount = 0
+        thumbnailWarmingPendingCount = 0
+        thumbnailWarmingStartedAt = nil
+        thumbnailWarmingCompletedElapsed = nil
+        thumbnailWarmingLastUpdatedAt = nil
+        thumbnailWarmingStatus = thumbnailWarmingEnabled ? .waiting : .off
     }
 
     private func run(fullReconciliation: Bool) {
@@ -286,6 +373,14 @@ final class LibraryIndexController {
                 storageReport = try await store.storageReport(scope: scope)
                 storedAccounts = try await store.storedAccounts()
                 try? await thumbnailCache.reconcile(scope: scope)
+                if let snapshot = try? await store.snapshot(scope: scope),
+                   let progress = try? await thumbnailCache.cachedProgress(
+                       assets: snapshot.assets,
+                       scope: scope
+                   )
+                {
+                    applyThumbnailWarmingProgress(progress)
+                }
                 if let thumbnails = try? await thumbnailCache.availableThumbnails(scope: scope) {
                     media?.registerWarmedThumbnails(thumbnails)
                 }
@@ -321,39 +416,178 @@ final class LibraryIndexController {
         }
     }
 
-    private func warmThumbnails() {
+    private func warmThumbnails(manual: Bool = false, rebuild: Bool = false) {
         let thermalState = ProcessInfo.processInfo.thermalState
-        guard thumbnailWarmingEnabled,
-              !ProcessInfo.processInfo.isLowPowerModeEnabled,
-              thermalState == .nominal || thermalState == .fair,
-              let scope,
-              let endpoint,
-              let accessToken,
-              warmingTask == nil
-        else { return }
+        guard thumbnailWarmingEnabled || manual else { return }
+        guard !ProcessInfo.processInfo.isLowPowerModeEnabled else {
+            thumbnailWarmingStatus = .waiting
+            Self.logger.info("Thumbnail warming deferred reason=low-power-mode")
+            return
+        }
+        guard thermalState == .nominal || thermalState == .fair else {
+            thumbnailWarmingStatus = .waiting
+            Self.logger.info(
+                "Thumbnail warming deferred reason=thermal state=\(Self.label(for: thermalState), privacy: .public)"
+            )
+            return
+        }
+        guard let scope, let endpoint, let accessToken else {
+            thumbnailWarmingStatus = .waiting
+            Self.logger.info("Thumbnail warming deferred reason=session-unavailable")
+            return
+        }
+        guard warmingTask == nil else {
+            Self.logger.info("Thumbnail warming already active")
+            return
+        }
+        warmingRunID &+= 1
+        let currentWarmingRunID = warmingRunID
+        thumbnailWarmingStatus = .warming
+        thumbnailWarmingCachedCount = 0
+        thumbnailWarmingCachedBytes = 0
+        thumbnailWarmingEligibleCount = 0
+        thumbnailWarmingProcessedCount = 0
+        thumbnailWarmingPendingCount = 0
+        thumbnailWarmingStartedAt = Date()
+        thumbnailWarmingCompletedElapsed = nil
+        lastWarmingLoggedMilestone = -1
         let cache = thumbnailCache
         let store = store
         warmingTask = Task { [weak self] in
             guard let self else { return }
+            let startedAt = Date()
             do {
                 try await cache.reconcile(scope: scope)
                 try await media?.registerWarmedThumbnails(cache.availableThumbnails(scope: scope))
-                guard let snapshot = try await store.snapshot(scope: scope) else { return }
-                try await cache.warm(
-                    assets: snapshot.assets,
-                    scope: scope,
-                    endpoint: endpoint,
-                    accessToken: accessToken
+                guard let snapshot = try await store.snapshot(scope: scope) else {
+                    thumbnailWarmingStatus = .waiting
+                    Self.logger.info("Thumbnail warming deferred reason=index-unavailable")
+                    if currentWarmingRunID == warmingRunID {
+                        warmingTask = nil
+                    }
+                    return
+                }
+                Self.logger.info(
+                    "Thumbnail warming started eligible=\(snapshot.assets.count) workers=2"
                 )
-                storageReport = try await store.storageReport(scope: scope)
+                let progress: @Sendable (LibraryThumbnailCache.WarmProgress) async -> Void = { [weak self] progress in
+                    await self?.publishThumbnailWarmingProgress(
+                        progress,
+                        warmingRunID: currentWarmingRunID
+                    )
+                }
+                let finalProgress: LibraryThumbnailCache.WarmProgress
+                if rebuild {
+                    Self.logger.info("Thumbnail cache rebuild started")
+                    finalProgress = try await cache.rebuild(
+                        assets: snapshot.assets,
+                        scope: scope,
+                        endpoint: endpoint,
+                        accessToken: accessToken,
+                        progress: progress
+                    )
+                } else {
+                    finalProgress = try await cache.warm(
+                        assets: snapshot.assets,
+                        scope: scope,
+                        endpoint: endpoint,
+                        accessToken: accessToken,
+                        progress: progress
+                    )
+                }
+                guard currentWarmingRunID == warmingRunID else { return }
+                let completedReport = try await store.storageReport(scope: scope)
+                storageReport = completedReport
+                thumbnailWarmingCompletedElapsed = Date().timeIntervalSince(startedAt)
+                thumbnailWarmingLastUpdatedAt = Date()
+                let unavailableCount = finalProgress.eligibleCount - finalProgress.cachedCount
+                if unavailableCount == 0 {
+                    thumbnailWarmingStatus = thumbnailWarmingEnabled ? .upToDate : .off
+                } else {
+                    thumbnailWarmingStatus = .failed(
+                        "\(unavailableCount.formatted()) failed"
+                    )
+                }
                 try await media?.registerWarmedThumbnails(cache.availableThumbnails(scope: scope))
-            } catch is CancellationError {
-                return
+                Self.logger.info(
+                    "Thumbnail warming completed cached=\(finalProgress.cachedCount) eligible=\(finalProgress.eligibleCount) unavailable=\(unavailableCount) bytes=\(finalProgress.cachedBytes) elapsedMs=\(Self.elapsedMilliseconds(since: startedAt))"
+                )
             } catch {
-                // Warming is optional and never changes metadata index correctness.
+                if Task.isCancelled {
+                    Self.logger.info(
+                        "Thumbnail warming cancelled elapsedMs=\(Self.elapsedMilliseconds(since: startedAt))"
+                    )
+                } else {
+                    if rebuild,
+                       let snapshot = try? await store.snapshot(scope: scope),
+                       let restoredProgress = try? await cache.cachedProgress(
+                           assets: snapshot.assets,
+                           scope: scope
+                       )
+                    {
+                        applyThumbnailWarmingProgress(restoredProgress)
+                    }
+                    if currentWarmingRunID == warmingRunID {
+                        thumbnailWarmingCompletedElapsed = Date().timeIntervalSince(startedAt)
+                        thumbnailWarmingStatus = .failed(
+                            "Failed: \(Self.message(for: error))"
+                        )
+                    }
+                    Self.logger.error(
+                        "Thumbnail warming failed elapsedMs=\(Self.elapsedMilliseconds(since: startedAt)) error=\(Self.message(for: error), privacy: .public)"
+                    )
+                }
             }
-            warmingTask = nil
+            if currentWarmingRunID == warmingRunID {
+                warmingTask = nil
+            }
         }
+    }
+
+    private func cancelThumbnailWarming(reason: String) {
+        warmingRunID &+= 1
+        guard let warmingTask else {
+            if thumbnailWarmingEnabled {
+                thumbnailWarmingStatus = .waiting
+            }
+            return
+        }
+        thumbnailWarmingCompletedElapsed = thumbnailWarmingStartedAt.map {
+            Date().timeIntervalSince($0)
+        }
+        warmingTask.cancel()
+        self.warmingTask = nil
+        thumbnailWarmingStatus = thumbnailWarmingEnabled ? .waiting : .off
+        Self.logger.info(
+            "Thumbnail warming cancellation requested reason=\(reason, privacy: .public)"
+        )
+    }
+
+    private func publishThumbnailWarmingProgress(
+        _ progress: LibraryThumbnailCache.WarmProgress,
+        warmingRunID: UInt64
+    ) {
+        guard warmingRunID == self.warmingRunID else { return }
+        applyThumbnailWarmingProgress(progress)
+        let percentage = progress.eligibleCount == 0
+            ? 100
+            : Int((Double(progress.cachedCount) / Double(progress.eligibleCount) * 100).rounded())
+        let milestone = percentage / 5
+        guard milestone != lastWarmingLoggedMilestone || progress.processedCount == progress.pendingCount else {
+            return
+        }
+        lastWarmingLoggedMilestone = milestone
+        Self.logger.info(
+            "Thumbnail warming progress cached=\(progress.cachedCount) eligible=\(progress.eligibleCount) bytes=\(progress.cachedBytes) processed=\(progress.processedCount) pending=\(progress.pendingCount) percent=\(percentage)"
+        )
+    }
+
+    private func applyThumbnailWarmingProgress(_ progress: LibraryThumbnailCache.WarmProgress) {
+        thumbnailWarmingCachedCount = progress.cachedCount
+        thumbnailWarmingCachedBytes = progress.cachedBytes
+        thumbnailWarmingEligibleCount = progress.eligibleCount
+        thumbnailWarmingProcessedCount = progress.processedCount
+        thumbnailWarmingPendingCount = progress.pendingCount
     }
 
     private func publish(_ result: LibraryIndexSyncResult, force: Bool) {
@@ -387,6 +621,16 @@ final class LibraryIndexController {
         case .historical: "historical"
         case .incremental: "incremental"
         case .fullReconciliation: "rebuild"
+        }
+    }
+
+    private nonisolated static func label(for thermalState: ProcessInfo.ThermalState) -> String {
+        switch thermalState {
+        case .nominal: "nominal"
+        case .fair: "fair"
+        case .serious: "serious"
+        case .critical: "critical"
+        @unknown default: "unknown"
         }
     }
 

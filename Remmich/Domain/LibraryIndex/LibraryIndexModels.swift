@@ -162,6 +162,11 @@ nonisolated protocol LibraryIndexStoring: Sendable {
     func setPaused(_ paused: Bool, scope: MediaAccountScope) async throws
     func setLastError(_ message: String?, scope: MediaAccountScope) async throws
     func upsert(derivatives: [LibraryIndexDerivativeRecord], scope: MediaAccountScope) async throws
+    func replace(
+        derivatives: [LibraryIndexDerivativeRecord],
+        kind: MediaDerivative,
+        scope: MediaAccountScope
+    ) async throws
     func clearDerivatives(scope: MediaAccountScope, kinds: Set<MediaDerivative>) async throws
     func storageReport(scope: MediaAccountScope) async throws -> LibraryIndexStorageReport
     func storedAccounts() async throws -> [StoredLibraryAccount]

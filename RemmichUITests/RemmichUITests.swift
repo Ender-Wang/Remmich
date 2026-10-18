@@ -60,7 +60,7 @@ final class RemmichUITests: XCTestCase {
             app.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.5)).tap()
             XCTAssertFalse(accountSettings.waitForExistence(timeout: 1))
         } else {
-            app.buttons["Done"].firstMatch.tap()
+            app.buttons["Close"].firstMatch.tap()
         }
     }
 

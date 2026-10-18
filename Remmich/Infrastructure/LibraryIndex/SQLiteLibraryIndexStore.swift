@@ -375,32 +375,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
         let database = try preparedDatabase(scope: scope)
         try database.transaction {
             for derivative in derivatives {
-                try database.execute(
-                    """
-                    INSERT INTO derivatives(
-                        scope, asset_id, derivative, pixel_width, pixel_height,
-                        source_revision, relative_file_key, byte_count, digest,
-                        is_verified, last_accessed_at, completed_at
-                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(scope, asset_id, derivative, pixel_width, pixel_height) DO UPDATE SET
-                        source_revision = excluded.source_revision,
-                        relative_file_key = excluded.relative_file_key,
-                        byte_count = excluded.byte_count,
-                        digest = excluded.digest,
-                        is_verified = excluded.is_verified,
-                        last_accessed_at = excluded.last_accessed_at,
-                        completed_at = excluded.completed_at
-                    """,
-                    [
-                        .text(scope.cacheNamespace), .text(derivative.assetID),
-                        .text(derivative.derivative.rawValue),
-                        .int(derivative.pixelSize?.width ?? 0), .int(derivative.pixelSize?.height ?? 0),
-                        .text(derivative.sourceRevision), .text(derivative.relativeFileKey),
-                        .int64(derivative.byteCount), .text(derivative.digest),
-                        .bool(derivative.isVerified), .date(derivative.lastAccessedAt),
-                        .date(derivative.completedAt),
-                    ]
-                )
+                try upsert(derivative: derivative, scope: scope, database: database)
             }
         }
     }
@@ -413,6 +388,23 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
             "DELETE FROM derivatives WHERE scope = ? AND derivative IN (\(placeholders))",
             [.text(scope.cacheNamespace)] + kinds.sorted { $0.rawValue < $1.rawValue }.map { .text($0.rawValue) }
         )
+    }
+
+    func replace(
+        derivatives: [LibraryIndexDerivativeRecord],
+        kind: MediaDerivative,
+        scope: MediaAccountScope
+    ) async throws {
+        let database = try preparedDatabase(scope: scope)
+        try database.transaction {
+            try database.execute(
+                "DELETE FROM derivatives WHERE scope = ? AND derivative = ?",
+                [.text(scope.cacheNamespace), .text(kind.rawValue)]
+            )
+            for derivative in derivatives {
+                try upsert(derivative: derivative, scope: scope, database: database)
+            }
+        }
     }
 
     func storageReport(scope: MediaAccountScope) async throws -> LibraryIndexStorageReport {
@@ -436,6 +428,39 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
             playbackBytes: snapshot?.derivatives
                 .filter { $0.derivative == .videoPlayback }
                 .reduce(0) { $0 + $1.byteCount } ?? 0
+        )
+    }
+
+    private func upsert(
+        derivative: LibraryIndexDerivativeRecord,
+        scope: MediaAccountScope,
+        database: SQLiteConnection
+    ) throws {
+        try database.execute(
+            """
+            INSERT INTO derivatives(
+                scope, asset_id, derivative, pixel_width, pixel_height,
+                source_revision, relative_file_key, byte_count, digest,
+                is_verified, last_accessed_at, completed_at
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(scope, asset_id, derivative, pixel_width, pixel_height) DO UPDATE SET
+                source_revision = excluded.source_revision,
+                relative_file_key = excluded.relative_file_key,
+                byte_count = excluded.byte_count,
+                digest = excluded.digest,
+                is_verified = excluded.is_verified,
+                last_accessed_at = excluded.last_accessed_at,
+                completed_at = excluded.completed_at
+            """,
+            [
+                .text(scope.cacheNamespace), .text(derivative.assetID),
+                .text(derivative.derivative.rawValue),
+                .int(derivative.pixelSize?.width ?? 0), .int(derivative.pixelSize?.height ?? 0),
+                .text(derivative.sourceRevision), .text(derivative.relativeFileKey),
+                .int64(derivative.byteCount), .text(derivative.digest),
+                .bool(derivative.isVerified), .date(derivative.lastAccessedAt),
+                .date(derivative.completedAt),
+            ]
         )
     }
 
