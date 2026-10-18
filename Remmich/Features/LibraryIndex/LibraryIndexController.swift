@@ -1,9 +1,15 @@
 import Foundation
 import Observation
+import OSLog
 
 @MainActor
 @Observable
 final class LibraryIndexController {
+    private nonisolated static let logger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "Remmich",
+        category: "LibraryIndex"
+    )
+
     enum Status: Equatable {
         case idle
         case indexing
@@ -157,6 +163,10 @@ final class LibraryIndexController {
             startedAt = Date()
         }
         status = .indexing
+        let runStartedAt = Date()
+        Self.logger.info(
+            "Library index started operation=\(fullReconciliation ? "rebuild" : "sync", privacy: .public) scope=\(scope.cacheNamespace.prefix(8), privacy: .private)"
+        )
         let synchronizer = synchronizer
         task = Task { [weak self] in
             guard let self else { return }
@@ -175,9 +185,12 @@ final class LibraryIndexController {
                     publish(result, force: false)
                 }
                 guard currentRunID == runID else { return }
-                _ = try await store.finishMaintenance(
+                let maintenance = try await store.finishMaintenance(
                     scope: scope,
                     compact: result.mode != .incremental
+                )
+                Self.logger.info(
+                    "Library index maintenance finished removedGenerations=\(maintenance.removedGenerations) removedAssets=\(maintenance.removedAssetRows) removedGroups=\(maintenance.removedGroupRows) compacted=\(maintenance.didCompact) bytesBefore=\(maintenance.metadataBytesBefore) bytesAfter=\(maintenance.metadataBytesAfter)"
                 )
                 publish(result, force: true)
                 status = .upToDate
@@ -190,14 +203,24 @@ final class LibraryIndexController {
                 if thumbnailWarmingEnabled {
                     warmThumbnails()
                 }
+                let metadataBytes = storageReport.metadataBytes
+                Self.logger.info(
+                    "Library index completed generation=\(result.generation) indexed=\(result.indexedAssetCount) expected=\(result.expectedAssetCount) elapsedMs=\(Self.elapsedMilliseconds(since: runStartedAt)) metadataBytes=\(metadataBytes)"
+                )
             } catch is CancellationError {
                 if currentRunID == runID, status == .indexing {
                     status = .idle
                 }
+                Self.logger.info(
+                    "Library index cancelled elapsedMs=\(Self.elapsedMilliseconds(since: runStartedAt))"
+                )
             } catch {
                 if currentRunID == runID {
                     status = .failed(Self.message(for: error))
                 }
+                Self.logger.error(
+                    "Library index failed elapsedMs=\(Self.elapsedMilliseconds(since: runStartedAt)) error=\(Self.message(for: error), privacy: .public)"
+                )
             }
             if currentRunID == runID {
                 task = nil
@@ -241,11 +264,29 @@ final class LibraryIndexController {
     }
 
     private func publish(_ result: LibraryIndexSyncResult, force: Bool) {
+        if !force {
+            Self.logger.info(
+                "Library index generation accepted mode=\(Self.label(for: result.mode), privacy: .public) generation=\(result.generation) indexed=\(result.indexedAssetCount) expected=\(result.expectedAssetCount) hasMoreHistory=\(result.hasMoreHistory) prunedGenerations=\(result.cleanup.removedGenerations) prunedAssets=\(result.cleanup.removedAssetRows) prunedGroups=\(result.cleanup.removedGroupRows)"
+            )
+        }
         let now = Date()
         guard force || now.timeIntervalSince(lastPublishedAt) >= 1 else { return }
         indexedAssetCount = result.indexedAssetCount
         expectedAssetCount = result.expectedAssetCount
         lastPublishedAt = now
+    }
+
+    private nonisolated static func label(for mode: LibraryIndexSyncMode) -> String {
+        switch mode {
+        case .recent: "recent"
+        case .historical: "historical"
+        case .incremental: "incremental"
+        case .fullReconciliation: "rebuild"
+        }
+    }
+
+    private nonisolated static func elapsedMilliseconds(since date: Date) -> Int {
+        max(0, Int(Date().timeIntervalSince(date) * 1000))
     }
 
     private static func message(for error: Error) -> String {
