@@ -5,6 +5,36 @@ import Testing
 
 @Suite("Timeline range catalog")
 struct TimelineRangeCatalogTests {
+    @Test func groupedCardsRetainOnlyBoundedDeterministicCoverCandidates() {
+        let assets = (0 ..< 30).map { index in
+            TimelineAssetSummary(
+                id: "asset-\(index)",
+                ownerID: "owner",
+                capturedAt: Date(timeIntervalSince1970: TimeInterval(index)),
+                uploadedAt: Date(timeIntervalSince1970: TimeInterval(index)),
+                localOffsetHours: 0,
+                mediaKind: .image,
+                durationMilliseconds: nil,
+                aspectRatio: 1,
+                isFavorite: false,
+                visibility: .timeline,
+                livePhotoVideoID: nil,
+                stack: nil,
+                projectionType: nil,
+                thumbhash: nil,
+                thumbnailRevision: .distantPast
+            )
+        }
+
+        let first = TimelineGroupedCatalogEntry.boundedCovers(from: assets)
+        let second = TimelineGroupedCatalogEntry.boundedCovers(from: assets)
+
+        #expect(first.count == TimelineGroupedCatalogEntry.coverLimit)
+        #expect(first.map(\.id) == second.map(\.id))
+        #expect(first.first?.id == "asset-0")
+        #expect(first.last?.id == "asset-29")
+    }
+
     @Test func groupedCatalogCachesStableMonthAndYearProjections() {
         let summaries = [
             TimelineBucketSummary(id: .init(rawValue: "2026-10-01"), assetCount: 8),

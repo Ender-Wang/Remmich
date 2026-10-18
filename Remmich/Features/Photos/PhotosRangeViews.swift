@@ -554,7 +554,7 @@ private struct PhotosLibraryGroupedCatalogView: View {
                 title: day.displayDate?.formatted(date: .abbreviated, time: .omitted) ?? day.id,
                 count: entry.assetCount,
                 systemImage: dayIconSystemImage,
-                assets: entry.assets,
+                assets: entry.coverAssets,
                 media: media,
                 motion: motion,
                 onSelect: onSelect,
@@ -567,7 +567,7 @@ private struct PhotosLibraryGroupedCatalogView: View {
                 title: "Week of \(week.startDate.formatted(date: .abbreviated, time: .omitted))",
                 count: entry.assetCount,
                 systemImage: "calendar",
-                assets: entry.assets,
+                assets: entry.coverAssets,
                 media: media,
                 motion: motion,
                 onSelect: onSelect,
@@ -1863,9 +1863,11 @@ private struct PhotosRangeCard: View {
 
     private func loadBatch(_ index: Int) async -> [TimelineAssetSummary] {
         if let store, bucketIDs.indices.contains(index) {
-            return await store.rangeCoverAssets(in: bucketIDs[index])
+            return await TimelineGroupedCatalogEntry.boundedCovers(
+                from: store.rangeCoverAssets(in: bucketIDs[index])
+            )
         }
-        return assets
+        return TimelineGroupedCatalogEntry.boundedCovers(from: assets)
     }
 
     private func runSlideshow() async {

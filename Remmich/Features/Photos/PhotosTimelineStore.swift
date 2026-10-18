@@ -696,7 +696,7 @@ final class PhotosTimelineStore {
                         id: .day(summary.id, day.id),
                         assetCount: day.assets.count,
                         owningBucketIDs: [summary.id],
-                        assets: day.assets
+                        coverAssets: TimelineGroupedCatalogEntry.boundedCovers(from: day.assets)
                     )
                 },
                 loadedBucketIDs: allBucketIDs,
@@ -726,7 +726,9 @@ final class PhotosTimelineStore {
                         id: .week(summary.id, week.id),
                         assetCount: week.assetCount,
                         owningBucketIDs: [previousID, summary.id].compactMap(\.self),
-                        assets: week.days.reversed().flatMap(\.assets)
+                        coverAssets: TimelineGroupedCatalogEntry.boundedCovers(
+                            from: week.days.reversed().flatMap(\.assets)
+                        )
                     )
                 },
                 loadedBucketIDs: allBucketIDs,
@@ -745,7 +747,7 @@ final class PhotosTimelineStore {
                     id: .day(bucketID, day.id),
                     assetCount: day.assets.count,
                     owningBucketIDs: [bucketID],
-                    assets: day.assets
+                    coverAssets: TimelineGroupedCatalogEntry.boundedCovers(from: day.assets)
                 )
             },
             loadedBucketIDs: loadedGroupedBucketIDs,
@@ -782,7 +784,9 @@ final class PhotosTimelineStore {
                     id: .week(bucketID, week.id),
                     assetCount: week.assetCount,
                     owningBucketIDs: [previousID, bucketID].compactMap(\.self),
-                    assets: week.days.reversed().flatMap(\.assets)
+                    coverAssets: TimelineGroupedCatalogEntry.boundedCovers(
+                        from: week.days.reversed().flatMap(\.assets)
+                    )
                 )
             },
             loadedBucketIDs: loadedGroupedBucketIDs,

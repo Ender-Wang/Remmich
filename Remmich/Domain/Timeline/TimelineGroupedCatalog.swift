@@ -28,13 +28,29 @@ nonisolated enum TimelineGroupedCatalogID: Hashable, Sendable {
 }
 
 nonisolated struct TimelineGroupedCatalogEntry: Identifiable, Sendable {
+    static let coverLimit = 12
+
     let id: TimelineGroupedCatalogID
     let assetCount: Int
     let owningBucketIDs: [TimelineBucketID]
-    let assets: [TimelineAssetSummary]
+    let coverAssets: [TimelineAssetSummary]
 
     var stableKey: String {
         id.stableKey
+    }
+
+    static func boundedCovers(
+        from assets: [TimelineAssetSummary],
+        limit: Int = coverLimit
+    ) -> [TimelineAssetSummary] {
+        guard limit > 0, assets.count > limit else {
+            return limit > 0 ? assets : []
+        }
+        guard limit > 1 else { return [assets[0]] }
+        return (0 ..< limit).map { slot in
+            let index = slot * (assets.count - 1) / (limit - 1)
+            return assets[index]
+        }
     }
 }
 
@@ -84,7 +100,7 @@ nonisolated struct TimelineGroupedCatalogCache: Sendable {
                     id: .month(summary.id),
                     assetCount: summary.assetCount,
                     owningBucketIDs: [summary.id],
-                    assets: []
+                    coverAssets: []
                 )
             },
             loadedBucketIDs: Set(months.map(\.id)),
@@ -99,7 +115,7 @@ nonisolated struct TimelineGroupedCatalogCache: Sendable {
                     id: .year(year.id),
                     assetCount: year.assetCount,
                     owningBucketIDs: year.months.map(\.id),
-                    assets: []
+                    coverAssets: []
                 )
             },
             loadedBucketIDs: Set(months.map(\.id)),
