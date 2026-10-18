@@ -144,6 +144,24 @@ nonisolated struct TimelineGroupedCatalogCache: Sendable {
         )
     }
 
+    mutating func replaceContributions(
+        level: TimelineGroupedCatalogLevel,
+        contributions newContributions: [TimelineBucketID: [TimelineGroupedCatalogEntry]],
+        loadedBucketIDs: Set<TimelineBucketID>,
+        allBucketIDs: Set<TimelineBucketID>
+    ) {
+        contributions[level] = newContributions
+        let combined = newContributions.values
+            .flatMap(\.self)
+            .sorted { $0.stableKey < $1.stableKey }
+        replace(
+            level: level,
+            entries: combined,
+            loadedBucketIDs: loadedBucketIDs,
+            hasMoreOlderHistory: !allBucketIDs.isSubset(of: loadedBucketIDs)
+        )
+    }
+
     mutating func replace(
         level: TimelineGroupedCatalogLevel,
         entries: [TimelineGroupedCatalogEntry],
