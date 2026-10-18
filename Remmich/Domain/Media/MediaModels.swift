@@ -30,7 +30,7 @@ nonisolated struct MediaAccountScope: Hashable, Sendable {
     }
 }
 
-nonisolated enum MediaDerivative: String, Hashable, Sendable {
+nonisolated enum MediaDerivative: String, Codable, Hashable, Sendable {
     case thumbnail
     case preview
     case fullSize
@@ -38,7 +38,7 @@ nonisolated enum MediaDerivative: String, Hashable, Sendable {
     case videoPlayback
 }
 
-nonisolated struct MediaPixelSize: Hashable, Sendable {
+nonisolated struct MediaPixelSize: Codable, Hashable, Sendable {
     let width: Int
     let height: Int
 

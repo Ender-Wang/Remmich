@@ -1,0 +1,127 @@
+import Foundation
+
+nonisolated enum LibraryIndexMediaScope: String, Codable, Hashable, Sendable {
+    case photos
+    case videos
+}
+
+nonisolated enum LibraryIndexAssetKind: String, Codable, Hashable, Sendable {
+    case image
+    case video
+    case audio
+    case other
+}
+
+nonisolated struct LibraryIndexAssetRecord: Codable, Hashable, Identifiable, Sendable {
+    let id: String
+    let ownerID: String
+    let kind: LibraryIndexAssetKind
+    let livePhotoVideoID: String?
+    let capturedAt: Date
+    let uploadedAt: Date
+    let updatedAt: Date
+    let checksum: String?
+    let width: Int?
+    let height: Int?
+    let aspectRatio: Double
+    let durationMilliseconds: Int?
+    let isFavorite: Bool
+    let visibility: String
+    let isTrashed: Bool
+    let isOffline: Bool
+    let bucketKey: String
+    let dayKey: String
+    let weekKey: String
+    let monthKey: String
+    let yearKey: String
+}
+
+nonisolated struct LibraryIndexGroupRecord: Codable, Hashable, Identifiable, Sendable {
+    let mediaScope: LibraryIndexMediaScope
+    let level: String
+    let key: String
+    let intervalStart: Date
+    let intervalEnd: Date
+    let assetCount: Int
+    let owningBucketKeys: [String]
+    let coverAssetIDs: [String]
+    let mosaicSeed: UInt64
+
+    var id: String {
+        "\(mediaScope.rawValue):\(level):\(key)"
+    }
+}
+
+nonisolated struct LibraryIndexDerivativeRecord: Codable, Hashable, Identifiable, Sendable {
+    let assetID: String
+    let derivative: MediaDerivative
+    let pixelSize: MediaPixelSize?
+    let sourceRevision: String
+    let relativeFileKey: String
+    let byteCount: Int64
+    let digest: String
+    let isVerified: Bool
+    let lastAccessedAt: Date
+    let completedAt: Date
+
+    var id: String {
+        let size = pixelSize.map { "\($0.width)x\($0.height)" } ?? "source"
+        return "\(assetID):\(derivative.rawValue):\(size)"
+    }
+}
+
+nonisolated struct LibraryIndexSyncState: Codable, Equatable, Sendable {
+    let acceptedGeneration: Int64?
+    let lastSuccessfulWatermark: Date?
+    let historicalCursor: String?
+    let isPaused: Bool
+    let expectedAssetCount: Int?
+    let indexedAssetCount: Int
+    let lastError: String?
+}
+
+nonisolated struct LibraryIndexSnapshot: Sendable {
+    let generation: Int64
+    let assets: [LibraryIndexAssetRecord]
+    let groups: [LibraryIndexGroupRecord]
+    let derivatives: [LibraryIndexDerivativeRecord]
+    let syncState: LibraryIndexSyncState
+}
+
+nonisolated protocol LibraryIndexStoring: Sendable {
+    func prepare(scope: MediaAccountScope) async throws
+    func beginGeneration(scope: MediaAccountScope) async throws -> Int64
+    func upsert(
+        assets: [LibraryIndexAssetRecord],
+        generation: Int64,
+        scope: MediaAccountScope
+    ) async throws
+    func replace(
+        groups: [LibraryIndexGroupRecord],
+        generation: Int64,
+        scope: MediaAccountScope
+    ) async throws
+    func acceptGeneration(
+        _ generation: Int64,
+        watermark: Date?,
+        historicalCursor: String?,
+        expectedAssetCount: Int?,
+        scope: MediaAccountScope
+    ) async throws
+    func snapshot(scope: MediaAccountScope) async throws -> LibraryIndexSnapshot?
+    func setPaused(_ paused: Bool, scope: MediaAccountScope) async throws
+    func setLastError(_ message: String?, scope: MediaAccountScope) async throws
+    func upsert(derivatives: [LibraryIndexDerivativeRecord], scope: MediaAccountScope) async throws
+    func clearDerivatives(scope: MediaAccountScope, kinds: Set<MediaDerivative>) async throws
+}
+
+extension TimelineMediaKind {
+    var libraryIndexKind: LibraryIndexAssetKind {
+        switch self {
+        case .image: .image
+        case .video: .video
+        case .audio: .audio
+        case .other: .other
+        }
+    }
+}
