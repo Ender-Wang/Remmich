@@ -12,6 +12,10 @@ import UIKit
 @testable import Remmich
 
 struct RemmichTests {
+    @Test func defaultTimelineQueryKeepsStackMembersSeparate() {
+        #expect(TimelineQuery().includesStacks == false)
+    }
+
     @Test @MainActor func destinationOrderMatchesImmichNavigation() {
         let destinations = AppDestination.allCases
         let titles = destinations.map(\.title)

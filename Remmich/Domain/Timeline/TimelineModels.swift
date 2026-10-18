@@ -42,7 +42,7 @@ nonisolated struct TimelineQuery: Hashable, Sendable {
     var orderBy: TimelineOrderBy = .takenAt
     var visibility: TimelineVisibility = .timeline
     var includesTrashed = false
-    var includesStacks = true
+    var includesStacks = false
     var includesPartners = true
 }
 
