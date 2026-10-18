@@ -43,6 +43,20 @@ struct VideoTimelineReaderTests {
         #expect(try await reader.memories().isEmpty)
     }
 
+    @Test @MainActor func completeVideoSearchSeedsStableDayAndWeekCatalogs() async {
+        let store = PhotosTimelineStore(reader: VideoTimelineReader(source: VideoPageFixture()))
+
+        await store.load()
+
+        let days = store.groupedCatalog(for: .day)
+        let weeks = store.groupedCatalog(for: .week)
+        #expect(days.entries.count == 3)
+        #expect(days.loadedBucketIDs == Set(store.bucketSummaries.map(\.id)))
+        #expect(!days.hasMoreOlderHistory)
+        #expect(!weeks.entries.isEmpty)
+        #expect(!weeks.hasMoreOlderHistory)
+    }
+
     @Test func memoryStacksKeepEveryVideoAndExcludeOtherMedia() async throws {
         let reader = VideoTimelineReader(source: VideoMemoryFixture())
         let memories = try await reader.memories()

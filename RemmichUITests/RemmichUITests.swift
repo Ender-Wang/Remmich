@@ -902,8 +902,8 @@ final class RemmichUITests: XCTestCase {
             }
         }
         // The initial bottom-anchor restoration can consume the first gesture on
-        // a fast simulator. Let it settle, then wait for each lazy month section
-        // to publish before continuing toward the older fixture month.
+        // a fast simulator. Let it settle, then keep crossing the explicit older
+        // catalog edge until the prior fixture month has materialized.
         sleep(1)
         var reachedOlderPhotoDay = hasVisibleOlderPhotoDay()
         for _ in 0 ..< 12 where !reachedOlderPhotoDay {

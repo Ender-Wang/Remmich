@@ -361,6 +361,53 @@ struct PhotosTimelineRegressionTests {
         #expect(store.sectionsByID[buckets[0].id]?.assets.map(\.id) == ["asset-0"])
     }
 
+    @Test @MainActor func groupedCatalogMaterializesOlderHistoryOnceAndSurvivesRangeSwitches() async {
+        let buckets = [
+            TimelineBucketSummary(id: .init(rawValue: "2026-10-01"), assetCount: 1),
+            TimelineBucketSummary(id: .init(rawValue: "2026-09-01"), assetCount: 1),
+            TimelineBucketSummary(id: .init(rawValue: "2026-08-01"), assetCount: 1),
+            TimelineBucketSummary(id: .init(rawValue: "2026-07-01"), assetCount: 1),
+        ]
+        let assets = Dictionary(uniqueKeysWithValues: buckets.enumerated().map { index, bucket in
+            let month = 10 - index
+            return (
+                bucket.id,
+                [Self.asset(
+                    "asset-\(month)",
+                    capturedAt: Self.date(String(format: "2026-%02d-15T12:00:00Z", month))
+                )]
+            )
+        })
+        let reader = ScenarioTimelineReader(buckets: buckets, assets: assets)
+        let store = PhotosTimelineStore(reader: reader)
+        let dayOwner = PhotosLibraryRangeBrowseOwner(id: UUID(), scope: .test)
+        let weekOwner = PhotosLibraryRangeBrowseOwner(id: UUID(), scope: .test)
+        await store.load()
+        await store.prepareGroupedCatalog(.day, owner: dayOwner)
+
+        for _ in 0 ..< buckets.count {
+            await store.loadNextOlderGroupedCatalogPage(.day, owner: dayOwner)
+        }
+
+        let days = store.groupedCatalog(for: .day)
+        #expect(days.entries.count == 4)
+        #expect(days.loadedBucketIDs == Set(buckets.map(\.id)))
+        #expect(!days.hasMoreOlderHistory)
+        #expect(days.entries.allSatisfy { $0.coverAssets.count == 1 })
+
+        var requestCounts: [TimelineBucketID: Int] = [:]
+        for bucket in buckets {
+            requestCounts[bucket.id] = await reader.assetRequestCount(for: bucket.id)
+        }
+        await store.prepareGroupedCatalog(.week, owner: weekOwner)
+        await store.prepareGroupedCatalog(.day, owner: dayOwner)
+
+        for bucket in buckets {
+            #expect(await reader.assetRequestCount(for: bucket.id) == requestCounts[bucket.id])
+        }
+        #expect(store.groupedCatalog(for: .day).entries.count == 4)
+    }
+
     @Test @MainActor func reselectLoadsEvictedLatestBeforeReleasingOlderWindow() async {
         let buckets = Self.buckets(count: 7)
         let assets = Dictionary(uniqueKeysWithValues: buckets.enumerated().map { index, bucket in

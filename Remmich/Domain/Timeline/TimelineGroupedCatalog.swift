@@ -134,11 +134,13 @@ nonisolated struct TimelineGroupedCatalogCache: Sendable {
         let combined = contributions[level, default: [:]].values
             .flatMap(\.self)
             .sorted { $0.stableKey < $1.stableKey }
+        let cumulativeLoadedBucketIDs = catalog(for: level).loadedBucketIDs
+            .union(loadedBucketIDs)
         replace(
             level: level,
             entries: combined,
-            loadedBucketIDs: loadedBucketIDs,
-            hasMoreOlderHistory: !allBucketIDs.isSubset(of: loadedBucketIDs)
+            loadedBucketIDs: cumulativeLoadedBucketIDs,
+            hasMoreOlderHistory: !allBucketIDs.isSubset(of: cumulativeLoadedBucketIDs)
         )
     }
 
