@@ -274,7 +274,7 @@ final class LibraryIndexController {
                 guard currentRunID == runID else { return }
                 let maintenance = try await store.finishMaintenance(
                     scope: scope,
-                    compact: result.mode != .incremental
+                    compact: true
                 )
                 Self.logger.info(
                     "Library index maintenance finished removedGenerations=\(maintenance.removedGenerations) removedAssets=\(maintenance.removedAssetRows) removedGroups=\(maintenance.removedGroupRows) compacted=\(maintenance.didCompact) bytesBefore=\(maintenance.metadataBytesBefore) bytesAfter=\(maintenance.metadataBytesAfter)"
