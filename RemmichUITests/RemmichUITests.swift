@@ -470,6 +470,30 @@ final class RemmichUITests: XCTestCase {
     }
 
     @MainActor
+    func testAssetViewerInfoShowsPreviewDimensionsAndCachedSize() {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = ["-ui-testing-signed-in"]
+        app.launch()
+
+        let asset = app.descendants(matching: .any)["asset-asset-1"].firstMatch
+        XCTAssertTrue(asset.waitForExistence(timeout: 10))
+        asset.tap()
+
+        let info = app.buttons["asset-viewer-info"]
+        XCTAssertTrue(info.waitForExistence(timeout: 10))
+        info.tap()
+
+        let previewMetadata = app.staticTexts["asset-viewer-preview-metadata"]
+        XCTAssertTrue(previewMetadata.waitForExistence(timeout: 10))
+        XCTAssertTrue(previewMetadata.label.contains("Preview"))
+        XCTAssertTrue(previewMetadata.label.contains("px"))
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            previewMetadata.label.contains("cached")
+        })
+    }
+
+    @MainActor
     func testVideoViewerUsesNativePlayerAndRestoresTimeline() {
         let app = XCUIApplication()
         app.launchArguments = ["-ui-testing-signed-in"]

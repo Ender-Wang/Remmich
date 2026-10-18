@@ -6,23 +6,30 @@ struct ZoomableStillImageView: View {
     let asset: TimelineAssetSummary
     let media: MediaLibraryController
     let targetPixels: MediaPixelSize
+    let reportsPreviewMetadata: Bool
+    let previewMetadataChanged: (AssetViewerPreviewMetadata) -> Void
     let zoomChanged: (Bool) -> Void
     let toggleChrome: () -> Void
 
     @State private var image: UIImage?
     @State private var failed = false
     @State private var loadedTargetPixels: MediaPixelSize?
+    @State private var loadedFileSizeBytes: Int?
 
     init(
         asset: TimelineAssetSummary,
         media: MediaLibraryController,
         targetPixels: MediaPixelSize,
+        reportsPreviewMetadata: Bool,
+        previewMetadataChanged: @escaping (AssetViewerPreviewMetadata) -> Void,
         zoomChanged: @escaping (Bool) -> Void,
         toggleChrome: @escaping () -> Void
     ) {
         self.asset = asset
         self.media = media
         self.targetPixels = targetPixels
+        self.reportsPreviewMetadata = reportsPreviewMetadata
+        self.previewMetadataChanged = previewMetadataChanged
         self.zoomChanged = zoomChanged
         self.toggleChrome = toggleChrome
 
@@ -64,29 +71,10 @@ struct ZoomableStillImageView: View {
     }
 
     private var loadID: String {
-        "\(asset.id)|\(targetPixels.width)x\(targetPixels.height)"
+        "\(asset.id)|\(targetPixels.width)x\(targetPixels.height)|\(reportsPreviewMetadata)"
     }
 
     private func loadPreview() async {
-        guard loadedTargetPixels != targetPixels else { return }
-        if failed {
-            failed = false
-        }
-        do {
-            let loadedImage = try await loadPreviewImage()
-            guard !Task.isCancelled else { return }
-            image = loadedImage
-            loadedTargetPixels = targetPixels
-        } catch is CancellationError {
-            return
-        } catch {
-            if image == nil {
-                failed = true
-            }
-        }
-    }
-
-    private func loadPreviewImage() async throws -> UIImage {
         guard let pipeline = media.pipeline,
               let request = media.imageRequest(
                   for: MediaLibraryController.viewerPreviewDescriptor(
@@ -94,16 +82,87 @@ struct ZoomableStillImageView: View {
                       targetPixels: targetPixels
                   )
               )
-        else {
-            throw AssetViewerImageError.unavailable
+        else { return }
+        if loadedTargetPixels == targetPixels {
+            if reportsPreviewMetadata, let image {
+                await reportMetadata(for: image, pipeline: pipeline, request: request)
+            }
+            return
         }
-        let response = try await pipeline.imageTask(with: request).response
-        return response.image
+        if failed {
+            failed = false
+        }
+        do {
+            let response = try await pipeline.imageTask(with: request).response
+            guard !Task.isCancelled else { return }
+            image = response.image
+            loadedTargetPixels = targetPixels
+            if let expectedLength = response.urlResponse?.expectedContentLength,
+               expectedLength > 0
+            {
+                loadedFileSizeBytes = Int(expectedLength)
+            }
+            if reportsPreviewMetadata {
+                await reportMetadata(for: response.image, pipeline: pipeline, request: request)
+            }
+        } catch {
+            guard !Task.isCancelled else { return }
+            if image == nil {
+                failed = true
+            }
+        }
     }
-}
 
-private enum AssetViewerImageError: Error {
-    case unavailable
+    private func reportMetadata(
+        for image: UIImage,
+        pipeline: ImagePipeline,
+        request: ImageRequest
+    ) async {
+        guard reportsPreviewMetadata else { return }
+        let pixelSize: MediaPixelSize = if let bitmap = image.cgImage {
+            .init(width: bitmap.width, height: bitmap.height)
+        } else {
+            .init(
+                width: Int((image.size.width * image.scale).rounded()),
+                height: Int((image.size.height * image.scale).rounded())
+            )
+        }
+        guard !Task.isCancelled else { return }
+        previewMetadataChanged(.init(
+            pixelSize: pixelSize,
+            fileSizeBytes: loadedFileSizeBytes
+        ))
+
+        guard loadedFileSizeBytes == nil,
+              let byteCount = await cachedPreviewByteCount(pipeline: pipeline, request: request),
+              byteCount > 0,
+              !Task.isCancelled,
+              reportsPreviewMetadata
+        else { return }
+        loadedFileSizeBytes = byteCount
+        previewMetadataChanged(.init(pixelSize: pixelSize, fileSizeBytes: byteCount))
+    }
+
+    private func cachedPreviewByteCount(
+        pipeline: ImagePipeline,
+        request: ImageRequest
+    ) async -> Int? {
+        var originalDataRequest = request
+        originalDataRequest.processors = []
+        originalDataRequest.thumbnail = nil
+
+        for _ in 0 ..< 25 {
+            guard !Task.isCancelled else { return nil }
+            let count = await Task.detached(priority: .utility) {
+                pipeline.cache.cachedData(for: originalDataRequest)?.count
+            }.value
+            if let count, count > 0 {
+                return count
+            }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        return nil
+    }
 }
 
 private struct ZoomableImageScrollView: UIViewRepresentable {

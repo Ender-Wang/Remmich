@@ -973,6 +973,21 @@ struct RemmichTests {
         #expect(display.targetPixels == targetPixels)
     }
 
+    @Test func viewerPreviewMetadataDescribesPixelsAndCachedBytes() {
+        let metadata = AssetViewerPreviewMetadata(
+            pixelSize: .init(width: 12, height: 18),
+            fileSizeBytes: 438_272
+        )
+        let dimensionsOnly = AssetViewerPreviewMetadata(
+            pixelSize: .init(width: 12, height: 18),
+            fileSizeBytes: nil
+        )
+
+        #expect(metadata.displayText.contains("12 × 18 px"))
+        #expect(metadata.displayText.contains("cached"))
+        #expect(dimensionsOnly.displayText == "Preview · 12 × 18 px")
+    }
+
     @Test @MainActor func viewerPreviewCanSeedRecreatedPageFromMemory() throws {
         let media = MediaLibraryController()
         media.configure(session: .fixture, activeEndpoint: AccountSession.fixture.apiURL)

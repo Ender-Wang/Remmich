@@ -16,6 +16,7 @@ struct AssetViewerView: View {
     @State private var chromeVisible = true
     @State private var showsInfo = false
     @State private var detailStates: [String: AssetViewerDetailState] = [:]
+    @State private var previewMetadataByAssetID: [String: AssetViewerPreviewMetadata] = [:]
     @State private var neighborLoadTask: Task<Void, Never>?
     @State private var infoContentHeight: CGFloat = 220
     @State private var infoDragTranslation: CGFloat = 0
@@ -241,6 +242,7 @@ struct AssetViewerView: View {
                 ZStack(alignment: .leading) {
                     AssetViewerInfoView(
                         state: detailState(for: asset.id),
+                        previewMetadata: previewMetadataByAssetID[asset.id],
                         anchorsContentToBottom: true,
                         contentHeightChanged: { updateInfoContentHeight($0, for: asset.id) },
                         retry: { retryDetail(for: asset.id) }
@@ -269,6 +271,7 @@ struct AssetViewerView: View {
                 ZStack(alignment: .top) {
                     AssetViewerInfoView(
                         state: detailState(for: asset.id),
+                        previewMetadata: previewMetadataByAssetID[asset.id],
                         anchorsContentToBottom: false,
                         contentHeightChanged: { updateInfoContentHeight($0, for: asset.id) },
                         retry: { retryDetail(for: asset.id) }
@@ -300,6 +303,9 @@ struct AssetViewerView: View {
                 width: Int(max(1, requestSize.width * displayScale)),
                 height: Int(max(1, requestSize.height * displayScale))
             ),
+            previewMetadataChanged: { metadata in
+                previewMetadataByAssetID[asset.id] = metadata
+            },
             resumePosition: { session.playbackPosition(for: asset.id) },
             savePosition: { session.setPlaybackPosition($0, for: asset.id) },
             zoomChanged: { isZoomed in
@@ -785,6 +791,7 @@ private struct AssetViewerFitPage: View {
     let isSelected: Bool
     let dismissesInfo: Bool
     let targetPixels: MediaPixelSize
+    let previewMetadataChanged: (AssetViewerPreviewMetadata) -> Void
     let resumePosition: () -> Double
     let savePosition: (Double) -> Void
     let zoomChanged: (Bool) -> Void
@@ -807,6 +814,8 @@ private struct AssetViewerFitPage: View {
                     asset: asset,
                     media: media,
                     targetPixels: targetPixels,
+                    reportsPreviewMetadata: isSelected && dismissesInfo,
+                    previewMetadataChanged: previewMetadataChanged,
                     zoomChanged: zoomChanged,
                     toggleChrome: toggleChrome
                 )

@@ -7,8 +7,28 @@ enum AssetViewerDetailState: Equatable {
     case failed(String)
 }
 
+nonisolated struct AssetViewerPreviewMetadata: Equatable, Sendable {
+    let pixelSize: MediaPixelSize
+    let fileSizeBytes: Int?
+
+    var displayText: String {
+        let width = pixelSize.width.formatted()
+        let height = pixelSize.height.formatted()
+        var components = ["Preview", "\(width) × \(height) px"]
+        if let fileSizeBytes, fileSizeBytes > 0 {
+            let fileSize = ByteCountFormatter.string(
+                fromByteCount: Int64(fileSizeBytes),
+                countStyle: .file
+            )
+            components.append("\(fileSize) cached")
+        }
+        return components.joined(separator: " · ")
+    }
+}
+
 struct AssetViewerInfoView: View {
     let state: AssetViewerDetailState
+    let previewMetadata: AssetViewerPreviewMetadata?
     let anchorsContentToBottom: Bool
     let contentHeightChanged: (CGFloat) -> Void
     let retry: () -> Void
@@ -86,9 +106,19 @@ struct AssetViewerInfoView: View {
                 Divider().overlay(Color.primary.opacity(0.16))
 
                 HStack(spacing: 12) {
-                    Text(detail.originalFileName)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(detail.originalFileName)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        if let previewMetadata {
+                            Text(previewMetadata.displayText)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
+                                .accessibilityIdentifier("asset-viewer-preview-metadata")
+                        }
+                    }
                     Spacer(minLength: 8)
                     Text(typeBadge(for: detail))
                         .font(.caption.weight(.semibold))
@@ -99,14 +129,29 @@ struct AssetViewerInfoView: View {
                 }
                 .padding(16)
 
-                if let summary = equipmentSummary(for: detail) {
+                let equipment = equipmentSummary(for: detail)
+                if equipment.hasContent {
                     Divider().overlay(Color.primary.opacity(0.16))
-                    Text(summary)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: .infinity)
-                        .padding(16)
+                    VStack(spacing: 6) {
+                        if let camera = equipment.camera {
+                            Text(camera)
+                                .foregroundStyle(.primary)
+                                .accessibilityIdentifier("asset-viewer-camera")
+                        }
+                        if let lens = equipment.lens {
+                            Text(lens)
+                                .accessibilityIdentifier("asset-viewer-lens")
+                        }
+                        if let photo = equipment.photo {
+                            Text(photo)
+                                .accessibilityIdentifier("asset-viewer-photo-facts")
+                        }
+                    }
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+                    .padding(16)
                 }
 
                 if !exposureFacts(for: detail).isEmpty {
@@ -129,7 +174,8 @@ struct AssetViewerInfoView: View {
                     Divider().overlay(Color.primary.opacity(0.16))
                     Label(location, systemImage: "location.fill")
                         .font(.subheadline)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: .infinity, alignment: .center)
                         .padding(16)
                         .accessibilityIdentifier("asset-viewer-location")
                 }
@@ -155,25 +201,25 @@ struct AssetViewerInfoView: View {
         return pathExtension.isEmpty ? "FILE" : pathExtension.uppercased()
     }
 
-    private func equipmentSummary(for detail: AssetDetail) -> String? {
-        var values: [String] = []
+    private func equipmentSummary(for detail: AssetDetail) -> AssetViewerEquipmentSummary {
         let camera = [detail.cameraMake, detail.cameraModel]
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
             .joined(separator: " ")
-        if !camera.isEmpty {
-            values.append(camera)
-        }
-        if let lens = detail.lensModel, !lens.isEmpty {
-            values.append(lens)
-        }
+        let lens = detail.lensModel?.trimmingCharacters(in: .whitespacesAndNewlines)
+        var photoFacts: [String] = []
         if let width = detail.width, let height = detail.height, width > 0, height > 0 {
-            values.append(String(format: "%.1f MP", Double(width * height) / 1_000_000))
+            photoFacts.append(String(format: "%.1f MP", Double(width * height) / 1_000_000))
+            photoFacts.append("\(width.formatted()) × \(height.formatted()) px")
         }
         if let bytes = detail.fileSizeBytes, bytes > 0 {
-            values.append(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file))
+            photoFacts.append(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file))
         }
-        return values.isEmpty ? nil : values.joined(separator: " · ")
+        return AssetViewerEquipmentSummary(
+            camera: camera.isEmpty ? nil : camera,
+            lens: lens?.isEmpty == false ? lens : nil,
+            photo: photoFacts.isEmpty ? nil : photoFacts.joined(separator: " · ")
+        )
     }
 
     private func exposureFacts(for detail: AssetDetail) -> [(String, String)] {
@@ -215,6 +261,16 @@ struct AssetViewerInfoView: View {
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
         return values.isEmpty ? nil : values.removingDuplicates().joined(separator: ", ")
+    }
+}
+
+private struct AssetViewerEquipmentSummary {
+    let camera: String?
+    let lens: String?
+    let photo: String?
+
+    var hasContent: Bool {
+        camera != nil || lens != nil || photo != nil
     }
 }
 
