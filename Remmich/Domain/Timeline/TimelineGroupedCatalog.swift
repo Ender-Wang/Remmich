@@ -1,0 +1,120 @@
+import Foundation
+
+nonisolated enum TimelineGroupedCatalogLevel: Hashable, Sendable {
+    case day
+    case week
+    case month
+    case year
+}
+
+nonisolated enum TimelineGroupedCatalogID: Hashable, Sendable {
+    case day(TimelineBucketID, TimelineCaptureDay)
+    case week(TimelineBucketID, TimelineWeekID)
+    case month(TimelineBucketID)
+    case year(Int)
+
+    var stableKey: String {
+        switch self {
+        case let .day(bucketID, day):
+            "day:\(bucketID.rawValue):\(day.id)"
+        case let .week(bucketID, week):
+            "week:\(bucketID.rawValue):\(week.id)"
+        case let .month(bucketID):
+            "month:\(bucketID.rawValue)"
+        case let .year(year):
+            "year:\(year)"
+        }
+    }
+}
+
+nonisolated struct TimelineGroupedCatalogEntry: Identifiable, Sendable {
+    let id: TimelineGroupedCatalogID
+    let assetCount: Int
+    let owningBucketIDs: [TimelineBucketID]
+    let assets: [TimelineAssetSummary]
+
+    var stableKey: String {
+        id.stableKey
+    }
+}
+
+nonisolated struct TimelineGroupedCatalog: Sendable {
+    let level: TimelineGroupedCatalogLevel
+    let entries: [TimelineGroupedCatalogEntry]
+    let loadedBucketIDs: Set<TimelineBucketID>
+    let hasMoreOlderHistory: Bool
+    let revision: UInt64
+
+    static func empty(level: TimelineGroupedCatalogLevel) -> Self {
+        .init(
+            level: level,
+            entries: [],
+            loadedBucketIDs: [],
+            hasMoreOlderHistory: false,
+            revision: 0
+        )
+    }
+}
+
+/// Session-owned grouped projections. A store owns one cache, so Photos and
+/// Videos remain independent while switching Day/Week/Month/Year reuses the
+/// same stable catalog until the store is reset or its summaries change.
+nonisolated struct TimelineGroupedCatalogCache: Sendable {
+    private(set) var catalogs: [TimelineGroupedCatalogLevel: TimelineGroupedCatalog] = [:]
+
+    func catalog(for level: TimelineGroupedCatalogLevel) -> TimelineGroupedCatalog {
+        catalogs[level] ?? .empty(level: level)
+    }
+
+    mutating func replaceSummaryCatalogs(with summaries: [TimelineBucketSummary]) {
+        let months = TimelineRangeCatalog.months(from: summaries)
+        replace(
+            level: .month,
+            entries: months.map { summary in
+                TimelineGroupedCatalogEntry(
+                    id: .month(summary.id),
+                    assetCount: summary.assetCount,
+                    owningBucketIDs: [summary.id],
+                    assets: []
+                )
+            },
+            loadedBucketIDs: Set(months.map(\.id)),
+            hasMoreOlderHistory: false
+        )
+
+        let years = TimelineRangeCatalog.years(from: summaries)
+        replace(
+            level: .year,
+            entries: years.map { year in
+                TimelineGroupedCatalogEntry(
+                    id: .year(year.id),
+                    assetCount: year.assetCount,
+                    owningBucketIDs: year.months.map(\.id),
+                    assets: []
+                )
+            },
+            loadedBucketIDs: Set(months.map(\.id)),
+            hasMoreOlderHistory: false
+        )
+    }
+
+    mutating func replace(
+        level: TimelineGroupedCatalogLevel,
+        entries: [TimelineGroupedCatalogEntry],
+        loadedBucketIDs: Set<TimelineBucketID>,
+        hasMoreOlderHistory: Bool
+    ) {
+        let priorRevision = catalogs[level]?.revision ?? 0
+        catalogs[level] = TimelineGroupedCatalog(
+            level: level,
+            entries: entries,
+            loadedBucketIDs: loadedBucketIDs,
+            hasMoreOlderHistory: hasMoreOlderHistory,
+            revision: priorRevision &+ 1
+        )
+    }
+
+    mutating func reset() {
+        catalogs = [:]
+    }
+}

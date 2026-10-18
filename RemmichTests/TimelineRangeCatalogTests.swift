@@ -5,6 +5,31 @@ import Testing
 
 @Suite("Timeline range catalog")
 struct TimelineRangeCatalogTests {
+    @Test func groupedCatalogCachesStableMonthAndYearProjections() {
+        let summaries = [
+            TimelineBucketSummary(id: .init(rawValue: "2026-10-01"), assetCount: 8),
+            TimelineBucketSummary(id: .init(rawValue: "2026-09-01"), assetCount: 5),
+            TimelineBucketSummary(id: .init(rawValue: "2025-12-01"), assetCount: 3),
+        ]
+        var cache = TimelineGroupedCatalogCache()
+
+        cache.replaceSummaryCatalogs(with: summaries)
+
+        let months = cache.catalog(for: .month)
+        let years = cache.catalog(for: .year)
+        #expect(months.entries.map(\.stableKey) == [
+            "month:2025-12-01", "month:2026-09-01", "month:2026-10-01",
+        ])
+        #expect(years.entries.map(\.stableKey) == ["year:2025", "year:2026"])
+        #expect(years.entries.map(\.assetCount) == [3, 13])
+        #expect(months.revision == 1)
+        #expect(years.revision == 1)
+
+        cache.replaceSummaryCatalogs(with: summaries)
+        #expect(cache.catalog(for: .month).revision == 2)
+        #expect(cache.catalog(for: .year).revision == 2)
+    }
+
     @Test func pinchRequiresACompletedGestureBeyondTheDeadZone() {
         #expect(PhotosPinchDirection(magnification: 0.77) == .coarser)
         #expect(PhotosPinchDirection(magnification: 1.29) == .finer)

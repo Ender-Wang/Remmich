@@ -27,6 +27,7 @@ final class PhotosTimelineStore {
     private(set) var memoryLaneState: PhotosMemoryLaneState = .idle
     private(set) var bucketSummaries: [TimelineBucketSummary] = []
     private(set) var sectionsByID: [TimelineBucketID: TimelineSection] = [:]
+    private(set) var groupedCatalogs = TimelineGroupedCatalogCache()
     private(set) var rangeCoverRevision: UInt64 = 0
     private(set) var memories: [TimelineMemorySummary] = []
     private(set) var visibleAnchor: TimelineVisibleAnchor?
@@ -348,6 +349,7 @@ final class PhotosTimelineStore {
         memoryLaneState = .idle
         bucketSummaries = []
         sectionsByID = [:]
+        groupedCatalogs.reset()
         rangeCoverRevision &+= 1
         memories = []
         visibleAnchor = nil
@@ -518,7 +520,12 @@ final class PhotosTimelineStore {
             }
         }
         bucketSummaries = unique
+        groupedCatalogs.replaceSummaryCatalogs(with: unique)
         reconcileCrossBucketDuplicates()
+    }
+
+    func groupedCatalog(for level: TimelineGroupedCatalogLevel) -> TimelineGroupedCatalog {
+        groupedCatalogs.catalog(for: level)
     }
 
     private func startMemoryLoad(generation requestGeneration: UInt64) {
