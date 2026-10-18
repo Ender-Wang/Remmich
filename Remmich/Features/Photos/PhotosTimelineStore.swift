@@ -48,6 +48,8 @@ final class PhotosTimelineStore {
     private var bucketRequestRevisions: [TimelineBucketID: UInt64] = [:]
     private var rawAssetsByID: [TimelineBucketID: [TimelineAssetSummary]] = [:]
     private var bucketTasks: [TimelineBucketID: Task<Void, Never>] = [:]
+    private var rangeCardCoverCache: [TimelineBucketID: [TimelineAssetSummary]] = [:]
+    private var rangeCardCoverTasks: [TimelineBucketID: Task<[TimelineAssetSummary]?, Never>] = [:]
     private var initialTask: Task<Void, Never>?
     private var refreshTask: Task<Void, Never>?
     private var memoryTask: Task<Void, Never>?
@@ -291,7 +293,11 @@ final class PhotosTimelineStore {
         let loadedIndexes = bucketSummaries.indices.filter { loaded.contains(bucketSummaries[$0].id) }
         let nextIndex = (loadedIndexes.max() ?? -1) + 1
         guard bucketSummaries.indices.contains(nextIndex) else { return }
-        await loadLibraryRangeBucket(bucketSummaries[nextIndex].id, owner: owner)
+        await loadLibraryRangeBucket(
+            bucketSummaries[nextIndex].id,
+            owner: owner,
+            includingPreviousMonth: level == .week
+        )
     }
 
     func rangeCoverAssets(in bucketID: TimelineBucketID) async -> [TimelineAssetSummary] {
@@ -317,6 +323,48 @@ final class PhotosTimelineStore {
             )
             return []
         }
+    }
+
+    func rangeCardCoverAssets(in bucketID: TimelineBucketID) async -> [TimelineAssetSummary] {
+        if let section = sectionsByID[bucketID], case .loaded = section.loadState {
+            return TimelineGroupedCatalogEntry.boundedCovers(from: section.assets)
+        }
+        if let cached = rangeCardCoverCache[bucketID] {
+            return cached
+        }
+        if let task = rangeCardCoverTasks[bucketID] {
+            return await task.value ?? []
+        }
+        guard sectionsByID[bucketID] != nil else { return [] }
+
+        let requestGeneration = generation
+        let requestRevision = rangeCoverRevision
+        let reader = reader
+        let query = query
+        let task = Task<[TimelineAssetSummary]?, Never> {
+            do {
+                let assets = try await reader.assets(in: bucketID, query: query)
+                guard !Task.isCancelled else { return nil }
+                return TimelineGroupedCatalogEntry.boundedCovers(
+                    from: Self.deduplicate(assets)
+                )
+            } catch {
+                guard !Task.isCancelled else { return nil }
+                Self.logger.notice(
+                    "Range card cover unavailable bucket=\(bucketID.rawValue, privacy: .public) error=\(Self.errorSummary(error), privacy: .public)"
+                )
+                return nil
+            }
+        }
+        rangeCardCoverTasks[bucketID] = task
+        let covers = await task.value
+        rangeCardCoverTasks[bucketID] = nil
+        guard requestGeneration == generation,
+              requestRevision == rangeCoverRevision,
+              let covers
+        else { return [] }
+        rangeCardCoverCache[bucketID] = covers
+        return covers
     }
 
     func completeJump() {
@@ -376,8 +424,11 @@ final class PhotosTimelineStore {
         memoryLaneState = .idle
         bucketSummaries = []
         sectionsByID = [:]
-        groupedCatalogs.reset()
+        groupedCatalogs = TimelineGroupedCatalogCache()
         rangeCoverRevision &+= 1
+        rangeCardCoverCache = [:]
+        rangeCardCoverTasks.values.forEach { $0.cancel() }
+        rangeCardCoverTasks = [:]
         memories = []
         visibleAnchor = nil
         jumpTarget = nil
@@ -528,6 +579,9 @@ final class PhotosTimelineStore {
 
     private func publishSummaries(_ summaries: [TimelineBucketSummary]) {
         rangeCoverRevision &+= 1
+        rangeCardCoverCache = [:]
+        rangeCardCoverTasks.values.forEach { $0.cancel() }
+        rangeCardCoverTasks = [:]
         let unique = Self.deduplicateSummaries(summaries)
         let validIDs = Set(unique.map(\.id))
         sectionsByID = sectionsByID.filter { validIDs.contains($0.key) }
@@ -551,7 +605,9 @@ final class PhotosTimelineStore {
             }
         }
         bucketSummaries = unique
-        groupedCatalogs.replaceSummaryCatalogs(with: unique)
+        var updatedCatalogs = groupedCatalogs
+        updatedCatalogs.replaceSummaryCatalogs(with: unique)
+        groupedCatalogs = updatedCatalogs
         reconcileCrossBucketDuplicates()
     }
 
@@ -673,6 +729,7 @@ final class PhotosTimelineStore {
         with assetsByBucket: [TimelineBucketID: [TimelineAssetSummary]]
     ) {
         let allBucketIDs = Set(bucketSummaries.map(\.id))
+        var updatedCatalogs = groupedCatalogs
         let sections = Dictionary(uniqueKeysWithValues: bucketSummaries.map { summary in
             let assets = assetsByBucket[summary.id, default: []]
             return (
@@ -688,7 +745,7 @@ final class PhotosTimelineStore {
 
         for summary in bucketSummaries {
             guard let section = sections[summary.id] else { continue }
-            groupedCatalogs.replaceContribution(
+            updatedCatalogs.replaceContribution(
                 level: .day,
                 ownerBucketID: summary.id,
                 entries: section.dayGroups.map { day in
@@ -718,7 +775,7 @@ final class PhotosTimelineStore {
                     in: bucketSummaries
                 ) != nil
             )
-            groupedCatalogs.replaceContribution(
+            updatedCatalogs.replaceContribution(
                 level: .week,
                 ownerBucketID: summary.id,
                 entries: weeks.map { week in
@@ -735,11 +792,13 @@ final class PhotosTimelineStore {
                 allBucketIDs: allBucketIDs
             )
         }
+        groupedCatalogs = updatedCatalogs
     }
 
     private func updateDayCatalogContribution(for bucketID: TimelineBucketID) {
         guard let section = sectionsByID[bucketID], case .loaded = section.loadState else { return }
-        groupedCatalogs.replaceContribution(
+        var updatedCatalogs = groupedCatalogs
+        updatedCatalogs.replaceContribution(
             level: .day,
             ownerBucketID: bucketID,
             entries: section.dayGroups.map { day in
@@ -753,6 +812,7 @@ final class PhotosTimelineStore {
             loadedBucketIDs: loadedGroupedBucketIDs,
             allBucketIDs: Set(bucketSummaries.map(\.id))
         )
+        groupedCatalogs = updatedCatalogs
     }
 
     private func updateWeekCatalogContribution(for bucketID: TimelineBucketID) {
@@ -776,7 +836,8 @@ final class PhotosTimelineStore {
                 in: bucketSummaries
             ) != nil
         )
-        groupedCatalogs.replaceContribution(
+        var updatedCatalogs = groupedCatalogs
+        updatedCatalogs.replaceContribution(
             level: .week,
             ownerBucketID: bucketID,
             entries: weeks.map { week in
@@ -792,6 +853,7 @@ final class PhotosTimelineStore {
             loadedBucketIDs: loadedGroupedBucketIDs,
             allBucketIDs: Set(bucketSummaries.map(\.id))
         )
+        groupedCatalogs = updatedCatalogs
     }
 
     private var loadedGroupedBucketIDs: Set<TimelineBucketID> {
@@ -808,10 +870,12 @@ final class PhotosTimelineStore {
         refreshTask?.cancel()
         memoryTask?.cancel()
         bucketTasks.values.forEach { $0.cancel() }
+        rangeCardCoverTasks.values.forEach { $0.cancel() }
         initialTask = nil
         refreshTask = nil
         memoryTask = nil
         bucketTasks = [:]
+        rangeCardCoverTasks = [:]
         for id in Array(bucketRequestRevisions.keys) {
             bucketRequestRevisions[id, default: 0] &+= 1
         }

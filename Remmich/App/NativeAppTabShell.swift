@@ -1,5 +1,12 @@
+import Observation
 import SwiftUI
 import UIKit
+
+@MainActor
+@Observable
+final class NativeTabSelectionState {
+    var selection: NativeTabDestination = .photos
+}
 
 enum NativeTabDestination: Hashable {
     case photos

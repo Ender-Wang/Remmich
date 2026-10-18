@@ -217,6 +217,25 @@ struct PhotosTimelineRegressionTests {
         #expect(await reader.assetRequestCount(for: bucketID) == 1)
     }
 
+    @Test @MainActor func rangeCardCoverCachesOneBoundedRequestForAnUnloadedBucket() async {
+        let bucketID = Self.bucketID(6)
+        let assets = (0 ..< 24).map { Self.asset("cover-\($0)") }
+        let reader = ScenarioTimelineReader(
+            buckets: Self.buckets(count: 7),
+            assets: [bucketID: assets]
+        )
+        let store = PhotosTimelineStore(reader: reader)
+        await store.load()
+
+        let first = await store.rangeCardCoverAssets(in: bucketID)
+        let second = await store.rangeCardCoverAssets(in: bucketID)
+
+        #expect(first.count == TimelineGroupedCatalogEntry.coverLimit)
+        #expect(second.map(\.id) == first.map(\.id))
+        #expect(await reader.assetRequestCount(for: bucketID) == 1)
+        #expect(store.sectionsByID[bucketID]?.assets.isEmpty == true)
+    }
+
     @Test @MainActor func terminalInitialFailureRequiresAnExplicitRetry() async {
         let reader = InitialRetryTimelineReader(
             buckets: Self.buckets(count: 1),
@@ -406,6 +425,44 @@ struct PhotosTimelineRegressionTests {
             #expect(await reader.assetRequestCount(for: bucket.id) == requestCounts[bucket.id])
         }
         #expect(store.groupedCatalog(for: .day).entries.count == 4)
+    }
+
+    @Test @MainActor func weekCatalogLoadsTheOlderBoundaryMonthBeforeAdvancing() async {
+        let buckets = [
+            TimelineBucketSummary(id: .init(rawValue: "2026-10-01"), assetCount: 1),
+            TimelineBucketSummary(id: .init(rawValue: "2026-09-01"), assetCount: 1),
+            TimelineBucketSummary(id: .init(rawValue: "2026-08-01"), assetCount: 1),
+            TimelineBucketSummary(id: .init(rawValue: "2026-07-01"), assetCount: 1),
+        ]
+        let assets = Dictionary(uniqueKeysWithValues: buckets.enumerated().map { index, bucket in
+            let month = 10 - index
+            return (
+                bucket.id,
+                [Self.asset(
+                    "asset-\(month)",
+                    capturedAt: Self.date(String(format: "2026-%02d-15T12:00:00Z", month))
+                )]
+            )
+        })
+        let reader = ScenarioTimelineReader(buckets: buckets, assets: assets)
+        let store = PhotosTimelineStore(reader: reader)
+        let owner = PhotosLibraryRangeBrowseOwner(id: UUID(), scope: .test)
+
+        await store.load()
+        await store.prepareGroupedCatalog(.week, owner: owner)
+
+        let initialWeeks = store.groupedCatalog(for: .week)
+        #expect(initialWeeks.loadedBucketIDs == Set(buckets[0 ... 1].map(\.id)))
+        let initialEntryIDs = Set(initialWeeks.entries.map(\.stableKey))
+
+        await store.loadNextOlderGroupedCatalogPage(.week, owner: owner)
+
+        let weeks = store.groupedCatalog(for: .week)
+        #expect(weeks.loadedBucketIDs == Set(buckets.map(\.id)))
+        #expect(!weeks.hasMoreOlderHistory)
+        #expect(!Set(weeks.entries.map(\.stableKey)).subtracting(initialEntryIDs).isEmpty)
+        #expect(await reader.assetRequestCount(for: buckets[2].id) == 1)
+        #expect(await reader.assetRequestCount(for: buckets[3].id) == 1)
     }
 
     @Test @MainActor func reselectLoadsEvictedLatestBeforeReleasingOlderWindow() async {

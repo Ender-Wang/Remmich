@@ -19,6 +19,7 @@ struct AppShellView: View {
     let signOut: () async -> Void
 
     @State private var selection: NativeTabDestination = .photos
+    @State private var tabSelectionState = NativeTabSelectionState()
     @State private var tabBarTop: CGFloat = 0
     @State private var compactPhotosTabs = false
     @State private var compactVideosTabs = false
@@ -80,6 +81,8 @@ struct AppShellView: View {
                             }
                         },
                         viewerVisibilityChanged: setViewerPresented,
+                        tabSelectionState: tabSelectionState,
+                        tabDestination: .photos,
                         showAccount: showAccount
                     )
                 }
@@ -105,6 +108,8 @@ struct AppShellView: View {
                             }
                         },
                         viewerVisibilityChanged: setViewerPresented,
+                        tabSelectionState: tabSelectionState,
+                        tabDestination: .videos,
                         showAccount: showAccount
                     )
                 }
@@ -178,6 +183,9 @@ struct AppShellView: View {
         )
         .ignoresSafeArea(.container, edges: .all)
         .environment(\.accountAvatarMedia, media)
+        .onChange(of: selection, initial: true) { _, selection in
+            tabSelectionState.selection = selection
+        }
         .overlay(alignment: .topLeading) {
             #if DEBUG
                 if ProcessInfo.processInfo.arguments.contains("-ui-testing-range-library") {

@@ -208,7 +208,7 @@ struct TimelineRangeCatalogTests {
 
         let keys = (0 ..< 17).map { "range-\($0)" }
         let blocks = TimelineRangeMosaicPlanner.blocks(keys: keys, layout: .landscape)
-        #expect(blocks.map(\.range.count) == [13, 4])
+        #expect(blocks.map(\.range.count) == [4, 13])
 
         for count in 4 ... 13 {
             for seed in 0 ..< 16 {
@@ -242,6 +242,21 @@ struct TimelineRangeCatalogTests {
         #expect(Set(fullBlocks.compactMap { placements in
             placements.first(where: \.isFeatured).map { "\($0.column):\($0.row)" }
         }).count == 9)
+    }
+
+    @Test func prependingOlderRangesPreservesExistingNewestMosaicBlocks() {
+        let existingKeys = (0 ..< 14).map { "existing-\($0)" }
+        let olderKeys = (0 ..< 7).map { "older-\($0)" }
+
+        let before = TimelineRangeMosaicPlanner.blocks(keys: existingKeys)
+        let after = TimelineRangeMosaicPlanner.blocks(keys: olderKeys + existingKeys)
+        let beforeMembership = before.map { Array(existingKeys[$0.range]) }
+        let afterMembership = after.map { Array((olderKeys + existingKeys)[$0.range]) }
+
+        let stableMembership = Array(beforeMembership.dropFirst())
+        let stableSeeds = before.dropFirst().map(\.seed)
+        #expect(Array(afterMembership.suffix(stableMembership.count)) == stableMembership)
+        #expect(after.suffix(stableSeeds.count).map(\.seed) == stableSeeds)
     }
 
     @Test func landscapeShortMosaicsFillOneCompactFourCellRow() {

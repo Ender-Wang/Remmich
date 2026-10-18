@@ -55,15 +55,6 @@ struct PhotosChromeTracker {
     }
 }
 
-private enum PhotosRangePresentationID: Hashable {
-    case all
-    case days
-    case weeks
-    case years
-    case months
-    case route(PhotosRangeRoute)
-}
-
 nonisolated enum TimelineLibraryRange: Int, CaseIterable {
     case all
     case day
@@ -143,6 +134,8 @@ struct PhotosView: View {
     var rootAccessibilityID = "photos-root"
     let compactChromeChanged: (Bool) -> Void
     var viewerVisibilityChanged: (Bool) -> Void = { _ in }
+    var tabSelectionState: NativeTabSelectionState?
+    var tabDestination: NativeTabDestination = .photos
     let showAccount: () -> Void
 
     @Namespace private var viewerNamespace
@@ -150,7 +143,9 @@ struct PhotosView: View {
     @State private var latestJumpTask: Task<Void, Never>?
     @State private var visibleDescriptors: [String: MediaRequestDescriptor] = [:]
     @State private var visibleAssets: [String: Date] = [:]
+    @State private var timelineSections: [TimelineSection] = []
     @State private var viewportUpdateTask: Task<Void, Never>?
+    @State private var timelineResumeTask: Task<Void, Never>?
     @State private var rotationRestoreTask: Task<Void, Never>?
     @State private var layoutRestoreTask: Task<Void, Never>?
     @State private var rotationAnchorID: String?
@@ -219,13 +214,47 @@ struct PhotosView: View {
         }
         .onAppear { media.beginTimelinePresentation() }
         .task { await store.load() }
-        .onChange(of: store.sections.map { "\($0.id.rawValue):\($0.contentRevision)" }) {
+        .onChange(
+            of: store.sections.map { "\($0.id.rawValue):\($0.contentRevision)" },
+            initial: true
+        ) {
+            guard isTimelineActive else { return }
+            timelineSections = store.sections
             scheduleViewportUpdate()
+        }
+        .onChange(of: isTimelineActive) { _, isVisible in
+            timelineResumeTask?.cancel()
+            if isVisible {
+                timelineResumeTask = Task { @MainActor in
+                    // Reveal the retained timeline first, then reconcile its
+                    // frozen section snapshot on the following run loop.
+                    await Task.yield()
+                    guard !Task.isCancelled, isTimelineActive else { return }
+                    timelineSections = store.sections
+                    scheduleViewportUpdate()
+                    if let bucketID = store.visibleAnchor?.bucketID {
+                        await store.loadBucket(bucketID)
+                    }
+                    timelineResumeTask = nil
+                }
+            } else {
+                viewportUpdateTask?.cancel()
+                viewportUpdateTask = nil
+                timelineResumeTask = nil
+            }
         }
         .onChange(of: scrollToLatestRequest) {
             guard libraryRange != .all || !navigationPath.isEmpty else { return }
             let request = scrollToLatestRequest
-            Task { @MainActor in
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                navigationPath = []
+                libraryRange = .all
+            }
+            latestJumpTask?.cancel()
+            latestJumpTask = Task { @MainActor in
+                defer { latestJumpTask = nil }
                 guard !Task.isCancelled,
                       request == scrollToLatestRequest,
                       let latest = store.bucketSummaries.first?.id,
@@ -234,9 +263,11 @@ struct PhotosView: View {
                     store.completeJump()
                     return
                 }
-                navigationPath = []
-                libraryRange = .all
-                didPositionInitially = false
+                var scrollTransaction = Transaction(animation: nil)
+                scrollTransaction.disablesAnimations = true
+                withTransaction(scrollTransaction) {
+                    timelinePosition.scrollTo(edge: .bottom)
+                }
                 store.completeJump()
             }
         }
@@ -248,6 +279,7 @@ struct PhotosView: View {
         }
         .onDisappear {
             viewportUpdateTask?.cancel()
+            timelineResumeTask?.cancel()
             rotationRestoreTask?.cancel()
             layoutRestoreTask?.cancel()
             latestJumpTask?.cancel()
@@ -261,10 +293,7 @@ struct PhotosView: View {
     }
 
     private var rangePresentation: some View {
-        ZStack {
-            rangeContent
-                .id(visiblePresentationID)
-        }
+        rangeContent
     }
 
     private var dayIconSystemImage: String {
@@ -354,39 +383,61 @@ struct PhotosView: View {
         selectRoute(.week(newest, week, .library), initialAssetID: nil)
     }
 
-    @ViewBuilder
     private var rangeContent: some View {
-        if let route = navigationPath.last {
-            rangeDestination(route)
-        } else {
-            switch libraryRange {
-            case .all:
-                timeline
-            case .day:
-                PhotosLibraryDaysView(
-                    store: store,
-                    media: media,
-                    dayIconSystemImage: dayIconSystemImage,
-                    tabBarTop: tabBarTop,
-                    onSelect: selectRoute,
-                    onPinch: pinchLibraryRange
-                )
-            case .week:
-                PhotosLibraryWeeksView(
-                    store: store, media: media, tabBarTop: tabBarTop,
-                    onSelect: selectRoute, onPinch: pinchLibraryRange
-                )
-            case .month:
-                PhotosMonthsView(
-                    summaries: store.bucketSummaries, store: store, media: media,
-                    tabBarTop: tabBarTop, onSelect: selectRoute, onPinch: pinchLibraryRange
-                )
-            case .year:
-                PhotosYearsView(
-                    store: store, media: media, tabBarTop: tabBarTop,
-                    onSelect: selectRoute, onPinch: pinchLibraryRange
-                )
+        ZStack {
+            timeline
+                .opacity(showsMainTimeline ? 1 : 0)
+                .allowsHitTesting(showsMainTimeline)
+                .accessibilityHidden(!showsMainTimeline)
+
+            if !showsMainTimeline {
+                if let route = navigationPath.last {
+                    rangeDestination(route)
+                } else {
+                    groupedRangeContent
+                }
             }
+        }
+    }
+
+    private var showsMainTimeline: Bool {
+        libraryRange == .all && navigationPath.isEmpty
+    }
+
+    private var isTimelineActive: Bool {
+        (tabSelectionState?.selection ?? tabDestination) == tabDestination
+            && showsMainTimeline
+    }
+
+    @ViewBuilder
+    private var groupedRangeContent: some View {
+        switch libraryRange {
+        case .all:
+            EmptyView()
+        case .day:
+            PhotosLibraryDaysView(
+                store: store,
+                media: media,
+                dayIconSystemImage: dayIconSystemImage,
+                tabBarTop: tabBarTop,
+                onSelect: selectRoute,
+                onPinch: pinchLibraryRange
+            )
+        case .week:
+            PhotosLibraryWeeksView(
+                store: store, media: media, tabBarTop: tabBarTop,
+                onSelect: selectRoute, onPinch: pinchLibraryRange
+            )
+        case .month:
+            PhotosMonthsView(
+                summaries: store.bucketSummaries, store: store, media: media,
+                tabBarTop: tabBarTop, onSelect: selectRoute, onPinch: pinchLibraryRange
+            )
+        case .year:
+            PhotosYearsView(
+                store: store, media: media, tabBarTop: tabBarTop,
+                onSelect: selectRoute, onPinch: pinchLibraryRange
+            )
         }
     }
 
@@ -431,7 +482,13 @@ struct PhotosView: View {
     }
 
     private func navigateBack() {
-        withAnimation(.smooth(duration: 0.25)) {
+        // Swapping an asset grid or grouped catalog back to its parent can
+        // publish hundreds of visibility changes. Keep that structural swap
+        // atomic instead of implicitly animating every outgoing and incoming
+        // child in the same frame.
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
             if !navigationPath.isEmpty {
                 if let route = navigationPath.last {
                     initialAssetByRoute.removeValue(forKey: route)
@@ -441,20 +498,6 @@ struct PhotosView: View {
                 libraryRange = libraryRange.next(for: .finer) ?? .all
             }
         }
-    }
-
-    private var rootPresentationID: PhotosRangePresentationID {
-        switch libraryRange {
-        case .all: .all
-        case .day: .days
-        case .week: .weeks
-        case .month: .months
-        case .year: .years
-        }
-    }
-
-    private var visiblePresentationID: PhotosRangePresentationID {
-        navigationPath.last.map(PhotosRangePresentationID.route) ?? rootPresentationID
     }
 
     private func pinchLibraryRange(_ gesture: PhotosPinchGesture) {
@@ -516,11 +559,12 @@ struct PhotosView: View {
                 }
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        ForEach(Array(store.sections.reversed())) { section in
+                        ForEach(Array(timelineSections.reversed())) { section in
                             TimelineSectionView(
                                 section: section,
                                 store: store,
                                 media: media,
+                                isActive: isTimelineActive,
                                 availableWidth: timelineWidth,
                                 assetLayout: presentation.preferences.assetLayout,
                                 visibilityChanged: updateVisibility,
@@ -536,7 +580,7 @@ struct PhotosView: View {
                             )
                             .id(section.id)
                             .onScrollVisibilityChange(threshold: 0.01) { visible in
-                                guard visible else { return }
+                                guard isTimelineActive, visible else { return }
                                 store.updateVisibleAnchor(.init(
                                     bucketID: section.id,
                                     assetID: section.assets.first?.id
@@ -582,6 +626,7 @@ struct PhotosView: View {
                         bottomGap: max(0, geometry.contentSize.height - visibleBottom)
                     )
                 } action: { old, new in
+                    guard isTimelineActive else { return }
                     timelineBottomGap = new.bottomGap
                     updateChrome(old: old, new: new)
                     if new.bottomGap <= 24, store.jumpTarget == latestScrollTarget {
@@ -746,11 +791,13 @@ struct PhotosView: View {
         assetID: String,
         descriptor: MediaRequestDescriptor?
     ) {
+        guard isTimelineActive else { return }
         visibleDescriptors[assetID] = descriptor
         scheduleViewportUpdate()
     }
 
     private func updateViewport(_ asset: TimelineAssetSummary, visible: Bool) {
+        guard isTimelineActive else { return }
         if visible {
             visibleAssets[asset.id] = asset.capturedAt
         } else {
@@ -759,10 +806,11 @@ struct PhotosView: View {
     }
 
     private func scheduleViewportUpdate() {
+        guard isTimelineActive else { return }
         viewportUpdateTask?.cancel()
         viewportUpdateTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(120))
-            guard !Task.isCancelled,
+            guard !Task.isCancelled, isTimelineActive,
                   let target = visibleDescriptors.values.compactMap(\.targetPixels).max(by: {
                       $0.width * $0.height < $1.width * $1.height
                   })
@@ -777,6 +825,7 @@ private struct TimelineSectionView: View {
     let section: TimelineSection
     let store: PhotosTimelineStore
     let media: MediaLibraryController
+    let isActive: Bool
     let availableWidth: CGFloat
     let assetLayout: PhotosAssetLayout
     let visibilityChanged: (String, MediaRequestDescriptor?) -> Void
@@ -791,7 +840,10 @@ private struct TimelineSectionView: View {
                 bucketHeader
                 ProgressView()
                     .frame(maxWidth: .infinity, minHeight: 88)
-                    .task { await store.loadBucket(section.id) }
+                    .task {
+                        guard isActive else { return }
+                        await store.loadBucket(section.id)
+                    }
             case .loaded:
                 if section.assets.isEmpty {
                     Text("No photos in this section")

@@ -310,7 +310,7 @@ struct PhotosYearsView: View {
             scrollToLatestRequest: scrollToLatestRequest,
             tabBarTop: tabBarTop,
             onPinch: onPinch
-        ) { year, motion in
+        ) { year, motion, allowsCoverLoading in
             PhotosBucketCoverButton(
                 route: .year(year.id),
                 accessibilityID: "timeline-year-\(year.id)",
@@ -321,6 +321,7 @@ struct PhotosYearsView: View {
                 store: store,
                 media: media,
                 motion: motion,
+                allowsCoverLoading: allowsCoverLoading,
                 onSelect: onSelect,
                 onPinch: onPinch
             )
@@ -345,7 +346,7 @@ struct PhotosMonthsView: View {
             scrollToLatestRequest: scrollToLatestRequest,
             tabBarTop: tabBarTop,
             onPinch: onPinch
-        ) { month, motion in
+        ) { month, motion, allowsCoverLoading in
             PhotosBucketCoverButton(
                 route: .month(month.id),
                 accessibilityID: "timeline-month-\(month.id.rawValue)",
@@ -357,6 +358,7 @@ struct PhotosMonthsView: View {
                 store: store,
                 media: media,
                 motion: motion,
+                allowsCoverLoading: allowsCoverLoading,
                 onSelect: onSelect,
                 onPinch: onPinch
             )
@@ -461,13 +463,26 @@ private struct PhotosLibraryGroupedCatalogView: View {
                     LazyVStack(spacing: TimelineRangeMosaicPlanner.spacing) {
                         if catalog.hasMoreOlderHistory {
                             PhotosOlderGroupedCatalogLoader(
-                                revision: catalog.revision,
                                 level: level
                             ) {
+                                let priorOldestKey = catalog.entries.first?.stableKey
                                 await store.loadNextOlderGroupedCatalogPage(
                                     level,
                                     owner: rangeBrowseOwner
                                 )
+                                await Task.yield()
+                                let updatedEntries = store.groupedCatalog(for: level).entries
+                                if let priorOldestKey,
+                                   let priorIndex = updatedEntries.firstIndex(where: {
+                                       $0.stableKey == priorOldestKey
+                                   })
+                                {
+                                    let continuationIndex = max(0, priorIndex - 1)
+                                    proxy.scrollTo(
+                                        updatedEntries[continuationIndex].stableKey,
+                                        anchor: .top
+                                    )
+                                }
                             }
                         }
                         let entries = catalog.entries
@@ -475,8 +490,7 @@ private struct PhotosLibraryGroupedCatalogView: View {
                             keys: entries.map(\.stableKey),
                             layout: mosaicLayout
                         )
-                        ForEach(blocks.indices, id: \.self) { blockIndex in
-                            let block = blocks[blockIndex]
+                        ForEach(blocks, id: \.seed) { block in
                             let items = Array(entries[block.range])
                             TimelineRangeMosaicBlock(
                                 items: items,
@@ -489,6 +503,7 @@ private struct PhotosLibraryGroupedCatalogView: View {
                                 level: level == .day ? .day : .week
                             ) { entry, _, motion in
                                 card(for: entry, motion: motion)
+                                    .id(entry.stableKey)
                             }
                         }
                         Color.clear
@@ -580,7 +595,6 @@ private struct PhotosLibraryGroupedCatalogView: View {
 }
 
 private struct PhotosOlderGroupedCatalogLoader: View {
-    let revision: UInt64
     let level: TimelineGroupedCatalogLevel
     let load: () async -> Void
 
@@ -603,14 +617,10 @@ private struct PhotosOlderGroupedCatalogLoader: View {
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
         .frame(maxWidth: .infinity, minHeight: 52)
+        .accessibilityIdentifier("timeline-load-older-\(level == .day ? "days" : "weeks")")
         .onScrollVisibilityChange(threshold: 0.01) { visible in
             isVisible = visible
             if visible {
-                requestLoad()
-            }
-        }
-        .onChange(of: revision) {
-            if isVisible {
                 requestLoad()
             }
         }
@@ -1004,6 +1014,7 @@ private struct PhotosBucketCoverButton: View {
     let store: PhotosTimelineStore
     let media: MediaLibraryController
     let motion: TimelineRangeCoverMotion
+    var allowsCoverLoading = true
     let onSelect: ((PhotosRangeRoute, String?) -> Void)?
     let onPinch: ((PhotosPinchGesture) -> Void)?
     @State private var currentCoverID = "loading"
@@ -1017,6 +1028,7 @@ private struct PhotosBucketCoverButton: View {
             bucketIDs: bucketIDs,
             store: store,
             motion: motion,
+            allowsCoverLoading: allowsCoverLoading,
             onCoverChanged: { currentCoverID = $0 ?? "loading" }
         )
         .photosRangeCardInteraction(
@@ -1114,9 +1126,14 @@ nonisolated enum TimelineRangeMosaicPlanner {
     ) -> [TimelineRangeMosaicBlockPlan] {
         guard !keys.isEmpty else { return [] }
         var result: [TimelineRangeMosaicBlockPlan] = []
+        // Anchor blocks at the newest end. Older catalog pages are prepended,
+        // so this keeps every already-visible newer block's membership and
+        // identity stable instead of repacking the entire mosaic after each
+        // page load.
+        let remainder = keys.count % layout.blockCapacity
         var start = 0
+        var count = remainder == 0 ? layout.blockCapacity : remainder
         while start < keys.count {
-            let count = min(layout.blockCapacity, keys.count - start)
             let range = start ..< start + count
             let seed = stableSeed(keys[start])
             result.append(.init(
@@ -1126,6 +1143,7 @@ nonisolated enum TimelineRangeMosaicPlanner {
                 layout: layout
             ))
             start += count
+            count = min(layout.blockCapacity, keys.count - start)
         }
         return result
     }
@@ -1538,7 +1556,7 @@ private struct PhotosRangeCardGrid<Item: Identifiable, Content: View>: View wher
     var scrollToLatestRequest = 0
     var tabBarTop: CGFloat = 0
     var onPinch: ((PhotosPinchGesture) -> Void)?
-    @ViewBuilder let content: (Item, TimelineRangeCoverMotion) -> Content
+    @ViewBuilder let content: (Item, TimelineRangeCoverMotion, Bool) -> Content
     @State private var didPositionInitially = false
     @State private var didSettleInitialViewport = false
     @State private var userHasScrolled = false
@@ -1572,9 +1590,8 @@ private struct PhotosRangeCardGrid<Item: Identifiable, Content: View>: View wher
 
             let scrollView = ScrollViewReader { proxy in
                 ScrollView {
-                    VStack(spacing: 0) {
-                        ForEach(blocks.indices, id: \.self) { blockIndex in
-                            let block = blocks[blockIndex]
+                    LazyVStack(spacing: 0) {
+                        ForEach(Array(blocks.enumerated()), id: \.element.seed) { blockIndex, block in
                             let blockItems = Array(items[block.range])
                             VStack(spacing: 0) {
                                 TimelineRangeMosaicBlock(items: blockItems, plan: .init(
@@ -1583,7 +1600,7 @@ private struct PhotosRangeCardGrid<Item: Identifiable, Content: View>: View wher
                                     seed: block.seed,
                                     layout: block.layout
                                 ), level: level) { item, _, motion in
-                                    content(item, motion)
+                                    content(item, motion, didSettleInitialViewport)
                                         .id(item.id)
                                 }
                                 if blockIndex == blocks.indices.last {
@@ -1615,6 +1632,9 @@ private struct PhotosRangeCardGrid<Item: Identifiable, Content: View>: View wher
                     proxy.scrollTo(PhotosRangeScrollAnchor.row(blocks.count - 1), anchor: .bottom)
                     guard !Task.isCancelled else { return }
                     didPositionInitially = true
+                    try? await Task.sleep(for: .milliseconds(80))
+                    guard !Task.isCancelled, !userHasScrolled else { return }
+                    didSettleInitialViewport = true
                 }
                 .task(id: LayoutKey(viewport: geometry.size, navigationTop: navigationTop)) {
                     guard didPositionInitially else { return }
@@ -1732,6 +1752,40 @@ nonisolated enum TimelineRangeGridLayout {
     }
 }
 
+@MainActor
+private final class PhotosRangeCardSlideshowLifetime {
+    private var isVisible = false
+    private var task: Task<Void, Never>?
+
+    func visibilityChanged(
+        _ visible: Bool,
+        operation: @escaping @MainActor () async -> Void
+    ) {
+        guard visible != isVisible else { return }
+        isVisible = visible
+        if visible {
+            start(operation)
+        } else {
+            cancel()
+        }
+    }
+
+    func restartIfVisible(operation: @escaping @MainActor () async -> Void) {
+        guard isVisible else { return }
+        start(operation)
+    }
+
+    func cancel() {
+        task?.cancel()
+        task = nil
+    }
+
+    private func start(_ operation: @escaping @MainActor () async -> Void) {
+        task?.cancel()
+        task = Task { await operation() }
+    }
+}
+
 private struct PhotosRangeCard: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
@@ -1744,6 +1798,7 @@ private struct PhotosRangeCard: View {
     var bucketIDs: [TimelineBucketID] = []
     var store: PhotosTimelineStore?
     var motion: TimelineRangeCoverMotion = .ordinary
+    var allowsCoverLoading = true
     var onCoverChanged: (String?) -> Void = { _ in }
 
     @State private var coverAssets: [TimelineAssetSummary] = []
@@ -1752,8 +1807,8 @@ private struct PhotosRangeCard: View {
     @State private var incomingAsset: TimelineAssetSummary?
     @State private var coverScales: [String: Double] = [:]
     @State private var coverOpacities: [String: Double] = [:]
-    @State private var isVisible = false
     @State private var loadedRevision: UInt64?
+    @State private var slideshowLifetime = PhotosRangeCardSlideshowLifetime()
 
     private var currentAsset: TimelineAssetSummary? {
         coverAssets.indices.contains(currentIndex) ? coverAssets[currentIndex] : coverAssets.first
@@ -1846,11 +1901,31 @@ private struct PhotosRangeCard: View {
             .onChange(of: currentAsset?.id, initial: true) { _, coverID in
                 onCoverChanged(coverID)
             }
-            .onScrollVisibilityChange(threshold: 0.15) { isVisible = $0 }
-            .task(id: "\(isVisible):\(scenePhase):\(reduceMotion):\(motion):\(store?.rangeCoverRevision ?? 0)") {
-                guard isVisible, scenePhase == .active else { return }
-                await runSlideshow()
+            .onScrollVisibilityChange(threshold: 0.15) { visible in
+                slideshowLifetime.visibilityChanged(visible) {
+                    guard allowsCoverLoading, scenePhase == .active else { return }
+                    await runSlideshow()
+                }
             }
+            .onChange(of: allowsCoverLoading) {
+                if allowsCoverLoading {
+                    slideshowLifetime.restartIfVisible {
+                        guard scenePhase == .active else { return }
+                        await runSlideshow()
+                    }
+                } else {
+                    slideshowLifetime.cancel()
+                }
+            }
+            .onChange(
+                of: "\(scenePhase):\(reduceMotion):\(motion):\(store?.rangeCoverRevision ?? 0)"
+            ) {
+                slideshowLifetime.restartIfVisible {
+                    guard allowsCoverLoading, scenePhase == .active else { return }
+                    await runSlideshow()
+                }
+            }
+            .onDisappear { slideshowLifetime.cancel() }
     }
 
     private func opacity(for asset: TimelineAssetSummary) -> Double {
@@ -1863,9 +1938,7 @@ private struct PhotosRangeCard: View {
 
     private func loadBatch(_ index: Int) async -> [TimelineAssetSummary] {
         if let store, bucketIDs.indices.contains(index) {
-            return await TimelineGroupedCatalogEntry.boundedCovers(
-                from: store.rangeCoverAssets(in: bucketIDs[index])
-            )
+            return await store.rangeCardCoverAssets(in: bucketIDs[index])
         }
         return TimelineGroupedCatalogEntry.boundedCovers(from: assets)
     }
