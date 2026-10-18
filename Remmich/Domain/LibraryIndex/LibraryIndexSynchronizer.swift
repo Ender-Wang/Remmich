@@ -9,9 +9,11 @@ nonisolated enum LibraryIndexSyncMode: Sendable {
 
 nonisolated struct LibraryIndexSyncResult: Sendable {
     let mode: LibraryIndexSyncMode
+    let generation: Int64
     let indexedAssetCount: Int
     let expectedAssetCount: Int
     let hasMoreHistory: Bool
+    let cleanup: LibraryIndexGenerationCleanup
 }
 
 actor LibraryIndexSynchronizer {
@@ -52,9 +54,16 @@ actor LibraryIndexSynchronizer {
         guard previous?.syncState.isPaused != true else {
             return .init(
                 mode: mode,
+                generation: previous?.generation ?? 0,
                 indexedAssetCount: previous?.syncState.indexedAssetCount ?? 0,
                 expectedAssetCount: previous?.syncState.expectedAssetCount ?? 0,
-                hasMoreHistory: previous?.syncState.historicalCursor != nil
+                hasMoreHistory: previous?.syncState.historicalCursor != nil,
+                cleanup: .init(
+                    generation: previous?.generation ?? 0,
+                    removedGenerations: 0,
+                    removedAssetRows: 0,
+                    removedGroupRows: 0
+                )
             )
         }
 
@@ -104,7 +113,7 @@ actor LibraryIndexSynchronizer {
             let nextCursor = fullReconciliation ? nil : summaries
                 .first { !Set(stagedAssets.map(\.bucketKey)).contains($0.id.rawValue) }?
                 .id.rawValue
-            try await store.acceptGeneration(
+            let cleanup = try await store.acceptGeneration(
                 generation,
                 watermark: stagedAssets.map(\.updatedAt).max(),
                 historicalCursor: nextCursor,
@@ -114,9 +123,11 @@ actor LibraryIndexSynchronizer {
             try await store.setLastError(nil, scope: scope)
             return .init(
                 mode: mode,
+                generation: generation,
                 indexedAssetCount: stagedAssets.count,
                 expectedAssetCount: expectedCount,
-                hasMoreHistory: nextCursor != nil
+                hasMoreHistory: nextCursor != nil,
+                cleanup: cleanup
             )
         } catch {
             if !(error is CancellationError) {

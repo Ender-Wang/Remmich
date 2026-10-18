@@ -98,6 +98,22 @@ nonisolated struct LibraryIndexStorageReport: Equatable, Sendable {
     let playbackBytes: Int64
 }
 
+nonisolated struct LibraryIndexGenerationCleanup: Equatable, Sendable {
+    let generation: Int64
+    let removedGenerations: Int
+    let removedAssetRows: Int
+    let removedGroupRows: Int
+}
+
+nonisolated struct LibraryIndexMaintenanceReport: Equatable, Sendable {
+    let removedGenerations: Int
+    let removedAssetRows: Int
+    let removedGroupRows: Int
+    let metadataBytesBefore: Int64
+    let metadataBytesAfter: Int64
+    let didCompact: Bool
+}
+
 nonisolated protocol LibraryIndexStoring: Sendable {
     func prepare(scope: MediaAccountScope) async throws
     func beginGeneration(scope: MediaAccountScope) async throws -> Int64
@@ -123,7 +139,11 @@ nonisolated protocol LibraryIndexStoring: Sendable {
         historicalCursor: String?,
         expectedAssetCount: Int?,
         scope: MediaAccountScope
-    ) async throws
+    ) async throws -> LibraryIndexGenerationCleanup
+    func finishMaintenance(
+        scope: MediaAccountScope,
+        compact: Bool
+    ) async throws -> LibraryIndexMaintenanceReport
     func snapshot(scope: MediaAccountScope) async throws -> LibraryIndexSnapshot?
     func setPaused(_ paused: Bool, scope: MediaAccountScope) async throws
     func setLastError(_ message: String?, scope: MediaAccountScope) async throws

@@ -20,7 +20,7 @@ struct LibraryIndexStoreTests {
         )
         #expect(try await store.snapshot(scope: scope) == nil)
 
-        try await store.acceptGeneration(
+        _ = try await store.acceptGeneration(
             generation,
             watermark: Date(timeIntervalSince1970: 500),
             historicalCursor: "cursor",
@@ -48,7 +48,7 @@ struct LibraryIndexStoreTests {
             generation: accepted,
             scope: first
         )
-        try await store.acceptGeneration(
+        _ = try await store.acceptGeneration(
             accepted,
             watermark: nil,
             historicalCursor: nil,
@@ -67,7 +67,7 @@ struct LibraryIndexStoreTests {
 
         let other = try await store.beginGeneration(scope: second)
         try await store.upsert(assets: [Self.asset(id: "other")], generation: other, scope: second)
-        try await store.acceptGeneration(
+        _ = try await store.acceptGeneration(
             other,
             watermark: nil,
             historicalCursor: nil,
@@ -122,7 +122,7 @@ struct LibraryIndexStoreTests {
             ],
             scope: scope
         )
-        try await store.acceptGeneration(
+        _ = try await store.acceptGeneration(
             generation,
             watermark: nil,
             historicalCursor: nil,
@@ -136,6 +136,58 @@ struct LibraryIndexStoreTests {
         try await store.clearDerivatives(scope: scope, kinds: [.preview])
         #expect(try await store.snapshot(scope: scope)?.derivatives.isEmpty == true)
         #expect(try await store.snapshot(scope: scope)?.groups.count == 1)
+    }
+
+    @Test func promotionAndMaintenanceKeepOnlyAcceptedGenerationData() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        let scope = Self.scope(userID: "bounded")
+
+        let first = try await store.beginGeneration(scope: scope)
+        try await store.upsert(
+            assets: [Self.asset(id: "first")],
+            generation: first,
+            scope: scope
+        )
+        _ = try await store.acceptGeneration(
+            first,
+            watermark: nil,
+            historicalCursor: "older",
+            expectedAssetCount: 2,
+            scope: scope
+        )
+
+        let second = try await store.beginGeneration(scope: scope)
+        try await store.upsert(
+            assets: [Self.asset(id: "second")],
+            generation: second,
+            scope: scope
+        )
+        let promotion = try await store.acceptGeneration(
+            second,
+            watermark: nil,
+            historicalCursor: nil,
+            expectedAssetCount: 2,
+            scope: scope
+        )
+        #expect(promotion.removedGenerations == 1)
+        #expect(promotion.removedAssetRows == 1)
+        #expect(try await store.snapshot(scope: scope)?.assets.map(\.id) == ["first", "second"])
+
+        let abandoned = try await store.beginGeneration(scope: scope)
+        try await store.upsert(
+            assets: [Self.asset(id: "abandoned")],
+            generation: abandoned,
+            scope: scope
+        )
+        let maintenance = try await store.finishMaintenance(scope: scope, compact: true)
+        #expect(maintenance.removedGenerations == 1)
+        #expect(maintenance.removedAssetRows == 3)
+        #expect(maintenance.metadataBytesAfter <= maintenance.metadataBytesBefore)
+        #expect(maintenance.didCompact)
+        #expect(try await store.snapshot(scope: scope)?.generation == second)
+        #expect(try await store.snapshot(scope: scope)?.assets.map(\.id) == ["first", "second"])
     }
 
     private static func scope(userID: String) -> MediaAccountScope {

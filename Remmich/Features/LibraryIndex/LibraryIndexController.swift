@@ -175,6 +175,10 @@ final class LibraryIndexController {
                     publish(result, force: false)
                 }
                 guard currentRunID == runID else { return }
+                _ = try await store.finishMaintenance(
+                    scope: scope,
+                    compact: result.mode != .incremental
+                )
                 publish(result, force: true)
                 status = .upToDate
                 lastUpdatedAt = Date()

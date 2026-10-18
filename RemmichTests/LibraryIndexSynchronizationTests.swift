@@ -86,7 +86,7 @@ struct LibraryIndexSynchronizationTests {
         defer { fixture.cleanup() }
         let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
         let generation = try await store.beginGeneration(scope: Self.scope)
-        try await store.acceptGeneration(
+        _ = try await store.acceptGeneration(
             generation,
             watermark: nil,
             historicalCursor: nil,
@@ -121,7 +121,7 @@ struct LibraryIndexSynchronizationTests {
             generation: generation,
             scope: Self.scope
         )
-        try await store.acceptGeneration(
+        _ = try await store.acceptGeneration(
             generation,
             watermark: nil,
             historicalCursor: nil,

@@ -209,9 +209,21 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
         historicalCursor: String?,
         expectedAssetCount: Int?,
         scope: MediaAccountScope
-    ) async throws {
+    ) async throws -> LibraryIndexGenerationCleanup {
         let database = try preparedDatabase(scope: scope)
         try requireBuildingGeneration(generation, scope: scope, database: database)
+        let removedGenerations = try Int(database.scalarInt64(
+            "SELECT COUNT(*) FROM generations WHERE scope = ? AND generation <> ?",
+            [.text(scope.cacheNamespace), .int64(generation)]
+        ) ?? 0)
+        let removedAssetRows = try Int(database.scalarInt64(
+            "SELECT COUNT(*) FROM assets WHERE scope = ? AND generation <> ?",
+            [.text(scope.cacheNamespace), .int64(generation)]
+        ) ?? 0)
+        let removedGroupRows = try Int(database.scalarInt64(
+            "SELECT COUNT(*) FROM grouped_catalogs WHERE scope = ? AND generation <> ?",
+            [.text(scope.cacheNamespace), .int64(generation)]
+        ) ?? 0)
         try database.transaction {
             try database.execute(
                 "UPDATE generations SET state = 'accepted', completed_at = ? WHERE scope = ? AND generation = ?",
@@ -239,7 +251,86 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
                     .optionalText(historicalCursor), .optionalInt(expectedAssetCount),
                 ]
             )
+            try database.execute(
+                "DELETE FROM assets WHERE scope = ? AND generation <> ?",
+                [.text(scope.cacheNamespace), .int64(generation)]
+            )
+            try database.execute(
+                "DELETE FROM grouped_catalogs WHERE scope = ? AND generation <> ?",
+                [.text(scope.cacheNamespace), .int64(generation)]
+            )
+            try database.execute(
+                "DELETE FROM generations WHERE scope = ? AND generation <> ?",
+                [.text(scope.cacheNamespace), .int64(generation)]
+            )
         }
+        return .init(
+            generation: generation,
+            removedGenerations: removedGenerations,
+            removedAssetRows: removedAssetRows,
+            removedGroupRows: removedGroupRows
+        )
+    }
+
+    func finishMaintenance(
+        scope: MediaAccountScope,
+        compact: Bool
+    ) async throws -> LibraryIndexMaintenanceReport {
+        let database = try preparedDatabase(scope: scope)
+        let before = metadataFileBytes()
+        guard let accepted = try database.scalarInt64(
+            "SELECT accepted_generation FROM sync_state WHERE scope = ?",
+            [.text(scope.cacheNamespace)]
+        ) else {
+            try database.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            return .init(
+                removedGenerations: 0,
+                removedAssetRows: 0,
+                removedGroupRows: 0,
+                metadataBytesBefore: before,
+                metadataBytesAfter: metadataFileBytes(),
+                didCompact: false
+            )
+        }
+        let removedGenerations = try Int(database.scalarInt64(
+            "SELECT COUNT(*) FROM generations WHERE scope = ? AND generation <> ?",
+            [.text(scope.cacheNamespace), .int64(accepted)]
+        ) ?? 0)
+        let removedAssetRows = try Int(database.scalarInt64(
+            "SELECT COUNT(*) FROM assets WHERE scope = ? AND generation <> ?",
+            [.text(scope.cacheNamespace), .int64(accepted)]
+        ) ?? 0)
+        let removedGroupRows = try Int(database.scalarInt64(
+            "SELECT COUNT(*) FROM grouped_catalogs WHERE scope = ? AND generation <> ?",
+            [.text(scope.cacheNamespace), .int64(accepted)]
+        ) ?? 0)
+        try database.transaction {
+            try database.execute(
+                "DELETE FROM assets WHERE scope = ? AND generation <> ?",
+                [.text(scope.cacheNamespace), .int64(accepted)]
+            )
+            try database.execute(
+                "DELETE FROM grouped_catalogs WHERE scope = ? AND generation <> ?",
+                [.text(scope.cacheNamespace), .int64(accepted)]
+            )
+            try database.execute(
+                "DELETE FROM generations WHERE scope = ? AND generation <> ?",
+                [.text(scope.cacheNamespace), .int64(accepted)]
+            )
+        }
+        try database.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        if compact {
+            try database.execute("VACUUM")
+            try database.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        }
+        return .init(
+            removedGenerations: removedGenerations,
+            removedAssetRows: removedAssetRows,
+            removedGroupRows: removedGroupRows,
+            metadataBytesBefore: before,
+            metadataBytesAfter: metadataFileBytes(),
+            didCompact: compact
+        )
     }
 
     func snapshot(scope: MediaAccountScope) async throws -> LibraryIndexSnapshot? {
@@ -326,11 +417,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
 
     func storageReport(scope: MediaAccountScope) async throws -> LibraryIndexStorageReport {
         let snapshot = try await snapshot(scope: scope)
-        let metadataBytes = [databaseURL, URL(fileURLWithPath: databaseURL.path + "-wal")]
-            .reduce(Int64(0)) { total, url in
-                let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
-                return total + ((attributes?[.size] as? NSNumber)?.int64Value ?? 0)
-            }
+        let metadataBytes = metadataFileBytes()
         return .init(
             metadataBytes: metadataBytes,
             derivativeBytes: snapshot?.derivatives
@@ -363,6 +450,14 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
         try migrate(database)
         try ensureScope(scope, database: database)
         return database
+    }
+
+    private func metadataFileBytes() -> Int64 {
+        [databaseURL, URL(fileURLWithPath: databaseURL.path + "-wal")]
+            .reduce(Int64(0)) { total, url in
+                let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+                return total + ((attributes?[.size] as? NSNumber)?.int64Value ?? 0)
+            }
     }
 
     private func database() throws -> SQLiteConnection {

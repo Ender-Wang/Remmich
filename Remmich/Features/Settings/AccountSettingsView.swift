@@ -215,7 +215,7 @@ struct AccountSettingsView: View {
             }
             HStack {
                 Button("Sync Now") { libraryIndex.syncNow() }
-                Button("Full Sync & Verify") { libraryIndex.fullSyncAndVerify() }
+                Button("Rebuild & Verify Index") { libraryIndex.fullSyncAndVerify() }
             }
             Button("Clear Thumbnails", role: .destructive) {
                 libraryIndex.clearThumbnails()
