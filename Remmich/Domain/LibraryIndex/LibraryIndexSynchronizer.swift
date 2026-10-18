@@ -11,9 +11,18 @@ nonisolated struct LibraryIndexSyncResult: Sendable {
     let mode: LibraryIndexSyncMode
     let generation: Int64
     let indexedAssetCount: Int
+    let indexedPhotoCount: Int
+    let indexedVideoCount: Int
     let expectedAssetCount: Int
     let hasMoreHistory: Bool
     let cleanup: LibraryIndexGenerationCleanup
+}
+
+nonisolated struct LibraryIndexProgress: Sendable {
+    let indexedAssetCount: Int
+    let indexedPhotoCount: Int
+    let indexedVideoCount: Int
+    let expectedAssetCount: Int
 }
 
 actor LibraryIndexSynchronizer {
@@ -27,27 +36,48 @@ actor LibraryIndexSynchronizer {
         self.batchSize = max(1, batchSize)
     }
 
-    func synchronizeRecent(scope: MediaAccountScope) async throws -> LibraryIndexSyncResult {
+    func synchronizeRecent(
+        scope: MediaAccountScope,
+        progress: (@Sendable (LibraryIndexProgress) async -> Void)? = nil
+    ) async throws -> LibraryIndexSyncResult {
         let snapshot = try await store.snapshot(scope: scope)
         return try await synchronize(
             scope: scope,
             mode: snapshot == nil ? .recent : .incremental,
-            fullReconciliation: false
+            fullReconciliation: false,
+            progress: progress
         )
     }
 
-    func resumeHistorical(scope: MediaAccountScope) async throws -> LibraryIndexSyncResult {
-        try await synchronize(scope: scope, mode: .historical, fullReconciliation: false)
+    func resumeHistorical(
+        scope: MediaAccountScope,
+        progress: (@Sendable (LibraryIndexProgress) async -> Void)? = nil
+    ) async throws -> LibraryIndexSyncResult {
+        try await synchronize(
+            scope: scope,
+            mode: .historical,
+            fullReconciliation: false,
+            progress: progress
+        )
     }
 
-    func fullSyncAndVerify(scope: MediaAccountScope) async throws -> LibraryIndexSyncResult {
-        try await synchronize(scope: scope, mode: .fullReconciliation, fullReconciliation: true)
+    func fullSyncAndVerify(
+        scope: MediaAccountScope,
+        progress: (@Sendable (LibraryIndexProgress) async -> Void)? = nil
+    ) async throws -> LibraryIndexSyncResult {
+        try await synchronize(
+            scope: scope,
+            mode: .fullReconciliation,
+            fullReconciliation: true,
+            progress: progress
+        )
     }
 
     private func synchronize(
         scope: MediaAccountScope,
         mode: LibraryIndexSyncMode,
-        fullReconciliation: Bool
+        fullReconciliation: Bool,
+        progress: (@Sendable (LibraryIndexProgress) async -> Void)?
     ) async throws -> LibraryIndexSyncResult {
         try await store.prepare(scope: scope)
         let previous = try await store.snapshot(scope: scope)
@@ -56,6 +86,8 @@ actor LibraryIndexSynchronizer {
                 mode: mode,
                 generation: previous?.generation ?? 0,
                 indexedAssetCount: previous?.syncState.indexedAssetCount ?? 0,
+                indexedPhotoCount: previous?.assets.count { $0.kind == .image } ?? 0,
+                indexedVideoCount: previous?.assets.count { $0.kind == .video } ?? 0,
                 expectedAssetCount: previous?.syncState.expectedAssetCount ?? 0,
                 hasMoreHistory: previous?.syncState.historicalCursor != nil,
                 cleanup: .init(
@@ -84,13 +116,21 @@ actor LibraryIndexSynchronizer {
             } else {
                 try await store.beginGeneration(scope: scope)
             }
+            let selectedBucketKeys = Set(selected.map(\.id.rawValue))
+            let retainedAssets = fullReconciliation
+                ? []
+                : previous?.assets.filter { !selectedBucketKeys.contains($0.bucketKey) } ?? []
+            var progressCounts = Self.progress(from: retainedAssets, expectedAssetCount: expectedCount)
             var replacements: [String: [LibraryIndexAssetRecord]] = [:]
             for summary in selected {
                 try Task.checkCancellation()
                 let assets = try await source.assets(in: summary.id, query: .init())
-                replacements[summary.id.rawValue] = assets.map {
+                let records = assets.map {
                     LibraryIndexAssetRecord(asset: $0, bucketID: summary.id)
                 }
+                replacements[summary.id.rawValue] = records
+                progressCounts = progressCounts.adding(records)
+                await progress?(progressCounts)
             }
 
             try await store.removeAssets(
@@ -125,6 +165,8 @@ actor LibraryIndexSynchronizer {
                 mode: mode,
                 generation: generation,
                 indexedAssetCount: stagedAssets.count,
+                indexedPhotoCount: stagedAssets.count { $0.kind == .image },
+                indexedVideoCount: stagedAssets.count { $0.kind == .video },
                 expectedAssetCount: expectedCount,
                 hasMoreHistory: nextCursor != nil,
                 cleanup: cleanup
@@ -182,6 +224,29 @@ actor LibraryIndexSynchronizer {
             return description
         }
         return String(describing: error)
+    }
+
+    private static func progress(
+        from assets: [LibraryIndexAssetRecord],
+        expectedAssetCount: Int
+    ) -> LibraryIndexProgress {
+        .init(
+            indexedAssetCount: assets.count,
+            indexedPhotoCount: assets.count { $0.kind == .image },
+            indexedVideoCount: assets.count { $0.kind == .video },
+            expectedAssetCount: expectedAssetCount
+        )
+    }
+}
+
+private extension LibraryIndexProgress {
+    nonisolated func adding(_ assets: [LibraryIndexAssetRecord]) -> LibraryIndexProgress {
+        .init(
+            indexedAssetCount: indexedAssetCount + assets.count,
+            indexedPhotoCount: indexedPhotoCount + assets.count { $0.kind == .image },
+            indexedVideoCount: indexedVideoCount + assets.count { $0.kind == .video },
+            expectedAssetCount: expectedAssetCount
+        )
     }
 }
 

@@ -18,6 +18,7 @@ struct AccountSettingsView: View {
     @State private var saveError: String?
     @State private var showsSignOutChoices = false
     @State private var pendingAccountDeletion: StoredLibraryAccount?
+    @State private var libraryIndexClock = Date()
 
     init(
         session: AccountSession,
@@ -169,6 +170,19 @@ struct AccountSettingsView: View {
             Text("This removes the local index and cached media for \(account.serverIdentity). It does not change the Immich server.")
         }
         .task { libraryIndex.refreshStoredAccounts() }
+        .task(id: libraryIndex.status == .indexing) {
+            guard libraryIndex.status == .indexing else {
+                libraryIndexClock = Date()
+                return
+            }
+
+            libraryIndexClock = Date()
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled else { return }
+                libraryIndexClock = Date()
+            }
+        }
     }
 
     private func closePanel() {
@@ -193,30 +207,35 @@ struct AccountSettingsView: View {
 
     private var libraryIndexSection: some View {
         accountSection("Library Index & Cache") {
-            LabeledContent("Status", value: libraryIndexStatus)
+            LabeledContent("Index status", value: libraryIndexStatus)
             if libraryIndex.expectedAssetCount > 0 {
                 ProgressView(value: libraryIndex.fractionCompleted)
                     .accessibilityLabel("Library indexing progress")
-                    .accessibilityValue(libraryIndexProgressText)
-                Text(libraryIndexProgressText)
-                    .font(.footnote.monospacedDigit())
-                if let elapsed = libraryIndex.elapsed {
-                    LabeledContent("Elapsed", value: Self.duration(elapsed))
-                }
-                if let remaining = libraryIndex.estimatedRemaining {
-                    LabeledContent("Estimated remaining", value: "About \(Self.duration(remaining))")
-                }
+                    .accessibilityValue("\(libraryIndexProgressText). \(libraryIndexMediaBreakdown)")
             }
-            if let lastUpdatedAt = libraryIndex.lastUpdatedAt {
-                LabeledContent("Last sync", value: lastUpdatedAt.formatted(date: .abbreviated, time: .shortened))
-            }
-            LabeledContent(
-                "Metadata index",
-                value: ByteCountFormatter.string(
-                    fromByteCount: libraryIndex.storageReport.metadataBytes,
-                    countStyle: .binary
+            VStack(alignment: .leading, spacing: 6) {
+                if libraryIndex.expectedAssetCount > 0 {
+                    Text(libraryIndexProgressText)
+                    libraryIndexTiming
+                }
+                if let lastUpdatedAt = libraryIndex.lastUpdatedAt {
+                    libraryIndexDetail(
+                        "Last sync",
+                        value: lastUpdatedAt.formatted(date: .abbreviated, time: .shortened)
+                    )
+                }
+                libraryIndexDetail(
+                    "Metadata index (~8 MB / 10K assets)",
+                    value: ByteCountFormatter.string(
+                        fromByteCount: libraryIndex.storageReport.metadataBytes,
+                        countStyle: .binary
+                    )
                 )
-            )
+                if libraryIndex.expectedAssetCount > 0 {
+                    Text(libraryIndexMediaBreakdown)
+                }
+            }
+            .font(.footnote.monospacedDigit())
             LabeledContent(
                 "Timeline thumbnails",
                 value: "\(libraryIndex.storageReport.derivativeCount.formatted()) cached · \(ByteCountFormatter.string(fromByteCount: libraryIndex.storageReport.derivativeBytes, countStyle: .binary))"
@@ -281,6 +300,35 @@ struct AccountSettingsView: View {
         return libraryIndex.storedAccounts.filter { $0.namespace != currentNamespace }
     }
 
+    private var libraryIndexTiming: some View {
+        libraryIndexTiming(at: libraryIndex.status == .indexing ? libraryIndexClock : Date())
+    }
+
+    private func libraryIndexTiming(at date: Date) -> some View {
+        Group {
+            if let elapsed = libraryIndex.elapsed(at: date) {
+                let label = if let remaining = libraryIndex.estimatedRemaining(at: date) {
+                    "Elapsed (\(Self.duration(remaining)) remaining)"
+                } else {
+                    "Elapsed"
+                }
+                libraryIndexDetail(label, value: Self.duration(elapsed))
+            }
+        }
+        .transaction { transaction in
+            transaction.animation = nil
+        }
+    }
+
+    private func libraryIndexDetail(_ label: String, value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(label)
+            Spacer(minLength: 8)
+            Text(value)
+                .multilineTextAlignment(.trailing)
+        }
+    }
+
     private func performSignOut(deleteLocalData: Bool) {
         Task {
             await signOut(deleteLocalData)
@@ -305,7 +353,11 @@ struct AccountSettingsView: View {
 
     private var libraryIndexProgressText: String {
         let percentage = Int((libraryIndex.fractionCompleted * 100).rounded())
-        return "\(libraryIndex.indexedAssetCount.formatted()) of \(libraryIndex.expectedAssetCount.formatted()) assets indexed · \(percentage)%"
+        return "\(percentage)% (\(libraryIndex.indexedAssetCount.formatted())/\(libraryIndex.expectedAssetCount.formatted())) assets indexed"
+    }
+
+    private var libraryIndexMediaBreakdown: String {
+        "\(libraryIndex.indexedPhotoCount.formatted()) photos, \(libraryIndex.indexedVideoCount.formatted()) videos"
     }
 
     private static func duration(_ seconds: TimeInterval) -> String {

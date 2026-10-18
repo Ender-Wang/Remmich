@@ -77,8 +77,33 @@ struct LibraryIndexSynchronizationTests {
         let result = try await synchronizer.fullSyncAndVerify(scope: Self.scope)
         let snapshot = try #require(try await store.snapshot(scope: Self.scope))
         #expect(result.indexedAssetCount == 1)
+        #expect(result.indexedPhotoCount == 1)
+        #expect(result.indexedVideoCount == 0)
         #expect(snapshot.assets.count == 1)
         #expect(snapshot.assets.first?.livePhotoVideoID == "live-photo-motion")
+    }
+
+    @Test func fullReconciliationPublishesLivePhotoAndVideoCounts() async throws {
+        let fixture = try IndexFixture()
+        defer { fixture.cleanup() }
+        let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        let source = IndexSource(buckets: [
+            "2026-10-01": [Self.asset(id: "photo", bucket: "2026-10-01")],
+            "2026-09-01": [Self.asset(id: "video", bucket: "2026-09-01", mediaKind: .video)],
+        ])
+        let recorder = IndexProgressRecorder()
+        let synchronizer = LibraryIndexSynchronizer(source: source, store: store)
+
+        _ = try await synchronizer.fullSyncAndVerify(scope: Self.scope) { progress in
+            await recorder.append(progress)
+        }
+
+        let progressValues = await recorder.values
+        let finalProgress = try #require(progressValues.last)
+        #expect(finalProgress.indexedAssetCount == 2)
+        #expect(finalProgress.indexedPhotoCount == 1)
+        #expect(finalProgress.indexedVideoCount == 1)
+        #expect(finalProgress.expectedAssetCount == 2)
     }
 
     @Test func reportsThumbnailOriginalAndPlaybackBytesSeparately() async throws {
@@ -172,12 +197,51 @@ struct LibraryIndexSynchronizationTests {
         #expect(FileManager.default.fileExists(atPath: otherDirectory.path))
     }
 
+    @Test @MainActor func controllerResetsAndFreezesElapsedForEachRun() async throws {
+        let fixture = try IndexFixture()
+        defer { fixture.cleanup() }
+        let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        let source = IndexSource(buckets: [
+            "2026-10-01": [Self.asset(id: "one", bucket: "2026-10-01")],
+        ])
+        let controller = LibraryIndexController(source: source, store: store)
+
+        controller.start(session: .fixture, endpoint: AccountSession.fixture.apiURL)
+        try await Self.waitUntilUpToDate(controller)
+        let firstStartedAt = try #require(controller.startedAt)
+        let firstElapsed = try #require(controller.elapsed)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(try abs(#require(controller.elapsed) - firstElapsed) < 0.01)
+        #expect(try abs(#require(controller.elapsed(at: .distantFuture)) - firstElapsed) < 0.01)
+
+        controller.fullSyncAndVerify()
+        let rebuildStartedAt = try #require(controller.startedAt)
+        #expect(rebuildStartedAt > firstStartedAt)
+        try await Self.waitUntilUpToDate(controller)
+        let rebuildElapsed = try #require(controller.elapsed)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(try abs(#require(controller.elapsed) - rebuildElapsed) < 0.01)
+        #expect(try abs(#require(controller.elapsed(at: .distantFuture)) - rebuildElapsed) < 0.01)
+    }
+
     private static let scope = MediaAccountScope(session: .fixture)
+
+    @MainActor
+    private static func waitUntilUpToDate(_ controller: LibraryIndexController) async throws {
+        for _ in 0 ..< 500 {
+            if controller.status == .upToDate {
+                return
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        Issue.record("Timed out waiting for the library index to finish")
+    }
 
     private static func asset(
         id: String,
         bucket _: String,
-        livePhotoVideoID: String? = nil
+        livePhotoVideoID: String? = nil,
+        mediaKind: TimelineMediaKind = .image
     ) -> TimelineAssetSummary {
         .init(
             id: id,
@@ -185,7 +249,7 @@ struct LibraryIndexSynchronizationTests {
             capturedAt: Date(timeIntervalSince1970: 1_760_000_000),
             uploadedAt: Date(timeIntervalSince1970: 1_760_000_010),
             localOffsetHours: 0,
-            mediaKind: .image,
+            mediaKind: mediaKind,
             durationMilliseconds: nil,
             aspectRatio: 4 / 3,
             isFavorite: false,
@@ -240,6 +304,14 @@ struct LibraryIndexSynchronizationTests {
             lastAccessedAt: .now,
             completedAt: .now
         )
+    }
+}
+
+private actor IndexProgressRecorder {
+    private(set) var values: [LibraryIndexProgress] = []
+
+    func append(_ progress: LibraryIndexProgress) {
+        values.append(progress)
     }
 }
 

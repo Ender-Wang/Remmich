@@ -20,8 +20,11 @@ final class LibraryIndexController {
 
     private(set) var status: Status = .idle
     private(set) var indexedAssetCount = 0
+    private(set) var indexedPhotoCount = 0
+    private(set) var indexedVideoCount = 0
     private(set) var expectedAssetCount = 0
     private(set) var startedAt: Date?
+    private(set) var completedElapsed: TimeInterval?
     private(set) var lastUpdatedAt: Date?
     private(set) var storageReport = LibraryIndexStorageReport(
         metadataBytes: 0,
@@ -66,11 +69,27 @@ final class LibraryIndexController {
     }
 
     var elapsed: TimeInterval? {
-        startedAt.map { Date().timeIntervalSince($0) }
+        elapsed(at: Date())
     }
 
     var estimatedRemaining: TimeInterval? {
-        guard let elapsed, indexedAssetCount > 0, expectedAssetCount > indexedAssetCount else { return nil }
+        estimatedRemaining(at: Date())
+    }
+
+    func elapsed(at date: Date) -> TimeInterval? {
+        if status == .indexing, let startedAt {
+            return date.timeIntervalSince(startedAt)
+        }
+        return completedElapsed
+    }
+
+    func estimatedRemaining(at date: Date) -> TimeInterval? {
+        guard let elapsed = elapsed(at: date),
+              indexedAssetCount > 0,
+              expectedAssetCount > indexedAssetCount
+        else {
+            return nil
+        }
         return elapsed * Double(expectedAssetCount - indexedAssetCount) / Double(indexedAssetCount)
     }
 
@@ -82,6 +101,8 @@ final class LibraryIndexController {
         if scope != nextScope {
             scope = nextScope
             indexedAssetCount = 0
+            indexedPhotoCount = 0
+            indexedVideoCount = 0
             expectedAssetCount = 0
             startedAt = nil
         }
@@ -91,6 +112,7 @@ final class LibraryIndexController {
 
     func pause() {
         guard let scope else { return }
+        completedElapsed = startedAt.map { Date().timeIntervalSince($0) }
         task?.cancel()
         task = nil
         status = .paused
@@ -204,8 +226,11 @@ final class LibraryIndexController {
         accessToken = nil
         status = .idle
         indexedAssetCount = 0
+        indexedPhotoCount = 0
+        indexedVideoCount = 0
         expectedAssetCount = 0
         startedAt = nil
+        completedElapsed = nil
         lastUpdatedAt = nil
     }
 
@@ -213,8 +238,13 @@ final class LibraryIndexController {
         guard let scope, task == nil else { return }
         runID &+= 1
         let currentRunID = runID
-        if startedAt == nil {
-            startedAt = Date()
+        startedAt = Date()
+        completedElapsed = nil
+        lastPublishedAt = .distantPast
+        if fullReconciliation {
+            indexedAssetCount = 0
+            indexedPhotoCount = 0
+            indexedVideoCount = 0
         }
         status = .indexing
         let runStartedAt = Date()
@@ -225,16 +255,19 @@ final class LibraryIndexController {
         task = Task { [weak self] in
             guard let self else { return }
             do {
+                let progress: @Sendable (LibraryIndexProgress) async -> Void = { [weak self] progress in
+                    await self?.publish(progress)
+                }
                 var result = if fullReconciliation {
-                    try await synchronizer.fullSyncAndVerify(scope: scope)
+                    try await synchronizer.fullSyncAndVerify(scope: scope, progress: progress)
                 } else {
-                    try await synchronizer.synchronizeRecent(scope: scope)
+                    try await synchronizer.synchronizeRecent(scope: scope, progress: progress)
                 }
                 guard currentRunID == runID else { return }
                 publish(result, force: false)
                 while result.hasMoreHistory, !Task.isCancelled {
                     await Task.yield()
-                    result = try await synchronizer.resumeHistorical(scope: scope)
+                    result = try await synchronizer.resumeHistorical(scope: scope, progress: progress)
                     guard currentRunID == runID else { return }
                     publish(result, force: false)
                 }
@@ -247,6 +280,7 @@ final class LibraryIndexController {
                     "Library index maintenance finished removedGenerations=\(maintenance.removedGenerations) removedAssets=\(maintenance.removedAssetRows) removedGroups=\(maintenance.removedGroupRows) compacted=\(maintenance.didCompact) bytesBefore=\(maintenance.metadataBytesBefore) bytesAfter=\(maintenance.metadataBytesAfter)"
                 )
                 publish(result, force: true)
+                completedElapsed = Date().timeIntervalSince(runStartedAt)
                 status = .upToDate
                 lastUpdatedAt = Date()
                 storageReport = try await store.storageReport(scope: scope)
@@ -263,6 +297,9 @@ final class LibraryIndexController {
                     "Library index completed generation=\(result.generation) indexed=\(result.indexedAssetCount) expected=\(result.expectedAssetCount) elapsedMs=\(Self.elapsedMilliseconds(since: runStartedAt)) metadataBytes=\(metadataBytes)"
                 )
             } catch is CancellationError {
+                if currentRunID == runID {
+                    completedElapsed = Date().timeIntervalSince(runStartedAt)
+                }
                 if currentRunID == runID, status == .indexing {
                     status = .idle
                 }
@@ -271,6 +308,7 @@ final class LibraryIndexController {
                 )
             } catch {
                 if currentRunID == runID {
+                    completedElapsed = Date().timeIntervalSince(runStartedAt)
                     status = .failed(Self.message(for: error))
                 }
                 Self.logger.error(
@@ -327,7 +365,19 @@ final class LibraryIndexController {
         let now = Date()
         guard force || now.timeIntervalSince(lastPublishedAt) >= 1 else { return }
         indexedAssetCount = result.indexedAssetCount
+        indexedPhotoCount = result.indexedPhotoCount
+        indexedVideoCount = result.indexedVideoCount
         expectedAssetCount = result.expectedAssetCount
+        lastPublishedAt = now
+    }
+
+    private func publish(_ progress: LibraryIndexProgress) {
+        let now = Date()
+        guard now.timeIntervalSince(lastPublishedAt) >= 1 else { return }
+        indexedAssetCount = progress.indexedAssetCount
+        indexedPhotoCount = progress.indexedPhotoCount
+        indexedVideoCount = progress.indexedVideoCount
+        expectedAssetCount = progress.expectedAssetCount
         lastPublishedAt = now
     }
 
