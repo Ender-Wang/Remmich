@@ -248,6 +248,28 @@ struct TimelineReadContractTests {
         #expect(assets[1].durationMilliseconds == 12345)
     }
 
+    @Test func usesOneThumbnailRevisionContractAcrossTimelineSources() throws {
+        let createdAt = try #require(
+            ISO8601DateFormatter().date(from: "2026-09-01T00:00:01Z")
+        )
+        let fileCreatedAt = try #require(
+            ISO8601DateFormatter().date(from: "2026-09-01T00:00:00Z")
+        )
+
+        #expect(
+            ImmichClient.thumbnailRevision(
+                createdAt: createdAt,
+                fileCreatedAt: fileCreatedAt
+            ) == createdAt
+        )
+        #expect(
+            ImmichClient.thumbnailRevision(
+                createdAt: fileCreatedAt,
+                fileCreatedAt: createdAt
+            ) == createdAt
+        )
+    }
+
     @Test func acceptsImmichDateVariantsAndTreatsTimezoneLessTimelineDatesAsUTC() throws {
         let transcoder = ImmichDateTranscoder()
         let wholeSeconds = try transcoder.decode("2026-09-01T00:00:00Z")

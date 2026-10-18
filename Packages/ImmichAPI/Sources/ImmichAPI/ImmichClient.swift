@@ -277,7 +277,10 @@ public actor ImmichClient {
                             ownerID: asset.ownerId,
                             capturedAt: asset.localDateTime,
                             uploadedAt: asset.createdAt,
-                            thumbnailRevision: asset.updatedAt,
+                            thumbnailRevision: Self.thumbnailRevision(
+                                createdAt: asset.createdAt,
+                                fileCreatedAt: asset.fileCreatedAt
+                            ),
                             durationMilliseconds: asset.duration,
                             aspectRatio: aspectRatio,
                             isFavorite: asset.isFavorite,
@@ -456,9 +459,16 @@ public actor ImmichClient {
                 country: optionalValue(at: index, in: response.country),
                 latitude: optionalValue(at: index, in: response.latitude),
                 longitude: optionalValue(at: index, in: response.longitude),
-                thumbnailRevision: max(createdAt, fileCreatedAt)
+                thumbnailRevision: thumbnailRevision(
+                    createdAt: createdAt,
+                    fileCreatedAt: fileCreatedAt
+                )
             )
         }
+    }
+
+    static func thumbnailRevision(createdAt: Date, fileCreatedAt: Date) -> Date {
+        max(createdAt, fileCreatedAt)
     }
 
     private static func timelineBucketsQuery(
