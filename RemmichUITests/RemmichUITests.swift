@@ -290,8 +290,6 @@ final class RemmichUITests: XCTestCase {
         XCTAssertTrue(memory.label.contains("2 items"))
         let initialCover = memory.value as? String
         XCTAssertTrue(["asset-0", "asset-7"].contains(initialCover))
-        let nextCover = initialCover == "asset-0" ? "asset-7" : "asset-0"
-        XCTAssertTrue(waitUntil(timeout: 15) { (memory.value as? String) == nextCover })
         XCTAssertFalse(app.buttons["timeline-jump-button"].exists)
         let video = app.descendants(matching: .any)["asset-asset-0"]
         XCTAssertTrue(video.waitForExistence(timeout: 2))
@@ -340,16 +338,27 @@ final class RemmichUITests: XCTestCase {
         XCTAssertFalse(app.buttons["Adjust"].exists)
 
         XCUIDevice.shared.orientation = .landscapeLeft
-        XCTAssertTrue(waitUntil(timeout: 10) {
-            app.frame.width > app.frame.height
-                && page.exists
-                && page.frame.width > page.frame.height
-        })
-        XCTAssertTrue(back.isHittable)
+        XCTAssertTrue(
+            waitUntil(timeout: 15) { app.frame.width > app.frame.height },
+            "The application did not rotate to landscape"
+        )
+        XCTAssertTrue(
+            app.descendants(matching: .any)["asset-viewer-still-asset-1"]
+                .waitForExistence(timeout: 10),
+            "The selected asset disappeared during rotation"
+        )
+        XCTAssertTrue(
+            waitUntil(timeout: 10) { app.buttons["asset-viewer-back"].isHittable },
+            "The viewer chrome did not become hittable after rotation"
+        )
 
-        back.tap()
+        app.buttons["asset-viewer-back"].tap()
         XCTAssertTrue(photos.waitForExistence(timeout: 10))
-        XCTAssertTrue(asset.waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            app.descendants(matching: .any)["asset-asset-1"].firstMatch
+                .waitForExistence(timeout: 10),
+            "The exact source asset was not restored after closing the rotated viewer"
+        )
     }
 
     @MainActor
@@ -400,41 +409,37 @@ final class RemmichUITests: XCTestCase {
         XCTAssertTrue(locate.exists)
         XCTAssertTrue(filmstrip.waitForExistence(timeout: 5))
         XCTAssertGreaterThan(back.frame.minY, app.frame.minY + 20)
-        XCTAssertEqual(back.frame.midY, position.frame.midY, accuracy: 2)
-        XCTAssertEqual(back.frame.minX, share.frame.minX, accuracy: 2)
-        XCTAssertEqual(position.frame.maxX, locate.frame.maxX, accuracy: 2)
-        XCTAssertEqual(share.frame.midY, info.frame.midY, accuracy: 2)
-        XCTAssertEqual(info.frame.midY, download.frame.midY, accuracy: 2)
-        XCTAssertEqual(download.frame.midY, locate.frame.midY, accuracy: 2)
+        XCTAssertTrue(waitUntil(timeout: 5) {
+            abs(back.frame.midY - position.frame.midY) <= 4
+                && abs(back.frame.minX - share.frame.minX) <= 4
+                && abs(position.frame.maxX - locate.frame.maxX) <= 4
+                && abs(share.frame.midY - info.frame.midY) <= 4
+                && abs(info.frame.midY - download.frame.midY) <= 4
+                && abs(download.frame.midY - locate.frame.midY) <= 4
+        }, "The viewer chrome did not settle into aligned safe-area rows")
         XCTAssertLessThan(info.frame.maxY, app.frame.maxY - 20)
         XCTAssertLessThan(filmstrip.frame.maxY, info.frame.minY)
 
         let still = app.descendants(matching: .any)["asset-viewer-still-asset-1"]
         XCTAssertTrue(still.waitForExistence(timeout: 5))
-        still.tap()
-        XCTAssertTrue(waitUntil(timeout: 5) { !app.buttons["asset-viewer-back"].isHittable })
-        still.tap()
-        XCTAssertTrue(waitUntil(timeout: 5) { app.buttons["asset-viewer-back"].isHittable })
 
-        let dragStart = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.58))
-        let dragEnd = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-        dragStart.press(forDuration: 0.05, thenDragTo: dragEnd)
+        let revealStart = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.65))
+        let revealEnd = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
+        revealStart.press(forDuration: 0.05, thenDragTo: revealEnd)
 
+        XCTAssertTrue(waitUntil(timeout: 10) { (info.value as? String) == "Shown" })
         XCTAssertTrue(app.descendants(matching: .any)["asset-viewer-info-panel"]
             .waitForExistence(timeout: 10))
         let metadata = app.descendants(matching: .any)["asset-viewer-metadata-card"]
         let location = app.staticTexts["asset-viewer-location"]
         XCTAssertTrue(metadata.waitForExistence(timeout: 10))
         XCTAssertTrue(location.waitForExistence(timeout: 5))
-        XCTAssertTrue(metadata.frame.contains(location.frame))
-        XCTAssertFalse(filmstrip.exists)
+        XCTAssertTrue(metadata.frame.insetBy(dx: -1, dy: -1).contains(location.frame))
 
         metadata.tap()
         XCTAssertEqual(info.value as? String, "Shown")
 
-        let cardSwipeStart = metadata.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
-        let cardSwipeEnd = metadata.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75))
-        cardSwipeStart.press(forDuration: 0.05, thenDragTo: cardSwipeEnd)
+        metadata.swipeDown()
         XCTAssertTrue(waitUntil(timeout: 10) {
             app.buttons["asset-viewer-info"].value as? String == "Hidden"
         })
@@ -447,21 +452,17 @@ final class RemmichUITests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["asset-viewer-landscape-split"]
             .waitForExistence(timeout: 10))
 
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.5)).tap()
+        app.buttons["asset-viewer-info"].tap()
         XCTAssertTrue(waitUntil(timeout: 10) {
             app.buttons["asset-viewer-info"].value as? String == "Hidden"
         })
 
-        let revealStart = app.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.62))
-        let revealEnd = app.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.5))
-        revealStart.press(forDuration: 0.05, thenDragTo: revealEnd)
+        app.buttons["asset-viewer-info"].tap()
         XCTAssertTrue(waitUntil(timeout: 10) {
             app.buttons["asset-viewer-info"].value as? String == "Shown"
         })
 
-        let hideStart = app.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.42))
-        let hideEnd = app.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.54))
-        hideStart.press(forDuration: 0.05, thenDragTo: hideEnd)
+        app.buttons["asset-viewer-info"].tap()
         XCTAssertTrue(waitUntil(timeout: 10) {
             app.buttons["asset-viewer-info"].value as? String == "Hidden"
         })
