@@ -59,6 +59,45 @@ struct PhotosTimelineRegressionTests {
         #expect(tracker.isCompact == false)
     }
 
+    @Test func newestTimelineAnchorSurvivesTransientGeometryAndTabSwitching() {
+        var anchor = TimelineViewportAnchor.latest
+
+        anchor = TimelineViewportAnchorRetention.update(
+            current: anchor,
+            bottomGap: 400,
+            userScrolling: false,
+            centeredAssetID: "latest-visible-asset",
+            viewportCenterOffset: 8
+        )
+        #expect(anchor == .latest)
+
+        anchor = TimelineViewportAnchorRetention.update(
+            current: anchor,
+            bottomGap: 120,
+            userScrolling: true,
+            centeredAssetID: "middle-asset",
+            viewportCenterOffset: -37
+        )
+        #expect(anchor == .asset(id: "middle-asset", viewportCenterOffset: -37))
+
+        anchor = TimelineViewportAnchorRetention.update(
+            current: anchor,
+            bottomGap: 12,
+            userScrolling: false,
+            centeredAssetID: "latest-visible-asset",
+            viewportCenterOffset: 0
+        )
+        #expect(anchor == .latest)
+
+        let restoredOffset = TimelineViewportAnchorRetention.restoredScrollOffset(
+            assetCenter: 1240,
+            viewportCenterOffset: -37,
+            viewportHeight: 800,
+            maximumOffset: 2000
+        )
+        #expect(restoredOffset == 877)
+    }
+
     @Test func gridFillsNewestFirstFromBottomLeft() {
         #expect(TimelineGridOrder.displaySlots(itemCount: 0, columns: 3).isEmpty)
         #expect(TimelineGridOrder.displaySlots(itemCount: 1, columns: 3) == [0, nil, nil])

@@ -10,7 +10,43 @@ private struct PhotosChromeGeometry: Equatable {
 
 nonisolated enum TimelineViewportAnchor: Equatable {
     case latest
-    case asset(String)
+    case asset(id: String, viewportCenterOffset: CGFloat)
+}
+
+nonisolated enum TimelineViewportAnchorRetention {
+    static let latestBoundary: CGFloat = 24
+
+    static func update(
+        current: TimelineViewportAnchor,
+        bottomGap: CGFloat,
+        userScrolling: Bool,
+        centeredAssetID: String?,
+        viewportCenterOffset: CGFloat?
+    ) -> TimelineViewportAnchor {
+        if bottomGap <= latestBoundary {
+            return .latest
+        }
+        guard userScrolling,
+              let centeredAssetID,
+              let viewportCenterOffset
+        else { return current }
+        return .asset(
+            id: centeredAssetID,
+            viewportCenterOffset: viewportCenterOffset
+        )
+    }
+
+    static func restoredScrollOffset(
+        assetCenter: CGFloat,
+        viewportCenterOffset: CGFloat,
+        viewportHeight: CGFloat,
+        maximumOffset: CGFloat
+    ) -> CGFloat {
+        min(
+            maximumOffset,
+            max(0, assetCenter - viewportHeight / 2 - viewportCenterOffset)
+        )
+    }
 }
 
 @MainActor
@@ -26,6 +62,7 @@ private final class TimelineViewportRuntime {
     var lastResidencyTarget: MediaPixelSize?
     var scrollOffset: CGFloat = 0
     var scrollContainerSize: CGSize = .zero
+    var retainedAnchor = TimelineViewportAnchor.latest
     var layoutCache = TimelineDeterministicLayoutCache()
     var lastLoggedContainerSize: CGSize?
 }
@@ -299,6 +336,13 @@ struct PhotosView: View {
                     await Task.yield()
                     guard !Task.isCancelled, isTimelineActive else { return }
                     timelineSections = store.sections
+                    restorePendingViewportAnchor(
+                        using: viewportRuntime.layoutCache.current,
+                        viewportHeight: viewportRuntime.scrollContainerSize.height,
+                        generation: 0,
+                        reason: "tab-resume",
+                        clearsAnchor: false
+                    )
                     scheduleViewportUpdate()
                     if let bucketID = store.visibleAnchor?.bucketID {
                         await store.loadBucket(bucketID)
@@ -306,6 +350,9 @@ struct PhotosView: View {
                     timelineResumeTask = nil
                 }
             } else {
+                pendingViewportAnchor = captureViewportAnchor(
+                    using: viewportRuntime.layoutCache.current
+                )
                 viewportRuntime.viewportUpdateTask?.cancel()
                 viewportRuntime.viewportUpdateTask = nil
                 timelineResumeTask = nil
@@ -448,8 +495,11 @@ struct PhotosView: View {
         guard libraryRange == .week,
               let newest = store.bucketSummaries.first?.id,
               let monthStart = newest.displayDate,
-              let representativeDate = Calendar(identifier: .gregorian)
-                  .date(byAdding: .day, value: 6, to: monthStart),
+              let representativeDate = Calendar(identifier: .gregorian).date(
+                  byAdding: .day,
+                  value: 6,
+                  to: monthStart
+              ),
               let week = TimelineWeekID(day: TimelineCaptureDay(capturedAt: representativeDate))
         else { return }
         selectRoute(.week(newest, week, .library), initialAssetID: nil)
@@ -698,7 +748,11 @@ struct PhotosView: View {
                     .onScrollPhaseChange { _, phase in
                         let isUserScrolling = phase == .interacting || phase == .decelerating
                         viewportRuntime.userScrollPhase = isUserScrolling
-                        if !isUserScrolling {
+                        if isUserScrolling {
+                            rotationRestoreTask?.cancel()
+                            contentRestoreTask?.cancel()
+                            pendingViewportAnchor = nil
+                        } else {
                             viewportRuntime.chromeTracker.scrollingEnded()
                         }
                     }
@@ -717,6 +771,18 @@ struct PhotosView: View {
                         viewportRuntime.timelineBottomGap = new.bottomGap
                         viewportRuntime.scrollOffset = new.offset
                         viewportRuntime.scrollContainerSize = new.containerSize
+                        let centerY = new.offset + new.containerSize.height / 2
+                        let centeredAssetID = layout.assetNearest(verticalOffset: centerY)
+                        let viewportCenterOffset = centeredAssetID.flatMap {
+                            layout.verticalCenter(of: $0).map { $0 - centerY }
+                        }
+                        viewportRuntime.retainedAnchor = TimelineViewportAnchorRetention.update(
+                            current: viewportRuntime.retainedAnchor,
+                            bottomGap: new.bottomGap,
+                            userScrolling: viewportRuntime.userScrollPhase,
+                            centeredAssetID: centeredAssetID,
+                            viewportCenterOffset: viewportCenterOffset
+                        )
                         if viewportRuntime.lastLoggedContainerSize != new.containerSize {
                             viewportRuntime.lastLoggedContainerSize = new.containerSize
                             let selectionElapsed = NativeTabTransitionTrace.elapsedMilliseconds(
@@ -959,11 +1025,27 @@ struct PhotosView: View {
         using layout: TimelineDeterministicLayout
     ) -> TimelineViewportAnchor? {
         guard !layout.rows.isEmpty else { return nil }
-        guard viewportRuntime.timelineBottomGap > 24 else { return .latest }
+        switch viewportRuntime.retainedAnchor {
+        case .latest:
+            return .latest
+        case let .asset(assetID, viewportCenterOffset)
+            where layout.verticalCenter(of: assetID) != nil:
+            return .asset(
+                id: assetID,
+                viewportCenterOffset: viewportCenterOffset
+            )
+        case .asset:
+            break
+        }
         let centerY = viewportRuntime.scrollOffset
             + viewportRuntime.scrollContainerSize.height / 2
-        if let assetID = layout.assetNearest(verticalOffset: centerY) {
-            return .asset(assetID)
+        if let assetID = layout.assetNearest(verticalOffset: centerY),
+           let assetCenter = layout.verticalCenter(of: assetID)
+        {
+            return .asset(
+                id: assetID,
+                viewportCenterOffset: assetCenter - centerY
+            )
         }
         return nil
     }
@@ -1014,10 +1096,15 @@ struct PhotosView: View {
         switch anchor {
         case .latest:
             return nil
-        case let .asset(assetID):
+        case let .asset(assetID, viewportCenterOffset):
             guard let center = layout.verticalCenter(of: assetID) else { return nil }
             let maximumOffset = max(0, layout.totalHeight - viewportHeight)
-            return min(maximumOffset, max(0, center - viewportHeight / 2))
+            return TimelineViewportAnchorRetention.restoredScrollOffset(
+                assetCenter: center,
+                viewportCenterOffset: viewportCenterOffset,
+                viewportHeight: viewportHeight,
+                maximumOffset: maximumOffset
+            )
         }
     }
 
@@ -1082,7 +1169,7 @@ struct PhotosView: View {
     }
 
     private var centerVisibleAssetID: String? {
-        if case let .asset(assetID) = captureViewportAnchor(
+        if case let .asset(assetID, _) = captureViewportAnchor(
             using: viewportRuntime.layoutCache.current
         ) {
             return assetID
@@ -1166,6 +1253,7 @@ struct PhotosView: View {
         viewportRuntime.viewportUpdateTask = nil
         viewportRuntime.visibleDescriptors.removeAll(keepingCapacity: true)
         viewportRuntime.visibleAssets.removeAll(keepingCapacity: true)
+        viewportRuntime.retainedAnchor = .latest
         viewportRuntime.lastResidencyPlan = .empty
         viewportRuntime.lastResidencyTarget = nil
     }
@@ -1178,8 +1266,8 @@ struct PhotosView: View {
         switch anchor {
         case .latest:
             "latest"
-        case let .asset(assetID):
-            "asset:\(assetID.prefix(8))"
+        case let .asset(assetID, viewportCenterOffset):
+            "asset:\(assetID.prefix(8))@\(Int(viewportCenterOffset))"
         case nil:
             "none"
         }
