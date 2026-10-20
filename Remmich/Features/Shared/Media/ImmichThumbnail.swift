@@ -8,13 +8,14 @@ struct ImmichThumbnail: View {
     var contentMode: ContentMode = .fill
     var showsBackground = true
     var imageCornerRadius: CGFloat = 0
+    var priority: ImageRequest.Priority = .normal
     var didLoad: (ImageContainer) -> Void = { _ in }
 
     @State private var retryID = 0
 
     var body: some View {
         LazyImage(
-            request: media.imageRequest(for: descriptor),
+            request: media.imageRequest(for: descriptor, priority: priority),
             transaction: .init(animation: .easeOut(duration: 0.18))
         ) { state in
             ZStack {
@@ -60,6 +61,7 @@ struct ImmichThumbnail: View {
             .clipped()
         }
         .pipeline(media.pipeline ?? .shared)
+        .priority(priority)
         .onDisappear(.cancel)
         .id("\(descriptor.assetID)-\(descriptor.updatedAt.timeIntervalSinceReferenceDate)-\(retryID)")
     }

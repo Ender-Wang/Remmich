@@ -67,6 +67,9 @@ final class PhotosTimelineStore {
     private var refreshTask: Task<Void, Never>?
     private var memoryTask: Task<Void, Never>?
     private var retainsPersistentBootstrap = false
+    private var persistentBootstrapGeneration: Int64?
+    private var persistentBootstrapDayCatalogRevision: UInt64?
+    private var persistentBootstrapWeekCatalogRevision: UInt64?
 
     init(
         reader: any TimelineReading,
@@ -102,6 +105,9 @@ final class PhotosTimelineStore {
         })
         groupedCatalogs = snapshot.groupedCatalogs
         retainsPersistentBootstrap = true
+        persistentBootstrapGeneration = snapshot.generation
+        persistentBootstrapDayCatalogRevision = groupedCatalogs.catalog(for: .day).revision
+        persistentBootstrapWeekCatalogRevision = groupedCatalogs.catalog(for: .week).revision
         loadState = snapshot.summaries.isEmpty ? .empty : .loaded
         refreshState = .idle
         visibleAnchor = Self.resolveVisibleAnchor(
@@ -111,6 +117,19 @@ final class PhotosTimelineStore {
         rebuildResidencyCatalog()
         Self.logger.info(
             "Local timeline bootstrap published generation=\(snapshot.generation) buckets=\(snapshot.summaries.count) assets=\(snapshot.assetsByBucket.values.reduce(0) { $0 + $1.count }) complete=\(snapshot.isComplete)"
+        )
+    }
+
+    func promoteBootstrapGroupedCatalogs(_ snapshot: TimelineBootstrapSnapshot) {
+        guard retainsPersistentBootstrap,
+              persistentBootstrapGeneration == snapshot.generation,
+              persistentBootstrapDayCatalogRevision == groupedCatalogs.catalog(for: .day).revision,
+              persistentBootstrapWeekCatalogRevision == groupedCatalogs.catalog(for: .week).revision
+        else { return }
+        groupedCatalogs = snapshot.groupedCatalogs
+        rangeCoverRevision &+= 1
+        Self.logger.info(
+            "Local grouped catalogs promoted generation=\(snapshot.generation) day=\(snapshot.groupedCatalogs.catalog(for: .day).entries.count) week=\(snapshot.groupedCatalogs.catalog(for: .week).entries.count)"
         )
     }
 
@@ -534,6 +553,9 @@ final class PhotosTimelineStore {
         residencyPages = []
         residencyPageIndexByAssetID = [:]
         retainsPersistentBootstrap = false
+        persistentBootstrapGeneration = nil
+        persistentBootstrapDayCatalogRevision = nil
+        persistentBootstrapWeekCatalogRevision = nil
     }
 
     private var isTerminalInitialFailure: Bool {

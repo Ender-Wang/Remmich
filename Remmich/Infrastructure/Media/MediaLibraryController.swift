@@ -78,11 +78,16 @@ final class MediaLibraryController {
         Self.logger.info("Timeline presentation started")
     }
 
-    func imageRequest(for descriptor: MediaRequestDescriptor) -> ImageRequest? {
+    func imageRequest(
+        for descriptor: MediaRequestDescriptor,
+        priority: ImageRequest.Priority = .normal
+    ) -> ImageRequest? {
         #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("-ui-testing-signed-in") {
                 let data = PreviewMediaFixtures.data(for: descriptor.assetID)
-                return ImageRequest(id: "ui-fixture-\(descriptor.assetID)", data: { data })
+                var request = ImageRequest(id: "ui-fixture-\(descriptor.assetID)", data: { data })
+                request.priority = priority
+                return request
             }
         #endif
         if descriptor.derivative == .thumbnail,
@@ -103,6 +108,7 @@ final class MediaLibraryController {
                     contentMode: .aspectFill
                 )
             }
+            request.priority = priority
             return request
         }
         guard let scope, let session, let activeAPIURL,
@@ -112,6 +118,7 @@ final class MediaLibraryController {
         urlRequest.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
         var request = ImageRequest(urlRequest: urlRequest)
         request.imageID = descriptor.cacheKey(in: scope)
+        request.priority = priority
         if let pixels = descriptor.targetPixels {
             request.thumbnail = .init(
                 size: .init(width: pixels.width, height: pixels.height),
@@ -173,7 +180,9 @@ final class MediaLibraryController {
 
     func updatePrefetch(_ descriptors: [MediaRequestDescriptor]) {
         prefetcher?.stopPrefetching()
-        let requests = descriptors.compactMap(imageRequest)
+        let requests = descriptors.compactMap {
+            imageRequest(for: $0, priority: .low)
+        }
         prefetcher?.startPrefetching(with: requests)
     }
 
@@ -256,7 +265,7 @@ final class MediaLibraryController {
 
         let work = Self.preloadAssets(in: plan).compactMap { asset -> (MediaRequestDescriptor, ImageRequest)? in
             let descriptor = Self.thumbnailDescriptor(for: asset, targetPixels: targetPixels)
-            guard let request = imageRequest(for: descriptor) else { return nil }
+            guard let request = imageRequest(for: descriptor, priority: .low) else { return nil }
             return (descriptor, request)
         }
         let pipeline = pipeline
@@ -457,6 +466,12 @@ final class MediaLibraryController {
     }
 
     private static func makePipeline(scope: MediaAccountScope) -> ImagePipeline {
+        #if DEBUG
+            // Keep Nuke's decode/load intervals visible in Instruments so a cold tab-switch
+            // stall can be attributed to the exact pipeline stage instead of inferred from
+            // aggregate console timings.
+            ImagePipeline.Configuration.isSignpostLoggingEnabled = true
+        #endif
         let memoryCache = ImageCache(costLimit: 96 * 1024 * 1024, countLimit: 1200)
         memoryCache.ttl = 10 * 60
         let dataCache = try? DataCache(name: "Remmich.Media.\(scope.cacheNamespace)")

@@ -116,6 +116,11 @@ final class AppSessionController {
             photos.routeDidChange(isReachable: isReachable)
             videos.routeDidChange(isReachable: isReachable)
         }
+        libraryIndex.acceptedGroupedCatalogsDidChange = { [weak self] bootstrap in
+            guard let self else { return }
+            photos.promoteBootstrapGroupedCatalogs(bootstrap.photos)
+            videos.promoteBootstrapGroupedCatalogs(bootstrap.videos)
+        }
     }
 
     func start() async {
@@ -594,6 +599,7 @@ final class AppSessionController {
         else { return }
         photos.bootstrap(bootstrap.photos)
         videos.bootstrap(bootstrap.videos)
+        libraryIndex.completeBootstrapGroupedCatalogs(bootstrap)
     }
 
     private static func message(for error: Error) -> String {

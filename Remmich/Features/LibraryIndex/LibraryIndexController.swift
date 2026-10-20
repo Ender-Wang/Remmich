@@ -58,6 +58,8 @@ final class LibraryIndexController {
     private(set) var thumbnailWarmingLastUpdatedAt: Date?
     @ObservationIgnored
     var acceptedBootstrapDidChange: ((LibraryTimelineBootstrap) -> Void)?
+    @ObservationIgnored
+    var acceptedGroupedCatalogsDidChange: ((LibraryTimelineBootstrap) -> Void)?
 
     private let store: SQLiteLibraryIndexStore
     private let synchronizer: LibraryIndexSynchronizer
@@ -67,6 +69,7 @@ final class LibraryIndexController {
     private var endpoint: URL?
     private var accessToken: String?
     private var task: Task<Void, Never>?
+    private var bootstrapCatalogTask: Task<Void, Never>?
     private var warmingTask: Task<Void, Never>?
     private var lastPublishedAt = Date.distantPast
     private var runID: UInt64 = 0
@@ -171,7 +174,7 @@ final class LibraryIndexController {
                 scope: nextScope
             )
             async let bootstrapTask = Task.detached(priority: .userInitiated) {
-                LibraryTimelineBootstrapBuilder.build(from: snapshot)
+                LibraryTimelineBootstrapBuilder.buildInitial(from: snapshot)
             }.value
             let (thumbnails, bootstrap) = await (thumbnailsTask, bootstrapTask)
             Self.logger.info(
@@ -191,6 +194,11 @@ final class LibraryIndexController {
         }
     }
 
+    func completeBootstrapGroupedCatalogs(_ initial: LibraryTimelineBootstrap) {
+        guard let scope else { return }
+        completeGroupedCatalogs(from: initial, scope: scope)
+    }
+
     private nonisolated static func elapsedMilliseconds(
         since start: ContinuousClock.Instant
     ) -> Int {
@@ -201,7 +209,7 @@ final class LibraryIndexController {
 
     func start(session: AccountSession, endpoint: URL) {
         let nextScope = MediaAccountScope(session: session)
-        suspend()
+        suspend(cancelBootstrapCatalogs: scope != nextScope)
         self.endpoint = endpoint
         accessToken = session.accessToken
         if scope != nextScope {
@@ -350,9 +358,17 @@ final class LibraryIndexController {
     }
 
     func suspend() {
+        suspend(cancelBootstrapCatalogs: true)
+    }
+
+    private func suspend(cancelBootstrapCatalogs: Bool) {
         runID &+= 1
         task?.cancel()
         task = nil
+        if cancelBootstrapCatalogs {
+            bootstrapCatalogTask?.cancel()
+            bootstrapCatalogTask = nil
+        }
         cancelThumbnailWarming(reason: "suspended")
         if status == .indexing {
             status = .idle
@@ -382,6 +398,35 @@ final class LibraryIndexController {
         thumbnailWarmingLastUpdatedAt = nil
         thumbnailWarmingStatus = thumbnailWarmingEnabled ? .waiting : .off
         lastPublishedBootstrapGeneration = nil
+    }
+
+    private func completeGroupedCatalogs(
+        from initial: LibraryTimelineBootstrap,
+        scope expectedScope: MediaAccountScope
+    ) {
+        bootstrapCatalogTask?.cancel()
+        guard acceptedGroupedCatalogsDidChange != nil else { return }
+        let expectedGeneration = initial.photos.generation
+        bootstrapCatalogTask = Task { [weak self] in
+            let worker = Task.detached(priority: .utility) {
+                LibraryTimelineBootstrapBuilder.complete(initial)
+            }
+            let completed = await withTaskCancellationHandler {
+                await worker.value
+            } onCancel: {
+                worker.cancel()
+            }
+            guard let self,
+                  !Task.isCancelled,
+                  scope == expectedScope,
+                  lastPublishedBootstrapGeneration == expectedGeneration
+            else { return }
+            acceptedGroupedCatalogsDidChange?(completed)
+            bootstrapCatalogTask = nil
+            Self.logger.info(
+                "Library bootstrap grouped catalogs promoted generation=\(expectedGeneration)"
+            )
+        }
     }
 
     private func run(fullReconciliation: Bool) {
@@ -493,9 +538,14 @@ final class LibraryIndexController {
               acceptedBootstrapDidChange != nil
         else { return }
 
-        let bootstrap = await Task.detached(priority: .userInitiated) {
-            LibraryTimelineBootstrapBuilder.build(from: snapshot)
-        }.value
+        let worker = Task.detached(priority: .userInitiated) {
+            LibraryTimelineBootstrapBuilder.buildInitial(from: snapshot)
+        }
+        let bootstrap = await withTaskCancellationHandler {
+            await worker.value
+        } onCancel: {
+            worker.cancel()
+        }
         guard expectedRunID == runID,
               scope == expectedScope,
               !Task.isCancelled,
@@ -504,6 +554,7 @@ final class LibraryIndexController {
 
         lastPublishedBootstrapGeneration = snapshot.generation
         acceptedBootstrapDidChange?(bootstrap)
+        completeGroupedCatalogs(from: bootstrap, scope: expectedScope)
         Self.logger.info(
             "Accepted library bootstrap republished generation=\(snapshot.generation) photos=\(bootstrap.photos.assetsByBucket.values.reduce(0) { $0 + $1.count }) videos=\(bootstrap.videos.assetsByBucket.values.reduce(0) { $0 + $1.count })"
         )

@@ -1,3 +1,4 @@
+import Nuke
 import SwiftUI
 
 nonisolated enum TimelineCoverAnimation {
@@ -464,6 +465,7 @@ struct TimelineDeterministicAssetRow: View {
     let viewportChanged: (TimelineAssetSummary, Bool) -> Void
     let transitionNamespace: Namespace.ID?
     let assetSelected: (TimelineAssetSummary) -> Void
+    var isActive = true
 
     var body: some View {
         HStack(spacing: spacing) {
@@ -476,7 +478,8 @@ struct TimelineDeterministicAssetRow: View {
                         visibilityChanged: visibilityChanged,
                         viewportChanged: viewportChanged,
                         transitionNamespace: transitionNamespace,
-                        assetSelected: assetSelected
+                        assetSelected: assetSelected,
+                        isActive: isActive
                     )
                     .frame(width: itemSide, height: itemSide)
                 } else {
@@ -499,6 +502,7 @@ struct TimelineAssetThumbnail: View {
     let viewportChanged: (TimelineAssetSummary, Bool) -> Void
     let transitionNamespace: Namespace.ID?
     let assetSelected: (TimelineAssetSummary) -> Void
+    var isActive = true
 
     var body: some View {
         Button {
@@ -521,6 +525,7 @@ struct TimelineAssetThumbnail: View {
                     imageCornerRadius: assetLayout == .naturalAspect
                         ? DesignMetrics.compactCornerRadius
                         : 0,
+                    priority: isActive ? .veryHigh : .veryLow,
                     didLoad: { media.retainTimelineThumbnail($0, descriptor: descriptor) }
                 )
                 .frame(width: proxy.size.width, height: proxy.size.height)

@@ -8,24 +8,42 @@ nonisolated enum LibraryTimelineBootstrapBuilder {
     )
 
     static func build(from snapshot: LibraryIndexSnapshot) -> LibraryTimelineBootstrap {
+        complete(buildInitial(from: snapshot))
+    }
+
+    static func buildInitial(from snapshot: LibraryIndexSnapshot) -> LibraryTimelineBootstrap {
         let startedAt = ContinuousClock.now
         let visible = snapshot.assets.filter {
             !$0.isTrashed && $0.visibility == "timeline"
         }
-        let bootstrap = LibraryTimelineBootstrap(
-            photos: buildTimeline(from: visible, snapshot: snapshot),
-            videos: buildTimeline(
-                from: visible.filter { $0.kind == .video },
-                snapshot: snapshot
-            )
+        let filteredAt = ContinuousClock.now
+        let photos = buildTimeline(from: visible, snapshot: snapshot)
+        let photosBuiltAt = ContinuousClock.now
+        let videos = buildTimeline(
+            from: visible.filter { $0.kind == .video },
+            snapshot: snapshot
         )
-        let components = startedAt.duration(to: .now).components
-        let elapsedMilliseconds = Int(components.seconds) * 1000
-            + Int(components.attoseconds / 1_000_000_000_000_000)
+        let videosBuiltAt = ContinuousClock.now
+        let bootstrap = LibraryTimelineBootstrap(
+            photos: photos,
+            videos: videos
+        )
         logger.info(
-            "Library timeline projection built generation=\(snapshot.generation) visible=\(visible.count) photoBuckets=\(bootstrap.photos.summaries.count) videoBuckets=\(bootstrap.videos.summaries.count) elapsedMs=\(elapsedMilliseconds)"
+            "Library timeline initial projection built generation=\(snapshot.generation) visible=\(visible.count) photoBuckets=\(bootstrap.photos.summaries.count) videoBuckets=\(bootstrap.videos.summaries.count) filterMs=\(elapsedMilliseconds(from: startedAt, to: filteredAt)) photosMs=\(elapsedMilliseconds(from: filteredAt, to: photosBuiltAt)) videosMs=\(elapsedMilliseconds(from: photosBuiltAt, to: videosBuiltAt)) elapsedMs=\(elapsedMilliseconds(from: startedAt, to: videosBuiltAt))"
         )
         return bootstrap
+    }
+
+    static func complete(_ initial: LibraryTimelineBootstrap) -> LibraryTimelineBootstrap {
+        let startedAt = ContinuousClock.now
+        let photos = completing(initial.photos)
+        let photosBuiltAt = ContinuousClock.now
+        let videos = completing(initial.videos)
+        let videosBuiltAt = ContinuousClock.now
+        logger.info(
+            "Library timeline grouped catalogs built generation=\(initial.photos.generation) photosMs=\(elapsedMilliseconds(from: startedAt, to: photosBuiltAt)) videosMs=\(elapsedMilliseconds(from: photosBuiltAt, to: videosBuiltAt)) elapsedMs=\(elapsedMilliseconds(from: startedAt, to: videosBuiltAt))"
+        )
+        return LibraryTimelineBootstrap(photos: photos, videos: videos)
     }
 
     private static func buildTimeline(
@@ -54,11 +72,6 @@ nonisolated enum LibraryTimelineBootstrapBuilder {
         .sorted { $0.id.rawValue > $1.id.rawValue }
         var groupedCatalogs = TimelineGroupedCatalogCache()
         groupedCatalogs.replaceSummaryCatalogs(with: summaries)
-        groupedCatalogs = (try? TimelineCompleteGroupedCatalogBuilder.build(
-            summaries: summaries,
-            assetsByBucket: assetsByBucket,
-            baseCatalogs: groupedCatalogs
-        )) ?? groupedCatalogs
         return TimelineBootstrapSnapshot(
             generation: snapshot.generation,
             summaries: summaries,
@@ -66,6 +79,32 @@ nonisolated enum LibraryTimelineBootstrapBuilder {
             groupedCatalogs: groupedCatalogs,
             isComplete: snapshot.syncState.historicalCursor == nil
         )
+    }
+
+    private static func completing(
+        _ initial: TimelineBootstrapSnapshot
+    ) -> TimelineBootstrapSnapshot {
+        let catalogs = (try? TimelineCompleteGroupedCatalogBuilder.build(
+            summaries: initial.summaries,
+            assetsByBucket: initial.assetsByBucket,
+            baseCatalogs: initial.groupedCatalogs
+        )) ?? initial.groupedCatalogs
+        return TimelineBootstrapSnapshot(
+            generation: initial.generation,
+            summaries: initial.summaries,
+            assetsByBucket: initial.assetsByBucket,
+            groupedCatalogs: catalogs,
+            isComplete: initial.isComplete
+        )
+    }
+
+    private static func elapsedMilliseconds(
+        from start: ContinuousClock.Instant,
+        to end: ContinuousClock.Instant
+    ) -> Int {
+        let components = start.duration(to: end).components
+        return Int(components.seconds) * 1000
+            + Int(components.attoseconds / 1_000_000_000_000_000)
     }
 }
 

@@ -19,8 +19,8 @@ struct AppShellView: View {
     let saveProfile: (ConnectionProfileDraft) async -> ConnectionProfileSaveResult
     let signOut: (Bool) async -> Void
 
-    @State private var selection: NativeTabDestination = .photos
     @State private var tabSelectionState = NativeTabSelectionState()
+    @State private var tabContentActivationState = NativeTabContentActivationState()
     @State private var timelineRotationState = TimelineRotationState()
     @State private var tabBarTop: CGFloat = 0
     @State private var compactPhotosTabs = false
@@ -44,10 +44,12 @@ struct AppShellView: View {
     @State private var viewerPresented = false
 
     var body: some View {
+        @Bindable var navigation = tabSelectionState
         NativeAppTabShell(
-            selection: $selection,
+            selection: $navigation.selection,
             tabBarTop: $tabBarTop,
             rotationState: timelineRotationState,
+            contentActivationState: tabContentActivationState,
             compactOwner: compactTabOwner,
             isViewerPresented: viewerPresented,
             photosScrollRequest: photosScrollRequest,
@@ -66,131 +68,176 @@ struct AppShellView: View {
                 groupedScrollRequests[destination, default: 0] &+= 1
             },
             photos: AnyView(
-                NavigationStack {
-                    PhotosView(
-                        store: photos,
-                        presentation: presentation,
-                        media: media,
-                        assetDetails: assetDetails,
-                        navigationPath: $photosPath,
-                        tabBarTop: $tabBarTop,
-                        rotationState: timelineRotationState,
-                        scrollToLatestRequest: photosScrollRequest,
-                        requestedLibraryRange: photosRangeRequest,
-                        requestedLibraryRangeHandled: { photosRangeRequest = nil },
-                        compactChromeChanged: { compact in
-                            compactPhotosTabs = compact
-                            if compact, selection == .photos {
-                                groupedMediaOwner = .photos
-                            }
-                        },
-                        viewerVisibilityChanged: setViewerPresented,
-                        tabSelectionState: tabSelectionState,
-                        tabDestination: .photos,
-                        showAccount: showAccount
-                    )
+                NativeTabContentGate(
+                    destination: .photos,
+                    title: "Photos",
+                    activationState: tabContentActivationState
+                ) {
+                    NavigationStack {
+                        PhotosView(
+                            store: photos,
+                            presentation: presentation,
+                            media: media,
+                            assetDetails: assetDetails,
+                            navigationPath: $photosPath,
+                            tabBarTop: $tabBarTop,
+                            rotationState: timelineRotationState,
+                            scrollToLatestRequest: photosScrollRequest,
+                            requestedLibraryRange: photosRangeRequest,
+                            requestedLibraryRangeHandled: { photosRangeRequest = nil },
+                            compactChromeChanged: { compact in
+                                compactPhotosTabs = compact
+                                if compact, tabSelectionState.selection == .photos {
+                                    groupedMediaOwner = .photos
+                                }
+                            },
+                            viewerVisibilityChanged: setViewerPresented,
+                            tabSelectionState: tabSelectionState,
+                            tabDestination: .photos,
+                            showAccount: showAccount
+                        )
+                    }
                 }
             ),
             videos: AnyView(
-                NavigationStack {
-                    PhotosView(
-                        store: videos,
-                        presentation: videoPresentation,
-                        media: media,
-                        assetDetails: assetDetails,
-                        navigationPath: $videosPath,
-                        tabBarTop: $tabBarTop,
-                        rotationState: timelineRotationState,
-                        scrollToLatestRequest: videosScrollRequest,
-                        requestedLibraryRange: videosRangeRequest,
-                        requestedLibraryRangeHandled: { videosRangeRequest = nil },
-                        contentName: "Videos",
-                        rootAccessibilityID: "videos-root",
-                        compactChromeChanged: { compact in
-                            compactVideosTabs = compact
-                            if compact, selection == .videos {
-                                groupedMediaOwner = .videos
-                            }
-                        },
-                        viewerVisibilityChanged: setViewerPresented,
-                        tabSelectionState: tabSelectionState,
-                        tabDestination: .videos,
-                        showAccount: showAccount
-                    )
+                NativeTabContentGate(
+                    destination: .videos,
+                    title: "Videos",
+                    activationState: tabContentActivationState
+                ) {
+                    NavigationStack {
+                        PhotosView(
+                            store: videos,
+                            presentation: videoPresentation,
+                            media: media,
+                            assetDetails: assetDetails,
+                            navigationPath: $videosPath,
+                            tabBarTop: $tabBarTop,
+                            rotationState: timelineRotationState,
+                            scrollToLatestRequest: videosScrollRequest,
+                            requestedLibraryRange: videosRangeRequest,
+                            requestedLibraryRangeHandled: { videosRangeRequest = nil },
+                            contentName: "Videos",
+                            rootAccessibilityID: "videos-root",
+                            compactChromeChanged: { compact in
+                                compactVideosTabs = compact
+                                if compact, tabSelectionState.selection == .videos {
+                                    groupedMediaOwner = .videos
+                                }
+                            },
+                            viewerVisibilityChanged: setViewerPresented,
+                            tabSelectionState: tabSelectionState,
+                            tabDestination: .videos,
+                            showAccount: showAccount
+                        )
+                    }
                 }
             ),
             albums: AnyView(
-                NavigationStack(path: $albumsPath) {
-                    AlbumsView(albums: PreviewFixtures.albums, showAccount: showAccount)
+                NativeTabContentGate(
+                    destination: .albums,
+                    title: "Albums",
+                    activationState: tabContentActivationState
+                ) {
+                    NavigationStack(path: $albumsPath) {
+                        AlbumsView(albums: PreviewFixtures.albums, showAccount: showAccount)
+                    }
                 }
             ),
             library: AnyView(
-                NavigationStack(path: $libraryPath) {
-                    LibraryView(collections: PreviewFixtures.collections, showAccount: showAccount)
+                NativeTabContentGate(
+                    destination: .library,
+                    title: "Library",
+                    activationState: tabContentActivationState
+                ) {
+                    NavigationStack(path: $libraryPath) {
+                        LibraryView(collections: PreviewFixtures.collections, showAccount: showAccount)
+                    }
                 }
             ),
             years: AnyView(
-                PhotosGroupedTabView(
-                    kind: .years,
-                    isSelected: selection == .years,
-                    scrollToLatestRequest: groupedScrollRequests[.years, default: 0],
-                    tabBarTop: tabBarTop,
-                    store: groupedMediaStore,
-                    presentation: groupedMediaPresentation,
-                    media: media,
-                    assetDetails: assetDetails,
-                    contentName: groupedMediaContentName,
-                    rangePinched: pinchGroupedRange,
-                    viewerVisibilityChanged: setViewerPresented,
-                    showAccount: showAccount
-                )
-                .id(groupedMediaOwner)
+                NativeTabContentGate(
+                    destination: .years,
+                    title: "Years",
+                    activationState: tabContentActivationState
+                ) {
+                    PhotosGroupedTabView(
+                        kind: .years,
+                        isSelected: tabSelectionState.selection == .years,
+                        scrollToLatestRequest: groupedScrollRequests[.years, default: 0],
+                        tabBarTop: tabBarTop,
+                        store: groupedMediaStore,
+                        presentation: groupedMediaPresentation,
+                        media: media,
+                        assetDetails: assetDetails,
+                        contentName: groupedMediaContentName,
+                        rangePinched: pinchGroupedRange,
+                        viewerVisibilityChanged: setViewerPresented,
+                        showAccount: showAccount
+                    )
+                    .id(groupedMediaOwner)
+                }
             ),
             months: AnyView(
-                PhotosGroupedTabView(
-                    kind: .months,
-                    isSelected: selection == .months,
-                    scrollToLatestRequest: groupedScrollRequests[.months, default: 0],
-                    tabBarTop: tabBarTop,
-                    store: groupedMediaStore,
-                    presentation: groupedMediaPresentation,
-                    media: media,
-                    assetDetails: assetDetails,
-                    contentName: groupedMediaContentName,
-                    rangePinched: pinchGroupedRange,
-                    viewerVisibilityChanged: setViewerPresented,
-                    showAccount: showAccount
-                )
-                .id(groupedMediaOwner)
+                NativeTabContentGate(
+                    destination: .months,
+                    title: "Months",
+                    activationState: tabContentActivationState
+                ) {
+                    PhotosGroupedTabView(
+                        kind: .months,
+                        isSelected: tabSelectionState.selection == .months,
+                        scrollToLatestRequest: groupedScrollRequests[.months, default: 0],
+                        tabBarTop: tabBarTop,
+                        store: groupedMediaStore,
+                        presentation: groupedMediaPresentation,
+                        media: media,
+                        assetDetails: assetDetails,
+                        contentName: groupedMediaContentName,
+                        rangePinched: pinchGroupedRange,
+                        viewerVisibilityChanged: setViewerPresented,
+                        showAccount: showAccount
+                    )
+                    .id(groupedMediaOwner)
+                }
             ),
             weeks: AnyView(
-                PhotosGroupedTabView(
-                    kind: .weeks,
-                    isSelected: selection == .weeks,
-                    scrollToLatestRequest: groupedScrollRequests[.weeks, default: 0],
-                    tabBarTop: tabBarTop,
-                    store: groupedMediaStore,
-                    presentation: groupedMediaPresentation,
-                    media: media,
-                    assetDetails: assetDetails,
-                    contentName: groupedMediaContentName,
-                    rangePinched: pinchGroupedRange,
-                    viewerVisibilityChanged: setViewerPresented,
-                    showAccount: showAccount
-                )
-                .id(groupedMediaOwner)
+                NativeTabContentGate(
+                    destination: .weeks,
+                    title: "Weeks",
+                    activationState: tabContentActivationState
+                ) {
+                    PhotosGroupedTabView(
+                        kind: .weeks,
+                        isSelected: tabSelectionState.selection == .weeks,
+                        scrollToLatestRequest: groupedScrollRequests[.weeks, default: 0],
+                        tabBarTop: tabBarTop,
+                        store: groupedMediaStore,
+                        presentation: groupedMediaPresentation,
+                        media: media,
+                        assetDetails: assetDetails,
+                        contentName: groupedMediaContentName,
+                        rangePinched: pinchGroupedRange,
+                        viewerVisibilityChanged: setViewerPresented,
+                        showAccount: showAccount
+                    )
+                    .id(groupedMediaOwner)
+                }
             ),
             search: AnyView(
-                NavigationStack(path: $searchPath) {
-                    SearchView(assets: PreviewFixtures.assets, showAccount: showAccount)
+                NativeTabContentGate(
+                    destination: .search,
+                    title: "Search",
+                    activationState: tabContentActivationState
+                ) {
+                    NavigationStack(path: $searchPath) {
+                        SearchView(assets: PreviewFixtures.assets, showAccount: showAccount)
+                    }
                 }
             )
         )
         .ignoresSafeArea(.container, edges: .all)
         .environment(\.accountAvatarMedia, media)
-        .onChange(of: selection, initial: true) { _, selection in
-            tabSelectionState.selection = selection
-        }
         .overlay(alignment: .topLeading) {
             #if DEBUG
                 if ProcessInfo.processInfo.arguments.contains("-ui-testing-range-library") {
@@ -245,13 +292,13 @@ struct AppShellView: View {
     private func pinchGroupedRange(_ kind: PhotosGroupedTabKind, _ gesture: PhotosPinchGesture) {
         switch (kind, gesture.direction) {
         case (.years, .finer):
-            selection = .months
+            tabSelectionState.selection = .months
         case (.months, .coarser):
-            selection = .years
+            tabSelectionState.selection = .years
         case (.months, .finer):
-            selection = .weeks
+            tabSelectionState.selection = .weeks
         case (.weeks, .coarser):
-            selection = .months
+            tabSelectionState.selection = .months
         case (.weeks, .finer):
             rangeRequestGeneration &+= 1
             let request = TimelineLibraryRangeRequest(
@@ -260,10 +307,10 @@ struct AppShellView: View {
             )
             if groupedMediaOwner == .videos {
                 videosRangeRequest = request
-                selection = .videos
+                tabSelectionState.selection = .videos
             } else {
                 photosRangeRequest = request
-                selection = .photos
+                tabSelectionState.selection = .photos
             }
         case (.years, .coarser):
             break
@@ -271,7 +318,7 @@ struct AppShellView: View {
     }
 
     private var compactTabOwner: NativeTabDestination? {
-        switch selection {
+        switch tabSelectionState.selection {
         case .photos: compactPhotosTabs ? .photos : nil
         case .videos: compactVideosTabs ? .videos : nil
         case .weeks, .months, .years: groupedMediaOwner
@@ -289,6 +336,23 @@ struct AppShellView: View {
 
     private var groupedMediaContentName: String {
         groupedMediaOwner == .videos ? "Videos" : "Photos"
+    }
+}
+
+private struct NativeTabContentGate<Content: View>: View {
+    let destination: NativeTabDestination
+    let title: String
+    let activationState: NativeTabContentActivationState
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        if activationState.isHydrated(destination) {
+            content()
+        } else {
+            Color(uiColor: .systemBackground)
+                .ignoresSafeArea()
+                .accessibilityLabel("Loading \(title)")
+        }
     }
 }
 

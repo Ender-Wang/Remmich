@@ -461,6 +461,11 @@ private struct PhotosLibraryGroupedCatalogView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: TimelineRangeMosaicPlanner.spacing) {
+                        if catalog.entries.isEmpty, !store.bucketSummaries.isEmpty {
+                            ProgressView("Preparing date groups…")
+                                .frame(maxWidth: .infinity, minHeight: 160)
+                                .accessibilityIdentifier("timeline-grouped-catalog-loading")
+                        }
                         if catalog.hasMoreOlderHistory {
                             PhotosOlderGroupedCatalogLoader(
                                 level: level

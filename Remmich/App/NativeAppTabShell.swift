@@ -11,6 +11,22 @@ final class NativeTabSelectionState {
 
 @MainActor
 @Observable
+final class NativeTabContentActivationState {
+    private(set) var activeDestination: NativeTabDestination = .photos
+    private(set) var hydratedDestinations: Set<NativeTabDestination> = [.photos]
+
+    func activate(_ destination: NativeTabDestination) {
+        activeDestination = destination
+        hydratedDestinations.insert(destination)
+    }
+
+    func isHydrated(_ destination: NativeTabDestination) -> Bool {
+        hydratedDestinations.contains(destination)
+    }
+}
+
+@MainActor
+@Observable
 final class TimelineRotationState {
     private(set) var generation = 0
     private(set) var targetSize: CGSize?
@@ -38,6 +54,40 @@ enum NativeTabDestination: Hashable {
     case search
 }
 
+@MainActor
+enum NativeTabTransitionTrace {
+    private static let signposter = OSSignposter(
+        subsystem: "io.github.ender-wang.Remmich",
+        category: "NativeTabs"
+    )
+    private static var startedAtByDestination: [NativeTabDestination: ContinuousClock.Instant] = [:]
+    private static var intervalByDestination: [NativeTabDestination: OSSignpostIntervalState] = [:]
+
+    static func begin(destination: NativeTabDestination) {
+        if let interval = intervalByDestination.removeValue(forKey: destination) {
+            signposter.endInterval("TabSelection", interval)
+        }
+        startedAtByDestination[destination] = .now
+        intervalByDestination[destination] = signposter.beginInterval(
+            "TabSelection",
+            id: signposter.makeSignpostID(),
+            "destination=\(String(describing: destination))"
+        )
+    }
+
+    static func elapsedMilliseconds(for destination: NativeTabDestination) -> Int? {
+        guard let startedAt = startedAtByDestination[destination] else { return nil }
+        let components = startedAt.duration(to: .now).components
+        return Int(components.seconds) * 1000
+            + Int(components.attoseconds / 1_000_000_000_000_000)
+    }
+
+    static func end(destination: NativeTabDestination) {
+        guard let interval = intervalByDestination.removeValue(forKey: destination) else { return }
+        signposter.endInterval("TabSelection", interval)
+    }
+}
+
 enum NativeTabLayout {
     static func destinations(compactOwner: NativeTabDestination?) -> [NativeTabDestination] {
         switch compactOwner {
@@ -57,6 +107,7 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
     @Binding var selection: NativeTabDestination
     @Binding var tabBarTop: CGFloat
     let rotationState: TimelineRotationState
+    let contentActivationState: NativeTabContentActivationState
     let compactOwner: NativeTabDestination?
     let isViewerPresented: Bool
     let photosScrollRequest: Int
@@ -99,24 +150,74 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
 
     @MainActor
     final class Coordinator: NSObject, UITabBarControllerDelegate {
+        private static let logger = Logger(
+            subsystem: "io.github.ender-wang.Remmich",
+            category: "NativeTabs"
+        )
+
         fileprivate weak var controller: MeasuringTabBarController?
         private var parent: NativeAppTabShell
         private var installedTabs: [NativeTabDestination]?
         private var isUpdatingTabs = false
         private var tabBarShouldBeHidden = false
+        private var didResolveVideos = false
+        private var contentActivationGeneration = 0
+        private var contentActivationTask: Task<Void, Never>?
+        private var lastDestinationChange: (
+            destination: NativeTabDestination,
+            instant: ContinuousClock.Instant
+        )?
 
-        private lazy var photosController = mediaHostingController(rootView: parent.photos)
-        private lazy var videosController = mediaHostingController(rootView: parent.videos)
-        private lazy var albumsController = UIHostingController(rootView: parent.albums)
-        private lazy var libraryController = UIHostingController(rootView: parent.library)
-        private lazy var yearsController = mediaHostingController(rootView: parent.years)
-        private lazy var monthsController = mediaHostingController(rootView: parent.months)
-        private lazy var weeksController = mediaHostingController(rootView: parent.weeks)
-        private lazy var searchController = UIHostingController(rootView: parent.search)
+        private lazy var photosController = tabHostingController(
+            rootView: parent.photos,
+            destination: .photos,
+            ignoresContainerSafeArea: true
+        )
+        private lazy var videosController = tabHostingController(
+            rootView: parent.videos,
+            destination: .videos,
+            ignoresContainerSafeArea: true
+        )
+        private lazy var albumsController = tabHostingController(
+            rootView: parent.albums,
+            destination: .albums
+        )
+        private lazy var libraryController = tabHostingController(
+            rootView: parent.library,
+            destination: .library
+        )
+        private lazy var yearsController = tabHostingController(
+            rootView: parent.years,
+            destination: .years,
+            ignoresContainerSafeArea: true
+        )
+        private lazy var monthsController = tabHostingController(
+            rootView: parent.months,
+            destination: .months,
+            ignoresContainerSafeArea: true
+        )
+        private lazy var weeksController = tabHostingController(
+            rootView: parent.weeks,
+            destination: .weeks,
+            ignoresContainerSafeArea: true
+        )
+        private lazy var searchController = tabHostingController(
+            rootView: parent.search,
+            destination: .search
+        )
 
-        private func mediaHostingController(rootView: AnyView) -> UIHostingController<AnyView> {
-            let controller = UIHostingController(rootView: rootView)
-            controller.safeAreaRegions = .keyboard
+        private func tabHostingController(
+            rootView: AnyView,
+            destination: NativeTabDestination,
+            ignoresContainerSafeArea: Bool = false
+        ) -> TabContentHostingController {
+            let controller = TabContentHostingController(rootView: rootView)
+            if ignoresContainerSafeArea {
+                controller.safeAreaRegions = .keyboard
+            }
+            controller.didAppear = { [weak self] in
+                self?.scheduleContentActivation(destination)
+            }
             return controller
         }
 
@@ -154,6 +255,30 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
 
         init(_ parent: NativeAppTabShell) {
             self.parent = parent
+        }
+
+        deinit {
+            contentActivationTask?.cancel()
+        }
+
+        private func scheduleContentActivation(_ destination: NativeTabDestination) {
+            guard !parent.contentActivationState.isHydrated(destination) else { return }
+            contentActivationGeneration &+= 1
+            let generation = contentActivationGeneration
+            contentActivationTask?.cancel()
+            contentActivationTask = Task { @MainActor [weak self] in
+                guard let self,
+                      !Task.isCancelled,
+                      generation == contentActivationGeneration,
+                      parent.selection == destination,
+                      controller?.selectedTab === tab(for: destination)
+                else { return }
+                parent.contentActivationState.activate(destination)
+                contentActivationTask = nil
+                Self.logger.info(
+                    "Native tab content activated destination=\(String(describing: destination), privacy: .public)"
+                )
+            }
         }
 
         func setTabBarTop(_ top: CGFloat) {
@@ -202,6 +327,35 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
             if controller.selectedTab !== intendedTab {
                 controller.selectedTab = intendedTab
             }
+            resolveVideoTab(in: controller)
+        }
+
+        private func resolveVideoTab(in controller: UITabBarController) {
+            guard !didResolveVideos,
+                  parent.selection != .videos,
+                  installedTabs?.contains(.videos) == true
+            else { return }
+
+            let bounds = controller.view.bounds
+            guard bounds.width > 0, bounds.height > 0,
+                  let controllerToWarm = videosTab.viewController
+            else { return }
+
+            // Resolve through UITab before the tab bar becomes interactive. Accessing the lazy
+            // controller directly does not populate UITab's provider cache, so UIKit would still
+            // perform first-time controller resolution on the user's first Videos tap.
+            let startedAt = ContinuousClock.now
+            controllerToWarm.loadViewIfNeeded()
+            controllerToWarm.view.frame = bounds
+            controllerToWarm.view.setNeedsLayout()
+            controllerToWarm.view.layoutIfNeeded()
+            didResolveVideos = true
+            let components = startedAt.duration(to: .now).components
+            let elapsedMilliseconds = Int(components.seconds) * 1000
+                + Int(components.attoseconds / 1_000_000_000_000_000)
+            Self.logger.info(
+                "Videos tab controller resolved size=\(Int(bounds.width))x\(Int(bounds.height)) elapsedMs=\(elapsedMilliseconds)"
+            )
         }
 
         private func setTabBarHidden(
@@ -243,6 +397,25 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
 
         func tabBarController(_: UITabBarController, didSelectTab selectedTab: UITab, previousTab: UITab?) {
             guard !isUpdatingTabs, let destination = destination(for: selectedTab) else { return }
+            let isReselection = selectedTab === previousTab
+            if isReselection,
+               let lastDestinationChange,
+               lastDestinationChange.destination == destination,
+               lastDestinationChange.instant.duration(to: .now) < .milliseconds(320)
+            {
+                Self.logger.info(
+                    "Native tab duplicate selection suppressed destination=\(String(describing: destination), privacy: .public)"
+                )
+                return
+            }
+            if !isReselection {
+                lastDestinationChange = (destination, .now)
+            }
+            NativeTabTransitionTrace.begin(destination: destination)
+            let selectedController = selectedTab.viewController
+            Self.logger.info(
+                "Native tab selected destination=\(String(describing: destination), privacy: .public) resolved=\(selectedController != nil) loaded=\(selectedController?.isViewLoaded == true) attached=\(selectedController?.viewIfLoaded?.window != nil)"
+            )
             if selectedTab === photosTab, previousTab === photosTab {
                 parent.photosRetapped()
             } else if selectedTab === videosTab, previousTab === videosTab {
@@ -253,6 +426,29 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
                 parent.groupedTabRetapped(destination)
             } else {
                 parent.selection = destination
+            }
+
+            let transitionDuration = controller?.transitionCoordinator?.transitionDuration ?? 0
+            Self.logger.info(
+                "Native tab visual selection published destination=\(String(describing: destination), privacy: .public) elapsedMs=\(NativeTabTransitionTrace.elapsedMilliseconds(for: destination) ?? -1) transitionDurationMs=\(Int(transitionDuration * 1000))"
+            )
+            if let transitionCoordinator = controller?.transitionCoordinator {
+                transitionCoordinator.animate(alongsideTransition: nil) { _ in
+                    Task { @MainActor in
+                        NativeTabTransitionTrace.end(destination: destination)
+                        Self.logger.info(
+                            "Native tab transition completed destination=\(String(describing: destination), privacy: .public) elapsedMs=\(NativeTabTransitionTrace.elapsedMilliseconds(for: destination) ?? -1)"
+                        )
+                    }
+                }
+            } else {
+                Task { @MainActor in
+                    await Task.yield()
+                    NativeTabTransitionTrace.end(destination: destination)
+                    Self.logger.info(
+                        "Native tab next run loop destination=\(String(describing: destination), privacy: .public) elapsedMs=\(NativeTabTransitionTrace.elapsedMilliseconds(for: destination) ?? -1)"
+                    )
+                }
             }
         }
 
@@ -296,6 +492,16 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
             }
             return nil
         }
+    }
+}
+
+@MainActor
+private final class TabContentHostingController: UIHostingController<AnyView> {
+    var didAppear: (() -> Void)?
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        didAppear?()
     }
 }
 

@@ -164,7 +164,7 @@ struct PhotosView: View {
     @State private var timelinePosition = ScrollPosition(edge: .bottom)
     @State private var latestJumpTask: Task<Void, Never>?
     @State private var viewportRuntime = TimelineViewportRuntime()
-    @State private var timelineSections: [TimelineSection] = []
+    @State private var timelineSections: [TimelineSection]
     @State private var timelineResumeTask: Task<Void, Never>?
     @State private var rotationRestoreTask: Task<Void, Never>?
     @State private var contentRestoreTask: Task<Void, Never>?
@@ -175,6 +175,45 @@ struct PhotosView: View {
     @State private var libraryRange: TimelineLibraryRange = .all
     @State private var initialAssetByRoute: [PhotosRangeRoute: String] = [:]
     @State private var viewerRoute: AssetViewerRoute?
+
+    init(
+        store: PhotosTimelineStore,
+        presentation: PhotosPresentationState,
+        media: MediaLibraryController,
+        assetDetails: any AssetDetailReading,
+        navigationPath: Binding<[PhotosRangeRoute]>,
+        tabBarTop: Binding<CGFloat>,
+        rotationState: TimelineRotationState? = nil,
+        scrollToLatestRequest: Int = 0,
+        requestedLibraryRange: TimelineLibraryRangeRequest? = nil,
+        requestedLibraryRangeHandled: @escaping () -> Void = {},
+        contentName: String = "Photos",
+        rootAccessibilityID: String = "photos-root",
+        compactChromeChanged: @escaping (Bool) -> Void,
+        viewerVisibilityChanged: @escaping (Bool) -> Void = { _ in },
+        tabSelectionState: NativeTabSelectionState? = nil,
+        tabDestination: NativeTabDestination = .photos,
+        showAccount: @escaping () -> Void
+    ) {
+        self.store = store
+        self.presentation = presentation
+        self.media = media
+        self.assetDetails = assetDetails
+        _navigationPath = navigationPath
+        _tabBarTop = tabBarTop
+        self.rotationState = rotationState
+        self.scrollToLatestRequest = scrollToLatestRequest
+        self.requestedLibraryRange = requestedLibraryRange
+        self.requestedLibraryRangeHandled = requestedLibraryRangeHandled
+        self.contentName = contentName
+        self.rootAccessibilityID = rootAccessibilityID
+        self.compactChromeChanged = compactChromeChanged
+        self.viewerVisibilityChanged = viewerVisibilityChanged
+        self.tabSelectionState = tabSelectionState
+        self.tabDestination = tabDestination
+        self.showAccount = showAccount
+        _timelineSections = State(initialValue: store.sections)
+    }
 
     var body: some View {
         Group {
@@ -434,8 +473,11 @@ struct PhotosView: View {
     }
 
     private var isTimelineActive: Bool {
-        (tabSelectionState?.selection ?? tabDestination) == tabDestination
-            && showsMainTimeline
+        isTabContentActivated && showsMainTimeline
+    }
+
+    private var isTabContentActivated: Bool {
+        tabSelectionState.map { $0.selection == tabDestination } ?? true
     }
 
     @ViewBuilder
@@ -671,8 +713,11 @@ struct PhotosView: View {
                         viewportRuntime.scrollContainerSize = new.containerSize
                         if viewportRuntime.lastLoggedContainerSize != new.containerSize {
                             viewportRuntime.lastLoggedContainerSize = new.containerSize
+                            let selectionElapsed = NativeTabTransitionTrace.elapsedMilliseconds(
+                                for: tabDestination
+                            ) ?? -1
                             Self.logger.info(
-                                "Timeline geometry content=\(contentName, privacy: .public) container=\(Self.describe(new.containerSize), privacy: .public) content=\(Self.describe(new.contentSize), privacy: .public) layoutWidth=\(Int(layout.key.width)) columns=\(layout.columns) rows=\(layout.rows.count) height=\(Int(layout.totalHeight))"
+                                "Timeline geometry content=\(contentName, privacy: .public) container=\(Self.describe(new.containerSize), privacy: .public) content=\(Self.describe(new.contentSize), privacy: .public) layoutWidth=\(Int(layout.key.width)) columns=\(layout.columns) rows=\(layout.rows.count) height=\(Int(layout.totalHeight)) selectionElapsedMs=\(selectionElapsed)"
                             )
                         }
                         if old.containerSize != new.containerSize,
@@ -847,7 +892,8 @@ struct PhotosView: View {
                         initialAssets: [asset],
                         origin: .timeline(bucketID: row.bucketID, contentName: contentName)
                     )
-                }
+                },
+                isActive: isTimelineActive
             )
             .frame(height: row.height, alignment: .top)
         case let .placeholder(section):
@@ -943,7 +989,11 @@ struct PhotosView: View {
                 rowsByID[row.id] = row
             }
         }
-        return rowsByID.values.sorted { $0.offset < $1.offset }
+        // Rows have explicit offsets, so construction order does not affect geometry.
+        // Prefer mounting the newest (bottom-most) visible rows before older overscan
+        // rows. This is only a scheduling hint: SwiftUI appearance and Nuke result
+        // publication may still produce a different visible reveal order.
+        return rowsByID.values.sorted { $0.offset > $1.offset }
     }
 
     private func targetScrollOffset(
