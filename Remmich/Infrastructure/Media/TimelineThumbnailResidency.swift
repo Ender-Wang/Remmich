@@ -65,8 +65,7 @@ actor TimelineThumbnailResidency {
         for descriptor: MediaRequestDescriptor,
         scopeGeneration requestedScopeGeneration: Int = 0
     ) async -> Bool {
-        guard requestedScopeGeneration == scopeGeneration else { return false }
-        guard descriptor.derivative == .thumbnail,
+        guard requestedScopeGeneration == scopeGeneration, descriptor.derivative == .thumbnail,
               let target = descriptor.targetPixels,
               target.width <= Self.maximumThumbnailDimension,
               target.height <= Self.maximumThumbnailDimension,

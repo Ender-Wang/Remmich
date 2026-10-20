@@ -646,9 +646,7 @@ struct AssetViewerView: View {
             await Task.yield()
             guard !Task.isCancelled,
                   pagerPhase == .idle,
-                  pagerPosition == assetID
-            else { return }
-            guard session.selectImmediately(assetID) else { return }
+                  pagerPosition == assetID, session.selectImmediately(assetID) else { return }
             recenterPagerWindowIfNeeded(on: assetID)
             scheduleNeighborLoading(for: assetID)
         }

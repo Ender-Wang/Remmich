@@ -58,8 +58,7 @@ actor TimelineWorkingSet<Value: Sendable> {
         generation requestedGeneration: Int? = nil,
         now: TimeInterval = Date.timeIntervalSinceReferenceDate
     ) {
-        guard requestedGeneration == nil || requestedGeneration == generation else { return }
-        guard tier != .cold else { return }
+        guard requestedGeneration == nil || requestedGeneration == generation, tier != .cold else { return }
         entries[key] = Entry(
             value: value,
             byteCost: max(0, byteCost),
