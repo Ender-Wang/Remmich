@@ -306,25 +306,21 @@ final class AppSessionController {
             return
         }
 
-        let service = service
-        let audit = RouteValidationAudit()
-        let coordinator = NetworkRouteCoordinator(ssidProvider: ssidProvider) { endpoint in
-            let result = await Self.validateRoute(endpoint, session: session, service: service)
-            await audit.record(result)
-            return result.isReachable
-        }
         let entitlementEnabled = Bundle.main.object(
             forInfoDictionaryKey: "RemmichSSIDEntitlementEnabled"
         ) as? Bool == true
-        guard let route = await coordinator.evaluate(
-            connectionProfile,
+        let outcome = await Self.evaluateRoutes(
+            profile: connectionProfile,
             preferredEndpoint: activeRoute?.endpoint,
-            allowSSIDlessLocalProbe: !entitlementEnabled
-        ) else {
+            allowSSIDlessLocalProbe: !entitlementEnabled,
+            session: session,
+            service: service,
+            ssidProvider: ssidProvider
+        )
+        guard let route = outcome.route else {
             guard evaluation == routeGeneration else { return }
-            let validationResults = await audit.results
-            if !validationResults.isEmpty,
-               validationResults.allSatisfy(\.isSessionRejected)
+            if !outcome.validationResults.isEmpty,
+               outcome.validationResults.allSatisfy(\.isSessionRejected)
             {
                 await invalidateSession(session, evaluation: evaluation)
                 return
@@ -487,6 +483,34 @@ final class AppSessionController {
         return result
     }
 
+    /// Runs the complete candidate loop away from the UI actor. Keeping only the final state
+    /// publication in `AppSessionController` prevents a slow DNS/route timeout from starving
+    /// native tab selection and other main-run-loop work.
+    private nonisolated static func evaluateRoutes(
+        profile: ConnectionProfile,
+        preferredEndpoint: URL?,
+        allowSSIDlessLocalProbe: Bool,
+        session: AccountSession,
+        service: any RouteValidating,
+        ssidProvider: any SSIDProviding
+    ) async -> RouteEvaluationOutcome {
+        let audit = RouteValidationAudit()
+        let coordinator = NetworkRouteCoordinator(ssidProvider: ssidProvider) { endpoint in
+            let result = await validateRoute(endpoint, session: session, service: service)
+            await audit.record(result)
+            return result.isReachable
+        }
+        let route = await coordinator.evaluate(
+            profile,
+            preferredEndpoint: preferredEndpoint,
+            allowSSIDlessLocalProbe: allowSSIDlessLocalProbe
+        )
+        return await RouteEvaluationOutcome(
+            route: route,
+            validationResults: audit.results
+        )
+    }
+
     private func normalizedProfile(from draft: ConnectionProfileDraft) throws -> ConnectionProfile {
         let localAddress = draft.localAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         let externalAddresses = draft.externalAddresses
@@ -589,6 +613,11 @@ private nonisolated enum RouteEvaluationTrigger: String, Sendable {
     case profileSave = "profile-save"
     case networkPath = "network-path"
     case foreground
+}
+
+private nonisolated struct RouteEvaluationOutcome: Sendable {
+    let route: ActiveConnectionRoute?
+    let validationResults: [RouteValidationResult]
 }
 
 private actor RouteValidationAudit {
