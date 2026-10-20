@@ -38,6 +38,10 @@ final class MediaLibraryController {
     private var timelinePresentationStartedAt: Date?
     private var didLogFirstTimelineThumbnail = false
     private var warmedThumbnailURLs: [String: URL] = [:]
+    private let profileImageCache = ProfileImageCache()
+    private var profileImageCacheTask: Task<Void, Never>?
+    private var cachedProfileImageURL: URL?
+    private var profileImageCacheRevision = 0
 
     func configure(session: AccountSession, activeEndpoint: URL?) {
         let nextScope = MediaAccountScope(session: session)
@@ -58,10 +62,13 @@ final class MediaLibraryController {
         }
         self.session = session
         activeAPIURL = activeEndpoint
+        prepareProfileImageCache(scope: nextScope, session: session, endpoint: activeEndpoint)
     }
 
     func updateRoute(_ endpoint: URL?) {
         activeAPIURL = endpoint
+        guard let scope, let session else { return }
+        prepareProfileImageCache(scope: scope, session: session, endpoint: endpoint)
     }
 
     func beginTimelinePresentation() {
@@ -151,15 +158,11 @@ final class MediaLibraryController {
                 return ImageRequest(id: "ui-fixture-avatar", data: { data })
             }
         #endif
-        guard let scope, let session, let activeAPIURL else { return nil }
-        let url = activeAPIURL
-            .appending(path: "users")
-            .appending(path: session.userID)
-            .appending(path: "profile-image")
-        var urlRequest = URLRequest(url: url)
-        urlRequest.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
-        var request = ImageRequest(urlRequest: urlRequest)
-        request.imageID = "\(scope.cacheNamespace):profile:\(session.userID)"
+        guard let scope, let session, let cachedProfileImageURL else { return nil }
+        var request = ImageRequest(
+            id: "\(scope.cacheNamespace):profile:\(session.userID):\(profileImageCacheRevision)",
+            data: { try Data(contentsOf: cachedProfileImageURL) }
+        )
         request.thumbnail = .init(
             size: .init(width: targetPixels, height: targetPixels),
             unit: .pixels,
@@ -371,6 +374,7 @@ final class MediaLibraryController {
     }
 
     func clearAll() {
+        profileImageCacheTask?.cancel()
         prefetcher?.stopPrefetching()
         cancelViewerPrefetching()
         residencyLoadTask?.cancel()
@@ -391,10 +395,65 @@ final class MediaLibraryController {
         timelinePresentationStartedAt = nil
         didLogFirstTimelineThumbnail = false
         warmedThumbnailURLs.removeAll()
+        profileImageCacheTask = nil
+        cachedProfileImageURL = nil
+        profileImageCacheRevision = 0
         residencyScopeGeneration += 1
         let residency = timelineResidency
         let scopeGeneration = residencyScopeGeneration
         Task { await residency.advance(to: scopeGeneration) }
+    }
+
+    func removeProfileImageCache(namespace: String) async {
+        if scope?.cacheNamespace == namespace {
+            profileImageCacheTask?.cancel()
+            profileImageCacheTask = nil
+        }
+        await profileImageCache.remove(namespace: namespace)
+        guard scope?.cacheNamespace == namespace else { return }
+        cachedProfileImageURL = nil
+        profileImageCacheRevision &+= 1
+    }
+
+    private func prepareProfileImageCache(
+        scope: MediaAccountScope,
+        session: AccountSession,
+        endpoint: URL?
+    ) {
+        profileImageCacheTask?.cancel()
+        if let cachedURL = ProfileImageCache.cachedURLIfPresent(namespace: scope.cacheNamespace),
+           cachedProfileImageURL != cachedURL
+        {
+            cachedProfileImageURL = cachedURL
+            profileImageCacheRevision &+= 1
+            Self.logger.info("Profile image restored from account cache")
+        }
+        guard let endpoint else { return }
+        profileImageCacheTask = Task { [weak self] in
+            guard let self else { return }
+            let result = await profileImageCache.refresh(
+                namespace: scope.cacheNamespace,
+                userID: session.userID,
+                endpoint: endpoint,
+                accessToken: session.accessToken
+            )
+            guard !Task.isCancelled, self.scope == scope else { return }
+            switch result {
+            case let .stored(url):
+                cachedProfileImageURL = url
+                profileImageCacheRevision &+= 1
+                Self.logger.info("Profile image account cache refreshed")
+            case .missing:
+                cachedProfileImageURL = nil
+                profileImageCacheRevision &+= 1
+                Self.logger.info("Profile image unavailable; account cache cleared")
+            case let .failed(message):
+                Self.logger.notice(
+                    "Profile image cache refresh failed; retaining cached image error=\(message, privacy: .public)"
+                )
+            }
+            profileImageCacheTask = nil
+        }
     }
 
     private static func makePipeline(scope: MediaAccountScope) -> ImagePipeline {
@@ -575,5 +634,74 @@ final class MediaLibraryController {
             case .cancelled: cancelled += 1
             }
         }
+    }
+}
+
+private actor ProfileImageCache {
+    enum RefreshResult: Sendable {
+        case stored(URL)
+        case missing
+        case failed(String)
+    }
+
+    private nonisolated static var rootURL: URL {
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        return caches.appending(path: "RemmichProfiles", directoryHint: .isDirectory)
+    }
+
+    nonisolated static func cachedURLIfPresent(namespace: String) -> URL? {
+        let url = fileURL(namespace: namespace)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
+    func refresh(
+        namespace: String,
+        userID: String,
+        endpoint: URL,
+        accessToken: String
+    ) async -> RefreshResult {
+        let url = endpoint
+            .appending(path: "users")
+            .appending(path: userID)
+            .appending(path: "profile-image")
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let response = response as? HTTPURLResponse else {
+                return .failed("The server returned an invalid response.")
+            }
+            if response.statusCode == 404 {
+                remove(namespace: namespace)
+                return .missing
+            }
+            guard (200 ..< 300).contains(response.statusCode), !data.isEmpty else {
+                return .failed("The server returned status \(response.statusCode).")
+            }
+            let fileURL = Self.fileURL(namespace: namespace)
+            try FileManager.default.createDirectory(
+                at: fileURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try data.write(to: fileURL, options: .atomic)
+            return .stored(fileURL)
+        } catch is CancellationError {
+            return .failed("The request was cancelled.")
+        } catch {
+            return .failed(error.localizedDescription)
+        }
+    }
+
+    func remove(namespace: String) {
+        try? FileManager.default.removeItem(at: Self.directoryURL(namespace: namespace))
+    }
+
+    private nonisolated static func directoryURL(namespace: String) -> URL {
+        rootURL.appending(path: namespace, directoryHint: .isDirectory)
+    }
+
+    private nonisolated static func fileURL(namespace: String) -> URL {
+        directoryURL(namespace: namespace).appending(path: "profile-image")
     }
 }

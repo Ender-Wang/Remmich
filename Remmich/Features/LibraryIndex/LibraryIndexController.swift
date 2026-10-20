@@ -301,6 +301,7 @@ final class LibraryIndexController {
         do {
             try await thumbnailCache.removeAccount(namespace: scope.cacheNamespace)
             try await store.removeAccount(namespace: scope.cacheNamespace)
+            await media?.removeProfileImageCache(namespace: scope.cacheNamespace)
             media?.clearRegisteredWarmedThumbnails()
             storageReport = .init(
                 metadataBytes: 0,
@@ -336,6 +337,7 @@ final class LibraryIndexController {
         do {
             try await thumbnailCache.removeAccount(namespace: namespace)
             try await store.removeAccount(namespace: namespace)
+            await media?.removeProfileImageCache(namespace: namespace)
             storedAccounts = try await store.storedAccounts()
             Self.logger.info(
                 "Removed retained account library data scope=\(namespace.prefix(8), privacy: .private)"
