@@ -12,6 +12,28 @@ import UIKit
 @testable import Remmich
 
 struct RemmichTests {
+    @Test func lazyMediaDataLoaderDoesNotConstructNetworkLoaderUntilNeeded() async {
+        let factoryCount = LockedCounter()
+        let underlying = CountingDataLoader()
+        let loader = LazyMediaDataLoader {
+            factoryCount.increment()
+            return underlying
+        }
+
+        #expect(factoryCount.value == 0)
+
+        await withCheckedContinuation { continuation in
+            _ = loader.loadData(
+                with: URLRequest(url: URL(string: "https://example.com/image.jpg")!),
+                didReceiveData: { _, _ in },
+                completion: { _ in continuation.resume() }
+            )
+        }
+
+        #expect(factoryCount.value == 1)
+        #expect(underlying.loadCount == 1)
+    }
+
     @Test func defaultTimelineQueryKeepsStackMembersSeparate() {
         #expect(TimelineQuery().includesStacks == false)
     }
@@ -932,6 +954,65 @@ struct RemmichTests {
         #expect(local.urlRequest?.value(forHTTPHeaderField: "Authorization") == "Bearer ui-test-token")
     }
 
+    @Test @MainActor func missingIndexedThumbnailFallsBackToActiveRoute() throws {
+        let media = MediaLibraryController()
+        let endpoint = try url("http://immich.local/api")
+        media.configure(session: .fixture, activeEndpoint: endpoint)
+        let revision = Date(timeIntervalSince1970: 1000)
+        let missingURL = FileManager.default.temporaryDirectory
+            .appending(path: "missing-\(UUID().uuidString).jpeg")
+        media.registerWarmedThumbnails([
+            .init(
+                assetID: "missing-local-asset",
+                sourceRevision: revision.ISO8601Format(),
+                fileURL: missingURL
+            ),
+        ])
+        let descriptor = MediaRequestDescriptor(
+            assetID: "missing-local-asset",
+            updatedAt: revision,
+            derivative: .thumbnail,
+            targetPixels: .init(width: 400, height: 300)
+        )
+
+        let request = try #require(media.imageRequest(for: descriptor))
+
+        #expect(request.url?.path == "/api/assets/missing-local-asset/thumbnail")
+        #expect(request.url?.query == "size=thumbnail")
+        #expect(request.urlRequest?.value(forHTTPHeaderField: "Authorization") == "Bearer ui-test-token")
+    }
+
+    @Test @MainActor func warmedThumbnailUsesManagedFileAndDecodedMemoryCacheOnly() throws {
+        let media = MediaLibraryController()
+        try media.configure(session: .fixture, activeEndpoint: url("http://immich.local/api"))
+        let revision = Date(timeIntervalSince1970: 1000)
+        let localURL = FileManager.default.temporaryDirectory
+            .appending(path: "warmed-\(UUID().uuidString).jpeg")
+        try Data([0xFF, 0xD8, 0xFF, 0xD9]).write(to: localURL)
+        defer { try? FileManager.default.removeItem(at: localURL) }
+        media.registerWarmedThumbnails([
+            .init(
+                assetID: "warmed-local-asset",
+                sourceRevision: revision.ISO8601Format(),
+                fileURL: localURL
+            ),
+        ])
+        let descriptor = MediaRequestDescriptor(
+            assetID: "warmed-local-asset",
+            updatedAt: revision,
+            derivative: .thumbnail,
+            targetPixels: .init(width: 400, height: 300)
+        )
+
+        let request = try #require(media.imageRequest(for: descriptor))
+
+        #expect(request.url == nil)
+        #expect(request.options.contains(.disableDiskCacheReads))
+        #expect(request.options.contains(.disableDiskCacheWrites))
+        #expect(!request.options.contains(.disableMemoryCacheReads))
+        #expect(!request.options.contains(.disableMemoryCacheWrites))
+    }
+
     @Test func mediaIdentityPartitionsAccountsAndDerivatives() {
         let first = AccountSession.fixture
         let second = AccountSession(
@@ -1554,6 +1635,19 @@ private final class CountingDataLoader: DataLoading, @unchecked Sendable {
             completion(nil)
         }
         return TaskCancellable(task: work)
+    }
+}
+
+private final class LockedCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    var value: Int {
+        lock.withLock { count }
+    }
+
+    func increment() {
+        lock.withLock { count += 1 }
     }
 }
 

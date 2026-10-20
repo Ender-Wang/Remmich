@@ -294,6 +294,32 @@ actor LibraryThumbnailCache {
         return thumbnails
     }
 
+    func indexedThumbnails(
+        from snapshot: LibraryIndexSnapshot,
+        scope: MediaAccountScope
+    ) -> [AvailableThumbnail] {
+        let startedAt = ContinuousClock.now
+        let scopeDirectory = rootURL.appending(
+            path: scope.cacheNamespace,
+            directoryHint: .isDirectory
+        )
+        let thumbnails: [AvailableThumbnail] = snapshot.derivatives.compactMap { record in
+            guard record.derivative == .thumbnail, record.isVerified else { return nil }
+            return .init(
+                assetID: record.assetID,
+                sourceRevision: record.sourceRevision,
+                fileURL: scopeDirectory.appending(path: record.relativeFileKey)
+            )
+        }
+        let components = startedAt.duration(to: .now).components
+        let elapsedMilliseconds = Int(components.seconds) * 1000
+            + Int(components.attoseconds / 1_000_000_000_000_000)
+        Self.logger.info(
+            "Indexed thumbnail manifest projected records=\(snapshot.derivatives.count) candidates=\(thumbnails.count) elapsedMs=\(elapsedMilliseconds)"
+        )
+        return thumbnails
+    }
+
     private func promoteRebuiltThumbnails(
         _ records: [LibraryIndexDerivativeRecord],
         scope: MediaAccountScope,

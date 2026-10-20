@@ -199,6 +199,38 @@ struct LibraryIndexSynchronizationTests {
         #expect(snapshot.assets.map(\.id) == ["asset"])
     }
 
+    @Test func indexedThumbnailManifestDoesNotRequireCacheWideFileScan() async throws {
+        let fixture = try IndexFixture()
+        defer { fixture.cleanup() }
+        let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        let generation = try await store.beginGeneration(scope: Self.scope)
+        try await store.upsert(
+            assets: [Self.record(id: "asset", bucket: "2026-10-01")],
+            generation: generation,
+            scope: Self.scope
+        )
+        _ = try await store.acceptGeneration(
+            generation,
+            watermark: nil,
+            historicalCursor: nil,
+            expectedAssetCount: 1,
+            scope: Self.scope
+        )
+        try await store.upsert(
+            derivatives: [Self.derivative(.thumbnail, bytes: 100, assetID: "asset")],
+            scope: Self.scope
+        )
+        let cache = LibraryThumbnailCache(store: store, rootURL: fixture.cacheURL)
+        let snapshot = try #require(try await store.snapshot(scope: Self.scope))
+
+        let indexed = await cache.indexedThumbnails(from: snapshot, scope: Self.scope)
+        let available = await cache.availableThumbnails(from: snapshot, scope: Self.scope)
+
+        #expect(indexed.count == 1)
+        #expect(indexed.first?.assetID == "asset")
+        #expect(available.isEmpty)
+    }
+
     @Test func thumbnailWarmingReportsAlreadyCachedAssetsAsComplete() async throws {
         let fixture = try IndexFixture()
         defer { fixture.cleanup() }

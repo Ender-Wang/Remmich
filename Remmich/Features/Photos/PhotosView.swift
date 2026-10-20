@@ -270,6 +270,9 @@ struct PhotosView: View {
         .onAppear {
             viewportRuntime.isTimelineActive = isTimelineActive
             media.beginTimelinePresentation()
+            if isTimelineActive {
+                media.beginTimelineContentPresentation(contentName)
+            }
         }
         .task { await store.load() }
         .onChange(
@@ -289,6 +292,7 @@ struct PhotosView: View {
             viewportRuntime.isTimelineActive = isVisible
             timelineResumeTask?.cancel()
             if isVisible {
+                media.beginTimelineContentPresentation(contentName)
                 timelineResumeTask = Task { @MainActor in
                     // Reveal the retained timeline first, then reconcile its
                     // frozen section snapshot on the following run loop.
@@ -636,6 +640,8 @@ struct PhotosView: View {
                 key: layoutKey
             )
 
+            let virtualRows = virtualizedTimelineRows(in: layout)
+
             ScrollViewReader { proxy in
                 VStack(spacing: 0) {
                     if case let .failed(message) = store.refreshState {
@@ -648,7 +654,7 @@ struct PhotosView: View {
                             Color.clear
                                 .frame(width: proposedWidth, height: layout.totalHeight)
                                 .accessibilityHidden(true)
-                            ForEach(virtualizedTimelineRows(in: layout)) { row in
+                            ForEach(virtualRows) { row in
                                 timelineRow(row, layout: layout)
                                     .frame(width: proposedWidth, height: row.height, alignment: .topLeading)
                                     .offset(y: row.offset)
@@ -717,7 +723,7 @@ struct PhotosView: View {
                                 for: tabDestination
                             ) ?? -1
                             Self.logger.info(
-                                "Timeline geometry content=\(contentName, privacy: .public) container=\(Self.describe(new.containerSize), privacy: .public) content=\(Self.describe(new.contentSize), privacy: .public) layoutWidth=\(Int(layout.key.width)) columns=\(layout.columns) rows=\(layout.rows.count) height=\(Int(layout.totalHeight)) selectionElapsedMs=\(selectionElapsed)"
+                                "Timeline geometry content=\(contentName, privacy: .public) container=\(Self.describe(new.containerSize), privacy: .public) content=\(Self.describe(new.contentSize), privacy: .public) layoutWidth=\(Int(layout.key.width)) columns=\(layout.columns) rows=\(layout.rows.count) height=\(Int(layout.totalHeight)) layoutBuildMs=\(layout.buildMilliseconds) selectionElapsedMs=\(selectionElapsed)"
                             )
                         }
                         if old.containerSize != new.containerSize,
@@ -967,6 +973,10 @@ struct PhotosView: View {
     ) -> [TimelineDeterministicLayout.Row] {
         guard !layout.rows.isEmpty else { return [] }
         let viewportHeight = max(1, viewportRuntime.scrollContainerSize.height)
+        // Keep enough rows mounted beyond the viewport that cached thumbnails
+        // remain visually continuous during a fast scroll. Tab selection is
+        // committed before timeline hydration, so this buffer no longer
+        // competes with the native tab interaction.
         let overscan = max(800, viewportHeight * 1.5)
         let latestOffset = max(0, layout.totalHeight - viewportHeight)
         var offsets = viewportRuntime.scrollContainerSize.height > 1

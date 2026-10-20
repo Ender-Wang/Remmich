@@ -238,6 +238,7 @@ struct AppShellView: View {
         )
         .ignoresSafeArea(.container, edges: .all)
         .environment(\.accountAvatarMedia, media)
+        .onAppear { media.logShellPresented() }
         .overlay(alignment: .topLeading) {
             #if DEBUG
                 if ProcessInfo.processInfo.arguments.contains("-ui-testing-range-library") {

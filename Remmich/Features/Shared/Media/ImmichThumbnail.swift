@@ -9,7 +9,7 @@ struct ImmichThumbnail: View {
     var showsBackground = true
     var imageCornerRadius: CGFloat = 0
     var priority: ImageRequest.Priority = .normal
-    var didLoad: (ImageContainer) -> Void = { _ in }
+    var didLoad: (ImageResponse) -> Void = { _ in }
 
     @State private var retryID = 0
 
@@ -22,7 +22,7 @@ struct ImmichThumbnail: View {
                 if showsBackground {
                     Rectangle().fill(.quaternary)
                 }
-                if let image = state.image, let container = state.imageContainer {
+                if let image = state.image {
                     GeometryReader { geometry in
                         image
                             .resizable()
@@ -41,9 +41,6 @@ struct ImmichThumbnail: View {
                             .clipped()
                     }
                     .transition(.opacity)
-                    .task(id: ObjectIdentifier(container.image)) {
-                        didLoad(container)
-                    }
                 } else if state.error != nil {
                     Button {
                         retryID += 1
@@ -62,6 +59,11 @@ struct ImmichThumbnail: View {
         }
         .pipeline(media.pipeline ?? .shared)
         .priority(priority)
+        .onCompletion { result in
+            if case let .success(response) = result {
+                didLoad(response)
+            }
+        }
         .onDisappear(.cancel)
         .id("\(descriptor.assetID)-\(descriptor.updatedAt.timeIntervalSinceReferenceDate)-\(retryID)")
     }

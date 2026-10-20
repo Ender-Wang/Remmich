@@ -7,6 +7,10 @@ import OSLog
 @MainActor
 @Observable
 final class AppSessionController {
+    private nonisolated static let startupLogger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "Remmich",
+        category: "StartupPerformance"
+    )
     private nonisolated static let routeLogger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "Remmich",
         category: "Routing"
@@ -96,7 +100,10 @@ final class AppSessionController {
         } else {
             timeline
         }
-        photos = PhotosTimelineStore(reader: photosReader)
+        photos = PhotosTimelineStore(
+            reader: photosReader,
+            persistentRefreshPolicy: .acceptedIndexPublication
+        )
         videos = PhotosTimelineStore(
             reader: VideoTimelineReader(source: videosReader),
             persistentRefreshPolicy: .acceptedIndexPublication
@@ -124,6 +131,9 @@ final class AppSessionController {
     }
 
     func start() async {
+        let startupStartedAt = Date()
+        media.beginStartupTrace(at: startupStartedAt)
+        Self.startupLogger.info("App session startup started")
         startNetworkMonitoring()
         if ProcessInfo.processInfo.arguments.contains("-ui-testing-signed-in") {
             let session = AccountSession.fixture
@@ -142,17 +152,35 @@ final class AppSessionController {
         }
 
         connectionProfile = await profileStore.load()
+        Self.startupLogger.info(
+            "Connection profile restored elapsedMs=\(Self.elapsedMilliseconds(since: startupStartedAt))"
+        )
         do {
             guard let session = try await sessionStore.load() else {
                 state = .signedOut
                 return
             }
+            Self.startupLogger.info(
+                "Account session restored elapsedMs=\(Self.elapsedMilliseconds(since: startupStartedAt))"
+            )
             isRestoringSession = true
             defer { isRestoringSession = false }
             media.configure(session: session, activeEndpoint: nil)
+            Self.startupLogger.info(
+                "Media pipeline configured elapsedMs=\(Self.elapsedMilliseconds(since: startupStartedAt))"
+            )
             await timeline.configure(session: session, activeEndpoint: nil)
+            Self.startupLogger.info(
+                "Timeline repository configured elapsedMs=\(Self.elapsedMilliseconds(since: startupStartedAt))"
+            )
             await bootstrapLocalLibrary(session: session)
+            Self.startupLogger.info(
+                "Local library bootstrap published elapsedMs=\(Self.elapsedMilliseconds(since: startupStartedAt))"
+            )
             state = .signedIn(session)
+            Self.startupLogger.info(
+                "Signed-in shell state published elapsedMs=\(Self.elapsedMilliseconds(since: startupStartedAt))"
+            )
             await reevaluateRoute(trigger: .startup)
         } catch SessionStoreError.corruptPayload {
             try? await sessionStore.delete()
@@ -607,6 +635,10 @@ final class AppSessionController {
             return message
         }
         return "Something went wrong. Check the server address and try again."
+    }
+
+    private nonisolated static func elapsedMilliseconds(since start: Date) -> Int {
+        Int(Date().timeIntervalSince(start) * 1000)
     }
 }
 

@@ -647,11 +647,17 @@ final class PhotosTimelineStore {
             guard requestGeneration == generation,
                   bucketRequestRevisions[bucketID] == requestRevision
             else { return }
+            let publicationStartedAt = Date()
             let assets = Self.deduplicate(response)
+            let deduplicationFinishedAt = Date()
             rawAssetsByID[bucketID] = assets
             sectionsByID[bucketID]?.loadState = .loaded
             reconcileCrossBucketDuplicates(forceRevisionFor: bucketID)
+            let reconciliationFinishedAt = Date()
             updateGroupedCatalogContributions(loadedBucketID: bucketID)
+            Self.logger.info(
+                "Bucket publication finished generation=\(requestGeneration) bucket=\(bucketID.rawValue, privacy: .public) count=\(assets.count) deduplicateMs=\(Self.elapsedMilliseconds(since: publicationStartedAt, to: deduplicationFinishedAt)) reconcileMs=\(Self.elapsedMilliseconds(since: deduplicationFinishedAt, to: reconciliationFinishedAt)) groupsMs=\(Self.elapsedMilliseconds(since: reconciliationFinishedAt)) totalMs=\(Self.elapsedMilliseconds(since: publicationStartedAt))"
+            )
         } catch {
             guard requestGeneration == generation,
                   bucketRequestRevisions[bucketID] == requestRevision
@@ -1014,5 +1020,9 @@ final class PhotosTimelineStore {
 
     private nonisolated static func elapsedMilliseconds(since start: Date) -> Int {
         Int(Date().timeIntervalSince(start) * 1000)
+    }
+
+    private nonisolated static func elapsedMilliseconds(since start: Date, to end: Date) -> Int {
+        Int(end.timeIntervalSince(start) * 1000)
     }
 }

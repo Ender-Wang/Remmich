@@ -526,7 +526,13 @@ struct TimelineAssetThumbnail: View {
                         ? DesignMetrics.compactCornerRadius
                         : 0,
                     priority: isActive ? .veryHigh : .veryLow,
-                    didLoad: { media.retainTimelineThumbnail($0, descriptor: descriptor) }
+                    didLoad: {
+                        media.retainTimelineThumbnail(
+                            $0.container,
+                            descriptor: descriptor,
+                            cacheType: $0.cacheType
+                        )
+                    }
                 )
                 .frame(width: proxy.size.width, height: proxy.size.height)
                 .overlay(alignment: .topTrailing) {

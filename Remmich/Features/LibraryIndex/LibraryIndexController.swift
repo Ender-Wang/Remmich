@@ -169,7 +169,7 @@ final class LibraryIndexController {
             indexedVideoCount = snapshot.assets.count { $0.kind == .video }
             expectedAssetCount = snapshot.syncState.expectedAssetCount ?? snapshot.assets.count
             status = snapshot.syncState.isPaused ? .paused : .upToDate
-            async let thumbnailsTask = thumbnailCache.availableThumbnails(
+            async let thumbnailsTask = thumbnailCache.indexedThumbnails(
                 from: snapshot,
                 scope: nextScope
             )

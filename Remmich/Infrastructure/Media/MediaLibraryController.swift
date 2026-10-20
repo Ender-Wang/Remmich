@@ -35,8 +35,11 @@ final class MediaLibraryController {
     private var residencyPreloadGeneration = 0
     private var activeResidencyPreloadGeneration: Int?
     private var cumulativePreloadCancellationCount = 0
+    private var startupTraceStartedAt: Date?
+    private var didLogShellPresentation = false
     private var timelinePresentationStartedAt: Date?
     private var didLogFirstTimelineThumbnail = false
+    private var pendingTimelineContentTrace: TimelineContentTrace?
     private var warmedThumbnailURLs: [String: URL] = [:]
     private let profileImageCache = ProfileImageCache()
     private var profileImageCacheTask: Task<Void, Never>?
@@ -44,25 +47,41 @@ final class MediaLibraryController {
     private var profileImageCacheRevision = 0
 
     func configure(session: AccountSession, activeEndpoint: URL?) {
+        let startedAt = Date()
         let nextScope = MediaAccountScope(session: session)
         if scope != nextScope {
             clearAll()
+            let clearedAt = Date()
             scope = nextScope
-            pipeline = Self.makePipeline(scope: nextScope)
-            prefetcher = pipeline.map {
-                ImagePrefetcher(pipeline: $0, destination: .memoryCache, maxConcurrentRequestCount: 3)
-            }
-            viewerPrefetcher = pipeline.map {
-                ImagePrefetcher(pipeline: $0, destination: .memoryCache, maxConcurrentRequestCount: 2)
-            }
+            let pipeline = Self.makePipeline(scope: nextScope)
+            self.pipeline = pipeline
+            let pipelineAt = Date()
+            prefetcher = ImagePrefetcher(
+                pipeline: pipeline,
+                destination: .memoryCache,
+                maxConcurrentRequestCount: 3
+            )
+            viewerPrefetcher = ImagePrefetcher(
+                pipeline: pipeline,
+                destination: .memoryCache,
+                maxConcurrentRequestCount: 2
+            )
+            let prefetchersAt = Date()
             downloadService = MediaDownloadService(
                 token: session.accessToken,
                 namespace: nextScope.cacheNamespace
             )
+            Self.logger.info(
+                "Media scope configured clearMs=\(Self.elapsedMilliseconds(from: startedAt, to: clearedAt)) pipelineMs=\(Self.elapsedMilliseconds(from: clearedAt, to: pipelineAt)) prefetcherMs=\(Self.elapsedMilliseconds(from: pipelineAt, to: prefetchersAt)) downloadMs=\(Self.elapsedMilliseconds(from: prefetchersAt, to: Date()))"
+            )
         }
         self.session = session
         activeAPIURL = activeEndpoint
+        let profileStartedAt = Date()
         prepareProfileImageCache(scope: nextScope, session: session, endpoint: activeEndpoint)
+        Self.logger.info(
+            "Media configuration finished profileCacheMs=\(Self.elapsedMilliseconds(since: profileStartedAt)) totalMs=\(Self.elapsedMilliseconds(since: startedAt))"
+        )
     }
 
     func updateRoute(_ endpoint: URL?) {
@@ -75,7 +94,29 @@ final class MediaLibraryController {
         guard timelinePresentationStartedAt == nil else { return }
         timelinePresentationStartedAt = Date()
         didLogFirstTimelineThumbnail = false
-        Self.logger.info("Timeline presentation started")
+        let startupElapsed = startupTraceStartedAt.map { Self.elapsedMilliseconds(since: $0) } ?? -1
+        Self.logger.info(
+            "Timeline presentation started startupElapsedMs=\(startupElapsed)"
+        )
+    }
+
+    func beginTimelineContentPresentation(_ name: String) {
+        pendingTimelineContentTrace = TimelineContentTrace(name: name, startedAt: Date())
+        Self.logger.info("Timeline content activated content=\(name, privacy: .public)")
+    }
+
+    func beginStartupTrace(at date: Date) {
+        startupTraceStartedAt = date
+        didLogShellPresentation = false
+        timelinePresentationStartedAt = nil
+        didLogFirstTimelineThumbnail = false
+    }
+
+    func logShellPresented() {
+        guard !didLogShellPresentation else { return }
+        didLogShellPresentation = true
+        let startupElapsed = startupTraceStartedAt.map { Self.elapsedMilliseconds(since: $0) } ?? -1
+        Self.logger.info("App shell appeared startupElapsedMs=\(startupElapsed)")
     }
 
     func imageRequest(
@@ -90,16 +131,48 @@ final class MediaLibraryController {
                 return request
             }
         #endif
+        var trace: TimelineContentTrace?
+        if descriptor.derivative == .thumbnail,
+           var pendingTrace = pendingTimelineContentTrace,
+           pendingTrace.requestedAssetID == nil
+        {
+            pendingTrace.requestedAssetID = descriptor.assetID
+            pendingTimelineContentTrace = pendingTrace
+            Self.logger.info(
+                "First active thumbnail request created content=\(pendingTrace.name, privacy: .public) asset=\(descriptor.assetID.prefix(8), privacy: .private) elapsedMs=\(Self.elapsedMilliseconds(since: pendingTrace.startedAt))"
+            )
+            trace = pendingTrace
+        }
         if descriptor.derivative == .thumbnail,
            let scope,
            let fileURL = warmedThumbnailURLs[Self.warmedThumbnailKey(
                assetID: descriptor.assetID,
                revision: descriptor.updatedAt
-           )]
+           )],
+           FileManager.default.fileExists(atPath: fileURL.path)
         {
+            if let trace {
+                Self.logger.info(
+                    "First active thumbnail source resolved content=\(trace.name, privacy: .public) source=local elapsedMs=\(Self.elapsedMilliseconds(since: trace.startedAt))"
+                )
+            }
+            let requestTrace = trace
             var request = ImageRequest(
                 id: descriptor.cacheKey(in: scope),
-                data: { try Data(contentsOf: fileURL) }
+                data: {
+                    if let trace = requestTrace {
+                        Self.logger.info(
+                            "First active thumbnail file read started content=\(trace.name, privacy: .public) elapsedMs=\(Self.elapsedMilliseconds(since: trace.startedAt))"
+                        )
+                    }
+                    let data = try Data(contentsOf: fileURL)
+                    if let trace = requestTrace {
+                        Self.logger.info(
+                            "First active thumbnail file read finished content=\(trace.name, privacy: .public) bytes=\(data.count) elapsedMs=\(Self.elapsedMilliseconds(since: trace.startedAt))"
+                        )
+                    }
+                    return data
+                }
             )
             if let pixels = descriptor.targetPixels {
                 request.thumbnail = .init(
@@ -108,12 +181,23 @@ final class MediaLibraryController {
                     contentMode: .aspectFill
                 )
             }
+            // The persistent thumbnail cache is the authoritative disk layer for
+            // warmed timeline assets. Keep Nuke's decoded memory cache, but do
+            // not perform a second disk-cache lookup/write for the same JPEG.
+            // Besides duplicating storage, DataCache reads update file metadata
+            // during the first visible batch and delay direct managed-file I/O.
+            request.options.insert(.disableDiskCache)
             request.priority = priority
             return request
         }
         guard let scope, let session, let activeAPIURL,
               let url = Self.mediaURL(for: descriptor, apiURL: activeAPIURL)
         else { return nil }
+        if let trace {
+            Self.logger.info(
+                "First active thumbnail source resolved content=\(trace.name, privacy: .public) source=remote elapsedMs=\(Self.elapsedMilliseconds(since: trace.startedAt))"
+            )
+        }
         var urlRequest = URLRequest(url: url)
         urlRequest.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
         var request = ImageRequest(urlRequest: urlRequest)
@@ -296,22 +380,33 @@ final class MediaLibraryController {
             residencyLoadTask = nil
             let cancellationCount = cumulativePreloadCancellationCount
             Self.logger.info(
-                "Timeline preload finished generation=\(preloadGeneration) requested=\(summary.requested) memoryHits=\(summary.memoryHits) diskHits=\(summary.diskHits) networkLoads=\(summary.networkLoads) failures=\(summary.failures) cancelled=\(summary.cancelled) residencyEntries=\(residencyEntries) residencyDecodedBytes=\(residencyDecodedBytes) elapsedMs=\(Self.elapsedMilliseconds(since: startedAt)) totalCancellations=\(cancellationCount)"
+                "Timeline preload finished generation=\(preloadGeneration) requested=\(summary.requested) memoryHits=\(summary.memoryHits) diskHits=\(summary.diskHits) managedFileLoads=\(summary.managedFileLoads) networkLoads=\(summary.networkLoads) failures=\(summary.failures) cancelled=\(summary.cancelled) residencyEntries=\(residencyEntries) residencyDecodedBytes=\(residencyDecodedBytes) elapsedMs=\(Self.elapsedMilliseconds(since: startedAt)) totalCancellations=\(cancellationCount)"
             )
         }
     }
 
     func retainTimelineThumbnail(
         _ container: ImageContainer,
-        descriptor: MediaRequestDescriptor
+        descriptor: MediaRequestDescriptor,
+        cacheType: ImageResponse.CacheType?
     ) {
+        if let trace = pendingTimelineContentTrace,
+           trace.requestedAssetID == descriptor.assetID
+        {
+            pendingTimelineContentTrace = nil
+            let dimensions = container.image.cgImage.map { "\($0.width)x\($0.height)" } ?? "unknown"
+            Self.logger.info(
+                "First active timeline thumbnail loaded content=\(trace.name, privacy: .public) cache=\(Self.describe(cacheType), privacy: .public) elapsedMs=\(Self.elapsedMilliseconds(since: trace.startedAt)) decodedPixels=\(dimensions, privacy: .public)"
+            )
+        }
         if !didLogFirstTimelineThumbnail,
            let timelinePresentationStartedAt
         {
             didLogFirstTimelineThumbnail = true
             let dimensions = container.image.cgImage.map { "\($0.width)x\($0.height)" } ?? "unknown"
+            let startupElapsed = startupTraceStartedAt.map { Self.elapsedMilliseconds(since: $0) } ?? -1
             Self.logger.info(
-                "First timeline thumbnail rendered elapsedMs=\(Self.elapsedMilliseconds(since: timelinePresentationStartedAt)) decodedPixels=\(dimensions, privacy: .public)"
+                "First timeline thumbnail loaded cache=\(Self.describe(cacheType), privacy: .public) elapsedMs=\(Self.elapsedMilliseconds(since: timelinePresentationStartedAt)) startupElapsedMs=\(startupElapsed) decodedPixels=\(dimensions, privacy: .public)"
             )
         }
         let residency = timelineResidency
@@ -466,6 +561,7 @@ final class MediaLibraryController {
     }
 
     private static func makePipeline(scope: MediaAccountScope) -> ImagePipeline {
+        let startedAt = Date()
         #if DEBUG
             // Keep Nuke's decode/load intervals visible in Instruments so a cold tab-switch
             // stall can be attributed to the exact pipeline stage instead of inferred from
@@ -474,15 +570,29 @@ final class MediaLibraryController {
         #endif
         let memoryCache = ImageCache(costLimit: 96 * 1024 * 1024, countLimit: 1200)
         memoryCache.ttl = 10 * 60
+        let memoryCacheAt = Date()
         let dataCache = try? DataCache(name: "Remmich.Media.\(scope.cacheNamespace)")
         dataCache?.sizeLimit = 512 * 1024 * 1024
-        return ImagePipeline {
-            $0.imageCache = memoryCache
-            $0.dataCache = dataCache
-            $0.dataCachePolicy = .storeOriginalData
-            $0.isProgressiveDecodingEnabled = true
-            $0.isTaskCoalescingEnabled = true
+        let dataCacheAt = Date()
+        let dataLoader = LazyMediaDataLoader {
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.urlCache = nil
+            configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+            let loader = DataLoader(configuration: configuration)
+            loader.prefersIncrementalDelivery = true
+            return loader
         }
+        var configuration = ImagePipeline.Configuration(dataLoader: dataLoader)
+        configuration.imageCache = memoryCache
+        configuration.dataCache = dataCache
+        configuration.dataCachePolicy = .storeOriginalData
+        configuration.isProgressiveDecodingEnabled = true
+        configuration.isTaskCoalescingEnabled = true
+        let pipeline = ImagePipeline(configuration: configuration)
+        Self.logger.info(
+            "Media pipeline built memoryCacheMs=\(elapsedMilliseconds(from: startedAt, to: memoryCacheAt)) dataCacheMs=\(elapsedMilliseconds(from: memoryCacheAt, to: dataCacheAt)) pipelineMs=\(elapsedMilliseconds(from: dataCacheAt, to: Date())) totalMs=\(elapsedMilliseconds(since: startedAt))"
+        )
+        return pipeline
     }
 
     private static func mediaURL(
@@ -603,7 +713,7 @@ final class MediaLibraryController {
             return switch response.cacheType {
             case .memory: .memory
             case .disk: .disk
-            case nil: .network
+            case nil: item.1.url == nil ? .managedFile : .network
             }
         } catch {
             return Task.isCancelled ? .cancelled : .failed
@@ -614,9 +724,28 @@ final class MediaLibraryController {
         Int(Date().timeIntervalSince(start) * 1000)
     }
 
+    private nonisolated static func elapsedMilliseconds(from start: Date, to end: Date) -> Int {
+        Int(end.timeIntervalSince(start) * 1000)
+    }
+
+    private nonisolated static func describe(_ cacheType: ImageResponse.CacheType?) -> String {
+        switch cacheType {
+        case .memory: "memory"
+        case .disk: "disk"
+        case nil: "source"
+        }
+    }
+
+    private struct TimelineContentTrace {
+        let name: String
+        let startedAt: Date
+        var requestedAssetID: String?
+    }
+
     private nonisolated enum PreloadOutcome: Sendable {
         case memory
         case disk
+        case managedFile
         case network
         case failed
         case cancelled
@@ -626,6 +755,7 @@ final class MediaLibraryController {
         let requested: Int
         var memoryHits = 0
         var diskHits = 0
+        var managedFileLoads = 0
         var networkLoads = 0
         var failures = 0
         var cancelled = 0
@@ -637,18 +767,52 @@ final class MediaLibraryController {
         }
 
         var completed: Int {
-            memoryHits + diskHits + networkLoads + failures + cancelled
+            memoryHits + diskHits + managedFileLoads + networkLoads + failures + cancelled
         }
 
         mutating func record(_ outcome: PreloadOutcome) {
             switch outcome {
             case .memory: memoryHits += 1
             case .disk: diskHits += 1
+            case .managedFile: managedFileLoads += 1
             case .network: networkLoads += 1
             case .failed: failures += 1
             case .cancelled: cancelled += 1
             }
         }
+    }
+}
+
+/// Defers Foundation networking initialization until a request actually needs
+/// the network. Warm timeline thumbnails use data closures or Nuke's data cache,
+/// so constructing the local-first pipeline must not instantiate URLSession.
+final nonisolated class LazyMediaDataLoader: DataLoading, @unchecked Sendable {
+    private let lock = NSLock()
+    private let makeLoader: @Sendable () -> any DataLoading
+    private var loader: (any DataLoading)?
+
+    init(makeLoader: @escaping @Sendable () -> any DataLoading) {
+        self.makeLoader = makeLoader
+    }
+
+    func loadData(
+        with request: URLRequest,
+        didReceiveData: @escaping @Sendable (Data, URLResponse) -> Void,
+        completion: @escaping @Sendable (Error?) -> Void
+    ) -> any Cancellable {
+        let loader = lock.withLock {
+            if let loader {
+                return loader
+            }
+            let loader = makeLoader()
+            self.loader = loader
+            return loader
+        }
+        return loader.loadData(
+            with: request,
+            didReceiveData: didReceiveData,
+            completion: completion
+        )
     }
 }
 

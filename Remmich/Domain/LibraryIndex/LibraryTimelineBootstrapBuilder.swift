@@ -17,11 +17,18 @@ nonisolated enum LibraryTimelineBootstrapBuilder {
             !$0.isTrashed && $0.visibility == "timeline"
         }
         let filteredAt = ContinuousClock.now
-        let photos = buildTimeline(from: visible, snapshot: snapshot)
+        let photos = buildTimeline(
+            from: visible,
+            groups: snapshot.groups,
+            snapshot: snapshot,
+            scope: nil
+        )
         let photosBuiltAt = ContinuousClock.now
         let videos = buildTimeline(
             from: visible.filter { $0.kind == .video },
-            snapshot: snapshot
+            groups: snapshot.groups,
+            snapshot: snapshot,
+            scope: .videos
         )
         let videosBuiltAt = ContinuousClock.now
         let bootstrap = LibraryTimelineBootstrap(
@@ -35,6 +42,16 @@ nonisolated enum LibraryTimelineBootstrapBuilder {
     }
 
     static func complete(_ initial: LibraryTimelineBootstrap) -> LibraryTimelineBootstrap {
+        guard initial.photos.groupedCatalogs.catalog(for: .day).entries.isEmpty
+            || initial.photos.groupedCatalogs.catalog(for: .week).entries.isEmpty
+            || initial.videos.groupedCatalogs.catalog(for: .day).entries.isEmpty
+            || initial.videos.groupedCatalogs.catalog(for: .week).entries.isEmpty
+        else {
+            logger.info(
+                "Library timeline grouped catalogs reused generation=\(initial.photos.generation) source=persisted"
+            )
+            return initial
+        }
         let startedAt = ContinuousClock.now
         let photos = completing(initial.photos)
         let photosBuiltAt = ContinuousClock.now
@@ -48,7 +65,9 @@ nonisolated enum LibraryTimelineBootstrapBuilder {
 
     private static func buildTimeline(
         from records: [LibraryIndexAssetRecord],
-        snapshot: LibraryIndexSnapshot
+        groups: [LibraryIndexGroupRecord],
+        snapshot: LibraryIndexSnapshot,
+        scope: LibraryIndexMediaScope?
     ) -> TimelineBootstrapSnapshot {
         let grouped: [TimelineBucketID: [LibraryIndexAssetRecord]] = Dictionary(
             grouping: records,
@@ -72,6 +91,13 @@ nonisolated enum LibraryTimelineBootstrapBuilder {
         .sorted { $0.id.rawValue > $1.id.rawValue }
         var groupedCatalogs = TimelineGroupedCatalogCache()
         groupedCatalogs.replaceSummaryCatalogs(with: summaries)
+        installPersistedGroups(
+            groups,
+            scope: scope,
+            assetsByBucket: assetsByBucket,
+            summaries: summaries,
+            catalogs: &groupedCatalogs
+        )
         return TimelineBootstrapSnapshot(
             generation: snapshot.generation,
             summaries: summaries,
@@ -79,6 +105,100 @@ nonisolated enum LibraryTimelineBootstrapBuilder {
             groupedCatalogs: groupedCatalogs,
             isComplete: snapshot.syncState.historicalCursor == nil
         )
+    }
+
+    private static func installPersistedGroups(
+        _ records: [LibraryIndexGroupRecord],
+        scope: LibraryIndexMediaScope?,
+        assetsByBucket: [TimelineBucketID: [TimelineAssetSummary]],
+        summaries: [TimelineBucketSummary],
+        catalogs: inout TimelineGroupedCatalogCache
+    ) {
+        guard !records.isEmpty else { return }
+        let selected = if let scope {
+            records.filter { $0.mediaScope == scope }
+        } else {
+            records
+        }
+        let assetsByID = Dictionary(
+            uniqueKeysWithValues: assetsByBucket.values
+                .flatMap(\.self)
+                .map { ($0.id, $0) }
+        )
+        let allBucketIDs = Set(summaries.map(\.id))
+        for level in [
+            TimelineGroupedCatalogLevel.day,
+            .week,
+            .month,
+            .year,
+        ] {
+            let levelName = switch level {
+            case .day: "day"
+            case .week: "week"
+            case .month: "month"
+            case .year: "year"
+            }
+            let merged = Dictionary(grouping: selected.filter { $0.level == levelName }, by: \.key)
+                .compactMap { key, members -> TimelineGroupedCatalogEntry? in
+                    let owningBucketIDs = Set(
+                        members.flatMap(\.owningBucketKeys).map(TimelineBucketID.init(rawValue:))
+                    )
+                    let covers = members
+                        .flatMap(\.coverAssetIDs)
+                        .compactMap { assetsByID[$0] }
+                        .sorted { lhs, rhs in
+                            if lhs.capturedAt == rhs.capturedAt {
+                                return lhs.id < rhs.id
+                            }
+                            return lhs.capturedAt < rhs.capturedAt
+                        }
+                    guard let id = groupedCatalogID(
+                        level: level,
+                        key: key,
+                        intervalStart: members.map(\.intervalStart).min() ?? .distantPast,
+                        owningBucketIDs: owningBucketIDs
+                    ) else { return nil }
+                    return TimelineGroupedCatalogEntry(
+                        id: id,
+                        assetCount: members.reduce(0) { $0 + $1.assetCount },
+                        owningBucketIDs: owningBucketIDs.sorted { $0.rawValue < $1.rawValue },
+                        coverAssets: TimelineGroupedCatalogEntry.boundedCovers(from: covers)
+                    )
+                }
+                .sorted { $0.stableKey < $1.stableKey }
+            guard !merged.isEmpty else { continue }
+            catalogs.replace(
+                level: level,
+                entries: merged,
+                loadedBucketIDs: allBucketIDs,
+                hasMoreOlderHistory: false
+            )
+        }
+    }
+
+    private static func groupedCatalogID(
+        level: TimelineGroupedCatalogLevel,
+        key: String,
+        intervalStart: Date,
+        owningBucketIDs: Set<TimelineBucketID>
+    ) -> TimelineGroupedCatalogID? {
+        switch level {
+        case .day:
+            guard let bucketID = owningBucketIDs.max(by: { $0.rawValue < $1.rawValue }) else {
+                return nil
+            }
+            return .day(bucketID, TimelineCaptureDay(capturedAt: intervalStart))
+        case .week:
+            guard let bucketID = owningBucketIDs.max(by: { $0.rawValue < $1.rawValue }),
+                  let weekID = TimelineWeekID(day: TimelineCaptureDay(capturedAt: intervalStart))
+            else { return nil }
+            return .week(bucketID, weekID)
+        case .month:
+            return .month(TimelineBucketID(rawValue: key + "-01"))
+        case .year:
+            guard let year = Int(key) else { return nil }
+            return .year(year)
+        }
     }
 
     private static func completing(

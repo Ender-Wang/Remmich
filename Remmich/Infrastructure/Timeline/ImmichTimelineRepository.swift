@@ -97,10 +97,13 @@ actor ImmichTimelineRepository: TimelineReading, VideoReading, AssetDetailReadin
                 query: Self.map(query)
             )
             try requireCurrent(requestGeneration)
+            let mappingStartedAt = Date()
+            let mapped = assets.map(Self.map)
+            let mappingFinishedAt = Date()
             Self.logger.info(
-                "Bucket assets finished generation=\(requestGeneration) bucket=\(bucketID.rawValue, privacy: .public) count=\(assets.count) elapsedMs=\(Self.elapsedMilliseconds(since: startedAt))"
+                "Bucket assets finished generation=\(requestGeneration) bucket=\(bucketID.rawValue, privacy: .public) count=\(assets.count) fetchMs=\(Self.elapsedMilliseconds(since: startedAt, to: mappingStartedAt)) mapMs=\(Self.elapsedMilliseconds(since: mappingStartedAt, to: mappingFinishedAt)) totalMs=\(Self.elapsedMilliseconds(since: startedAt, to: mappingFinishedAt))"
             )
-            return assets.map(Self.map)
+            return mapped
         } catch {
             Self.logger.error(
                 "Bucket assets failed generation=\(requestGeneration) bucket=\(bucketID.rawValue, privacy: .public) elapsedMs=\(Self.elapsedMilliseconds(since: startedAt)) error=\(Self.errorSummary(error), privacy: .public)"
@@ -295,6 +298,10 @@ actor ImmichTimelineRepository: TimelineReading, VideoReading, AssetDetailReadin
 
     private nonisolated static func elapsedMilliseconds(since start: Date) -> Int {
         Int(Date().timeIntervalSince(start) * 1000)
+    }
+
+    private nonisolated static func elapsedMilliseconds(since start: Date, to end: Date) -> Int {
+        Int(end.timeIntervalSince(start) * 1000)
     }
 
     private nonisolated static func errorSummary(_ error: Error) -> String {

@@ -31,6 +31,59 @@ struct LibraryTimelineBootstrapBuilderTests {
         #expect(completed.videos.groupedCatalogs.catalog(for: .day).entries.count == 1)
     }
 
+    @Test func persistedGroupRecordsPopulateInitialCatalogsWithoutRecomputation() {
+        let snapshot = snapshot(groups: [
+            group(
+                scope: .photos,
+                level: "day",
+                key: "2026-10-18",
+                count: 1,
+                buckets: ["2026-10-01"],
+                covers: ["newest-photo"],
+                start: "2026-10-18T00:00:00Z"
+            ),
+            group(
+                scope: .photos,
+                level: "week",
+                key: "2026-W42",
+                count: 2,
+                buckets: ["2026-10-01"],
+                covers: ["older-photo", "newest-photo"],
+                start: "2026-10-12T00:00:00Z"
+            ),
+            group(
+                scope: .videos,
+                level: "day",
+                key: "2026-10-17",
+                count: 1,
+                buckets: ["2026-10-01"],
+                covers: ["video"],
+                start: "2026-10-17T00:00:00Z"
+            ),
+            group(
+                scope: .videos,
+                level: "week",
+                key: "2026-W42",
+                count: 1,
+                buckets: ["2026-10-01"],
+                covers: ["video"],
+                start: "2026-10-12T00:00:00Z"
+            ),
+        ])
+
+        let initial = LibraryTimelineBootstrapBuilder.buildInitial(from: snapshot)
+        let completed = LibraryTimelineBootstrapBuilder.complete(initial)
+
+        #expect(initial.photos.groupedCatalogs.catalog(for: .day).entries.count == 2)
+        #expect(initial.photos.groupedCatalogs.catalog(for: .week).entries.count == 1)
+        #expect(initial.videos.groupedCatalogs.catalog(for: .day).entries.count == 1)
+        #expect(initial.videos.groupedCatalogs.catalog(for: .week).entries.count == 1)
+        #expect(
+            completed.photos.groupedCatalogs.catalog(for: .day).revision
+                == initial.photos.groupedCatalogs.catalog(for: .day).revision
+        )
+    }
+
     @Test @MainActor func storePromotesCompletedCatalogsForTheInstalledGeneration() {
         let initial = LibraryTimelineBootstrapBuilder.buildInitial(from: snapshot())
         let completed = LibraryTimelineBootstrapBuilder.complete(initial)
@@ -46,7 +99,7 @@ struct LibraryTimelineBootstrapBuilderTests {
         #expect(store.sections.flatMap(\.assets).map(\.id).count == 4)
     }
 
-    private func snapshot() -> LibraryIndexSnapshot {
+    private func snapshot(groups: [LibraryIndexGroupRecord] = []) -> LibraryIndexSnapshot {
         LibraryIndexSnapshot(
             generation: 42,
             assets: [
@@ -61,7 +114,7 @@ struct LibraryTimelineBootstrapBuilderTests {
                     visibility: "archive"
                 ),
             ],
-            groups: [],
+            groups: groups,
             derivatives: [],
             syncState: .init(
                 acceptedGeneration: 42,
@@ -72,6 +125,29 @@ struct LibraryTimelineBootstrapBuilderTests {
                 indexedAssetCount: 5,
                 lastError: nil
             )
+        )
+    }
+
+    private func group(
+        scope: LibraryIndexMediaScope,
+        level: String,
+        key: String,
+        count: Int,
+        buckets: [String],
+        covers: [String],
+        start: String
+    ) -> LibraryIndexGroupRecord {
+        let intervalStart = ISO8601DateFormatter().date(from: start)!
+        return LibraryIndexGroupRecord(
+            mediaScope: scope,
+            level: level,
+            key: key,
+            intervalStart: intervalStart,
+            intervalEnd: intervalStart.addingTimeInterval(86400),
+            assetCount: count,
+            owningBucketKeys: buckets,
+            coverAssetIDs: covers,
+            mosaicSeed: 42
         )
     }
 
