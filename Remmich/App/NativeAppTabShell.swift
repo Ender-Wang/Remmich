@@ -273,6 +273,18 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
                       parent.selection == destination,
                       controller?.selectedTab === tab(for: destination)
                 else { return }
+
+                // Let UIKit commit the tab selection before the destination's
+                // SwiftUI hierarchy is mounted. This is a scheduler boundary,
+                // not a timed delay: tab navigation remains the control plane,
+                // while timeline hydration follows on the next available turn.
+                await Task.yield()
+                guard !Task.isCancelled,
+                      generation == contentActivationGeneration,
+                      parent.selection == destination,
+                      controller?.selectedTab === tab(for: destination)
+                else { return }
+
                 parent.contentActivationState.activate(destination)
                 contentActivationTask = nil
                 Self.logger.info(
