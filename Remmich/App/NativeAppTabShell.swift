@@ -1,4 +1,5 @@
 import Observation
+import OSLog
 import SwiftUI
 import UIKit
 
@@ -6,6 +7,24 @@ import UIKit
 @Observable
 final class NativeTabSelectionState {
     var selection: NativeTabDestination = .photos
+}
+
+@MainActor
+@Observable
+final class TimelineRotationState {
+    private(set) var generation = 0
+    private(set) var targetSize: CGSize?
+    private(set) var isRotating = false
+
+    func begin(to targetSize: CGSize) {
+        generation &+= 1
+        self.targetSize = targetSize
+        isRotating = true
+    }
+
+    func complete() {
+        isRotating = false
+    }
 }
 
 enum NativeTabDestination: Hashable {
@@ -37,6 +56,7 @@ enum NativeTabLayout {
 struct NativeAppTabShell: UIViewControllerRepresentable {
     @Binding var selection: NativeTabDestination
     @Binding var tabBarTop: CGFloat
+    let rotationState: TimelineRotationState
     let compactOwner: NativeTabDestination?
     let isViewerPresented: Bool
     let photosScrollRequest: Int
@@ -61,6 +81,7 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
 
     func makeUIViewController(context: Context) -> UITabBarController {
         let controller = MeasuringTabBarController()
+        controller.rotationState = rotationState
         controller.tabBarTopChanged = { [weak coordinator = context.coordinator] top in
             coordinator?.setTabBarTop(top)
         }
@@ -72,12 +93,13 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_: UITabBarController, context: Context) {
+        context.coordinator.controller?.rotationState = rotationState
         context.coordinator.update(self, animated: true)
     }
 
     @MainActor
     final class Coordinator: NSObject, UITabBarControllerDelegate {
-        weak var controller: UITabBarController?
+        fileprivate weak var controller: MeasuringTabBarController?
         private var parent: NativeAppTabShell
         private var installedTabs: [NativeTabDestination]?
         private var isUpdatingTabs = false
@@ -279,12 +301,82 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
 
 @MainActor
 private final class MeasuringTabBarController: UITabBarController {
+    private static let logger = Logger(
+        subsystem: "io.github.ender-wang.Remmich",
+        category: "TimelineRotation"
+    )
+
     var tabBarTopChanged: ((CGFloat) -> Void)?
+    var rotationState: TimelineRotationState?
+    private var rotationGeneration = 0
+    private var rotationStartedAt: ContinuousClock.Instant?
+    private var rotationTargetSize: CGSize?
+    private var lastLoggedLayoutSize: CGSize?
+
+    override func viewWillTransition(
+        to size: CGSize,
+        with coordinator: any UIViewControllerTransitionCoordinator
+    ) {
+        rotationGeneration += 1
+        let generation = rotationGeneration
+        rotationStartedAt = .now
+        rotationTargetSize = size
+        lastLoggedLayoutSize = nil
+        rotationState?.begin(to: size)
+        let currentSize = view.bounds.size
+        Self.logger.info(
+            "Host rotation began generation=\(generation) current=\(Self.describe(currentSize), privacy: .public) target=\(Self.describe(size), privacy: .public) durationMs=\(Int(coordinator.transitionDuration * 1000))"
+        )
+        coordinator.animate(alongsideTransition: nil) { [weak self] context in
+            self?.completeRotation(generation: generation, cancelled: context.isCancelled)
+        }
+        super.viewWillTransition(to: size, with: coordinator)
+    }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         tabBar.layoutIfNeeded()
         tabBarTopChanged?(visibleTop(of: tabBar) ?? tabBar.frame.minY)
+        guard let target = rotationTargetSize,
+              lastLoggedLayoutSize != view.bounds.size
+        else { return }
+        lastLoggedLayoutSize = view.bounds.size
+        let elapsed = rotationStartedAt.map { Self.elapsedMilliseconds(since: $0) } ?? -1
+        let generation = rotationGeneration
+        let bounds = view.bounds.size
+        let tabBarFrame = tabBar.frame
+        Self.logger.info(
+            "Host rotation layout generation=\(generation) bounds=\(Self.describe(bounds), privacy: .public) target=\(Self.describe(target), privacy: .public) tabBar=\(Self.describe(tabBarFrame), privacy: .public) elapsedMs=\(elapsed)"
+        )
+    }
+
+    private func completeRotation(generation: Int, cancelled: Bool) {
+        let elapsed = rotationStartedAt.map { Self.elapsedMilliseconds(since: $0) } ?? -1
+        let bounds = view.bounds.size
+        Self.logger.info(
+            "Host rotation completed generation=\(generation) cancelled=\(cancelled) bounds=\(Self.describe(bounds), privacy: .public) elapsedMs=\(elapsed)"
+        )
+        guard generation == rotationGeneration else { return }
+        rotationState?.complete()
+        rotationStartedAt = nil
+        rotationTargetSize = nil
+        lastLoggedLayoutSize = nil
+    }
+
+    private nonisolated static func elapsedMilliseconds(
+        since start: ContinuousClock.Instant
+    ) -> Int {
+        let components = start.duration(to: .now).components
+        return Int(components.seconds) * 1000
+            + Int(components.attoseconds / 1_000_000_000_000_000)
+    }
+
+    private nonisolated static func describe(_ size: CGSize) -> String {
+        "\(Int(size.width))x\(Int(size.height))"
+    }
+
+    private nonisolated static func describe(_ rect: CGRect) -> String {
+        "x=\(Int(rect.minX)) y=\(Int(rect.minY)) w=\(Int(rect.width)) h=\(Int(rect.height))"
     }
 
     private func visibleTop(of root: UIView) -> CGFloat? {

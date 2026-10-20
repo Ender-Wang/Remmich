@@ -221,7 +221,14 @@ final class PhotosTimelineStore {
             return
         }
         guard visibleAnchor?.bucketID != anchor.bucketID else { return }
+        let previous = visibleAnchor
         visibleAnchor = anchor
+        let previousBucketID = previous?.bucketID.rawValue ?? "none"
+        let anchorAssetID = anchor.assetID.map { String($0.prefix(8)) } ?? "none"
+        let persistentBootstrap = retainsPersistentBootstrap
+        Self.logger.info(
+            "Timeline visible anchor changed from=\(previousBucketID, privacy: .public) to=\(anchor.bucketID.rawValue, privacy: .public) asset=\(anchorAssetID, privacy: .public) persistentBootstrap=\(persistentBootstrap)"
+        )
         applyMetadataWindow(centeredOn: anchor.bucketID)
         Task { [weak self] in
             guard let self else { return }

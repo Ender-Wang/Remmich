@@ -21,6 +21,7 @@ struct AppShellView: View {
 
     @State private var selection: NativeTabDestination = .photos
     @State private var tabSelectionState = NativeTabSelectionState()
+    @State private var timelineRotationState = TimelineRotationState()
     @State private var tabBarTop: CGFloat = 0
     @State private var compactPhotosTabs = false
     @State private var compactVideosTabs = false
@@ -46,6 +47,7 @@ struct AppShellView: View {
         NativeAppTabShell(
             selection: $selection,
             tabBarTop: $tabBarTop,
+            rotationState: timelineRotationState,
             compactOwner: compactTabOwner,
             isViewerPresented: viewerPresented,
             photosScrollRequest: photosScrollRequest,
@@ -72,6 +74,7 @@ struct AppShellView: View {
                         assetDetails: assetDetails,
                         navigationPath: $photosPath,
                         tabBarTop: $tabBarTop,
+                        rotationState: timelineRotationState,
                         scrollToLatestRequest: photosScrollRequest,
                         requestedLibraryRange: photosRangeRequest,
                         requestedLibraryRangeHandled: { photosRangeRequest = nil },
@@ -97,6 +100,7 @@ struct AppShellView: View {
                         assetDetails: assetDetails,
                         navigationPath: $videosPath,
                         tabBarTop: $tabBarTop,
+                        rotationState: timelineRotationState,
                         scrollToLatestRequest: videosScrollRequest,
                         requestedLibraryRange: videosRangeRequest,
                         requestedLibraryRangeHandled: { videosRangeRequest = nil },

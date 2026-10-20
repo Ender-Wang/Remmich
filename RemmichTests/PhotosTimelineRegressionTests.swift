@@ -75,6 +75,66 @@ struct PhotosTimelineRegressionTests {
         #expect(TimelineGridOrder.columnCount(availableWidth: 1180, minimumColumnWidth: 120, spacing: 24) == 8)
     }
 
+    @Test func deterministicTimelineLayoutDerivesExactRowsFromWidthAndAssetCount() {
+        let bucket = TimelineBucketID(rawValue: "2026-10-01")
+        let assets = (0 ..< 8).map { index in
+            Self.asset(
+                "asset-\(index)",
+                capturedAt: Self.date("2026-10-18T\(String(format: "%02d", 20 - index)):00:00Z")
+            )
+        }
+        let section = TimelineSection(
+            summary: .init(id: bucket, assetCount: assets.count),
+            assets: assets,
+            loadState: .loaded,
+            contentRevision: 1
+        )
+        let portraitKey = TimelineDeterministicLayout.Key(
+            width: 393,
+            minimumColumnWidth: 88,
+            spacing: 2,
+            sectionRevisions: ["2026-10-01:1"]
+        )
+        let portrait = TimelineDeterministicLayout.build(
+            sections: [section],
+            key: portraitKey
+        )
+
+        #expect(portrait.columns == 4)
+        #expect(portrait.rows.count == 3)
+        #expect(portrait.totalHeight == TimelineDeterministicLayout.headerHeight + portrait.itemSide * 2 + 2)
+        #expect(portrait.assetNearest(
+            verticalOffset: TimelineDeterministicLayout.headerHeight + portrait.itemSide * 1.5
+        ) != nil)
+
+        let landscape = TimelineDeterministicLayout.build(
+            sections: [section],
+            key: .init(
+                width: 844,
+                minimumColumnWidth: 88,
+                spacing: 2,
+                sectionRevisions: ["2026-10-01:1"]
+            )
+        )
+        #expect(landscape.columns == 9)
+        #expect(landscape.rows.count == 2)
+        #expect(landscape.totalHeight == TimelineDeterministicLayout.headerHeight + landscape.itemSide)
+    }
+
+    @Test func dayGroupingRemainsOrderedWithoutRepeatedArrayMutation() {
+        let newest = Self.asset("newest", capturedAt: Self.date("2026-10-18T12:00:00Z"))
+        let sameDay = Self.asset("same-day", capturedAt: Self.date("2026-10-18T11:00:00Z"))
+        let older = Self.asset("older", capturedAt: Self.date("2026-10-17T12:00:00Z"))
+        let section = TimelineSection(
+            summary: .init(id: .init(rawValue: "2026-10-01"), assetCount: 3),
+            assets: [newest, sameDay, older],
+            loadState: .loaded,
+            contentRevision: 1
+        )
+
+        #expect(section.dayGroups.map { $0.assets.map(\.id) } == [["newest", "same-day"], ["older"]])
+    }
+
     @Test func rangeCardsRestAboveTheMeasuredTabBar() {
         #expect(TimelineRangeGridLayout.bottomContentInset(
             frameBottom: 844,
