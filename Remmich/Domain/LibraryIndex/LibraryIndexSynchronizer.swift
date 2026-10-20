@@ -335,7 +335,12 @@ private extension LibraryIndexAssetRecord {
             dayKey: String(format: "%04d-%02d-%02d", year, month, day),
             weekKey: String(format: "%04d-W%02d", year, week),
             monthKey: String(format: "%04d-%02d", year, month),
-            yearKey: String(format: "%04d", year)
+            yearKey: String(format: "%04d", year),
+            localOffsetHours: asset.localOffsetHours,
+            stackID: asset.stack?.id,
+            stackAssetCount: asset.stack?.assetCount,
+            projectionType: asset.projectionType,
+            thumbhash: asset.thumbhash
         )
     }
 }

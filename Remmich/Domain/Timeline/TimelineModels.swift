@@ -1,21 +1,41 @@
 import Foundation
+import Synchronization
 
 nonisolated enum TimelineCaptureDateFormatting {
+    private struct FormatterKey: Hashable {
+        let dateStyle: DateFormatter.Style
+        let timeStyle: DateFormatter.Style
+        let localeIdentifier: String
+    }
+
+    private static let formatters = Mutex<[FormatterKey: DateFormatter]>([:])
+
     static func string(
         from date: Date,
         dateStyle: DateFormatter.Style,
         timeStyle: DateFormatter.Style,
         locale: Locale = .autoupdatingCurrent
     ) -> String {
-        let formatter = DateFormatter()
-        var calendar = Calendar.autoupdatingCurrent
-        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
-        formatter.calendar = calendar
-        formatter.locale = locale
-        formatter.timeZone = calendar.timeZone
-        formatter.dateStyle = dateStyle
-        formatter.timeStyle = timeStyle
-        return formatter.string(from: date)
+        let key = FormatterKey(
+            dateStyle: dateStyle,
+            timeStyle: timeStyle,
+            localeIdentifier: locale.identifier
+        )
+        return formatters.withLock { formatters in
+            if let formatter = formatters[key] {
+                return formatter.string(from: date)
+            }
+            let formatter = DateFormatter()
+            var calendar = Calendar.autoupdatingCurrent
+            calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+            formatter.calendar = calendar
+            formatter.locale = locale
+            formatter.timeZone = calendar.timeZone
+            formatter.dateStyle = dateStyle
+            formatter.timeStyle = timeStyle
+            formatters[key] = formatter
+            return formatter.string(from: date)
+        }
     }
 }
 
@@ -136,18 +156,19 @@ nonisolated struct TimelineCaptureDay: Hashable, Identifiable, Sendable {
     let year: Int
     let month: Int
     let day: Int
+    let id: String
 
     init(capturedAt: Date) {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
         let components = calendar.dateComponents([.year, .month, .day], from: capturedAt)
-        year = components.year ?? 1
-        month = components.month ?? 1
-        day = components.day ?? 1
-    }
-
-    var id: String {
-        String(format: "%04d-%02d-%02d", year, month, day)
+        let year = components.year ?? 1
+        let month = components.month ?? 1
+        let day = components.day ?? 1
+        self.year = year
+        self.month = month
+        self.day = day
+        id = "\(Self.padded(year, width: 4))-\(Self.padded(month, width: 2))-\(Self.padded(day, width: 2))"
     }
 
     var displayDate: Date? {
@@ -159,6 +180,12 @@ nonisolated struct TimelineCaptureDay: Hashable, Identifiable, Sendable {
             month: month,
             day: day
         ))
+    }
+
+    private static func padded(_ value: Int, width: Int) -> String {
+        let text = String(value)
+        guard text.count < width else { return text }
+        return String(repeating: "0", count: width - text.count) + text
     }
 }
 
@@ -283,13 +310,24 @@ nonisolated struct TimelineSection: Identifiable, Sendable {
 
     var dayGroups: [TimelineDayGroup] {
         var groups: [TimelineDayGroup] = []
+        groups.reserveCapacity(min(assets.count, 31))
+        var currentDay: TimelineCaptureDay?
+        var currentAssets: [TimelineAssetSummary] = []
+
         for asset in assets {
             let day = TimelineCaptureDay(capturedAt: asset.capturedAt)
-            if groups.last?.id == day {
-                groups[groups.count - 1].assets.append(asset)
-            } else {
-                groups.append(.init(id: day, assets: [asset]))
+            if currentDay == day {
+                currentAssets.append(asset)
+                continue
             }
+            if let currentDay {
+                groups.append(.init(id: currentDay, assets: currentAssets))
+            }
+            currentDay = day
+            currentAssets = [asset]
+        }
+        if let currentDay {
+            groups.append(.init(id: currentDay, assets: currentAssets))
         }
         return groups
     }

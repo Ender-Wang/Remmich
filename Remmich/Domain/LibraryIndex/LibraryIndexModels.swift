@@ -34,6 +34,81 @@ nonisolated struct LibraryIndexAssetRecord: Codable, Hashable, Identifiable, Sen
     let weekKey: String
     let monthKey: String
     let yearKey: String
+
+    let localOffsetHours: Double
+    let stackID: String?
+    let stackAssetCount: Int?
+    let projectionType: String?
+    let thumbhash: String?
+
+    init(
+        id: String,
+        ownerID: String,
+        kind: LibraryIndexAssetKind,
+        livePhotoVideoID: String?,
+        capturedAt: Date,
+        uploadedAt: Date,
+        updatedAt: Date,
+        checksum: String?,
+        width: Int?,
+        height: Int?,
+        aspectRatio: Double,
+        durationMilliseconds: Int?,
+        isFavorite: Bool,
+        visibility: String,
+        isTrashed: Bool,
+        isOffline: Bool,
+        bucketKey: String,
+        dayKey: String,
+        weekKey: String,
+        monthKey: String,
+        yearKey: String,
+        localOffsetHours: Double = 0,
+        stackID: String? = nil,
+        stackAssetCount: Int? = nil,
+        projectionType: String? = nil,
+        thumbhash: String? = nil
+    ) {
+        self.id = id
+        self.ownerID = ownerID
+        self.kind = kind
+        self.livePhotoVideoID = livePhotoVideoID
+        self.capturedAt = capturedAt
+        self.uploadedAt = uploadedAt
+        self.updatedAt = updatedAt
+        self.checksum = checksum
+        self.width = width
+        self.height = height
+        self.aspectRatio = aspectRatio
+        self.durationMilliseconds = durationMilliseconds
+        self.isFavorite = isFavorite
+        self.visibility = visibility
+        self.isTrashed = isTrashed
+        self.isOffline = isOffline
+        self.bucketKey = bucketKey
+        self.dayKey = dayKey
+        self.weekKey = weekKey
+        self.monthKey = monthKey
+        self.yearKey = yearKey
+        self.localOffsetHours = localOffsetHours
+        self.stackID = stackID
+        self.stackAssetCount = stackAssetCount
+        self.projectionType = projectionType
+        self.thumbhash = thumbhash
+    }
+}
+
+nonisolated struct TimelineBootstrapSnapshot: Sendable {
+    let generation: Int64
+    let summaries: [TimelineBucketSummary]
+    let assetsByBucket: [TimelineBucketID: [TimelineAssetSummary]]
+    let groupedCatalogs: TimelineGroupedCatalogCache
+    let isComplete: Bool
+}
+
+nonisolated struct LibraryTimelineBootstrap: Sendable {
+    let photos: TimelineBootstrapSnapshot
+    let videos: TimelineBootstrapSnapshot
 }
 
 nonisolated struct LibraryIndexGroupRecord: Codable, Hashable, Identifiable, Sendable {

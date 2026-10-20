@@ -56,6 +56,8 @@ final class LibraryIndexController {
     private(set) var thumbnailWarmingStartedAt: Date?
     private(set) var thumbnailWarmingCompletedElapsed: TimeInterval?
     private(set) var thumbnailWarmingLastUpdatedAt: Date?
+    @ObservationIgnored
+    var acceptedBootstrapDidChange: ((LibraryTimelineBootstrap) -> Void)?
 
     private let store: SQLiteLibraryIndexStore
     private let synchronizer: LibraryIndexSynchronizer
@@ -70,6 +72,7 @@ final class LibraryIndexController {
     private var runID: UInt64 = 0
     private var warmingRunID: UInt64 = 0
     private var lastWarmingLoggedMilestone = -1
+    private var lastPublishedBootstrapGeneration: Int64?
 
     init(
         source: any TimelineReading,
@@ -140,6 +143,62 @@ final class LibraryIndexController {
             / Double(thumbnailWarmingProcessedCount)
     }
 
+    func bootstrap(session: AccountSession) async -> LibraryTimelineBootstrap? {
+        let nextScope = MediaAccountScope(session: session)
+        let bootstrapStartedAt = ContinuousClock.now
+        Self.logger.info("Library bootstrap started")
+        do {
+            try await store.prepare(scope: nextScope)
+            Self.logger.info(
+                "Library bootstrap store prepared elapsedMs=\(Self.elapsedMilliseconds(since: bootstrapStartedAt))"
+            )
+            guard let snapshot = try await store.snapshot(scope: nextScope) else {
+                Self.logger.info("Library bootstrap unavailable reason=no-accepted-generation")
+                return nil
+            }
+            let snapshotLoadedAt = ContinuousClock.now
+            Self.logger.info(
+                "Library bootstrap snapshot loaded generation=\(snapshot.generation) assets=\(snapshot.assets.count) derivatives=\(snapshot.derivatives.count) elapsedMs=\(Self.elapsedMilliseconds(since: bootstrapStartedAt))"
+            )
+            scope = nextScope
+            indexedAssetCount = snapshot.syncState.indexedAssetCount
+            indexedPhotoCount = snapshot.assets.count { $0.kind == .image }
+            indexedVideoCount = snapshot.assets.count { $0.kind == .video }
+            expectedAssetCount = snapshot.syncState.expectedAssetCount ?? snapshot.assets.count
+            status = snapshot.syncState.isPaused ? .paused : .upToDate
+            async let thumbnailsTask = thumbnailCache.availableThumbnails(
+                from: snapshot,
+                scope: nextScope
+            )
+            async let bootstrapTask = Task.detached(priority: .userInitiated) {
+                LibraryTimelineBootstrapBuilder.build(from: snapshot)
+            }.value
+            let (thumbnails, bootstrap) = await (thumbnailsTask, bootstrapTask)
+            Self.logger.info(
+                "Library bootstrap derivatives and projection ready thumbnails=\(thumbnails.count) stageMs=\(Self.elapsedMilliseconds(since: snapshotLoadedAt)) totalMs=\(Self.elapsedMilliseconds(since: bootstrapStartedAt))"
+            )
+            media?.registerWarmedThumbnails(thumbnails)
+            lastPublishedBootstrapGeneration = snapshot.generation
+            Self.logger.info(
+                "Library bootstrap loaded generation=\(snapshot.generation) assets=\(snapshot.assets.count) thumbnails=\(thumbnails.count) complete=\(bootstrap.photos.isComplete) elapsedMs=\(Self.elapsedMilliseconds(since: bootstrapStartedAt))"
+            )
+            return bootstrap
+        } catch {
+            Self.logger.error(
+                "Library bootstrap failed error=\(Self.message(for: error), privacy: .public)"
+            )
+            return nil
+        }
+    }
+
+    private nonisolated static func elapsedMilliseconds(
+        since start: ContinuousClock.Instant
+    ) -> Int {
+        let components = start.duration(to: .now).components
+        return Int(components.seconds) * 1000
+            + Int(components.attoseconds / 1_000_000_000_000_000)
+    }
+
     func start(session: AccountSession, endpoint: URL) {
         let nextScope = MediaAccountScope(session: session)
         suspend()
@@ -147,6 +206,7 @@ final class LibraryIndexController {
         accessToken = session.accessToken
         if scope != nextScope {
             scope = nextScope
+            lastPublishedBootstrapGeneration = nil
             indexedAssetCount = 0
             indexedPhotoCount = 0
             indexedVideoCount = 0
@@ -319,6 +379,7 @@ final class LibraryIndexController {
         thumbnailWarmingCompletedElapsed = nil
         thumbnailWarmingLastUpdatedAt = nil
         thumbnailWarmingStatus = thumbnailWarmingEnabled ? .waiting : .off
+        lastPublishedBootstrapGeneration = nil
     }
 
     private func run(fullReconciliation: Bool) {
@@ -373,13 +434,18 @@ final class LibraryIndexController {
                 storageReport = try await store.storageReport(scope: scope)
                 storedAccounts = try await store.storedAccounts()
                 try? await thumbnailCache.reconcile(scope: scope)
-                if let snapshot = try? await store.snapshot(scope: scope),
-                   let progress = try? await thumbnailCache.cachedProgress(
-                       assets: snapshot.assets,
-                       scope: scope
-                   )
-                {
-                    applyThumbnailWarmingProgress(progress)
+                if let snapshot = try? await store.snapshot(scope: scope) {
+                    if let progress = try? await thumbnailCache.cachedProgress(
+                        assets: snapshot.assets,
+                        scope: scope
+                    ) {
+                        applyThumbnailWarmingProgress(progress)
+                    }
+                    await publishAcceptedBootstrapIfNeeded(
+                        snapshot,
+                        scope: scope,
+                        runID: currentRunID
+                    )
                 }
                 if let thumbnails = try? await thumbnailCache.availableThumbnails(scope: scope) {
                     media?.registerWarmedThumbnails(thumbnails)
@@ -414,6 +480,31 @@ final class LibraryIndexController {
                 task = nil
             }
         }
+    }
+
+    private func publishAcceptedBootstrapIfNeeded(
+        _ snapshot: LibraryIndexSnapshot,
+        scope expectedScope: MediaAccountScope,
+        runID expectedRunID: UInt64
+    ) async {
+        guard snapshot.generation != lastPublishedBootstrapGeneration,
+              acceptedBootstrapDidChange != nil
+        else { return }
+
+        let bootstrap = await Task.detached(priority: .userInitiated) {
+            LibraryTimelineBootstrapBuilder.build(from: snapshot)
+        }.value
+        guard expectedRunID == runID,
+              scope == expectedScope,
+              !Task.isCancelled,
+              snapshot.generation != lastPublishedBootstrapGeneration
+        else { return }
+
+        lastPublishedBootstrapGeneration = snapshot.generation
+        acceptedBootstrapDidChange?(bootstrap)
+        Self.logger.info(
+            "Accepted library bootstrap republished generation=\(snapshot.generation) photos=\(bootstrap.photos.assetsByBucket.values.reduce(0) { $0 + $1.count }) videos=\(bootstrap.videos.assetsByBucket.values.reduce(0) { $0 + $1.count })"
+        )
     }
 
     private func warmThumbnails(manual: Bool = false, rebuild: Bool = false) {

@@ -257,18 +257,41 @@ actor LibraryThumbnailCache {
 
     func availableThumbnails(scope: MediaAccountScope) async throws -> [AvailableThumbnail] {
         guard let snapshot = try await store.snapshot(scope: scope) else { return [] }
-        return snapshot.derivatives.compactMap { record in
-            guard record.derivative == .thumbnail else { return nil }
-            let fileURL = rootURL
-                .appending(path: scope.cacheNamespace, directoryHint: .isDirectory)
-                .appending(path: record.relativeFileKey)
-            guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
+        return availableThumbnails(from: snapshot, scope: scope)
+    }
+
+    func availableThumbnails(
+        from snapshot: LibraryIndexSnapshot,
+        scope: MediaAccountScope
+    ) -> [AvailableThumbnail] {
+        let startedAt = ContinuousClock.now
+        let thumbnailDirectory = rootURL
+            .appending(path: scope.cacheNamespace, directoryHint: .isDirectory)
+            .appending(path: MediaDerivative.thumbnail.rawValue, directoryHint: .isDirectory)
+        let availableFilenames = Set(
+            (try? FileManager.default.contentsOfDirectory(
+                at: thumbnailDirectory,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            ))?.map(\.lastPathComponent) ?? []
+        )
+        let thumbnails: [AvailableThumbnail] = snapshot.derivatives.compactMap { record in
+            guard record.derivative == .thumbnail, record.isVerified else { return nil }
+            let filename = URL(filePath: record.relativeFileKey).lastPathComponent
+            guard availableFilenames.contains(filename) else { return nil }
             return .init(
                 assetID: record.assetID,
                 sourceRevision: record.sourceRevision,
-                fileURL: fileURL
+                fileURL: thumbnailDirectory.appending(path: filename)
             )
         }
+        let components = startedAt.duration(to: .now).components
+        let elapsedMilliseconds = Int(components.seconds) * 1000
+            + Int(components.attoseconds / 1_000_000_000_000_000)
+        Self.logger.info(
+            "Available thumbnail manifest scanned records=\(snapshot.derivatives.count) files=\(availableFilenames.count) available=\(thumbnails.count) elapsedMs=\(elapsedMilliseconds)"
+        )
+        return thumbnails
     }
 
     private func promoteRebuiltThumbnails(

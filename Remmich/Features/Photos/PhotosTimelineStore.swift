@@ -56,6 +56,7 @@ final class PhotosTimelineStore {
     private var initialTask: Task<Void, Never>?
     private var refreshTask: Task<Void, Never>?
     private var memoryTask: Task<Void, Never>?
+    private var retainsPersistentBootstrap = false
 
     init(
         reader: any TimelineReading,
@@ -65,6 +66,68 @@ final class PhotosTimelineStore {
         self.reader = reader
         self.query = query
         self.now = now
+    }
+
+    func bootstrap(_ snapshot: TimelineBootstrapSnapshot) {
+        let previousVisibleAnchor = visibleAnchor
+        generation &+= 1
+        cancelInFlightWork()
+        publicationRevision &+= 1
+        let revision = publicationRevision
+        bucketSummaries = snapshot.summaries
+        rawAssetsByID = snapshot.assetsByBucket
+        sectionsByID = Dictionary(uniqueKeysWithValues: snapshot.summaries.map { summary in
+            let assets = snapshot.assetsByBucket[summary.id, default: []]
+            return (
+                summary.id,
+                TimelineSection(
+                    summary: summary,
+                    assets: assets,
+                    loadState: .loaded,
+                    contentRevision: revision
+                )
+            )
+        })
+        groupedCatalogs = snapshot.groupedCatalogs
+        retainsPersistentBootstrap = true
+        loadState = snapshot.summaries.isEmpty ? .empty : .loaded
+        refreshState = .idle
+        visibleAnchor = Self.resolveVisibleAnchor(
+            previousVisibleAnchor,
+            in: snapshot
+        )
+        rebuildResidencyCatalog()
+        Self.logger.info(
+            "Local timeline bootstrap published generation=\(snapshot.generation) buckets=\(snapshot.summaries.count) assets=\(snapshot.assetsByBucket.values.reduce(0) { $0 + $1.count }) complete=\(snapshot.isComplete)"
+        )
+    }
+
+    private static func resolveVisibleAnchor(
+        _ previousAnchor: TimelineVisibleAnchor?,
+        in snapshot: TimelineBootstrapSnapshot
+    ) -> TimelineVisibleAnchor? {
+        if let previousAnchor,
+           let assetID = previousAnchor.assetID,
+           let bucketID = snapshot.assetsByBucket.first(where: { _, assets in
+               assets.contains { $0.id == assetID }
+           })?.key
+        {
+            return TimelineVisibleAnchor(bucketID: bucketID, assetID: assetID)
+        }
+        if let previousAnchor,
+           snapshot.summaries.contains(where: { $0.id == previousAnchor.bucketID })
+        {
+            return TimelineVisibleAnchor(
+                bucketID: previousAnchor.bucketID,
+                assetID: snapshot.assetsByBucket[previousAnchor.bucketID]?.first?.id
+            )
+        }
+        return snapshot.summaries.first.map { summary in
+            TimelineVisibleAnchor(
+                bucketID: summary.id,
+                assetID: snapshot.assetsByBucket[summary.id]?.first?.id
+            )
+        }
     }
 
     func load() async {
@@ -204,6 +267,16 @@ final class PhotosTimelineStore {
     }
 
     func prepareJump(to bucketID: TimelineBucketID) async -> Bool {
+        if sectionsByID[bucketID] == nil,
+           let summary = bucketSummaries.first(where: { $0.id == bucketID })
+        {
+            sectionsByID[bucketID] = TimelineSection(
+                summary: summary,
+                assets: [],
+                loadState: .unloaded,
+                contentRevision: publicationRevision
+            )
+        }
         guard sectionsByID[bucketID] != nil else { return false }
         jumpTarget = bucketID
         await loadBucket(bucketID)
@@ -371,6 +444,11 @@ final class PhotosTimelineStore {
             Task { [weak self] in await self?.load() }
             return
         }
+        if retainsPersistentBootstrap {
+            Task { [weak self] in await self?.refresh() }
+            startMemoryLoad(generation: generation)
+            return
+        }
         let retryIDs = recoveryBucketIDs()
         Task { [weak self] in
             guard let self else { return }
@@ -430,6 +508,7 @@ final class PhotosTimelineStore {
         residencyAssetsByID = [:]
         residencyPages = []
         residencyPageIndexByAssetID = [:]
+        retainsPersistentBootstrap = false
     }
 
     private var isTerminalInitialFailure: Bool {
@@ -659,7 +738,7 @@ final class PhotosTimelineStore {
     }
 
     private func applyMetadataWindow(centeredOn bucketID: TimelineBucketID) {
-        guard let center = bucketSummaries.firstIndex(where: { $0.id == bucketID }) else { return }
+        guard !retainsPersistentBootstrap, let center = bucketSummaries.firstIndex(where: { $0.id == bucketID }) else { return }
         let count = min(Self.metadataWindowSize, bucketSummaries.count)
         var lower = max(0, center - count / 2)
         var upper = min(bucketSummaries.count, lower + count)

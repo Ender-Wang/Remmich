@@ -105,6 +105,14 @@ final class AppSessionController {
         self.ssidProvider = ssidProvider
         self.networkMonitoringEnabled = networkMonitoringEnabled
         self.pathChangeDebounce = pathChangeDebounce
+        libraryIndex.acceptedBootstrapDidChange = { [weak self] bootstrap in
+            guard let self else { return }
+            photos.bootstrap(bootstrap.photos)
+            videos.bootstrap(bootstrap.videos)
+            let isReachable = routeStatus == .connected
+            photos.routeDidChange(isReachable: isReachable)
+            videos.routeDidChange(isReachable: isReachable)
+        }
     }
 
     func start() async {
@@ -135,6 +143,7 @@ final class AppSessionController {
             defer { isRestoringSession = false }
             media.configure(session: session, activeEndpoint: nil)
             await timeline.configure(session: session, activeEndpoint: nil)
+            await bootstrapLocalLibrary(session: session)
             state = .signedIn(session)
             await reevaluateRoute(trigger: .startup)
         } catch SessionStoreError.corruptPayload {
@@ -178,7 +187,12 @@ final class AppSessionController {
             activeRoute = .init(kind: .direct, endpoint: session.apiURL)
             routeStatus = .connected
             media.configure(session: session, activeEndpoint: session.apiURL)
-            if await timeline.configure(session: session, activeEndpoint: session.apiURL) {
+            let routeChanged = await timeline.configure(
+                session: session,
+                activeEndpoint: session.apiURL
+            )
+            await bootstrapLocalLibrary(session: session)
+            if routeChanged {
                 photos.routeDidChange(isReachable: true)
                 videos.routeDidChange(isReachable: true)
             }
@@ -545,6 +559,14 @@ final class AppSessionController {
     private func startLibraryIndexing(session: AccountSession) {
         guard !ProcessInfo.processInfo.arguments.contains("-ui-testing-signed-in") else { return }
         libraryIndex.start(session: session, endpoint: activeRoute?.endpoint ?? session.apiURL)
+    }
+
+    private func bootstrapLocalLibrary(session: AccountSession) async {
+        guard !ProcessInfo.processInfo.arguments.contains("-ui-testing-signed-in"),
+              let bootstrap = await libraryIndex.bootstrap(session: session)
+        else { return }
+        photos.bootstrap(bootstrap.photos)
+        videos.bootstrap(bootstrap.videos)
     }
 
     private static func message(for error: Error) -> String {

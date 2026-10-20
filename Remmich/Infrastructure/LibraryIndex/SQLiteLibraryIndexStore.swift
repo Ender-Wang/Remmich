@@ -2,7 +2,7 @@ import Foundation
 import SQLite3
 
 actor SQLiteLibraryIndexStore: LibraryIndexStoring {
-    static let currentSchemaVersion = 1
+    static let currentSchemaVersion = 2
 
     private let databaseURL: URL
     private var connection: SQLiteConnection?
@@ -63,12 +63,14 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
                         captured_at, uploaded_at, updated_at, checksum, width, height,
                         aspect_ratio, duration_ms, is_favorite, visibility, is_trashed,
                         is_offline, bucket_key, day_key, week_key, month_key, year_key,
+                        local_offset_hours, stack_id, stack_asset_count, projection_type, thumbhash,
                         generation, tombstone
                     )
                     SELECT scope, asset_id, owner_id, kind, live_photo_video_id,
                            captured_at, uploaded_at, updated_at, checksum, width, height,
                            aspect_ratio, duration_ms, is_favorite, visibility, is_trashed,
                            is_offline, bucket_key, day_key, week_key, month_key, year_key,
+                           local_offset_hours, stack_id, stack_asset_count, projection_type, thumbhash,
                            ?, tombstone
                     FROM assets WHERE scope = ? AND generation = ?
                     """,
@@ -110,8 +112,9 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
                         captured_at, uploaded_at, updated_at, checksum, width, height,
                         aspect_ratio, duration_ms, is_favorite, visibility, is_trashed,
                         is_offline, bucket_key, day_key, week_key, month_key, year_key,
+                        local_offset_hours, stack_id, stack_asset_count, projection_type, thumbhash,
                         generation, tombstone
-                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
                     ON CONFLICT(scope, generation, asset_id) DO UPDATE SET
                         owner_id = excluded.owner_id,
                         kind = excluded.kind,
@@ -133,6 +136,11 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
                         week_key = excluded.week_key,
                         month_key = excluded.month_key,
                         year_key = excluded.year_key,
+                        local_offset_hours = excluded.local_offset_hours,
+                        stack_id = excluded.stack_id,
+                        stack_asset_count = excluded.stack_asset_count,
+                        projection_type = excluded.projection_type,
+                        thumbhash = excluded.thumbhash,
                         tombstone = 0
                     """,
                     [
@@ -144,6 +152,9 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
                         .bool(asset.isFavorite), .text(asset.visibility), .bool(asset.isTrashed),
                         .bool(asset.isOffline), .text(asset.bucketKey), .text(asset.dayKey),
                         .text(asset.weekKey), .text(asset.monthKey), .text(asset.yearKey),
+                        .double(asset.localOffsetHours), .optionalText(asset.stackID),
+                        .optionalInt(asset.stackAssetCount), .optionalText(asset.projectionType),
+                        .optionalText(asset.thumbhash),
                         .int64(generation),
                     ]
                 )
@@ -555,108 +566,122 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
     }
 
     private func migrate(_ database: SQLiteConnection) throws {
-        let version = try Int(database.scalarInt64("PRAGMA user_version") ?? 0)
+        var version = try Int(database.scalarInt64("PRAGMA user_version") ?? 0)
         guard version <= Self.currentSchemaVersion else {
             throw LibraryIndexStoreError.unsupportedSchema(version)
         }
-        guard version < 1 else { return }
-        try database.transaction {
-            try database.execute("""
-            CREATE TABLE IF NOT EXISTS scopes(
-                scope TEXT PRIMARY KEY,
-                server_identity TEXT NOT NULL,
-                user_id TEXT NOT NULL,
-                created_at REAL NOT NULL
-            )
-            """)
-            try database.execute("""
-            CREATE TABLE IF NOT EXISTS generations(
-                scope TEXT NOT NULL,
-                generation INTEGER NOT NULL,
-                state TEXT NOT NULL,
-                started_at REAL NOT NULL,
-                completed_at REAL,
-                PRIMARY KEY(scope, generation)
-            )
-            """)
-            try database.execute("""
-            CREATE TABLE IF NOT EXISTS assets(
-                scope TEXT NOT NULL,
-                asset_id TEXT NOT NULL,
-                owner_id TEXT NOT NULL,
-                kind TEXT NOT NULL,
-                live_photo_video_id TEXT,
-                captured_at REAL NOT NULL,
-                uploaded_at REAL NOT NULL,
-                updated_at REAL NOT NULL,
-                checksum TEXT,
-                width INTEGER,
-                height INTEGER,
-                aspect_ratio REAL NOT NULL,
-                duration_ms INTEGER,
-                is_favorite INTEGER NOT NULL,
-                visibility TEXT NOT NULL,
-                is_trashed INTEGER NOT NULL,
-                is_offline INTEGER NOT NULL,
-                bucket_key TEXT NOT NULL,
-                day_key TEXT NOT NULL,
-                week_key TEXT NOT NULL,
-                month_key TEXT NOT NULL,
-                year_key TEXT NOT NULL,
-                generation INTEGER NOT NULL,
-                tombstone INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY(scope, generation, asset_id)
-            )
-            """)
-            try database.execute("CREATE INDEX IF NOT EXISTS assets_scope_day ON assets(scope, day_key, captured_at)")
-            try database.execute("CREATE INDEX IF NOT EXISTS assets_scope_week ON assets(scope, week_key, captured_at)")
-            try database.execute("CREATE INDEX IF NOT EXISTS assets_scope_month ON assets(scope, month_key, captured_at)")
-            try database.execute("CREATE INDEX IF NOT EXISTS assets_scope_updated ON assets(scope, updated_at, asset_id)")
-            try database.execute("""
-            CREATE TABLE IF NOT EXISTS grouped_catalogs(
-                scope TEXT NOT NULL,
-                generation INTEGER NOT NULL,
-                media_scope TEXT NOT NULL,
-                level TEXT NOT NULL,
-                group_key TEXT NOT NULL,
-                interval_start REAL NOT NULL,
-                interval_end REAL NOT NULL,
-                asset_count INTEGER NOT NULL,
-                owning_buckets TEXT NOT NULL,
-                cover_asset_ids TEXT NOT NULL,
-                mosaic_seed TEXT NOT NULL,
-                PRIMARY KEY(scope, generation, media_scope, level, group_key)
-            )
-            """)
-            try database.execute("""
-            CREATE TABLE IF NOT EXISTS sync_state(
-                scope TEXT PRIMARY KEY,
-                accepted_generation INTEGER,
-                last_watermark REAL,
-                historical_cursor TEXT,
-                is_paused INTEGER NOT NULL DEFAULT 0,
-                expected_asset_count INTEGER,
-                last_error TEXT
-            )
-            """)
-            try database.execute("""
-            CREATE TABLE IF NOT EXISTS derivatives(
-                scope TEXT NOT NULL,
-                asset_id TEXT NOT NULL,
-                derivative TEXT NOT NULL,
-                pixel_width INTEGER NOT NULL DEFAULT 0,
-                pixel_height INTEGER NOT NULL DEFAULT 0,
-                source_revision TEXT NOT NULL,
-                relative_file_key TEXT NOT NULL,
-                byte_count INTEGER NOT NULL,
-                digest TEXT NOT NULL,
-                is_verified INTEGER NOT NULL,
-                last_accessed_at REAL NOT NULL,
-                completed_at REAL NOT NULL,
-                PRIMARY KEY(scope, asset_id, derivative, pixel_width, pixel_height)
-            )
-            """)
-            try database.execute("PRAGMA user_version = 1")
+        if version < 1 {
+            try database.transaction {
+                try database.execute("""
+                CREATE TABLE IF NOT EXISTS scopes(
+                    scope TEXT PRIMARY KEY,
+                    server_identity TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    created_at REAL NOT NULL
+                )
+                """)
+                try database.execute("""
+                CREATE TABLE IF NOT EXISTS generations(
+                    scope TEXT NOT NULL,
+                    generation INTEGER NOT NULL,
+                    state TEXT NOT NULL,
+                    started_at REAL NOT NULL,
+                    completed_at REAL,
+                    PRIMARY KEY(scope, generation)
+                )
+                """)
+                try database.execute("""
+                CREATE TABLE IF NOT EXISTS assets(
+                    scope TEXT NOT NULL,
+                    asset_id TEXT NOT NULL,
+                    owner_id TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    live_photo_video_id TEXT,
+                    captured_at REAL NOT NULL,
+                    uploaded_at REAL NOT NULL,
+                    updated_at REAL NOT NULL,
+                    checksum TEXT,
+                    width INTEGER,
+                    height INTEGER,
+                    aspect_ratio REAL NOT NULL,
+                    duration_ms INTEGER,
+                    is_favorite INTEGER NOT NULL,
+                    visibility TEXT NOT NULL,
+                    is_trashed INTEGER NOT NULL,
+                    is_offline INTEGER NOT NULL,
+                    bucket_key TEXT NOT NULL,
+                    day_key TEXT NOT NULL,
+                    week_key TEXT NOT NULL,
+                    month_key TEXT NOT NULL,
+                    year_key TEXT NOT NULL,
+                    generation INTEGER NOT NULL,
+                    tombstone INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY(scope, generation, asset_id)
+                )
+                """)
+                try database.execute("CREATE INDEX IF NOT EXISTS assets_scope_day ON assets(scope, day_key, captured_at)")
+                try database.execute("CREATE INDEX IF NOT EXISTS assets_scope_week ON assets(scope, week_key, captured_at)")
+                try database.execute("CREATE INDEX IF NOT EXISTS assets_scope_month ON assets(scope, month_key, captured_at)")
+                try database.execute("CREATE INDEX IF NOT EXISTS assets_scope_updated ON assets(scope, updated_at, asset_id)")
+                try database.execute("""
+                CREATE TABLE IF NOT EXISTS grouped_catalogs(
+                    scope TEXT NOT NULL,
+                    generation INTEGER NOT NULL,
+                    media_scope TEXT NOT NULL,
+                    level TEXT NOT NULL,
+                    group_key TEXT NOT NULL,
+                    interval_start REAL NOT NULL,
+                    interval_end REAL NOT NULL,
+                    asset_count INTEGER NOT NULL,
+                    owning_buckets TEXT NOT NULL,
+                    cover_asset_ids TEXT NOT NULL,
+                    mosaic_seed TEXT NOT NULL,
+                    PRIMARY KEY(scope, generation, media_scope, level, group_key)
+                )
+                """)
+                try database.execute("""
+                CREATE TABLE IF NOT EXISTS sync_state(
+                    scope TEXT PRIMARY KEY,
+                    accepted_generation INTEGER,
+                    last_watermark REAL,
+                    historical_cursor TEXT,
+                    is_paused INTEGER NOT NULL DEFAULT 0,
+                    expected_asset_count INTEGER,
+                    last_error TEXT
+                )
+                """)
+                try database.execute("""
+                CREATE TABLE IF NOT EXISTS derivatives(
+                    scope TEXT NOT NULL,
+                    asset_id TEXT NOT NULL,
+                    derivative TEXT NOT NULL,
+                    pixel_width INTEGER NOT NULL DEFAULT 0,
+                    pixel_height INTEGER NOT NULL DEFAULT 0,
+                    source_revision TEXT NOT NULL,
+                    relative_file_key TEXT NOT NULL,
+                    byte_count INTEGER NOT NULL,
+                    digest TEXT NOT NULL,
+                    is_verified INTEGER NOT NULL,
+                    last_accessed_at REAL NOT NULL,
+                    completed_at REAL NOT NULL,
+                    PRIMARY KEY(scope, asset_id, derivative, pixel_width, pixel_height)
+                )
+                """)
+                try database.execute("PRAGMA user_version = 1")
+            }
+            version = 1
+        }
+        if version < 2 {
+            try database.transaction {
+                try database.execute(
+                    "ALTER TABLE assets ADD COLUMN local_offset_hours REAL NOT NULL DEFAULT 0"
+                )
+                try database.execute("ALTER TABLE assets ADD COLUMN stack_id TEXT")
+                try database.execute("ALTER TABLE assets ADD COLUMN stack_asset_count INTEGER")
+                try database.execute("ALTER TABLE assets ADD COLUMN projection_type TEXT")
+                try database.execute("ALTER TABLE assets ADD COLUMN thumbhash TEXT")
+                try database.execute("PRAGMA user_version = 2")
+            }
         }
     }
 
@@ -701,7 +726,8 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
             SELECT asset_id, owner_id, kind, live_photo_video_id, captured_at,
                    uploaded_at, updated_at, checksum, width, height, aspect_ratio,
                    duration_ms, is_favorite, visibility, is_trashed, is_offline,
-                   bucket_key, day_key, week_key, month_key, year_key
+                   bucket_key, day_key, week_key, month_key, year_key,
+                   local_offset_hours, stack_id, stack_asset_count, projection_type, thumbhash
             FROM assets
             WHERE scope = ? AND generation = ? AND tombstone = 0
             ORDER BY captured_at ASC, asset_id ASC
@@ -717,7 +743,10 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
                 durationMilliseconds: row.optionalInt(11), isFavorite: row.bool(12),
                 visibility: row.text(13), isTrashed: row.bool(14), isOffline: row.bool(15),
                 bucketKey: row.text(16), dayKey: row.text(17), weekKey: row.text(18),
-                monthKey: row.text(19), yearKey: row.text(20)
+                monthKey: row.text(19), yearKey: row.text(20),
+                localOffsetHours: row.double(21), stackID: row.optionalText(22),
+                stackAssetCount: row.optionalInt(23), projectionType: row.optionalText(24),
+                thumbhash: row.optionalText(25)
             )
         }
     }
