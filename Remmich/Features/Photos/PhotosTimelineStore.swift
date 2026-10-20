@@ -13,6 +13,15 @@ nonisolated struct PhotosLibraryRangeBrowseOwner: Equatable, Sendable {
     let scope: Scope
 }
 
+nonisolated enum PersistentTimelineRefreshPolicy: Equatable, Sendable {
+    /// Refresh the bootstrapped catalog directly through the timeline reader.
+    case reader
+
+    /// Keep rendering the accepted local catalog until its background synchronizer publishes
+    /// a newer accepted generation. Independent remote content, such as memories, still refreshes.
+    case acceptedIndexPublication
+}
+
 @MainActor
 @Observable
 final class PhotosTimelineStore {
@@ -41,6 +50,7 @@ final class PhotosTimelineStore {
     }
 
     private let reader: any TimelineReading
+    private let persistentRefreshPolicy: PersistentTimelineRefreshPolicy
     private let now: () -> Date
     private var query: TimelineQuery
     private var generation: UInt64 = 0
@@ -60,10 +70,12 @@ final class PhotosTimelineStore {
 
     init(
         reader: any TimelineReading,
+        persistentRefreshPolicy: PersistentTimelineRefreshPolicy = .reader,
         query: TimelineQuery = .init(),
         now: @escaping () -> Date = { .now }
     ) {
         self.reader = reader
+        self.persistentRefreshPolicy = persistentRefreshPolicy
         self.query = query
         self.now = now
     }
@@ -445,15 +457,21 @@ final class PhotosTimelineStore {
         generation &+= 1
         cancelInFlightWork()
         guard isReachable else { return }
+        if retainsPersistentBootstrap {
+            if persistentRefreshPolicy == .reader {
+                Task { [weak self] in await self?.refresh() }
+            } else {
+                Self.logger.info(
+                    "Persistent timeline catalog refresh deferred to accepted index publication"
+                )
+            }
+            startMemoryLoad(generation: generation)
+            return
+        }
         if bucketSummaries.isEmpty {
             guard loadState != .idle else { return }
             loadState = .idle
             Task { [weak self] in await self?.load() }
-            return
-        }
-        if retainsPersistentBootstrap {
-            Task { [weak self] in await self?.refresh() }
-            startMemoryLoad(generation: generation)
             return
         }
         let retryIDs = recoveryBucketIDs()

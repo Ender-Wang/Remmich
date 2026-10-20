@@ -57,12 +57,103 @@ struct VideoTimelineReaderTests {
         #expect(!weeks.hasMoreOlderHistory)
     }
 
+    @Test @MainActor func acceptedIndexPublicationAvoidsDuplicateRemoteVideoCatalogRefresh() async {
+        let source = VideoRefreshCountingFixture()
+        let bucketID = TimelineBucketID(rawValue: "2026-10-01")
+        let date = Date(timeIntervalSince1970: 1)
+        let asset = TimelineAssetSummary(
+            id: "indexed-video",
+            ownerID: "owner",
+            capturedAt: date,
+            uploadedAt: date,
+            localOffsetHours: 0,
+            mediaKind: .video,
+            durationMilliseconds: 1000,
+            aspectRatio: 1,
+            isFavorite: false,
+            visibility: .timeline,
+            livePhotoVideoID: nil,
+            stack: nil,
+            projectionType: nil,
+            thumbhash: nil,
+            thumbnailRevision: date
+        )
+        let store = PhotosTimelineStore(
+            reader: VideoTimelineReader(source: source),
+            persistentRefreshPolicy: .acceptedIndexPublication
+        )
+        store.bootstrap(.init(
+            generation: 1,
+            summaries: [.init(id: bucketID, assetCount: 1)],
+            assetsByBucket: [bucketID: [asset]],
+            groupedCatalogs: .init(),
+            isComplete: true
+        ))
+
+        store.routeDidChange(isReachable: true)
+
+        await source.waitUntilMemoryRequested()
+        #expect(await source.memoryRequestCount == 1)
+        #expect(await source.videoRequestCount == 0)
+        #expect(store.sections.first?.assets.map(\.id) == ["indexed-video"])
+
+        let emptySource = VideoRefreshCountingFixture()
+        let emptyStore = PhotosTimelineStore(
+            reader: VideoTimelineReader(source: emptySource),
+            persistentRefreshPolicy: .acceptedIndexPublication
+        )
+        emptyStore.bootstrap(.init(
+            generation: 1,
+            summaries: [],
+            assetsByBucket: [:],
+            groupedCatalogs: .init(),
+            isComplete: true
+        ))
+
+        emptyStore.routeDidChange(isReachable: true)
+
+        await emptySource.waitUntilMemoryRequested()
+        #expect(await emptySource.videoRequestCount == 0)
+        #expect(emptyStore.loadState == .empty)
+    }
+
     @Test func memoryStacksKeepEveryVideoAndExcludeOtherMedia() async throws {
         let reader = VideoTimelineReader(source: VideoMemoryFixture())
         let memories = try await reader.memories()
 
         #expect(memories.map(\.id) == ["memory"])
         #expect(memories[0].assets.map(\.id) == ["video-1", "video-2"])
+    }
+}
+
+private actor VideoRefreshCountingFixture: VideoReading {
+    private(set) var videoRequestCount = 0
+    private(set) var memoryRequestCount = 0
+    private var memoryWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func bucketSummaries(query _: TimelineQuery) async throws -> [TimelineBucketSummary] {
+        []
+    }
+
+    func assets(in _: TimelineBucketID, query _: TimelineQuery) async throws -> [TimelineAssetSummary] {
+        []
+    }
+
+    func videos(cursor _: String?) async throws -> VideoPage {
+        videoRequestCount += 1
+        return .init(assets: [], nextCursor: nil)
+    }
+
+    func memories() async throws -> [TimelineMemorySummary] {
+        memoryRequestCount += 1
+        memoryWaiters.forEach { $0.resume() }
+        memoryWaiters.removeAll()
+        return []
+    }
+
+    func waitUntilMemoryRequested() async {
+        guard memoryRequestCount == 0 else { return }
+        await withCheckedContinuation { memoryWaiters.append($0) }
     }
 }
 

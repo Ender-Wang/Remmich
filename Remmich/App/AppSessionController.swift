@@ -97,7 +97,10 @@ final class AppSessionController {
             timeline
         }
         photos = PhotosTimelineStore(reader: photosReader)
-        videos = PhotosTimelineStore(reader: VideoTimelineReader(source: videosReader))
+        videos = PhotosTimelineStore(
+            reader: VideoTimelineReader(source: videosReader),
+            persistentRefreshPolicy: .acceptedIndexPublication
+        )
         self.service = service
         self.sessionStore = sessionStore
         self.profileStore = profileStore
