@@ -1,3 +1,4 @@
+import Nuke
 import OSLog
 import SwiftUI
 
@@ -963,7 +964,7 @@ struct PhotosView: View {
                         origin: .timeline(bucketID: row.bucketID, contentName: contentName)
                     )
                 },
-                isActive: isTimelineActive
+                priority: timelinePriority(for: row, layout: layout)
             )
             .frame(height: row.height, alignment: .top)
         case let .placeholder(section):
@@ -997,6 +998,24 @@ struct PhotosView: View {
             .frame(maxWidth: .infinity, minHeight: row.height, alignment: .top)
             .accessibilityIdentifier("timeline-section-\(section.id.rawValue)")
         }
+    }
+
+    private func timelinePriority(
+        for row: TimelineDeterministicLayout.Row,
+        layout: TimelineDeterministicLayout
+    ) -> ImageRequest.Priority {
+        guard isTimelineActive else { return .veryLow }
+
+        let measuredHeight = viewportRuntime.scrollContainerSize.height
+        let viewportHeight = measuredHeight > 0 ? measuredHeight : 800
+        let viewportOffset = measuredHeight > 0
+            ? viewportRuntime.scrollOffset
+            : max(0, layout.totalHeight - viewportHeight)
+        let priorityMargin = viewportHeight * 0.25
+        let priorityRange = (viewportOffset - priorityMargin) ...
+            (viewportOffset + viewportHeight + priorityMargin)
+        let rowRange = row.offset ... (row.offset + row.height)
+        return rowRange.overlaps(priorityRange) ? .veryHigh : .low
     }
 
     private var timelineItemSpacing: CGFloat {

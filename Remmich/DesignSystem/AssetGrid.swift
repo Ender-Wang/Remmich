@@ -465,7 +465,7 @@ struct TimelineDeterministicAssetRow: View {
     let viewportChanged: (TimelineAssetSummary, Bool) -> Void
     let transitionNamespace: Namespace.ID?
     let assetSelected: (TimelineAssetSummary) -> Void
-    var isActive = true
+    var priority: ImageRequest.Priority = .normal
 
     var body: some View {
         HStack(spacing: spacing) {
@@ -479,7 +479,7 @@ struct TimelineDeterministicAssetRow: View {
                         viewportChanged: viewportChanged,
                         transitionNamespace: transitionNamespace,
                         assetSelected: assetSelected,
-                        isActive: isActive
+                        priority: priority
                     )
                     .frame(width: itemSide, height: itemSide)
                 } else {
@@ -502,7 +502,7 @@ struct TimelineAssetThumbnail: View {
     let viewportChanged: (TimelineAssetSummary, Bool) -> Void
     let transitionNamespace: Namespace.ID?
     let assetSelected: (TimelineAssetSummary) -> Void
-    var isActive = true
+    var priority: ImageRequest.Priority = .normal
 
     var body: some View {
         Button {
@@ -525,7 +525,7 @@ struct TimelineAssetThumbnail: View {
                     imageCornerRadius: assetLayout == .naturalAspect
                         ? DesignMetrics.compactCornerRadius
                         : 0,
-                    priority: isActive ? .veryHigh : .veryLow,
+                    priority: priority,
                     didLoad: {
                         media.retainTimelineThumbnail(
                             $0.container,
