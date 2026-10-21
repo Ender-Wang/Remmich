@@ -693,8 +693,6 @@ struct PhotosView: View {
                 key: layoutKey
             )
 
-            let virtualRows = virtualizedTimelineRows(in: layout)
-
             ScrollViewReader { proxy in
                 VStack(spacing: 0) {
                     if case let .failed(message) = store.refreshState {
@@ -703,14 +701,10 @@ struct PhotosView: View {
                         }
                     }
                     ScrollView {
-                        ZStack(alignment: .topLeading) {
-                            Color.clear
-                                .frame(width: proposedWidth, height: layout.totalHeight)
-                                .accessibilityHidden(true)
-                            ForEach(virtualRows) { row in
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(layout.rows) { row in
                                 timelineRow(row, layout: layout)
                                     .frame(width: proposedWidth, height: row.height, alignment: .topLeading)
-                                    .offset(y: row.offset)
                                     .id(row.id)
                                     .onScrollVisibilityChange(threshold: 0.01) { visible in
                                         guard isTimelineActive, visible else { return }
@@ -729,11 +723,7 @@ struct PhotosView: View {
                                     }
                             }
                         }
-                        .frame(
-                            width: proposedWidth,
-                            height: layout.totalHeight,
-                            alignment: .topLeading
-                        )
+                        .frame(width: proposedWidth, alignment: .topLeading)
                     }
                     .defaultScrollAnchor(.bottom)
                     .scrollPosition($timelinePosition)
@@ -752,11 +742,14 @@ struct PhotosView: View {
                         let isUserScrolling = phase == .interacting || phase == .decelerating
                         viewportRuntime.userScrollPhase = isUserScrolling
                         if isUserScrolling {
+                            viewportRuntime.viewportUpdateTask?.cancel()
+                            viewportRuntime.viewportUpdateTask = nil
                             rotationRestoreTask?.cancel()
                             contentRestoreTask?.cancel()
                             pendingViewportAnchor = nil
                         } else {
                             viewportRuntime.chromeTracker.scrollingEnded()
+                            scheduleViewportUpdate()
                         }
                     }
                     .onScrollGeometryChange(for: PhotosChromeGeometry.self) { scrollGeometry in
@@ -1055,44 +1048,6 @@ struct PhotosView: View {
         return nil
     }
 
-    private func virtualizedTimelineRows(
-        in layout: TimelineDeterministicLayout
-    ) -> [TimelineDeterministicLayout.Row] {
-        guard !layout.rows.isEmpty else { return [] }
-        let viewportHeight = max(1, viewportRuntime.scrollContainerSize.height)
-        // Keep enough rows mounted beyond the viewport that cached thumbnails
-        // remain visually continuous during a fast scroll. Tab selection is
-        // committed before timeline hydration, so this buffer no longer
-        // competes with the native tab interaction.
-        let overscan = max(800, viewportHeight * 1.5)
-        let latestOffset = max(0, layout.totalHeight - viewportHeight)
-        var offsets = viewportRuntime.scrollContainerSize.height > 1
-            ? [viewportRuntime.scrollOffset]
-            : [latestOffset]
-        if let anchor = pendingViewportAnchor,
-           let target = targetScrollOffset(
-               for: anchor,
-               in: layout,
-               viewportHeight: viewportHeight
-           )
-        {
-            offsets.append(target)
-        }
-
-        var rowsByID: [String: TimelineDeterministicLayout.Row] = [:]
-        for offset in offsets {
-            let range = (offset - overscan) ... (offset + viewportHeight + overscan)
-            for row in layout.rows(intersecting: range) {
-                rowsByID[row.id] = row
-            }
-        }
-        // Rows have explicit offsets, so construction order does not affect geometry.
-        // Prefer mounting the newest (bottom-most) visible rows before older overscan
-        // rows. This is only a scheduling hint: SwiftUI appearance and Nuke result
-        // publication may still produce a different visible reveal order.
-        return rowsByID.values.sorted { $0.offset > $1.offset }
-    }
-
     private func targetScrollOffset(
         for anchor: TimelineViewportAnchor,
         in layout: TimelineDeterministicLayout,
@@ -1238,7 +1193,7 @@ struct PhotosView: View {
     }
 
     private func scheduleViewportUpdate() {
-        guard isTimelineActive else { return }
+        guard isTimelineActive, !viewportRuntime.userScrollPhase else { return }
         viewportRuntime.viewportUpdateTask?.cancel()
         viewportRuntime.viewportUpdateTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(120))
