@@ -25,6 +25,12 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
 
+      - name: Update SwiftFormat
+        run: |
+          brew update
+          brew upgrade swiftformat
+          test "$(swiftformat --version)" = "0.64.0"
+
       - name: Report toolchain
         run: |
           xcodebuild -version
