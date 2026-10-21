@@ -10,7 +10,7 @@ struct RootView: View {
         Group {
             switch controller.state {
             case .loading:
-                ProgressView("Restoring session…")
+                RestoringAppShellView()
             case .signedOut:
                 OnboardingView(controller: controller)
             case .checking:
@@ -53,6 +53,53 @@ struct RootView: View {
         )) { _ in
             controller.handleMemoryPressure()
         }
+    }
+}
+
+private struct RestoringAppShellView: View {
+    @State private var selectionState = NativeTabSelectionState()
+    @State private var activationState = NativeTabContentActivationState()
+    @State private var rotationState = TimelineRotationState()
+    @State private var tabBarTop: CGFloat = 0
+
+    var body: some View {
+        @Bindable var navigation = selectionState
+        NativeAppTabShell(
+            selection: $navigation.selection,
+            tabBarTop: $tabBarTop,
+            rotationState: rotationState,
+            contentActivationState: activationState,
+            compactOwner: nil,
+            isViewerPresented: false,
+            photosScrollRequest: 0,
+            videosScrollRequest: 0,
+            groupedScrollRequests: [:],
+            groupedMediaOwner: .photos,
+            photosRetapped: {},
+            videosRetapped: {},
+            groupedTabRetapped: { _ in },
+            photos: loadingTab(title: "Photos"),
+            videos: loadingTab(title: "Videos"),
+            albums: loadingTab(title: "Albums"),
+            library: loadingTab(title: "Library"),
+            years: loadingTab(title: "Years"),
+            months: loadingTab(title: "Months"),
+            weeks: loadingTab(title: "Weeks"),
+            search: loadingTab(title: "Search")
+        )
+        .ignoresSafeArea(.container, edges: .all)
+        .allowsHitTesting(false)
+        .accessibilityIdentifier("restoring-shell")
+    }
+
+    private func loadingTab(title: String) -> AnyView {
+        AnyView(
+            NavigationStack {
+                LoadingStateView()
+                    .navigationTitle(title)
+                    .navigationBarTitleDisplayMode(.inline)
+            }
+        )
     }
 }
 

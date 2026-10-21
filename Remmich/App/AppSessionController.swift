@@ -173,13 +173,13 @@ final class AppSessionController {
             Self.startupLogger.info(
                 "Timeline repository configured elapsedMs=\(Self.elapsedMilliseconds(since: startupStartedAt))"
             )
-            await bootstrapLocalLibrary(session: session)
-            Self.startupLogger.info(
-                "Local library bootstrap published elapsedMs=\(Self.elapsedMilliseconds(since: startupStartedAt))"
-            )
             state = .signedIn(session)
             Self.startupLogger.info(
                 "Signed-in shell state published elapsedMs=\(Self.elapsedMilliseconds(since: startupStartedAt))"
+            )
+            await bootstrapLocalLibrary(session: session)
+            Self.startupLogger.info(
+                "Local library bootstrap published elapsedMs=\(Self.elapsedMilliseconds(since: startupStartedAt))"
             )
             await reevaluateRoute(trigger: .startup)
         } catch SessionStoreError.corruptPayload {
