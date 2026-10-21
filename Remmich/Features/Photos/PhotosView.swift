@@ -317,7 +317,10 @@ struct PhotosView: View {
             initial: true
         ) {
             guard isTimelineActive else { return }
-            if rotationState?.isRotating != true {
+            if viewportRuntime.userScrollPhase {
+                contentRestoreTask?.cancel()
+                pendingViewportAnchor = nil
+            } else if rotationState?.isRotating != true {
                 pendingViewportAnchor = captureViewportAnchor(
                     using: viewportRuntime.layoutCache.current
                 )
@@ -1121,6 +1124,12 @@ struct PhotosView: View {
         let task = Task { @MainActor in
             await Task.yield()
             guard !Task.isCancelled, pendingViewportAnchor == anchor else { return }
+            guard !viewportRuntime.userScrollPhase else {
+                pendingViewportAnchor = nil
+                rotationRestoreTask = nil
+                contentRestoreTask = nil
+                return
+            }
             let targetY = targetScrollOffset(
                 for: anchor,
                 in: layout,
