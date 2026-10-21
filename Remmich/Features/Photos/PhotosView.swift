@@ -916,13 +916,15 @@ struct PhotosView: View {
                             return
                         }
                         resetViewportTracking()
-                        var transaction = Transaction(animation: nil)
-                        transaction.disablesAnimations = true
+                        var transaction = Transaction(
+                            animation: reduceMotion ? nil : .smooth(duration: 0.45)
+                        )
+                        transaction.disablesAnimations = reduceMotion
                         withTransaction(transaction) {
                             timelinePosition.scrollTo(edge: .bottom)
                         }
                         Self.logger.info(
-                            "Photos re-tap scrolled to latest bucket=\(latest.rawValue, privacy: .public)"
+                            "\(contentName, privacy: .public) re-tap scrolled to latest bucket=\(latest.rawValue, privacy: .public) animated=\(!reduceMotion)"
                         )
                     }
                 }
