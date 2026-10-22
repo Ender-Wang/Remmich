@@ -49,19 +49,31 @@ final class RemmichUITests: XCTestCase {
             XCTAssertTrue(app.descendants(matching: .any)["library-root"].waitForExistence(timeout: 2))
         }
 
+        XCTAssertEqual(app.buttons.matching(identifier: "account-button").count, 1)
         app.buttons["account-button"].firstMatch.tap()
         let accountSettings = app.descendants(matching: .any)["account-settings"]
         XCTAssertTrue(accountSettings.waitForExistence(timeout: 2))
+        XCTAssertEqual(app.buttons.matching(identifier: "account-button").count, 0)
+        XCTAssertEqual(app.buttons.matching(identifier: "account-collapse-button").count, 1)
+        let pageSwitcher = app.segmentedControls["settings-page-picker"]
+        let settingsPages = app.descendants(matching: .any)["account-settings-pages"]
+        XCTAssertTrue(pageSwitcher.waitForExistence(timeout: 2))
+        XCTAssertTrue(settingsPages.waitForExistence(timeout: 2))
+        XCTAssertTrue(pageSwitcher.buttons["Account"].isSelected)
+        settingsPages.swipeLeft()
+        XCTAssertTrue(pageSwitcher.buttons["Index & Cache"].isSelected)
+        pageSwitcher.buttons["Account"].tap()
+        XCTAssertTrue(pageSwitcher.buttons["Account"].isSelected)
+        pageSwitcher.buttons["Index & Cache"].tap()
+        XCTAssertTrue(pageSwitcher.buttons["Index & Cache"].isSelected)
+        settingsPages.swipeRight()
+        XCTAssertTrue(pageSwitcher.buttons["Account"].isSelected)
         let initialSheetFrame = accountSettings.frame
         accountSettings.swipeUp()
         XCTAssertEqual(accountSettings.frame.minY, initialSheetFrame.minY, accuracy: 4)
         XCTAssertEqual(accountSettings.frame.height, initialSheetFrame.height, accuracy: 4)
-        if UIDevice.current.userInterfaceIdiom == .pad {
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.5)).tap()
-            XCTAssertFalse(accountSettings.waitForExistence(timeout: 1))
-        } else {
-            app.buttons["Close"].firstMatch.tap()
-        }
+        tabButton("Library", in: app).tap()
+        XCTAssertFalse(accountSettings.waitForExistence(timeout: 1))
     }
 
     @MainActor

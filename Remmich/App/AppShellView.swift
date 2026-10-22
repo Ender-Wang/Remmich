@@ -28,6 +28,7 @@ struct AppShellView: View {
     @State private var groupedMediaOwner: NativeTabDestination = .photos
     @State private var photosScrollRequest = 0
     @State private var videosScrollRequest = 0
+    @State private var libraryDismissAccountRequest = 0
     @State private var videoPresentation = PhotosPresentationState(
         store: UserDefaultsPresentationPreferencesStore(key: "video-presentation-preferences")
     )
@@ -63,6 +64,9 @@ struct AppShellView: View {
             videosRetapped: {
                 videosScrollRequest &+= 1
                 compactVideosTabs = false
+            },
+            libraryRetapped: {
+                libraryDismissAccountRequest &+= 1
             },
             groupedTabRetapped: { destination in
                 groupedScrollRequests[destination, default: 0] &+= 1
@@ -151,7 +155,17 @@ struct AppShellView: View {
                     activationState: tabContentActivationState
                 ) {
                     NavigationStack(path: $libraryPath) {
-                        LibraryView(collections: PreviewFixtures.collections, showAccount: showAccount)
+                        LibraryView(
+                            collections: PreviewFixtures.collections,
+                            session: session,
+                            profile: profile,
+                            activeRoute: activeRoute,
+                            routeStatus: routeStatus,
+                            libraryIndex: libraryIndex,
+                            saveProfile: saveProfile,
+                            signOut: signOut,
+                            dismissAccountRequest: $libraryDismissAccountRequest
+                        )
                     }
                 }
             ),
@@ -357,10 +371,38 @@ private struct NativeTabContentGate<Content: View>: View {
     }
 }
 
-struct AccountToolbarButton: ToolbarContent {
+struct AccountAvatarView: View {
     @Environment(\.accountAvatarMedia) private var media
     @Environment(\.displayScale) private var displayScale
 
+    let size: CGFloat
+
+    var body: some View {
+        Group {
+            if let media {
+                LazyImage(request: media.profileImageRequest(targetPixels: Int(size * displayScale))) { state in
+                    if let image = state.image {
+                        image.resizable().scaledToFill()
+                    } else {
+                        Image(systemName: "person.crop.circle")
+                            .resizable()
+                            .scaledToFit()
+                    }
+                }
+                .pipeline(media.pipeline ?? .shared)
+                .onDisappear(.cancel)
+            } else {
+                Image(systemName: "person.crop.circle")
+                    .resizable()
+                    .scaledToFit()
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(Circle())
+    }
+}
+
+struct AccountToolbarButton: ToolbarContent {
     let action: () -> Void
     var showsOnPhone = false
 
@@ -369,29 +411,9 @@ struct AccountToolbarButton: ToolbarContent {
         if showsOnPhone || UIDevice.current.userInterfaceIdiom == .pad {
             ToolbarItem(placement: .topBarTrailing) {
                 Button(action: action) {
-                    Group {
-                        if let media {
-                            LazyImage(request: media.profileImageRequest(targetPixels: Int(32 * displayScale))) { state in
-                                if let image = state.image {
-                                    image.resizable().scaledToFill()
-                                } else {
-                                    Image(systemName: "person.crop.circle")
-                                        .resizable()
-                                        .scaledToFit()
-                                }
-                            }
-                            .pipeline(media.pipeline ?? .shared)
-                            .onDisappear(.cancel)
-                        } else {
-                            Image(systemName: "person.crop.circle")
-                                .resizable()
-                                .scaledToFit()
-                        }
-                    }
-                    .frame(width: 32, height: 32)
-                    .clipShape(Circle())
-                    .background(Circle().fill(.regularMaterial))
-                    .contentShape(Circle())
+                    AccountAvatarView(size: 32)
+                        .background(Circle().fill(.regularMaterial))
+                        .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Account")

@@ -77,6 +77,7 @@ private struct RestoringAppShellView: View {
             groupedMediaOwner: .photos,
             photosRetapped: {},
             videosRetapped: {},
+            libraryRetapped: {},
             groupedTabRetapped: { _ in },
             photos: loadingTab(title: "Photos"),
             videos: loadingTab(title: "Videos"),

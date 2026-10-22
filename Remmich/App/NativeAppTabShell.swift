@@ -143,6 +143,7 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
     let groupedMediaOwner: NativeTabDestination
     let photosRetapped: () -> Void
     let videosRetapped: () -> Void
+    let libraryRetapped: () -> Void
     let groupedTabRetapped: (NativeTabDestination) -> Void
     let photos: AnyView
     let videos: AnyView
@@ -460,6 +461,8 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
                 parent.photosRetapped()
             } else if selectedTab === videosTab, previousTab === videosTab {
                 parent.videosRetapped()
+            } else if selectedTab === libraryTab, previousTab === libraryTab {
+                parent.libraryRetapped()
             } else if selectedTab === previousTab,
                       destination == .weeks || destination == .months || destination == .years
             {

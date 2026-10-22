@@ -11,6 +11,7 @@ struct AccountSettingsView: View {
     }
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let session: AccountSession
     let activeRoute: ActiveConnectionRoute?
@@ -19,6 +20,8 @@ struct AccountSettingsView: View {
     let saveProfile: (ConnectionProfileDraft) async -> ConnectionProfileSaveResult
     let signOut: (Bool) async -> Void
     let close: (() -> Void)?
+    let showsCloseControl: Bool
+    let drawsGlassBackground: Bool
 
     @State private var profile: ConnectionProfile
     @State private var localAddress: String
@@ -40,7 +43,9 @@ struct AccountSettingsView: View {
         libraryIndex: LibraryIndexController,
         saveProfile: @escaping (ConnectionProfileDraft) async -> ConnectionProfileSaveResult,
         signOut: @escaping (Bool) async -> Void,
-        close: (() -> Void)? = nil
+        close: (() -> Void)? = nil,
+        showsCloseControl: Bool = true,
+        drawsGlassBackground: Bool = true
     ) {
         self.session = session
         self.activeRoute = activeRoute
@@ -49,6 +54,8 @@ struct AccountSettingsView: View {
         self.saveProfile = saveProfile
         self.signOut = signOut
         self.close = close
+        self.showsCloseControl = showsCloseControl
+        self.drawsGlassBackground = drawsGlassBackground
         _profile = State(initialValue: profile)
         _localAddress = State(initialValue: profile.localEndpoint?.absoluteString ?? "")
         _externalAddresses = State(initialValue: profile.externalEndpoints.map(\.absoluteString).joined(separator: "\n"))
@@ -60,14 +67,16 @@ struct AccountSettingsView: View {
                 Text("Remmich")
                     .font(.title.bold())
                 Spacer()
-                Button("Close") { closePanel() }
-                    .buttonStyle(.glass)
+                if showsCloseControl {
+                    Button("Close") { closePanel() }
+                        .buttonStyle(.glass)
+                }
             }
+            .frame(minHeight: 44)
             .padding(.horizontal, 24)
-            .padding(.top, 24)
-            .padding(.bottom, 16)
+            .padding(.vertical, 12)
 
-            Picker("Settings Page", selection: $selectedPage) {
+            Picker("Settings Page", selection: pickerSelection) {
                 ForEach(SettingsPage.allCases) { page in
                     Text(page.rawValue)
                         .tag(page)
@@ -79,14 +88,25 @@ struct AccountSettingsView: View {
             .padding(.bottom, 16)
             .accessibilityIdentifier("settings-page-picker")
 
-            ScrollView {
-                selectedPageContent
-                    .padding(.horizontal, 24)
-                    .padding(.bottom, 24)
+            TabView(selection: $selectedPage) {
+                ScrollView {
+                    accountPage
+                        .padding(.horizontal, 24)
+                        .padding(.bottom, 24)
+                }
+                .tag(SettingsPage.account)
+
+                ScrollView {
+                    libraryPage
+                        .padding(.horizontal, 24)
+                        .padding(.bottom, 24)
+                }
+                .tag(SettingsPage.library)
             }
-            .id(selectedPage)
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .accessibilityIdentifier("account-settings-pages")
         }
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 32))
+        .modifier(AccountSettingsGlassBackground(enabled: drawsGlassBackground))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("account-settings")
         .alert("Cannot Save Profile", isPresented: Binding(
@@ -173,14 +193,19 @@ struct AccountSettingsView: View {
         }
     }
 
-    @ViewBuilder
-    private var selectedPageContent: some View {
-        switch selectedPage {
-        case .account:
-            accountPage
-        case .library:
-            libraryPage
-        }
+    private var pickerSelection: Binding<SettingsPage> {
+        Binding(
+            get: { selectedPage },
+            set: { page in
+                if reduceMotion {
+                    selectedPage = page
+                } else {
+                    withAnimation(.snappy(duration: 0.25, extraBounce: 0)) {
+                        selectedPage = page
+                    }
+                }
+            }
+        )
     }
 
     private var accountPage: some View {
@@ -668,6 +693,18 @@ struct AccountSettingsView: View {
             "Remmich saves these addresses as switching candidates. On the preferred Wi-Fi network, it tries the local address before the external addresses."
         } else {
             "Remmich saves these addresses as switching candidates, then tries the local address first and the external addresses in order. No Wi-Fi name is required."
+        }
+    }
+}
+
+private struct AccountSettingsGlassBackground: ViewModifier {
+    let enabled: Bool
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content.glassEffect(.regular, in: RoundedRectangle(cornerRadius: 32))
+        } else {
+            content
         }
     }
 }
