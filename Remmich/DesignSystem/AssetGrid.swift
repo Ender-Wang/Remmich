@@ -218,6 +218,21 @@ private struct TimelineGridDisplaySlot: Identifiable {
 }
 
 nonisolated enum TimelineGridOrder {
+    static func timelineColumnCount(
+        availableSize: CGSize,
+        minimumLandscapeColumnWidth: CGFloat,
+        spacing: CGFloat = 2
+    ) -> Int {
+        if availableSize.width < availableSize.height {
+            return 5
+        }
+        return columnCount(
+            availableWidth: availableSize.width,
+            minimumColumnWidth: minimumLandscapeColumnWidth,
+            spacing: spacing
+        )
+    }
+
     static func columnCount(
         availableWidth: CGFloat,
         minimumColumnWidth: CGFloat,
@@ -237,13 +252,33 @@ nonisolated enum TimelineGridOrder {
     }
 }
 
+nonisolated struct TimelineAssetFramePreferenceKey: PreferenceKey {
+    static let defaultValue: [String: CGRect] = [:]
+
+    static func reduce(
+        value: inout [String: CGRect],
+        nextValue: () -> [String: CGRect]
+    ) {
+        value.merge(nextValue(), uniquingKeysWith: { _, latest in latest })
+    }
+}
+
 nonisolated struct TimelineDeterministicLayout {
     static let headerHeight: CGFloat = 36
+    static let bottomSpacerID = "timeline-bottom-spacer"
+    static let bottomSpacing: CGFloat = 12
+
+    struct AssetRowTarget: Equatable {
+        let rowID: String
+        let rowHeight: CGFloat
+        let bucketID: TimelineBucketID
+    }
 
     struct Key: Equatable {
         let width: CGFloat
         let minimumColumnWidth: CGFloat
         let spacing: CGFloat
+        let fixedColumnCount: Int?
         let sectionRevisions: [String]
     }
 
@@ -260,15 +295,20 @@ nonisolated struct TimelineDeterministicLayout {
         let offset: CGFloat
         let height: CGFloat
         let assetHeight: CGFloat
-        let anchorAssetID: String?
     }
 
     static let empty = TimelineDeterministicLayout(
-        key: .init(width: 0, minimumColumnWidth: 0, spacing: 0, sectionRevisions: []),
+        key: .init(
+            width: 0,
+            minimumColumnWidth: 0,
+            spacing: 0,
+            fixedColumnCount: nil,
+            sectionRevisions: []
+        ),
         columns: 1,
         itemSide: 0,
         rows: [],
-        assetVerticalCenters: [:],
+        assetRowTargets: [:],
         totalHeight: 0,
         buildMilliseconds: 0
     )
@@ -277,7 +317,7 @@ nonisolated struct TimelineDeterministicLayout {
     let columns: Int
     let itemSide: CGFloat
     let rows: [Row]
-    let assetVerticalCenters: [String: CGFloat]
+    let assetRowTargets: [String: AssetRowTarget]
     let totalHeight: CGFloat
     let buildMilliseconds: Int
 
@@ -287,15 +327,16 @@ nonisolated struct TimelineDeterministicLayout {
     ) -> TimelineDeterministicLayout {
         guard key.width > 0 else { return .empty }
         let startedAt = ContinuousClock.now
-        let columns = TimelineGridOrder.columnCount(
-            availableWidth: key.width,
-            minimumColumnWidth: key.minimumColumnWidth,
-            spacing: key.spacing
-        )
+        let columns = key.fixedColumnCount.map { max(1, $0) }
+            ?? TimelineGridOrder.columnCount(
+                availableWidth: key.width,
+                minimumColumnWidth: key.minimumColumnWidth,
+                spacing: key.spacing
+            )
         let itemSide = max(1, (key.width - CGFloat(columns - 1) * key.spacing) / CGFloat(columns))
         var rows: [Row] = []
-        var assetVerticalCenters: [String: CGFloat] = [:]
-        assetVerticalCenters.reserveCapacity(sections.reduce(0) { $0 + $1.assets.count })
+        var assetRowTargets: [String: AssetRowTarget] = [:]
+        assetRowTargets.reserveCapacity(sections.reduce(0) { $0 + $1.assets.count })
         rows.reserveCapacity(sections.reduce(0) { result, section in
             result + Int(ceil(Double(section.assets.count) / Double(columns))) + 31
         })
@@ -310,8 +351,7 @@ nonisolated struct TimelineDeterministicLayout {
                     content: .placeholder(section),
                     offset: offset,
                     height: height,
-                    assetHeight: 0,
-                    anchorAssetID: nil
+                    assetHeight: 0
                 ))
                 offset += height
                 continue
@@ -323,8 +363,7 @@ nonisolated struct TimelineDeterministicLayout {
                     content: .header(group),
                     offset: offset,
                     height: headerHeight,
-                    assetHeight: 0,
-                    anchorAssetID: nil
+                    assetHeight: 0
                 ))
                 offset += headerHeight
 
@@ -340,18 +379,21 @@ nonisolated struct TimelineDeterministicLayout {
                     let hasFollowingAssetRow = rowIndex + 1 < rowCount
                     let height = itemSide + (hasFollowingAssetRow ? key.spacing : 0)
                     let nonempty = rowSlots.compactMap(\.self)
-                    let rowCenter = offset + itemSide / 2
+                    let rowID = "row-\(section.id.rawValue)-\(group.id.id)-\(rowIndex)"
                     for asset in nonempty {
-                        assetVerticalCenters[asset.id] = rowCenter
+                        assetRowTargets[asset.id] = AssetRowTarget(
+                            rowID: rowID,
+                            rowHeight: height,
+                            bucketID: section.id
+                        )
                     }
                     rows.append(Row(
-                        id: "row-\(section.id.rawValue)-\(group.id.id)-\(rowIndex)",
+                        id: rowID,
                         bucketID: section.id,
                         content: .assets(rowSlots),
                         offset: offset,
                         height: height,
-                        assetHeight: itemSide,
-                        anchorAssetID: nonempty.isEmpty ? nil : nonempty[nonempty.count / 2].id
+                        assetHeight: itemSide
                     ))
                     offset += height
                 }
@@ -363,73 +405,14 @@ nonisolated struct TimelineDeterministicLayout {
             columns: columns,
             itemSide: itemSide,
             rows: rows,
-            assetVerticalCenters: assetVerticalCenters,
+            assetRowTargets: assetRowTargets,
             totalHeight: offset,
             buildMilliseconds: elapsedMilliseconds(since: startedAt)
         )
     }
 
-    func verticalCenter(of assetID: String) -> CGFloat? {
-        assetVerticalCenters[assetID]
-    }
-
-    func rows(intersecting range: ClosedRange<CGFloat>) -> ArraySlice<Row> {
-        guard !rows.isEmpty else { return [] }
-        let lowerBound = max(0, range.lowerBound)
-        let upperBound = min(totalHeight, range.upperBound)
-
-        var lower = 0
-        var upper = rows.count
-        while lower < upper {
-            let middle = (lower + upper) / 2
-            if rows[middle].offset + rows[middle].height < lowerBound {
-                lower = middle + 1
-            } else {
-                upper = middle
-            }
-        }
-        let first = lower
-
-        lower = first
-        upper = rows.count
-        while lower < upper {
-            let middle = (lower + upper) / 2
-            if rows[middle].offset <= upperBound {
-                lower = middle + 1
-            } else {
-                upper = middle
-            }
-        }
-        return rows[first ..< lower]
-    }
-
-    func assetNearest(verticalOffset: CGFloat) -> String? {
-        guard !rows.isEmpty else { return nil }
-        let target = min(max(0, verticalOffset), totalHeight)
-        var lower = 0
-        var upper = rows.count - 1
-        while lower < upper {
-            let middle = (lower + upper) / 2
-            if rows[middle].offset + rows[middle].height < target {
-                lower = middle + 1
-            } else {
-                upper = middle
-            }
-        }
-        if let assetID = rows[lower].anchorAssetID {
-            return assetID
-        }
-        for distance in 1 ..< rows.count {
-            let after = lower + distance
-            if after < rows.count, let assetID = rows[after].anchorAssetID {
-                return assetID
-            }
-            let before = lower - distance
-            if before >= 0, let assetID = rows[before].anchorAssetID {
-                return assetID
-            }
-        }
-        return nil
+    func rowTarget(of assetID: String) -> AssetRowTarget? {
+        assetRowTargets[assetID]
     }
 
     private static func elapsedMilliseconds(since start: ContinuousClock.Instant) -> Int {
@@ -465,6 +448,7 @@ struct TimelineDeterministicAssetRow: View {
     let viewportChanged: (TimelineAssetSummary, Bool) -> Void
     let transitionNamespace: Namespace.ID?
     let assetSelected: (TimelineAssetSummary) -> Void
+    let frameCoordinateSpaceName: String
     var priority: ImageRequest.Priority = .normal
 
     var body: some View {
@@ -482,6 +466,18 @@ struct TimelineDeterministicAssetRow: View {
                         priority: priority
                     )
                     .frame(width: itemSide, height: itemSide)
+                    .background {
+                        GeometryReader { geometry in
+                            Color.clear.preference(
+                                key: TimelineAssetFramePreferenceKey.self,
+                                value: [
+                                    asset.id: geometry.frame(
+                                        in: .named(frameCoordinateSpaceName)
+                                    ),
+                                ]
+                            )
+                        }
+                    }
                 } else {
                     Color.clear
                         .frame(width: itemSide, height: itemSide)

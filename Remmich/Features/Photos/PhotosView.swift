@@ -1,6 +1,7 @@
 import Nuke
 import OSLog
 import SwiftUI
+import UIKit
 
 private struct PhotosChromeGeometry: Equatable {
     let offset: CGFloat
@@ -14,39 +15,125 @@ nonisolated enum TimelineViewportAnchor: Equatable {
     case asset(id: String, viewportCenterOffset: CGFloat)
 }
 
+nonisolated enum TimelineScrollMotionPhase: String, Equatable {
+    case idle
+    case interacting
+    case decelerating
+
+    var isMoving: Bool {
+        self != .idle
+    }
+}
+
+nonisolated enum TimelineRotationScrollPolicy {
+    static func shouldCancelRotation(
+        phase: TimelineScrollMotionPhase,
+        rotationOwnsScrollCallbacks: Bool
+    ) -> Bool {
+        phase.isMoving && !rotationOwnsScrollCallbacks
+    }
+
+    static func releasesRotationOwnership(phase: TimelineScrollMotionPhase) -> Bool {
+        phase == .idle
+    }
+}
+
 nonisolated enum TimelineViewportAnchorRetention {
     static let latestBoundary: CGFloat = 24
 
-    static func update(
-        current: TimelineViewportAnchor,
-        bottomGap: CGFloat,
-        userScrolling: Bool,
-        centeredAssetID: String?,
-        viewportCenterOffset: CGFloat?
-    ) -> TimelineViewportAnchor {
-        if bottomGap <= latestBoundary {
-            return .latest
-        }
-        guard userScrolling,
-              let centeredAssetID,
-              let viewportCenterOffset
-        else { return current }
-        return .asset(
-            id: centeredAssetID,
-            viewportCenterOffset: viewportCenterOffset
-        )
-    }
-
-    static func restoredScrollOffset(
-        assetCenter: CGFloat,
+    static func restoredUnitAnchor(
         viewportCenterOffset: CGFloat,
         viewportHeight: CGFloat,
-        maximumOffset: CGFloat
-    ) -> CGFloat {
-        min(
-            maximumOffset,
-            max(0, assetCenter - viewportHeight / 2 - viewportCenterOffset)
-        )
+        rowHeight: CGFloat
+    ) -> UnitPoint {
+        let travel = viewportHeight - rowHeight
+        guard abs(travel) > 0.5 else { return .center }
+        let y = min(1, max(0, 0.5 + viewportCenterOffset / travel))
+        return UnitPoint(x: 0.5, y: y)
+    }
+}
+
+nonisolated struct TimelineAssetFrameSnapshot: Equatable {
+    let layoutKey: TimelineDeterministicLayout.Key
+    let containerSize: CGSize
+    let frames: [String: CGRect]
+
+    var visualCenter: CGPoint {
+        CGPoint(x: containerSize.width / 2, y: containerSize.height / 2)
+    }
+
+    var visibleFrames: [String: CGRect] {
+        guard containerSize.width > 0, containerSize.height > 0 else { return [:] }
+        let viewport = CGRect(origin: .zero, size: containerSize)
+        return frames.filter { _, frame in
+            frame.width > 0 && frame.height > 0 && frame.intersects(viewport)
+        }
+    }
+
+    func assetNearestVisualCenter() -> (id: String, verticalOffset: CGFloat)? {
+        let visible = visibleFrames
+        guard let minimumVerticalDistance = visible.values.map({
+            abs($0.midY - visualCenter.y)
+        }).min() else { return nil }
+
+        // Cells in one row share a vertical center. First choose that row,
+        // then choose its cell closest to the horizontal visual center.
+        let rowTolerance: CGFloat = 1
+        return visible
+            .filter { _, frame in
+                abs(abs(frame.midY - visualCenter.y) - minimumVerticalDistance) <= rowTolerance
+            }
+            .min { lhs, rhs in
+                abs(lhs.value.midX - visualCenter.x) < abs(rhs.value.midX - visualCenter.x)
+            }
+            .map { entry in
+                (entry.key, entry.value.midY - visualCenter.y)
+            }
+    }
+}
+
+nonisolated enum TimelineAssetFrameSnapshotPolicy {
+    static func isCoherent(_ snapshot: TimelineAssetFrameSnapshot) -> Bool {
+        !snapshot.visibleFrames.isEmpty
+    }
+}
+
+private struct TimelineRotationTransaction {
+    enum Stage: Equatable {
+        case awaitingDestination
+        case restoreRequested(rowID: String)
+    }
+
+    let generation: Int
+    let assetID: String
+    let sourceLayoutKey: TimelineDeterministicLayout.Key
+    let targetWidth: CGFloat
+    let targetColumnCount: Int
+    let sourceScrollPhase: TimelineScrollMotionPhase
+    let sourceContentOffset: CGPoint
+    let momentumStopped: Bool
+    var stage: Stage = .awaitingDestination
+}
+
+nonisolated enum TimelineRotationCapturePolicy {
+    static func shouldCapture(
+        generation: Int,
+        isRotating: Bool,
+        isTimelineActive: Bool,
+        sourceSizes: [CGSize],
+        targetSize: CGSize
+    ) -> Bool {
+        guard generation > 0,
+              isRotating,
+              isTimelineActive,
+              targetSize.width > 0,
+              targetSize.height > 0
+        else { return false }
+
+        return sourceSizes.contains { sourceSize in
+            abs(sourceSize.width - targetSize.width) > 1
+                || abs(sourceSize.height - targetSize.height) > 1
+        }
     }
 }
 
@@ -57,15 +144,70 @@ private final class TimelineViewportRuntime {
     var visibleAssets: [String: Date] = [:]
     var viewportUpdateTask: Task<Void, Never>?
     var timelineBottomGap = CGFloat.infinity
-    var userScrollPhase = false
+    var scrollMotionPhase = TimelineScrollMotionPhase.idle
+    weak var scrollView: UIScrollView?
+    var rotationOwnsScrollCallbacks = false
     var chromeTracker = PhotosChromeTracker()
     var lastResidencyPlan = TimelineResidencyPlan.empty
     var lastResidencyTarget: MediaPixelSize?
     var scrollOffset: CGFloat = 0
     var scrollContainerSize: CGSize = .zero
     var retainedAnchor = TimelineViewportAnchor.latest
+    var latestFrameSnapshot: TimelineAssetFrameSnapshot?
+    var previousFrameSnapshot: TimelineAssetFrameSnapshot?
+    var rotationTransaction: TimelineRotationTransaction?
     var layoutCache = TimelineDeterministicLayoutCache()
     var lastLoggedContainerSize: CGSize?
+
+    var userScrollPhase: Bool {
+        scrollMotionPhase.isMoving
+    }
+}
+
+private struct TimelineScrollViewResolver: UIViewRepresentable {
+    let resolved: (UIScrollView?) -> Void
+
+    func makeUIView(context _: Context) -> TimelineScrollProbeView {
+        let view = TimelineScrollProbeView()
+        view.resolved = resolved
+        return view
+    }
+
+    func updateUIView(_ uiView: TimelineScrollProbeView, context _: Context) {
+        uiView.resolved = resolved
+        uiView.resolveScrollView()
+    }
+}
+
+private final class TimelineScrollProbeView: UIView {
+    var resolved: ((UIScrollView?) -> Void)?
+    private weak var lastResolvedScrollView: UIScrollView?
+
+    override func didMoveToSuperview() {
+        super.didMoveToSuperview()
+        resolveScrollView()
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        resolveScrollView()
+    }
+
+    func resolveScrollView() {
+        var candidate = superview
+        while let current = candidate {
+            if let scrollView = current as? UIScrollView {
+                guard scrollView !== lastResolvedScrollView else { return }
+                lastResolvedScrollView = scrollView
+                resolved?(scrollView)
+                return
+            }
+            candidate = current.superview
+        }
+        guard lastResolvedScrollView != nil else { return }
+        lastResolvedScrollView = nil
+        resolved?(nil)
+    }
 }
 
 struct PhotosChromeTracker {
@@ -204,7 +346,6 @@ struct PhotosView: View {
     @State private var viewportRuntime = TimelineViewportRuntime()
     @State private var timelineSections: [TimelineSection]
     @State private var timelineResumeTask: Task<Void, Never>?
-    @State private var rotationRestoreTask: Task<Void, Never>?
     @State private var contentRestoreTask: Task<Void, Never>?
     @State private var layoutRestoreTask: Task<Void, Never>?
     @State private var pendingViewportAnchor: TimelineViewportAnchor?
@@ -324,7 +465,7 @@ struct PhotosView: View {
             } else if rotationState?.isRotating != true {
                 pendingViewportAnchor = captureViewportAnchor(
                     using: viewportRuntime.layoutCache.current
-                )
+                ) ?? pendingViewportAnchor ?? viewportRuntime.retainedAnchor
             }
             timelineSections = store.sections
             scheduleViewportUpdate()
@@ -334,6 +475,7 @@ struct PhotosView: View {
             timelineResumeTask?.cancel()
             if isVisible {
                 media.beginTimelineContentPresentation(contentName)
+                pendingViewportAnchor = pendingViewportAnchor ?? viewportRuntime.retainedAnchor
                 timelineResumeTask = Task { @MainActor in
                     // Reveal the retained timeline first, then reconcile its
                     // frozen section snapshot on the following run loop.
@@ -343,7 +485,6 @@ struct PhotosView: View {
                     restorePendingViewportAnchor(
                         using: viewportRuntime.layoutCache.current,
                         viewportHeight: viewportRuntime.scrollContainerSize.height,
-                        generation: 0,
                         reason: "tab-resume",
                         clearsAnchor: false
                     )
@@ -357,6 +498,7 @@ struct PhotosView: View {
                 pendingViewportAnchor = captureViewportAnchor(
                     using: viewportRuntime.layoutCache.current
                 )
+                cancelRotationTransaction(reason: "tab-deactivated")
                 viewportRuntime.viewportUpdateTask?.cancel()
                 viewportRuntime.viewportUpdateTask = nil
                 timelineResumeTask = nil
@@ -386,7 +528,10 @@ struct PhotosView: View {
                 var scrollTransaction = Transaction(animation: nil)
                 scrollTransaction.disablesAnimations = true
                 withTransaction(scrollTransaction) {
-                    timelinePosition.scrollTo(edge: .bottom)
+                    timelinePosition.scrollTo(
+                        id: TimelineDeterministicLayout.bottomSpacerID,
+                        anchor: .bottom
+                    )
                 }
                 store.completeJump()
             }
@@ -401,7 +546,6 @@ struct PhotosView: View {
             viewportRuntime.viewportUpdateTask?.cancel()
             viewportRuntime.viewportUpdateTask = nil
             timelineResumeTask?.cancel()
-            rotationRestoreTask?.cancel()
             contentRestoreTask?.cancel()
             pendingViewportAnchor = nil
             layoutRestoreTask?.cancel()
@@ -680,13 +824,17 @@ struct PhotosView: View {
 
     private var timeline: some View {
         GeometryReader { geometry in
-            let proposedWidth = rotationState?.isRotating == true
-                ? rotationState?.targetSize?.width ?? geometry.size.width
-                : geometry.size.width
+            let layoutWidth = geometry.size.width
+            let layoutHeight = geometry.size.height
+            let columnCount = timelineColumnCount(
+                width: layoutWidth,
+                height: layoutHeight
+            )
             let layoutKey = TimelineDeterministicLayout.Key(
-                width: proposedWidth,
+                width: layoutWidth,
                 minimumColumnWidth: horizontalSizeClass == .regular ? 120 : 88,
                 spacing: timelineItemSpacing,
+                fixedColumnCount: columnCount,
                 sectionRevisions: timelineSectionRevisionKeys
             )
             let layout = viewportRuntime.layoutCache.resolve(
@@ -705,27 +853,24 @@ struct PhotosView: View {
                         LazyVStack(alignment: .leading, spacing: 0) {
                             ForEach(layout.rows) { row in
                                 timelineRow(row, layout: layout)
-                                    .frame(width: proposedWidth, height: row.height, alignment: .topLeading)
+                                    .frame(width: layoutWidth, height: row.height, alignment: .topLeading)
                                     .id(row.id)
-                                    .onScrollVisibilityChange(threshold: 0.01) { visible in
-                                        guard isTimelineActive, visible else { return }
-                                        store.updateVisibleAnchor(.init(
-                                            bucketID: row.bucketID,
-                                            assetID: row.anchorAssetID
-                                        ))
-                                        if store.jumpTarget == row.bucketID,
-                                           row.bucketID != latestScrollTarget
-                                        {
-                                            Self.logger.info(
-                                                "Calendar jump target became visible bucket=\(row.bucketID.rawValue, privacy: .public)"
-                                            )
-                                            store.completeJump()
-                                        }
-                                    }
                             }
+                            Color.clear
+                                .frame(height: TimelineDeterministicLayout.bottomSpacing)
+                                .id(TimelineDeterministicLayout.bottomSpacerID)
+                                .accessibilityHidden(true)
                         }
-                        .frame(width: proposedWidth, alignment: .topLeading)
+                        .scrollTargetLayout()
+                        .frame(width: layoutWidth, alignment: .topLeading)
+                        .background {
+                            TimelineScrollViewResolver { scrollView in
+                                viewportRuntime.scrollView = scrollView
+                            }
+                            .frame(width: 0, height: 0)
+                        }
                     }
+                    .coordinateSpace(name: timelineFrameCoordinateSpaceName)
                     .defaultScrollAnchor(.bottom)
                     .scrollPosition($timelinePosition)
                     .scrollEdgeEffectHidden(for: .bottom)
@@ -740,12 +885,31 @@ struct PhotosView: View {
                         pinchLibraryRange(gesture)
                     }
                     .onScrollPhaseChange { _, phase in
-                        let isUserScrolling = phase == .interacting || phase == .decelerating
-                        viewportRuntime.userScrollPhase = isUserScrolling
-                        if isUserScrolling {
+                        let motionPhase: TimelineScrollMotionPhase = if phase == .decelerating {
+                            .decelerating
+                        } else if phase == .tracking || phase == .interacting {
+                            .interacting
+                        } else {
+                            .idle
+                        }
+                        viewportRuntime.scrollMotionPhase = motionPhase
+
+                        if viewportRuntime.rotationOwnsScrollCallbacks {
+                            if TimelineRotationScrollPolicy.releasesRotationOwnership(phase: motionPhase) {
+                                viewportRuntime.rotationOwnsScrollCallbacks = false
+                                viewportRuntime.chromeTracker.scrollingEnded()
+                                scheduleViewportUpdate()
+                            }
+                            return
+                        }
+
+                        if TimelineRotationScrollPolicy.shouldCancelRotation(
+                            phase: motionPhase,
+                            rotationOwnsScrollCallbacks: false
+                        ) {
                             viewportRuntime.viewportUpdateTask?.cancel()
                             viewportRuntime.viewportUpdateTask = nil
-                            rotationRestoreTask?.cancel()
+                            cancelRotationTransaction(reason: "user-scroll")
                             contentRestoreTask?.cancel()
                             pendingViewportAnchor = nil
                         } else {
@@ -768,37 +932,18 @@ struct PhotosView: View {
                         viewportRuntime.timelineBottomGap = new.bottomGap
                         viewportRuntime.scrollOffset = new.offset
                         viewportRuntime.scrollContainerSize = new.containerSize
-                        let centerY = new.offset + new.containerSize.height / 2
-                        let centeredAssetID = layout.assetNearest(verticalOffset: centerY)
-                        let viewportCenterOffset = centeredAssetID.flatMap {
-                            layout.verticalCenter(of: $0).map { $0 - centerY }
+                        if viewportRuntime.userScrollPhase,
+                           new.bottomGap <= TimelineViewportAnchorRetention.latestBoundary
+                        {
+                            viewportRuntime.retainedAnchor = .latest
                         }
-                        viewportRuntime.retainedAnchor = TimelineViewportAnchorRetention.update(
-                            current: viewportRuntime.retainedAnchor,
-                            bottomGap: new.bottomGap,
-                            userScrolling: viewportRuntime.userScrollPhase,
-                            centeredAssetID: centeredAssetID,
-                            viewportCenterOffset: viewportCenterOffset
-                        )
                         if viewportRuntime.lastLoggedContainerSize != new.containerSize {
                             viewportRuntime.lastLoggedContainerSize = new.containerSize
                             let selectionElapsed = NativeTabTransitionTrace.elapsedMilliseconds(
                                 for: tabDestination
                             ) ?? -1
                             Self.logger.info(
-                                "Timeline geometry content=\(contentName, privacy: .public) container=\(Self.describe(new.containerSize), privacy: .public) content=\(Self.describe(new.contentSize), privacy: .public) layoutWidth=\(Int(layout.key.width)) columns=\(layout.columns) rows=\(layout.rows.count) height=\(Int(layout.totalHeight)) layoutBuildMs=\(layout.buildMilliseconds) selectionElapsedMs=\(selectionElapsed)"
-                            )
-                        }
-                        if old.containerSize != new.containerSize,
-                           rotationState?.isRotating == true,
-                           pendingViewportAnchor != nil
-                        {
-                            restorePendingViewportAnchor(
-                                using: layout,
-                                viewportHeight: new.containerSize.height,
-                                generation: rotationState?.generation ?? 0,
-                                reason: "rotation-geometry",
-                                clearsAnchor: false
+                                "Timeline geometry content=\(contentName, privacy: .public) container=\(Self.describe(new.containerSize), privacy: .public) content=\(Self.describe(new.contentSize), privacy: .public) layoutWidth=\(Int(layout.key.width)) columns=\(layout.columns) rows=\(layout.rows.count) height=\(Int(layout.totalHeight)) frameCount=\(viewportRuntime.latestFrameSnapshot?.frames.count ?? 0) layoutBuildMs=\(layout.buildMilliseconds) selectionElapsedMs=\(selectionElapsed)"
                             )
                         }
                         updateChrome(old: old, new: new)
@@ -812,11 +957,13 @@ struct PhotosView: View {
                         edges: UIDevice.current.userInterfaceIdiom == .pad ? .bottom : []
                     )
                     .contentMargins(.horizontal, 0, for: .scrollContent)
-                    .contentMargins(
-                        .bottom,
-                        UIDevice.current.userInterfaceIdiom == .phone ? 20 : 0,
-                        for: .scrollContent
-                    )
+                    .onPreferenceChange(TimelineAssetFramePreferenceKey.self) { frames in
+                        updateAssetFrameSnapshot(
+                            frames,
+                            layout: layout,
+                            fallbackContainerSize: geometry.size
+                        )
+                    }
                     .refreshable { await store.refresh() }
                     .overlay(alignment: .top) {
                         if memoryBackdropVisible {
@@ -839,43 +986,51 @@ struct PhotosView: View {
                     }
                     .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: compactChrome)
                     .onChange(of: rotationState?.generation ?? 0) { _, generation in
-                        guard generation > 0 else { return }
-                        let sourceLayout = viewportRuntime.layoutCache.previous.rows.isEmpty
-                            ? layout
-                            : viewportRuntime.layoutCache.previous
-                        let anchor = captureViewportAnchor(using: sourceLayout)
-                        pendingViewportAnchor = anchor
-                        Self.logger.info(
-                            "Timeline rotation captured content=\(contentName, privacy: .public) generation=\(generation) anchor=\(Self.describe(anchor), privacy: .public) sourceWidth=\(Int(sourceLayout.key.width)) targetWidth=\(Int(layout.key.width)) columns=\(sourceLayout.columns)->\(layout.columns) rows=\(layout.rows.count) buildMs=\(layout.buildMilliseconds)"
-                        )
-                        restorePendingViewportAnchor(
-                            using: layout,
-                            viewportHeight: viewportRuntime.scrollContainerSize.height,
+                        guard let rotationState,
+                              let targetSize = rotationState.targetSize
+                        else { return }
+                        let sourceSizes = [
+                            viewportRuntime.latestFrameSnapshot,
+                            viewportRuntime.previousFrameSnapshot,
+                        ]
+                        .compactMap { $0?.containerSize }
+                        guard TimelineRotationCapturePolicy.shouldCapture(
                             generation: generation,
-                            reason: "rotation",
-                            clearsAnchor: false
+                            isRotating: rotationState.isRotating,
+                            isTimelineActive: isTimelineActive,
+                            sourceSizes: sourceSizes,
+                            targetSize: targetSize
+                        ) else {
+                            Self.logger.info(
+                                "Timeline rotation ignored content=\(contentName, privacy: .public) generation=\(generation) active=\(isTimelineActive) rotating=\(rotationState.isRotating) target=\(Self.describe(targetSize), privacy: .public) reason=replayed-or-unchanged"
+                            )
+                            return
+                        }
+                        beginRotationTransaction(
+                            generation: generation,
+                            targetWidth: targetSize.width,
+                            targetColumns: timelineColumnCount(
+                                width: targetSize.width,
+                                height: targetSize.height
+                            )
                         )
                     }
                     .task(id: layout.key) {
-                        guard pendingViewportAnchor != nil else { return }
-                        let isRotating = rotationState?.isRotating == true
+                        guard pendingViewportAnchor != nil,
+                              rotationState?.isRotating != true
+                        else { return }
                         restorePendingViewportAnchor(
                             using: layout,
                             viewportHeight: viewportRuntime.scrollContainerSize.height,
-                            generation: rotationState?.generation ?? 0,
-                            reason: isRotating ? "rotation-layout" : "content",
-                            clearsAnchor: !isRotating
-                        )
-                    }
-                    .onChange(of: rotationState?.isRotating ?? false) { wasRotating, isRotating in
-                        guard wasRotating, !isRotating, pendingViewportAnchor != nil else { return }
-                        restorePendingViewportAnchor(
-                            using: layout,
-                            viewportHeight: viewportRuntime.scrollContainerSize.height,
-                            generation: rotationState?.generation ?? 0,
-                            reason: "rotation-complete",
+                            reason: "content",
                             clearsAnchor: true
                         )
+                    }
+                    .onChange(of: rotationState?.isRotating ?? false) { _, isRotating in
+                        guard !isRotating,
+                              let snapshot = viewportRuntime.latestFrameSnapshot
+                        else { return }
+                        advanceRotationTransaction(using: snapshot, layout: layout)
                     }
                     .onChange(of: presentation.preferences.assetLayout) {
                         guard let layoutAnchorID else { return }
@@ -900,8 +1055,7 @@ struct PhotosView: View {
                           latestJumpTask == nil,
                           viewportRuntime.timelineBottomGap > 24
                     else { return }
-                    rotationRestoreTask?.cancel()
-                    rotationRestoreTask = nil
+                    cancelRotationTransaction(reason: "return-to-latest")
                     contentRestoreTask?.cancel()
                     contentRestoreTask = nil
                     pendingViewportAnchor = nil
@@ -918,7 +1072,10 @@ struct PhotosView: View {
                         )
                         transaction.disablesAnimations = reduceMotion
                         withTransaction(transaction) {
-                            timelinePosition.scrollTo(edge: .bottom)
+                            timelinePosition.scrollTo(
+                                id: TimelineDeterministicLayout.bottomSpacerID,
+                                anchor: .bottom
+                            )
                         }
                         Self.logger.info(
                             "\(contentName, privacy: .public) re-tap scrolled to latest bucket=\(latest.rawValue, privacy: .public) animated=\(!reduceMotion)"
@@ -964,6 +1121,7 @@ struct PhotosView: View {
                         origin: .timeline(bucketID: row.bucketID, contentName: contentName)
                     )
                 },
+                frameCoordinateSpaceName: timelineFrameCoordinateSpaceName,
                 priority: timelinePriority(for: row, layout: layout)
             )
             .frame(height: row.height, alignment: .top)
@@ -1023,6 +1181,14 @@ struct PhotosView: View {
         return UIDevice.current.userInterfaceIdiom == .pad ? 24 : 12
     }
 
+    private func timelineColumnCount(width: CGFloat, height: CGFloat) -> Int {
+        TimelineGridOrder.timelineColumnCount(
+            availableSize: CGSize(width: width, height: height),
+            minimumLandscapeColumnWidth: horizontalSizeClass == .regular ? 120 : 88,
+            spacing: timelineItemSpacing
+        )
+    }
+
     private var timelineSectionRevisionKeys: [String] {
         timelineSections.map { section in
             section.id.rawValue + ":" + String(section.contentRevision)
@@ -1046,7 +1212,7 @@ struct PhotosView: View {
         case .latest:
             return .latest
         case let .asset(assetID, viewportCenterOffset)
-            where layout.verticalCenter(of: assetID) != nil:
+            where layout.rowTarget(of: assetID) != nil:
             return .asset(
                 id: assetID,
                 viewportCenterOffset: viewportCenterOffset
@@ -1054,35 +1220,34 @@ struct PhotosView: View {
         case .asset:
             break
         }
-        let centerY = viewportRuntime.scrollOffset
-            + viewportRuntime.scrollContainerSize.height / 2
-        if let assetID = layout.assetNearest(verticalOffset: centerY),
-           let assetCenter = layout.verticalCenter(of: assetID)
+        if let nearest = viewportRuntime.latestFrameSnapshot?.assetNearestVisualCenter(),
+           layout.rowTarget(of: nearest.id) != nil
         {
             return .asset(
-                id: assetID,
-                viewportCenterOffset: assetCenter - centerY
+                id: nearest.id,
+                viewportCenterOffset: nearest.verticalOffset
             )
         }
         return nil
     }
 
-    private func targetScrollOffset(
+    private func targetRow(
         for anchor: TimelineViewportAnchor,
         in layout: TimelineDeterministicLayout,
         viewportHeight: CGFloat
-    ) -> CGFloat? {
+    ) -> (rowID: String, unitAnchor: UnitPoint)? {
         switch anchor {
         case .latest:
-            return nil
+            return (TimelineDeterministicLayout.bottomSpacerID, .bottom)
         case let .asset(assetID, viewportCenterOffset):
-            guard let center = layout.verticalCenter(of: assetID) else { return nil }
-            let maximumOffset = max(0, layout.totalHeight - viewportHeight)
-            return TimelineViewportAnchorRetention.restoredScrollOffset(
-                assetCenter: center,
-                viewportCenterOffset: viewportCenterOffset,
-                viewportHeight: viewportHeight,
-                maximumOffset: maximumOffset
+            guard let target = layout.rowTarget(of: assetID) else { return nil }
+            return (
+                target.rowID,
+                TimelineViewportAnchorRetention.restoredUnitAnchor(
+                    viewportCenterOffset: viewportCenterOffset,
+                    viewportHeight: viewportHeight,
+                    rowHeight: target.rowHeight
+                )
             )
         }
     }
@@ -1090,7 +1255,6 @@ struct PhotosView: View {
     private func restorePendingViewportAnchor(
         using layout: TimelineDeterministicLayout,
         viewportHeight: CGFloat,
-        generation: Int,
         reason: String,
         clearsAnchor: Bool
     ) {
@@ -1100,43 +1264,249 @@ struct PhotosView: View {
             guard !Task.isCancelled, pendingViewportAnchor == anchor else { return }
             guard !viewportRuntime.userScrollPhase else {
                 pendingViewportAnchor = nil
-                rotationRestoreTask = nil
                 contentRestoreTask = nil
                 return
             }
-            let targetY = targetScrollOffset(
+            let targetRow = targetRow(
                 for: anchor,
                 in: layout,
                 viewportHeight: viewportHeight
             )
+            if case let .asset(assetID, _) = anchor, targetRow == nil {
+                if let visibleID = centerVisibleAssetID {
+                    viewportRuntime.retainedAnchor = .asset(
+                        id: visibleID,
+                        viewportCenterOffset: 0
+                    )
+                }
+                if clearsAnchor {
+                    pendingViewportAnchor = nil
+                }
+                contentRestoreTask = nil
+                Self.logger.info(
+                    "Timeline anchor restore stale content=\(contentName, privacy: .public) reason=\(reason, privacy: .public) asset=\(assetID.prefix(8), privacy: .public) action=keep-position"
+                )
+                return
+            }
             var transaction = Transaction(animation: nil)
             transaction.disablesAnimations = true
             withTransaction(transaction) {
-                switch anchor {
-                case .latest:
-                    timelinePosition.scrollTo(edge: .bottom)
-                case .asset:
-                    if let targetY {
-                        timelinePosition.scrollTo(y: targetY)
-                    }
+                if let targetRow {
+                    timelinePosition.scrollTo(
+                        id: targetRow.rowID,
+                        anchor: targetRow.unitAnchor
+                    )
                 }
             }
             if clearsAnchor {
                 pendingViewportAnchor = nil
             }
-            rotationRestoreTask = nil
             contentRestoreTask = nil
             Self.logger.info(
-                "Timeline anchor restored content=\(contentName, privacy: .public) reason=\(reason, privacy: .public) generation=\(generation) anchor=\(Self.describe(anchor), privacy: .public) targetY=\(targetY.map { String(Int($0)) } ?? "bottom", privacy: .public) layoutHeight=\(Int(layout.totalHeight)) viewportHeight=\(Int(viewportHeight))"
+                "Timeline anchor restored content=\(contentName, privacy: .public) reason=\(reason, privacy: .public) anchor=\(Self.describe(anchor), privacy: .public) targetRow=\(targetRow?.rowID ?? "bottom", privacy: .public) unitY=\(targetRow.map { String(format: "%.3f", $0.unitAnchor.y) } ?? "bottom", privacy: .public) result=requested viewportHeight=\(Int(viewportHeight))"
             )
         }
-        if reason.hasPrefix("rotation") {
-            rotationRestoreTask?.cancel()
-            rotationRestoreTask = task
-        } else {
-            contentRestoreTask?.cancel()
-            contentRestoreTask = task
+        contentRestoreTask?.cancel()
+        contentRestoreTask = task
+    }
+
+    private var timelineFrameCoordinateSpaceName: String {
+        "timeline-frames-\(contentName)"
+    }
+
+    private func updateAssetFrameSnapshot(
+        _ frames: [String: CGRect],
+        layout: TimelineDeterministicLayout,
+        fallbackContainerSize: CGSize
+    ) {
+        guard isTimelineActive, !frames.isEmpty else { return }
+        let measured = viewportRuntime.scrollContainerSize
+        let containerSize = measured.width > 0 && abs(measured.width - fallbackContainerSize.width) < 1
+            ? measured
+            : fallbackContainerSize
+        guard containerSize.width > 0, containerSize.height > 0 else { return }
+
+        let snapshot = TimelineAssetFrameSnapshot(
+            layoutKey: layout.key,
+            containerSize: containerSize,
+            frames: frames
+        )
+        guard TimelineAssetFrameSnapshotPolicy.isCoherent(snapshot) else { return }
+        if viewportRuntime.latestFrameSnapshot?.layoutKey != snapshot.layoutKey {
+            viewportRuntime.previousFrameSnapshot = viewportRuntime.latestFrameSnapshot
         }
+        viewportRuntime.latestFrameSnapshot = snapshot
+
+        if viewportRuntime.userScrollPhase,
+           viewportRuntime.timelineBottomGap > TimelineViewportAnchorRetention.latestBoundary,
+           let nearest = snapshot.assetNearestVisualCenter()
+        {
+            viewportRuntime.retainedAnchor = .asset(
+                id: nearest.id,
+                viewportCenterOffset: nearest.verticalOffset
+            )
+        }
+
+        if let nearest = snapshot.assetNearestVisualCenter(),
+           let target = layout.rowTarget(of: nearest.id)
+        {
+            store.updateVisibleAnchor(.init(
+                bucketID: target.bucketID,
+                assetID: nearest.id
+            ))
+        }
+
+        if let jumpTarget = store.jumpTarget,
+           jumpTarget != latestScrollTarget,
+           snapshot.visibleFrames.keys.contains(where: {
+               layout.rowTarget(of: $0)?.bucketID == jumpTarget
+           })
+        {
+            Self.logger.info(
+                "Calendar jump target became visible bucket=\(jumpTarget.rawValue, privacy: .public)"
+            )
+            store.completeJump()
+        }
+
+        advanceRotationTransaction(using: snapshot, layout: layout)
+    }
+
+    private func beginRotationTransaction(
+        generation: Int,
+        targetWidth: CGFloat,
+        targetColumns: Int
+    ) {
+        contentRestoreTask?.cancel()
+        contentRestoreTask = nil
+        pendingViewportAnchor = nil
+
+        let existing = viewportRuntime.rotationTransaction
+        let sourceSnapshot = [
+            viewportRuntime.latestFrameSnapshot,
+            viewportRuntime.previousFrameSnapshot,
+        ]
+        .compactMap(\.self)
+        .first { abs($0.layoutKey.width - targetWidth) > 1 }
+        ?? viewportRuntime.latestFrameSnapshot
+        let inheritedAssetID = existing?.assetID
+        let captured = sourceSnapshot?.assetNearestVisualCenter()
+        let assetID = inheritedAssetID ?? captured?.id
+
+        guard let sourceSnapshot else {
+            viewportRuntime.rotationTransaction = nil
+            Self.logger.error(
+                "Timeline rotation capture failed content=\(contentName, privacy: .public) generation=\(generation) targetWidth=\(Int(targetWidth)) reason=no-source-snapshot latest=\(Self.describe(viewportRuntime.latestFrameSnapshot), privacy: .public) previous=\(Self.describe(viewportRuntime.previousFrameSnapshot), privacy: .public)"
+            )
+            return
+        }
+        guard let assetID else {
+            viewportRuntime.rotationTransaction = nil
+            Self.logger.error(
+                "Timeline rotation capture failed content=\(contentName, privacy: .public) generation=\(generation) targetWidth=\(Int(targetWidth)) reason=no-visible-center source=\(Self.describe(sourceSnapshot), privacy: .public) latest=\(Self.describe(viewportRuntime.latestFrameSnapshot), privacy: .public) previous=\(Self.describe(viewportRuntime.previousFrameSnapshot), privacy: .public)"
+            )
+            return
+        }
+
+        let sourceScrollPhase = viewportRuntime.scrollMotionPhase
+        let sourceContentOffset = viewportRuntime.scrollView?.contentOffset
+            ?? CGPoint(x: 0, y: viewportRuntime.scrollOffset)
+        let momentumStopped = stopTimelineMotionForRotation(phase: sourceScrollPhase)
+
+        viewportRuntime.rotationTransaction = TimelineRotationTransaction(
+            generation: generation,
+            assetID: assetID,
+            sourceLayoutKey: sourceSnapshot.layoutKey,
+            targetWidth: targetWidth,
+            targetColumnCount: targetColumns,
+            sourceScrollPhase: sourceScrollPhase,
+            sourceContentOffset: sourceContentOffset,
+            momentumStopped: momentumStopped
+        )
+        Self.logger.info(
+            "Timeline rotation captured content=\(contentName, privacy: .public) generation=\(generation) asset=\(assetID.prefix(8), privacy: .public) inherited=\(inheritedAssetID != nil) sourceWidth=\(Int(sourceSnapshot.layoutKey.width)) targetWidth=\(Int(targetWidth)) targetColumns=\(targetColumns) sourceFrames=\(sourceSnapshot.frames.count) sourcePhase=\(sourceScrollPhase.rawValue, privacy: .public) sourceOffset=\(Int(sourceContentOffset.y)) momentumStopped=\(momentumStopped)"
+        )
+
+        if let latest = viewportRuntime.latestFrameSnapshot {
+            advanceRotationTransaction(
+                using: latest,
+                layout: viewportRuntime.layoutCache.current
+            )
+        }
+    }
+
+    private func advanceRotationTransaction(
+        using snapshot: TimelineAssetFrameSnapshot,
+        layout: TimelineDeterministicLayout
+    ) {
+        guard var rotation = viewportRuntime.rotationTransaction,
+              !viewportRuntime.userScrollPhase || viewportRuntime.rotationOwnsScrollCallbacks,
+              abs(snapshot.layoutKey.width - rotation.targetWidth) < 1,
+              abs(snapshot.containerSize.width - rotation.targetWidth) < 1,
+              layout.key == snapshot.layoutKey,
+              layout.columns == rotation.targetColumnCount
+        else { return }
+
+        guard let target = layout.rowTarget(of: rotation.assetID) else {
+            Self.logger.error(
+                "Timeline rotation stale content=\(contentName, privacy: .public) generation=\(rotation.generation) asset=\(rotation.assetID.prefix(8), privacy: .public) action=keep-position"
+            )
+            viewportRuntime.rotationTransaction = nil
+            viewportRuntime.rotationOwnsScrollCallbacks = false
+            viewportRuntime.scrollMotionPhase = .idle
+            return
+        }
+
+        switch rotation.stage {
+        case .awaitingDestination:
+            var transaction = Transaction(animation: nil)
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                timelinePosition.scrollTo(id: target.rowID, anchor: .center)
+            }
+            rotation.stage = .restoreRequested(rowID: target.rowID)
+            viewportRuntime.rotationTransaction = rotation
+            Self.logger.info(
+                "Timeline rotation restore requested content=\(contentName, privacy: .public) generation=\(rotation.generation) asset=\(rotation.assetID.prefix(8), privacy: .public) targetRow=\(target.rowID, privacy: .public) container=\(Self.describe(snapshot.containerSize), privacy: .public)"
+            )
+        case let .restoreRequested(rowID):
+            guard let frame = snapshot.frames[rotation.assetID] else { return }
+            let verticalDelta = frame.midY - snapshot.visualCenter.y
+            let tolerance = max(12, frame.height * 0.55)
+            guard abs(verticalDelta) <= tolerance else { return }
+            viewportRuntime.retainedAnchor = .asset(
+                id: rotation.assetID,
+                viewportCenterOffset: verticalDelta
+            )
+            viewportRuntime.rotationTransaction = nil
+            viewportRuntime.rotationOwnsScrollCallbacks = false
+            viewportRuntime.scrollMotionPhase = .idle
+            Self.logger.info(
+                "Timeline rotation verified content=\(contentName, privacy: .public) generation=\(rotation.generation) asset=\(rotation.assetID.prefix(8), privacy: .public) targetRow=\(rowID, privacy: .public) verticalDelta=\(Int(verticalDelta)) tolerance=\(Int(tolerance)) frames=\(snapshot.frames.count) sourcePhase=\(rotation.sourceScrollPhase.rawValue, privacy: .public) sourceOffset=\(Int(rotation.sourceContentOffset.y)) momentumStopped=\(rotation.momentumStopped)"
+            )
+        }
+    }
+
+    private func stopTimelineMotionForRotation(phase: TimelineScrollMotionPhase) -> Bool {
+        guard phase.isMoving, let scrollView = viewportRuntime.scrollView else { return false }
+        let presentedOffset = scrollView.contentOffset
+        viewportRuntime.rotationOwnsScrollCallbacks = true
+
+        // Cancelling the pan stops both a finger-down drag and UIKit deceleration.
+        // Re-enable it immediately so the destination accepts a new gesture.
+        scrollView.panGestureRecognizer.isEnabled = false
+        scrollView.panGestureRecognizer.isEnabled = true
+        scrollView.setContentOffset(presentedOffset, animated: false)
+        viewportRuntime.scrollMotionPhase = .idle
+        return true
+    }
+
+    private func cancelRotationTransaction(reason: String) {
+        guard let rotation = viewportRuntime.rotationTransaction else { return }
+        viewportRuntime.rotationTransaction = nil
+        viewportRuntime.rotationOwnsScrollCallbacks = false
+        Self.logger.info(
+            "Timeline rotation cancelled content=\(contentName, privacy: .public) generation=\(rotation.generation) asset=\(rotation.assetID.prefix(8), privacy: .public) reason=\(reason, privacy: .public)"
+        )
     }
 
     private var sectionRevisionKeys: [String] {
@@ -1154,6 +1524,9 @@ struct PhotosView: View {
     }
 
     private var centerVisibleAssetID: String? {
+        if let nearest = viewportRuntime.latestFrameSnapshot?.assetNearestVisualCenter() {
+            return nearest.id
+        }
         if case let .asset(assetID, _) = captureViewportAnchor(
             using: viewportRuntime.layoutCache.current
         ) {
@@ -1167,7 +1540,7 @@ struct PhotosView: View {
     private func updateChrome(old: PhotosChromeGeometry, new: PhotosChromeGeometry) {
         let programmaticJump = store.jumpTarget != nil
             || latestJumpTask != nil
-            || rotationRestoreTask != nil
+            || viewportRuntime.rotationTransaction != nil
             || contentRestoreTask != nil
             || layoutRestoreTask != nil
         if let compact = viewportRuntime.chromeTracker.update(
@@ -1238,6 +1611,11 @@ struct PhotosView: View {
         viewportRuntime.viewportUpdateTask = nil
         viewportRuntime.visibleDescriptors.removeAll(keepingCapacity: true)
         viewportRuntime.visibleAssets.removeAll(keepingCapacity: true)
+        viewportRuntime.latestFrameSnapshot = nil
+        viewportRuntime.previousFrameSnapshot = nil
+        viewportRuntime.rotationTransaction = nil
+        viewportRuntime.rotationOwnsScrollCallbacks = false
+        viewportRuntime.scrollMotionPhase = .idle
         viewportRuntime.retainedAnchor = .latest
         viewportRuntime.lastResidencyPlan = .empty
         viewportRuntime.lastResidencyTarget = nil
@@ -1245,6 +1623,11 @@ struct PhotosView: View {
 
     private nonisolated static func describe(_ size: CGSize) -> String {
         "\(Int(size.width))x\(Int(size.height))"
+    }
+
+    private nonisolated static func describe(_ snapshot: TimelineAssetFrameSnapshot?) -> String {
+        guard let snapshot else { return "none" }
+        return "layout=\(Int(snapshot.layoutKey.width)),container=\(describe(snapshot.containerSize)),frames=\(snapshot.frames.count),visible=\(snapshot.visibleFrames.count)"
     }
 
     private nonisolated static func describe(_ anchor: TimelineViewportAnchor?) -> String {

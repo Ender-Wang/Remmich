@@ -40,6 +40,7 @@ final class TimelineRotationState {
 
     func complete() {
         isRotating = false
+        targetSize = nil
     }
 }
 

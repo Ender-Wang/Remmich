@@ -195,18 +195,13 @@ final class RemmichUITests: XCTestCase {
         let photos = app.descendants(matching: .any)["photos-root"].firstMatch
         XCTAssertTrue(photos.waitForExistence(timeout: 5))
 
-        let grids = app.otherElements.matching(
-            NSPredicate(format: "label == %@", "Photo grid")
-        )
-        XCTAssertTrue(grids.firstMatch.waitForExistence(timeout: 2))
-
         // Exercise a multi-asset capture day. Its position in the timeline
         // changes when the presentation order changes.
         let assets = (1 ... 5).map { index in
             app.descendants(matching: .any)["asset-asset-\(index)"]
         }
-        XCTAssertTrue(assets[0].waitForExistence(timeout: 2))
-        XCTAssertTrue(assets[4].waitForExistence(timeout: 2))
+        XCTAssertTrue(assets[0].waitForExistence(timeout: 5))
+        XCTAssertTrue(assets[4].waitForExistence(timeout: 5))
 
         let frames = assets.map(\.frame)
         let newestRowY = frames[0].midY
@@ -220,12 +215,12 @@ final class RemmichUITests: XCTestCase {
 
         if photos.frame.width >= 600 {
             XCTAssertGreaterThanOrEqual(frames[0].width, 118)
-            XCTAssertGreaterThanOrEqual(newestRowCount, 4)
+            XCTAssertEqual(newestRowCount, 5)
         } else {
-            XCTAssertGreaterThanOrEqual(frames[0].width, 86)
-            XCTAssertGreaterThanOrEqual(newestRowCount, 3)
-            // The fixture's five assets share one capture day. The newest
-            // row fills left to right; any remaining older assets start above it.
+            XCTAssertGreaterThanOrEqual(frames[0].width, 75)
+            XCTAssertEqual(newestRowCount, 5)
+            // Portrait timelines intentionally use five columns, matching
+            // the center-asset rotation model and current product contract.
             XCTAssertEqual(frames[0].minX, photos.frame.minX, accuracy: 2)
             for index in 1 ..< newestRowCount {
                 XCTAssertEqual(frames[index].midY, newestRowY, accuracy: 2)

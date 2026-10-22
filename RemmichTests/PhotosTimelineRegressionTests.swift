@@ -1,11 +1,103 @@
 import Foundation
 import Nuke
+import SwiftUI
 import Testing
 import UIKit
 @testable import Remmich
 
 @Suite("Server-backed Photos timeline")
 struct PhotosTimelineRegressionTests {
+    @Test @MainActor func completedHostRotationCannotReplayWhenTimelineReactivates() {
+        let state = TimelineRotationState()
+
+        state.begin(to: CGSize(width: 874, height: 402))
+        #expect(state.generation == 1)
+        #expect(state.isRotating)
+        #expect(state.targetSize == CGSize(width: 874, height: 402))
+
+        state.complete()
+        #expect(!state.isRotating)
+        #expect(state.targetSize == nil)
+    }
+
+    @Test func rotationCaptureRequiresAnActiveLiveSizeChange() {
+        let portrait = CGSize(width: 402, height: 791)
+        let landscape = CGSize(width: 874, height: 338)
+
+        #expect(TimelineRotationCapturePolicy.shouldCapture(
+            generation: 4,
+            isRotating: true,
+            isTimelineActive: true,
+            sourceSizes: [portrait],
+            targetSize: landscape
+        ))
+        #expect(!TimelineRotationCapturePolicy.shouldCapture(
+            generation: 4,
+            isRotating: false,
+            isTimelineActive: true,
+            sourceSizes: [portrait],
+            targetSize: portrait
+        ))
+        #expect(!TimelineRotationCapturePolicy.shouldCapture(
+            generation: 4,
+            isRotating: true,
+            isTimelineActive: false,
+            sourceSizes: [portrait],
+            targetSize: landscape
+        ))
+        #expect(!TimelineRotationCapturePolicy.shouldCapture(
+            generation: 4,
+            isRotating: true,
+            isTimelineActive: true,
+            sourceSizes: [portrait],
+            targetSize: portrait
+        ))
+    }
+
+    @Test func rotationOwnsOnlyCallbacksProducedWhileStoppingSourceMomentum() {
+        #expect(TimelineScrollMotionPhase.interacting.isMoving)
+        #expect(TimelineScrollMotionPhase.decelerating.isMoving)
+        #expect(!TimelineScrollMotionPhase.idle.isMoving)
+
+        #expect(TimelineRotationScrollPolicy.shouldCancelRotation(
+            phase: .interacting,
+            rotationOwnsScrollCallbacks: false
+        ))
+        #expect(TimelineRotationScrollPolicy.shouldCancelRotation(
+            phase: .decelerating,
+            rotationOwnsScrollCallbacks: false
+        ))
+        #expect(!TimelineRotationScrollPolicy.shouldCancelRotation(
+            phase: .decelerating,
+            rotationOwnsScrollCallbacks: true
+        ))
+        #expect(TimelineRotationScrollPolicy.releasesRotationOwnership(phase: .idle))
+        #expect(!TimelineRotationScrollPolicy.releasesRotationOwnership(phase: .interacting))
+    }
+
+    @Test func offscreenOnlyFrameReductionCannotReplaceRotationSource() {
+        let key = TimelineDeterministicLayout.Key(
+            width: 402,
+            minimumColumnWidth: 88,
+            spacing: 2,
+            fixedColumnCount: 5,
+            sectionRevisions: []
+        )
+        let coherent = TimelineAssetFrameSnapshot(
+            layoutKey: key,
+            containerSize: CGSize(width: 402, height: 791),
+            frames: ["visible": CGRect(x: 80, y: 300, width: 78, height: 78)]
+        )
+        let offscreenOnly = TimelineAssetFrameSnapshot(
+            layoutKey: key,
+            containerSize: CGSize(width: 402, height: 791),
+            frames: ["retained": CGRect(x: 80, y: 1200, width: 78, height: 78)]
+        )
+
+        #expect(TimelineAssetFrameSnapshotPolicy.isCoherent(coherent))
+        #expect(!TimelineAssetFrameSnapshotPolicy.isCoherent(offscreenOnly))
+    }
+
     @Test @MainActor func nativeTabLayoutRetainsPhotosAndSearchIdentity() {
         #expect(NativeTabLayout.destinations(compactOwner: nil) == [.photos, .videos, .albums, .library, .search])
         #expect(NativeTabLayout.destinations(compactOwner: .photos) == [.photos, .weeks, .months, .years, .search])
@@ -59,43 +151,13 @@ struct PhotosTimelineRegressionTests {
         #expect(tracker.isCompact == false)
     }
 
-    @Test func newestTimelineAnchorSurvivesTransientGeometryAndTabSwitching() {
-        var anchor = TimelineViewportAnchor.latest
-
-        anchor = TimelineViewportAnchorRetention.update(
-            current: anchor,
-            bottomGap: 400,
-            userScrolling: false,
-            centeredAssetID: "latest-visible-asset",
-            viewportCenterOffset: 8
-        )
-        #expect(anchor == .latest)
-
-        anchor = TimelineViewportAnchorRetention.update(
-            current: anchor,
-            bottomGap: 120,
-            userScrolling: true,
-            centeredAssetID: "middle-asset",
-            viewportCenterOffset: -37
-        )
-        #expect(anchor == .asset(id: "middle-asset", viewportCenterOffset: -37))
-
-        anchor = TimelineViewportAnchorRetention.update(
-            current: anchor,
-            bottomGap: 12,
-            userScrolling: false,
-            centeredAssetID: "latest-visible-asset",
-            viewportCenterOffset: 0
-        )
-        #expect(anchor == .latest)
-
-        let restoredOffset = TimelineViewportAnchorRetention.restoredScrollOffset(
-            assetCenter: 1240,
+    @Test func retainedOffsetMapsToIdentityScrollAnchor() {
+        let restoredAnchor = TimelineViewportAnchorRetention.restoredUnitAnchor(
             viewportCenterOffset: -37,
             viewportHeight: 800,
-            maximumOffset: 2000
+            rowHeight: 100
         )
-        #expect(restoredOffset == 877)
+        #expect(abs(restoredAnchor.y - 0.447_142_857) < 0.000_001)
     }
 
     @Test func gridFillsNewestFirstFromBottomLeft() {
@@ -112,6 +174,14 @@ struct PhotosTimelineRegressionTests {
         #expect(TimelineGridOrder.columnCount(availableWidth: 402, minimumColumnWidth: 88, spacing: 12) == 4)
         #expect(TimelineGridOrder.columnCount(availableWidth: 820, minimumColumnWidth: 120, spacing: 24) == 5)
         #expect(TimelineGridOrder.columnCount(availableWidth: 1180, minimumColumnWidth: 120, spacing: 24) == 8)
+        #expect(TimelineGridOrder.timelineColumnCount(
+            availableSize: CGSize(width: 402, height: 874),
+            minimumLandscapeColumnWidth: 88
+        ) == 5)
+        #expect(TimelineGridOrder.timelineColumnCount(
+            availableSize: CGSize(width: 874, height: 402),
+            minimumLandscapeColumnWidth: 88
+        ) == 9)
     }
 
     @Test func deterministicTimelineLayoutDerivesExactRowsFromWidthAndAssetCount() {
@@ -132,6 +202,7 @@ struct PhotosTimelineRegressionTests {
             width: 393,
             minimumColumnWidth: 88,
             spacing: 2,
+            fixedColumnCount: 5,
             sectionRevisions: ["2026-10-01:1"]
         )
         let portrait = TimelineDeterministicLayout.build(
@@ -139,12 +210,11 @@ struct PhotosTimelineRegressionTests {
             key: portraitKey
         )
 
-        #expect(portrait.columns == 4)
+        #expect(portrait.columns == 5)
         #expect(portrait.rows.count == 3)
         #expect(portrait.totalHeight == TimelineDeterministicLayout.headerHeight + portrait.itemSide * 2 + 2)
-        #expect(portrait.assetNearest(
-            verticalOffset: TimelineDeterministicLayout.headerHeight + portrait.itemSide * 1.5
-        ) != nil)
+        #expect(portrait.rowTarget(of: "asset-0")?.rowID == portrait.rowTarget(of: "asset-4")?.rowID)
+        #expect(portrait.rowTarget(of: "asset-0")?.rowID != portrait.rowTarget(of: "asset-5")?.rowID)
 
         let landscape = TimelineDeterministicLayout.build(
             sections: [section],
@@ -152,12 +222,39 @@ struct PhotosTimelineRegressionTests {
                 width: 844,
                 minimumColumnWidth: 88,
                 spacing: 2,
+                fixedColumnCount: nil,
                 sectionRevisions: ["2026-10-01:1"]
             )
         )
         #expect(landscape.columns == 9)
         #expect(landscape.rows.count == 2)
         #expect(landscape.totalHeight == TimelineDeterministicLayout.headerHeight + landscape.itemSide)
+    }
+
+    @Test func frameSnapshotChoosesCenterRowThenCenterCell() {
+        let key = TimelineDeterministicLayout.Key(
+            width: 400,
+            minimumColumnWidth: 70,
+            spacing: 2,
+            fixedColumnCount: 5,
+            sectionRevisions: ["revision"]
+        )
+        let snapshot = TimelineAssetFrameSnapshot(
+            layoutKey: key,
+            containerSize: CGSize(width: 400, height: 800),
+            frames: [
+                "upper-center": CGRect(x: 160, y: 250, width: 80, height: 80),
+                "center-left": CGRect(x: 80, y: 360, width: 80, height: 80),
+                "center": CGRect(x: 160, y: 360, width: 80, height: 80),
+                "center-right": CGRect(x: 240, y: 360, width: 80, height: 80),
+                "lower-center": CGRect(x: 160, y: 470, width: 80, height: 80),
+                "overscan": CGRect(x: 160, y: 900, width: 80, height: 80),
+            ]
+        )
+
+        let nearest = snapshot.assetNearestVisualCenter()
+        #expect(nearest?.id == "center")
+        #expect(nearest?.verticalOffset == 0)
     }
 
     @Test func dayGroupingRemainsOrderedWithoutRepeatedArrayMutation() {
