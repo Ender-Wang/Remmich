@@ -81,6 +81,11 @@ enum NativeTabDestination: Hashable {
     case search
 }
 
+enum NativeTabPageDirection: Equatable {
+    case previous
+    case next
+}
+
 @MainActor
 enum NativeTabTransitionTrace {
     private static let signposter = OSSignposter(
@@ -116,6 +121,10 @@ enum NativeTabTransitionTrace {
 }
 
 enum NativeTabLayout {
+    static let primaryDestinations: [NativeTabDestination] = [
+        .photos, .videos, .albums, .library, .search,
+    ]
+
     static func destinations(compactOwner: NativeTabDestination?) -> [NativeTabDestination] {
         switch compactOwner {
         case .photos:
@@ -123,8 +132,20 @@ enum NativeTabLayout {
         case .videos:
             [.videos, .weeks, .months, .years, .search]
         default:
-            [.photos, .videos, .albums, .library, .search]
+            primaryDestinations
         }
+    }
+
+    static func adjacentDestination(
+        from destination: NativeTabDestination,
+        direction: NativeTabPageDirection,
+        compactOwner: NativeTabDestination?
+    ) -> NativeTabDestination? {
+        let destinations = destinations(compactOwner: compactOwner)
+        guard let index = destinations.firstIndex(of: destination) else { return nil }
+        let adjacentIndex = direction == .next ? index + 1 : index - 1
+        guard destinations.indices.contains(adjacentIndex) else { return nil }
+        return destinations[adjacentIndex]
     }
 }
 
@@ -137,6 +158,7 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
     let contentActivationState: NativeTabContentActivationState
     let compactOwner: NativeTabDestination?
     let isViewerPresented: Bool
+    let pageSwipeEnabled: Bool
     let photosScrollRequest: Int
     let videosScrollRequest: Int
     let groupedScrollRequests: [NativeTabDestination: Int]
@@ -167,6 +189,7 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
         controller.mode = .tabBar
         controller.delegate = context.coordinator
         context.coordinator.controller = controller
+        context.coordinator.installPrimaryPageSwipeRecognizers(on: controller)
         context.coordinator.update(self, animated: false)
         return controller
     }
@@ -177,7 +200,7 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
     }
 
     @MainActor
-    final class Coordinator: NSObject, UITabBarControllerDelegate {
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate, UITabBarControllerDelegate {
         private static let logger = Logger(
             subsystem: "io.github.ender-wang.Remmich",
             category: "NativeTabs"
@@ -195,6 +218,18 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
             destination: NativeTabDestination,
             instant: ContinuousClock.Instant
         )?
+        private var pendingPageDirection: NativeTabPageDirection?
+        private var pageInteractionController: UIPercentDrivenInteractiveTransition?
+        private var pageInteractionDestination: NativeTabDestination?
+        private weak var pageInteractionPreviousTab: UITab?
+
+        private lazy var pagePanRecognizer: UIPanGestureRecognizer = {
+            let recognizer = UIPanGestureRecognizer(target: self, action: #selector(primaryPagePanned(_:)))
+            recognizer.cancelsTouchesInView = false
+            recognizer.maximumNumberOfTouches = 1
+            recognizer.delegate = self
+            return recognizer
+        }()
 
         private lazy var photosController = tabHostingController(
             rootView: parent.photos,
@@ -289,6 +324,10 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
             contentActivationTask?.cancel()
         }
 
+        func installPrimaryPageSwipeRecognizers(on controller: UITabBarController) {
+            controller.view.addGestureRecognizer(pagePanRecognizer)
+        }
+
         private func scheduleContentActivation(_ destination: NativeTabDestination) {
             guard !parent.contentActivationState.isHydrated(destination) else { return }
             contentActivationGeneration &+= 1
@@ -364,7 +403,9 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
                 )
             }
             let intendedTab = tab(for: next.selection)
-            if controller.selectedTab !== intendedTab {
+            if pageInteractionController == nil,
+               controller.selectedTab !== intendedTab
+            {
                 controller.selectedTab = intendedTab
             }
             resolveVideoTab(in: controller)
@@ -437,6 +478,185 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
 
         func tabBarController(_: UITabBarController, didSelectTab selectedTab: UITab, previousTab: UITab?) {
             guard !isUpdatingTabs, let destination = destination(for: selectedTab) else { return }
+            publishSelection(
+                destination: destination,
+                selectedTab: selectedTab,
+                previousTab: previousTab
+            )
+        }
+
+        @objc private func primaryPagePanned(_ recognizer: UIPanGestureRecognizer) {
+            guard let controller else { return }
+
+            switch recognizer.state {
+            case .began:
+                beginPageInteraction(using: recognizer, in: controller)
+            case .changed:
+                updatePageInteraction(using: recognizer, in: controller)
+            case .ended:
+                completePageInteraction(using: recognizer, in: controller)
+            case .cancelled, .failed:
+                cancelPageInteraction(in: controller)
+            default:
+                break
+            }
+        }
+
+        private func beginPageInteraction(
+            using recognizer: UIPanGestureRecognizer,
+            in controller: UITabBarController
+        ) {
+            guard pageInteractionController == nil,
+                  let previousTab = controller.selectedTab
+            else { return }
+
+            let velocity = recognizer.velocity(in: controller.view)
+            let direction: NativeTabPageDirection = velocity.x < 0 ? .next : .previous
+            guard let destination = NativeTabLayout.adjacentDestination(
+                from: parent.selection,
+                direction: direction,
+                compactOwner: parent.compactOwner
+            ) else { return }
+
+            let interaction = UIPercentDrivenInteractiveTransition()
+            interaction.completionCurve = .easeOut
+            interaction.completionSpeed = 1
+            pageInteractionController = interaction
+            pageInteractionDestination = destination
+            pageInteractionPreviousTab = previousTab
+            pendingPageDirection = direction
+
+            isUpdatingTabs = true
+            controller.selectedTab = tab(for: destination)
+            isUpdatingTabs = false
+
+            guard controller.transitionCoordinator != nil else {
+                clearPageInteraction()
+                return
+            }
+        }
+
+        private func updatePageInteraction(
+            using recognizer: UIPanGestureRecognizer,
+            in controller: UITabBarController
+        ) {
+            guard let interaction = pageInteractionController else { return }
+            interaction.update(pageInteractionProgress(using: recognizer, in: controller))
+        }
+
+        private func completePageInteraction(
+            using recognizer: UIPanGestureRecognizer,
+            in controller: UITabBarController
+        ) {
+            guard let interaction = pageInteractionController else { return }
+            let progress = pageInteractionProgress(using: recognizer, in: controller)
+            let velocity = recognizer.velocity(in: controller.view).x
+            let advancesInTransitionDirection: Bool = switch pendingPageDirection {
+            case .next:
+                velocity < -420
+            case .previous:
+                velocity > 420
+            case nil:
+                false
+            }
+
+            if progress >= 0.35 || advancesInTransitionDirection {
+                finishPageInteraction(interaction, in: controller)
+            } else {
+                cancelPageInteraction(in: controller)
+            }
+        }
+
+        private func finishPageInteraction(
+            _ interaction: UIPercentDrivenInteractiveTransition,
+            in controller: UITabBarController
+        ) {
+            guard let destination = pageInteractionDestination,
+                  let previousTab = pageInteractionPreviousTab
+            else {
+                interaction.cancel()
+                clearPageInteraction()
+                return
+            }
+
+            let selectedTab = tab(for: destination)
+            interaction.finish()
+            publishSelection(
+                destination: destination,
+                selectedTab: selectedTab,
+                previousTab: previousTab
+            )
+            completePageInteractionTransition(in: controller) { [weak self] cancelled in
+                guard let self else { return }
+                if cancelled {
+                    restorePageInteractionPreviousTab(previousTab, in: controller)
+                    if let previousDestination = self.destination(for: previousTab) {
+                        parent.selection = previousDestination
+                    }
+                }
+                clearPageInteraction()
+            }
+        }
+
+        private func cancelPageInteraction(in controller: UITabBarController) {
+            guard let interaction = pageInteractionController else { return }
+            let previousTab = pageInteractionPreviousTab
+            interaction.cancel()
+            completePageInteractionTransition(in: controller) { [weak self] _ in
+                guard let self else { return }
+                if let previousTab {
+                    restorePageInteractionPreviousTab(previousTab, in: controller)
+                }
+                clearPageInteraction()
+            }
+        }
+
+        private func completePageInteractionTransition(
+            in controller: UITabBarController,
+            completion: @escaping (Bool) -> Void
+        ) {
+            guard let coordinator = controller.transitionCoordinator else {
+                completion(false)
+                return
+            }
+            coordinator.animate(alongsideTransition: nil) { context in
+                let wasCancelled = context.isCancelled
+                Task { @MainActor in
+                    completion(wasCancelled)
+                }
+            }
+        }
+
+        private func restorePageInteractionPreviousTab(
+            _ previousTab: UITab,
+            in controller: UITabBarController
+        ) {
+            guard controller.selectedTab !== previousTab else { return }
+            isUpdatingTabs = true
+            controller.selectedTab = previousTab
+            isUpdatingTabs = false
+        }
+
+        private func clearPageInteraction() {
+            pendingPageDirection = nil
+            pageInteractionController = nil
+            pageInteractionDestination = nil
+            pageInteractionPreviousTab = nil
+        }
+
+        private func pageInteractionProgress(
+            using recognizer: UIPanGestureRecognizer,
+            in controller: UITabBarController
+        ) -> CGFloat {
+            let width = max(controller.view.bounds.width, 1)
+            return min(max(abs(recognizer.translation(in: controller.view).x) / width, 0), 1)
+        }
+
+        private func publishSelection(
+            destination: NativeTabDestination,
+            selectedTab: UITab,
+            previousTab: UITab?
+        ) {
             controller?.discardRotationVisualHandoff(reason: "tab-selection")
             let isReselection = selectedTab === previousTab
             if isReselection,
@@ -495,6 +715,80 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
             }
         }
 
+        func gestureRecognizer(
+            _: UIGestureRecognizer,
+            shouldReceive touch: UITouch
+        ) -> Bool {
+            guard parent.pageSwipeEnabled,
+                  !parent.isViewerPresented
+            else { return false }
+
+            var touchedView = touch.view
+            while let view = touchedView {
+                if view is UIControl {
+                    return false
+                }
+                if let scrollView = view as? UIScrollView,
+                   scrollView.alwaysBounceHorizontal
+                   || scrollView.contentSize.width > scrollView.bounds.width + 1
+                {
+                    return false
+                }
+                touchedView = view.superview
+            }
+            return true
+        }
+
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            guard gestureRecognizer === pagePanRecognizer,
+                  parent.pageSwipeEnabled,
+                  !parent.isViewerPresented,
+                  !UIAccessibility.isReduceMotionEnabled,
+                  pageInteractionController == nil,
+                  let controller
+            else { return false }
+
+            let velocity = pagePanRecognizer.velocity(in: controller.view)
+            guard abs(velocity.x) > abs(velocity.y) * 1.2,
+                  abs(velocity.x) > 80
+            else { return false }
+
+            let direction: NativeTabPageDirection = velocity.x < 0 ? .next : .previous
+            if direction == .previous,
+               pagePanRecognizer.location(in: controller.view).x < 32
+            {
+                return false
+            }
+            return NativeTabLayout.adjacentDestination(
+                from: parent.selection,
+                direction: direction,
+                compactOwner: parent.compactOwner
+            ) != nil
+        }
+
+        func gestureRecognizer(
+            _: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith _: UIGestureRecognizer
+        ) -> Bool {
+            true
+        }
+
+        func tabBarController(
+            _: UITabBarController,
+            animationControllerForTransitionFrom _: UIViewController,
+            to _: UIViewController
+        ) -> (any UIViewControllerAnimatedTransitioning)? {
+            guard let direction = pendingPageDirection else { return nil }
+            return NativeTabPageAnimator(direction: direction)
+        }
+
+        func tabBarController(
+            _: UITabBarController,
+            interactionControllerFor _: any UIViewControllerAnimatedTransitioning
+        ) -> (any UIViewControllerInteractiveTransitioning)? {
+            pageInteractionController
+        }
+
         private func tab(for destination: NativeTabDestination) -> UITab {
             switch destination {
             case .photos: photosTab
@@ -535,6 +829,62 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
             }
             return nil
         }
+    }
+}
+
+private final class NativeTabPageAnimator: NSObject, UIViewControllerAnimatedTransitioning {
+    let direction: NativeTabPageDirection
+    private var propertyAnimator: UIViewPropertyAnimator?
+
+    init(direction: NativeTabPageDirection) {
+        self.direction = direction
+    }
+
+    func transitionDuration(using _: (any UIViewControllerContextTransitioning)?) -> TimeInterval {
+        0.36
+    }
+
+    func animateTransition(using transitionContext: any UIViewControllerContextTransitioning) {
+        interruptibleAnimator(using: transitionContext).startAnimation()
+    }
+
+    func interruptibleAnimator(
+        using transitionContext: any UIViewControllerContextTransitioning
+    ) -> any UIViewImplicitlyAnimating {
+        if let propertyAnimator {
+            return propertyAnimator
+        }
+
+        guard let fromView = transitionContext.view(forKey: .from),
+              let toView = transitionContext.view(forKey: .to),
+              let toController = transitionContext.viewController(forKey: .to)
+        else {
+            transitionContext.completeTransition(false)
+            return UIViewPropertyAnimator(duration: 0, curve: .linear)
+        }
+
+        let container = transitionContext.containerView
+        let width = container.bounds.width
+        let travel = direction == .next ? width : -width
+        toView.frame = transitionContext.finalFrame(for: toController)
+        toView.transform = CGAffineTransform(translationX: travel, y: 0)
+        container.addSubview(toView)
+
+        let animator = UIViewPropertyAnimator(
+            duration: transitionDuration(using: transitionContext),
+            curve: .easeInOut
+        ) {
+            fromView.transform = CGAffineTransform(translationX: -travel, y: 0)
+            toView.transform = .identity
+        }
+        animator.addCompletion { [weak self] _ in
+            fromView.transform = .identity
+            toView.transform = .identity
+            transitionContext.completeTransition(!transitionContext.transitionWasCancelled)
+            self?.propertyAnimator = nil
+        }
+        propertyAnimator = animator
+        return animator
     }
 }
 

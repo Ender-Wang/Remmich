@@ -12,6 +12,7 @@ struct LibraryView: View {
     let saveProfile: (ConnectionProfileDraft) async -> ConnectionProfileSaveResult
     let signOut: (Bool) async -> Void
     @Binding var dismissAccountRequest: Int
+    let accountPresentationChanged: (Bool) -> Void
 
     @State private var accountPresented = false
     @State private var accountContentMounted = false
@@ -164,6 +165,7 @@ struct LibraryView: View {
     }
 
     private func setAccountPresented(_ presented: Bool) {
+        accountPresentationChanged(presented)
         if reduceMotion {
             accountPresented = presented
             accountContentMounted = presented
@@ -261,7 +263,8 @@ private struct CollectionDetailView: View {
             libraryIndex: LibraryIndexController(source: PreviewTimelineReader()),
             saveProfile: { _ in .saved(profile: .init()) },
             signOut: { _ in },
-            dismissAccountRequest: .constant(0)
+            dismissAccountRequest: .constant(0),
+            accountPresentationChanged: { _ in }
         )
     }
 }

@@ -71,6 +71,7 @@ private struct RestoringAppShellView: View {
             contentActivationState: activationState,
             compactOwner: nil,
             isViewerPresented: false,
+            pageSwipeEnabled: false,
             photosScrollRequest: 0,
             videosScrollRequest: 0,
             groupedScrollRequests: [:],

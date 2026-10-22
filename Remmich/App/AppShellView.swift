@@ -29,6 +29,7 @@ struct AppShellView: View {
     @State private var photosScrollRequest = 0
     @State private var videosScrollRequest = 0
     @State private var libraryDismissAccountRequest = 0
+    @State private var libraryAccountPresented = false
     @State private var videoPresentation = PhotosPresentationState(
         store: UserDefaultsPresentationPreferencesStore(key: "video-presentation-preferences")
     )
@@ -53,6 +54,7 @@ struct AppShellView: View {
             contentActivationState: tabContentActivationState,
             compactOwner: compactTabOwner,
             isViewerPresented: viewerPresented,
+            pageSwipeEnabled: pageSwipeEnabled,
             photosScrollRequest: photosScrollRequest,
             videosScrollRequest: videosScrollRequest,
             groupedScrollRequests: groupedScrollRequests,
@@ -164,7 +166,8 @@ struct AppShellView: View {
                             libraryIndex: libraryIndex,
                             saveProfile: saveProfile,
                             signOut: signOut,
-                            dismissAccountRequest: $libraryDismissAccountRequest
+                            dismissAccountRequest: $libraryDismissAccountRequest,
+                            accountPresentationChanged: { libraryAccountPresented = $0 }
                         )
                     }
                 }
@@ -338,6 +341,21 @@ struct AppShellView: View {
         case .videos: compactVideosTabs ? .videos : nil
         case .weeks, .months, .years: groupedMediaOwner
         default: nil
+        }
+    }
+
+    private var pageSwipeEnabled: Bool {
+        guard !viewerPresented,
+              !libraryAccountPresented
+        else { return false }
+
+        switch tabSelectionState.selection {
+        case .photos: return photosPath.isEmpty
+        case .videos: return videosPath.isEmpty
+        case .albums: return albumsPath.isEmpty
+        case .library: return libraryPath.isEmpty
+        case .search: return searchPath.isEmpty
+        case .weeks, .months, .years: return true
         }
     }
 

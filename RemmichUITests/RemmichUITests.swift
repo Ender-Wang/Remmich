@@ -77,6 +77,58 @@ final class RemmichUITests: XCTestCase {
     }
 
     @MainActor
+    func testPrimaryNavigationSwipesBetweenAdjacentPages() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-ui-testing-signed-in"]
+        app.launch()
+
+        let pages = [
+            ("photos-root", "Photos"),
+            ("videos-root", "Videos"),
+            ("albums-root", "Albums"),
+            ("library-root", "Library"),
+            ("search-root", "Search"),
+        ]
+        XCTAssertTrue(app.descendants(matching: .any)[pages[0].0].waitForExistence(timeout: 5))
+
+        for page in pages.dropFirst() {
+            app.swipeLeft()
+            XCTAssertTrue(app.descendants(matching: .any)[page.0].waitForExistence(timeout: 5))
+            XCTAssertTrue(tabButton(page.1, in: app).isSelected)
+        }
+
+        for page in pages.dropLast().reversed() {
+            app.swipeRight()
+            XCTAssertTrue(app.descendants(matching: .any)[page.0].waitForExistence(timeout: 5))
+            XCTAssertTrue(tabButton(page.1, in: app).isSelected)
+        }
+    }
+
+    @MainActor
+    func testGroupedNavigationSwipesBetweenAdjacentPages() {
+        let app = rangeApplication()
+        app.launch()
+        XCTAssertTrue(app.descendants(matching: .any)["photos-root"].waitForExistence(timeout: 10))
+
+        selectRange("Weeks", in: app)
+        app.swipeLeft()
+        XCTAssertTrue(app.descendants(matching: .any)["timeline-months-root"].waitForExistence(timeout: 10))
+        XCTAssertTrue(tabButton("Months", in: app).isSelected)
+
+        app.swipeLeft()
+        XCTAssertTrue(app.descendants(matching: .any)["timeline-years-root"].waitForExistence(timeout: 10))
+        XCTAssertTrue(tabButton("Years", in: app).isSelected)
+
+        app.swipeRight()
+        XCTAssertTrue(app.descendants(matching: .any)["timeline-months-root"].waitForExistence(timeout: 10))
+        app.swipeRight()
+        XCTAssertTrue(app.descendants(matching: .any)["timeline-library-weeks-root"].waitForExistence(timeout: 10))
+        app.swipeRight()
+        XCTAssertTrue(app.descendants(matching: .any)["photos-root"].waitForExistence(timeout: 10))
+        XCTAssertTrue(tabButton("Photos", in: app).isSelected)
+    }
+
+    @MainActor
     func testCaptureAccountSheetAppearanceOnDevice() throws {
         #if targetEnvironment(simulator)
             throw XCTSkip("Captures the account panel over a manually authenticated physical-device library")
@@ -583,7 +635,7 @@ final class RemmichUITests: XCTestCase {
 
     @MainActor
     private func tabButton(_ label: String, in app: XCUIApplication) -> XCUIElement {
-        let matches = app.descendants(matching: .any)
+        let matches = app.buttons
             .matching(NSPredicate(format: "label == %@", label))
         return matches.allElementsBoundByIndex.first(where: \.isHittable) ?? matches.firstMatch
     }
