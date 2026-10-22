@@ -448,6 +448,10 @@ struct PhotosView: View {
         }
         .onAppear {
             viewportRuntime.isTimelineActive = isTimelineActive
+            rotationState?.setVisualHandoffEligible(
+                isTimelineActive,
+                for: tabDestination
+            )
             media.beginTimelinePresentation()
             if isTimelineActive {
                 media.beginTimelineContentPresentation(contentName)
@@ -472,6 +476,10 @@ struct PhotosView: View {
         }
         .onChange(of: isTimelineActive) { _, isVisible in
             viewportRuntime.isTimelineActive = isVisible
+            rotationState?.setVisualHandoffEligible(
+                isVisible,
+                for: tabDestination
+            )
             timelineResumeTask?.cancel()
             if isVisible {
                 media.beginTimelineContentPresentation(contentName)
@@ -543,6 +551,7 @@ struct PhotosView: View {
             requestedLibraryRangeHandled()
         }
         .onDisappear {
+            rotationState?.setVisualHandoffEligible(false, for: tabDestination)
             viewportRuntime.viewportUpdateTask?.cancel()
             viewportRuntime.viewportUpdateTask = nil
             timelineResumeTask?.cancel()
@@ -1001,6 +1010,11 @@ struct PhotosView: View {
                             sourceSizes: sourceSizes,
                             targetSize: targetSize
                         ) else {
+                            rotationState.resolveVisualHandoff(
+                                generation: generation,
+                                verified: false,
+                                reason: "capture-ignored"
+                            )
                             Self.logger.info(
                                 "Timeline rotation ignored content=\(contentName, privacy: .public) generation=\(generation) active=\(isTimelineActive) rotating=\(rotationState.isRotating) target=\(Self.describe(targetSize), privacy: .public) reason=replayed-or-unchanged"
                             )
@@ -1394,6 +1408,11 @@ struct PhotosView: View {
 
         guard let sourceSnapshot else {
             viewportRuntime.rotationTransaction = nil
+            rotationState?.resolveVisualHandoff(
+                generation: generation,
+                verified: false,
+                reason: "no-source-snapshot"
+            )
             Self.logger.error(
                 "Timeline rotation capture failed content=\(contentName, privacy: .public) generation=\(generation) targetWidth=\(Int(targetWidth)) reason=no-source-snapshot latest=\(Self.describe(viewportRuntime.latestFrameSnapshot), privacy: .public) previous=\(Self.describe(viewportRuntime.previousFrameSnapshot), privacy: .public)"
             )
@@ -1401,6 +1420,11 @@ struct PhotosView: View {
         }
         guard let assetID else {
             viewportRuntime.rotationTransaction = nil
+            rotationState?.resolveVisualHandoff(
+                generation: generation,
+                verified: false,
+                reason: "no-visible-center"
+            )
             Self.logger.error(
                 "Timeline rotation capture failed content=\(contentName, privacy: .public) generation=\(generation) targetWidth=\(Int(targetWidth)) reason=no-visible-center source=\(Self.describe(sourceSnapshot), privacy: .public) latest=\(Self.describe(viewportRuntime.latestFrameSnapshot), privacy: .public) previous=\(Self.describe(viewportRuntime.previousFrameSnapshot), privacy: .public)"
             )
@@ -1453,6 +1477,11 @@ struct PhotosView: View {
             viewportRuntime.rotationTransaction = nil
             viewportRuntime.rotationOwnsScrollCallbacks = false
             viewportRuntime.scrollMotionPhase = .idle
+            rotationState?.resolveVisualHandoff(
+                generation: rotation.generation,
+                verified: false,
+                reason: "stale-target"
+            )
             return
         }
 
@@ -1480,6 +1509,11 @@ struct PhotosView: View {
             viewportRuntime.rotationTransaction = nil
             viewportRuntime.rotationOwnsScrollCallbacks = false
             viewportRuntime.scrollMotionPhase = .idle
+            rotationState?.resolveVisualHandoff(
+                generation: rotation.generation,
+                verified: true,
+                reason: "asset-verified"
+            )
             Self.logger.info(
                 "Timeline rotation verified content=\(contentName, privacy: .public) generation=\(rotation.generation) asset=\(rotation.assetID.prefix(8), privacy: .public) targetRow=\(rowID, privacy: .public) verticalDelta=\(Int(verticalDelta)) tolerance=\(Int(tolerance)) frames=\(snapshot.frames.count) sourcePhase=\(rotation.sourceScrollPhase.rawValue, privacy: .public) sourceOffset=\(Int(rotation.sourceContentOffset.y)) momentumStopped=\(rotation.momentumStopped)"
             )
@@ -1504,6 +1538,11 @@ struct PhotosView: View {
         guard let rotation = viewportRuntime.rotationTransaction else { return }
         viewportRuntime.rotationTransaction = nil
         viewportRuntime.rotationOwnsScrollCallbacks = false
+        rotationState?.resolveVisualHandoff(
+            generation: rotation.generation,
+            verified: false,
+            reason: reason
+        )
         Self.logger.info(
             "Timeline rotation cancelled content=\(contentName, privacy: .public) generation=\(rotation.generation) asset=\(rotation.assetID.prefix(8), privacy: .public) reason=\(reason, privacy: .public)"
         )

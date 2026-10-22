@@ -7,6 +7,35 @@ import UIKit
 
 @Suite("Server-backed Photos timeline")
 struct PhotosTimelineRegressionTests {
+    @Test @MainActor func rotationVisualHandoffEligibilityTracksEachTimeline() {
+        let state = TimelineRotationState()
+
+        state.setVisualHandoffEligible(true, for: .photos)
+        #expect(state.isVisualHandoffEligible(for: .photos))
+        #expect(!state.isVisualHandoffEligible(for: .videos))
+
+        state.setVisualHandoffEligible(true, for: .videos)
+        state.setVisualHandoffEligible(false, for: .photos)
+        #expect(!state.isVisualHandoffEligible(for: .photos))
+        #expect(state.isVisualHandoffEligible(for: .videos))
+    }
+
+    @Test @MainActor func rotationVisualHandoffResolvesOnlyCurrentGeneration() {
+        let state = TimelineRotationState()
+        var resolutions: [(Int, Bool, String)] = []
+        state.visualHandoffResolved = { resolutions.append(($0, $1, $2)) }
+
+        state.begin(to: CGSize(width: 874, height: 402))
+        state.resolveVisualHandoff(generation: 0, verified: true, reason: "stale")
+        #expect(resolutions.isEmpty)
+
+        state.resolveVisualHandoff(generation: 1, verified: true, reason: "asset-verified")
+        #expect(resolutions.count == 1)
+        #expect(resolutions.first?.0 == 1)
+        #expect(resolutions.first?.1 == true)
+        #expect(resolutions.first?.2 == "asset-verified")
+    }
+
     @Test @MainActor func completedHostRotationCannotReplayWhenTimelineReactivates() {
         let state = TimelineRotationState()
 

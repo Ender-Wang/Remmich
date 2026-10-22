@@ -31,6 +31,8 @@ final class TimelineRotationState {
     private(set) var generation = 0
     private(set) var targetSize: CGSize?
     private(set) var isRotating = false
+    private var visualHandoffEligibleDestinations = Set<NativeTabDestination>()
+    var visualHandoffResolved: ((Int, Bool, String) -> Void)?
 
     func begin(to targetSize: CGSize) {
         generation &+= 1
@@ -41,6 +43,30 @@ final class TimelineRotationState {
     func complete() {
         isRotating = false
         targetSize = nil
+    }
+
+    func setVisualHandoffEligible(
+        _ eligible: Bool,
+        for destination: NativeTabDestination
+    ) {
+        if eligible {
+            visualHandoffEligibleDestinations.insert(destination)
+        } else {
+            visualHandoffEligibleDestinations.remove(destination)
+        }
+    }
+
+    func isVisualHandoffEligible(for destination: NativeTabDestination) -> Bool {
+        visualHandoffEligibleDestinations.contains(destination)
+    }
+
+    func resolveVisualHandoff(
+        generation: Int,
+        verified: Bool,
+        reason: String
+    ) {
+        guard generation == self.generation else { return }
+        visualHandoffResolved?(generation, verified, reason)
     }
 }
 
@@ -133,7 +159,7 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
 
     func makeUIViewController(context: Context) -> UITabBarController {
         let controller = MeasuringTabBarController()
-        controller.rotationState = rotationState
+        controller.bindRotationState(rotationState)
         controller.tabBarTopChanged = { [weak coordinator = context.coordinator] top in
             coordinator?.setTabBarTop(top)
         }
@@ -145,7 +171,7 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_: UITabBarController, context: Context) {
-        context.coordinator.controller?.rotationState = rotationState
+        context.coordinator.controller?.bindRotationState(rotationState)
         context.coordinator.update(self, animated: true)
     }
 
@@ -410,6 +436,7 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
 
         func tabBarController(_: UITabBarController, didSelectTab selectedTab: UITab, previousTab: UITab?) {
             guard !isUpdatingTabs, let destination = destination(for: selectedTab) else { return }
+            controller?.discardRotationVisualHandoff(reason: "tab-selection")
             let isReselection = selectedTab === previousTab
             if isReselection,
                let lastDestinationChange,
@@ -526,11 +553,28 @@ private final class MeasuringTabBarController: UITabBarController {
     )
 
     var tabBarTopChanged: ((CGFloat) -> Void)?
-    var rotationState: TimelineRotationState?
+    private weak var rotationState: TimelineRotationState?
     private var rotationGeneration = 0
     private var rotationStartedAt: ContinuousClock.Instant?
     private var rotationTargetSize: CGSize?
     private var lastLoggedLayoutSize: CGSize?
+    private var rotationVisualSnapshot: UIView?
+    private var rotationVisualGeneration: Int?
+    private var rotationVisualResolvedGeneration: Int?
+    private var rotationVisualCompletedGeneration: Int?
+    private var rotationVisualResolutionReason: String?
+
+    func bindRotationState(_ state: TimelineRotationState) {
+        guard rotationState !== state else { return }
+        rotationState = state
+        state.visualHandoffResolved = { [weak self] generation, verified, reason in
+            self?.resolveRotationVisualHandoff(
+                generation: generation,
+                verified: verified,
+                reason: reason
+            )
+        }
+    }
 
     override func viewWillTransition(
         to size: CGSize,
@@ -538,10 +582,15 @@ private final class MeasuringTabBarController: UITabBarController {
     ) {
         rotationGeneration += 1
         let generation = rotationGeneration
+        let visualSnapshot = captureRotationVisualSnapshotIfEligible()
         rotationStartedAt = .now
         rotationTargetSize = size
         lastLoggedLayoutSize = nil
         rotationState?.begin(to: size)
+        installRotationVisualSnapshot(
+            visualSnapshot,
+            generation: generation
+        )
         let currentSize = view.bounds.size
         Self.logger.info(
             "Host rotation began generation=\(generation) current=\(Self.describe(currentSize), privacy: .public) target=\(Self.describe(size), privacy: .public) durationMs=\(Int(coordinator.transitionDuration * 1000))"
@@ -556,6 +605,7 @@ private final class MeasuringTabBarController: UITabBarController {
         super.viewDidLayoutSubviews()
         tabBar.layoutIfNeeded()
         tabBarTopChanged?(visibleTop(of: tabBar) ?? tabBar.frame.minY)
+        updateRotationVisualSnapshotFrame()
         guard let target = rotationTargetSize,
               lastLoggedLayoutSize != view.bounds.size
         else { return }
@@ -577,9 +627,138 @@ private final class MeasuringTabBarController: UITabBarController {
         )
         guard generation == rotationGeneration else { return }
         rotationState?.complete()
+        rotationVisualCompletedGeneration = generation
+        if cancelled {
+            rotationVisualResolvedGeneration = generation
+            rotationVisualResolutionReason = "host-cancelled"
+        }
+        releaseRotationVisualHandoffIfReady(generation: generation)
         rotationStartedAt = nil
         rotationTargetSize = nil
         lastLoggedLayoutSize = nil
+    }
+
+    func discardRotationVisualHandoff(reason: String) {
+        guard let snapshot = rotationVisualSnapshot else { return }
+        let generation = rotationVisualGeneration ?? -1
+        snapshot.layer.removeAllAnimations()
+        snapshot.removeFromSuperview()
+        resetRotationVisualHandoff()
+        Self.logger.info(
+            "Rotation visual snapshot released generation=\(generation) reason=\(reason, privacy: .public) immediate=true"
+        )
+    }
+
+    private func captureRotationVisualSnapshotIfEligible() -> UIView? {
+        guard let rotationState,
+              let destination = selectedTimelineDestination,
+              rotationState.isVisualHandoffEligible(for: destination),
+              let contentView = selectedViewController?.viewIfLoaded,
+              contentView.window != nil,
+              !contentView.bounds.isEmpty
+        else { return nil }
+
+        return contentView.snapshotView(afterScreenUpdates: false)
+    }
+
+    private func installRotationVisualSnapshot(
+        _ candidate: UIView?,
+        generation: Int
+    ) {
+        rotationVisualResolvedGeneration = nil
+        rotationVisualCompletedGeneration = nil
+        rotationVisualResolutionReason = nil
+
+        if let snapshot = rotationVisualSnapshot {
+            snapshot.layer.removeAllAnimations()
+            snapshot.alpha = 1
+            rotationVisualGeneration = generation
+            Self.logger.info(
+                "Rotation visual snapshot captured generation=\(generation) inherited=true frame=\(Self.describe(snapshot.frame), privacy: .public)"
+            )
+            return
+        }
+        guard let candidate,
+              let contentView = selectedViewController?.viewIfLoaded
+        else {
+            rotationVisualGeneration = nil
+            return
+        }
+
+        candidate.isUserInteractionEnabled = false
+        candidate.accessibilityElementsHidden = true
+        candidate.frame = contentView.convert(contentView.bounds, to: view)
+        candidate.clipsToBounds = true
+        view.insertSubview(candidate, belowSubview: tabBar)
+        rotationVisualSnapshot = candidate
+        rotationVisualGeneration = generation
+        Self.logger.info(
+            "Rotation visual snapshot captured generation=\(generation) inherited=false frame=\(Self.describe(candidate.frame), privacy: .public)"
+        )
+    }
+
+    private func updateRotationVisualSnapshotFrame() {
+        guard let snapshot = rotationVisualSnapshot,
+              let contentView = selectedViewController?.viewIfLoaded,
+              contentView.window != nil
+        else { return }
+        snapshot.frame = contentView.convert(contentView.bounds, to: view)
+    }
+
+    private func resolveRotationVisualHandoff(
+        generation: Int,
+        verified: Bool,
+        reason: String
+    ) {
+        guard rotationVisualGeneration == generation else { return }
+        rotationVisualResolvedGeneration = generation
+        rotationVisualResolutionReason = reason
+        let hostCompleted = rotationVisualCompletedGeneration == generation
+        Self.logger.info(
+            "Rotation visual destination ready generation=\(generation) verified=\(verified) reason=\(reason, privacy: .public) hostCompleted=\(hostCompleted)"
+        )
+        releaseRotationVisualHandoffIfReady(generation: generation)
+    }
+
+    private func releaseRotationVisualHandoffIfReady(generation: Int) {
+        guard rotationVisualGeneration == generation,
+              rotationVisualResolvedGeneration == generation,
+              rotationVisualCompletedGeneration == generation,
+              let snapshot = rotationVisualSnapshot
+        else { return }
+
+        let reason = rotationVisualResolutionReason ?? "resolved"
+        let duration = UIAccessibility.isReduceMotionEnabled ? 0 : 0.12
+        UIView.animate(
+            withDuration: duration,
+            delay: 0,
+            options: [.beginFromCurrentState, .curveEaseOut, .allowUserInteraction]
+        ) {
+            snapshot.alpha = 0
+        } completion: { [weak self, weak snapshot] _ in
+            guard self?.rotationVisualGeneration == generation else { return }
+            snapshot?.removeFromSuperview()
+            self?.resetRotationVisualHandoff()
+        }
+        Self.logger.info(
+            "Rotation visual snapshot released generation=\(generation) reason=\(reason, privacy: .public) immediate=false"
+        )
+    }
+
+    private func resetRotationVisualHandoff() {
+        rotationVisualSnapshot = nil
+        rotationVisualGeneration = nil
+        rotationVisualResolvedGeneration = nil
+        rotationVisualCompletedGeneration = nil
+        rotationVisualResolutionReason = nil
+    }
+
+    private var selectedTimelineDestination: NativeTabDestination? {
+        switch selectedTab?.identifier {
+        case "photos": .photos
+        case "videos": .videos
+        default: nil
+        }
     }
 
     private nonisolated static func elapsedMilliseconds(
