@@ -147,6 +147,19 @@ enum NativeTabLayout {
         guard destinations.indices.contains(adjacentIndex) else { return nil }
         return destinations[adjacentIndex]
     }
+
+    static func pageDirection(
+        from source: NativeTabDestination,
+        to destination: NativeTabDestination,
+        compactOwner: NativeTabDestination?
+    ) -> NativeTabPageDirection? {
+        let destinations = destinations(compactOwner: compactOwner)
+        guard let sourceIndex = destinations.firstIndex(of: source),
+              let destinationIndex = destinations.firstIndex(of: destination),
+              sourceIndex != destinationIndex
+        else { return nil }
+        return destinationIndex > sourceIndex ? .next : .previous
+    }
 }
 
 /// One UIKit-owned tab bar on both devices. UIKit owns the Liquid Glass treatment
@@ -219,6 +232,7 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
             instant: ContinuousClock.Instant
         )?
         private var pendingPageDirection: NativeTabPageDirection?
+        private var pageInteractionDirection: NativeTabPageDirection?
         private var pageInteractionController: UIPercentDrivenInteractiveTransition?
         private var pageInteractionDestination: NativeTabDestination?
         private weak var pageInteractionPreviousTab: UITab?
@@ -478,11 +492,39 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
 
         func tabBarController(_: UITabBarController, didSelectTab selectedTab: UITab, previousTab: UITab?) {
             guard !isUpdatingTabs, let destination = destination(for: selectedTab) else { return }
+            defer {
+                if pageInteractionController == nil {
+                    pendingPageDirection = nil
+                }
+            }
             publishSelection(
                 destination: destination,
                 selectedTab: selectedTab,
                 previousTab: previousTab
             )
+        }
+
+        func tabBarController(
+            _ tabBarController: UITabBarController,
+            shouldSelectTab tab: UITab
+        ) -> Bool {
+            guard !isUpdatingTabs,
+                  pageInteractionController == nil,
+                  parent.pageSwipeEnabled,
+                  !parent.isViewerPresented,
+                  !UIAccessibility.isReduceMotionEnabled,
+                  let selectedTab = tabBarController.selectedTab,
+                  selectedTab !== tab,
+                  let source = destination(for: selectedTab),
+                  let destination = destination(for: tab)
+            else { return true }
+
+            pendingPageDirection = NativeTabLayout.pageDirection(
+                from: source,
+                to: destination,
+                compactOwner: parent.compactOwner
+            )
+            return true
         }
 
         @objc private func primaryPagePanned(_ recognizer: UIPanGestureRecognizer) {
@@ -522,6 +564,7 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
             interaction.completionCurve = .easeOut
             interaction.completionSpeed = 1
             pageInteractionController = interaction
+            pageInteractionDirection = direction
             pageInteractionDestination = destination
             pageInteractionPreviousTab = previousTab
             pendingPageDirection = direction
@@ -551,7 +594,7 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
             guard let interaction = pageInteractionController else { return }
             let progress = pageInteractionProgress(using: recognizer, in: controller)
             let velocity = recognizer.velocity(in: controller.view).x
-            let advancesInTransitionDirection: Bool = switch pendingPageDirection {
+            let advancesInTransitionDirection: Bool = switch pageInteractionDirection {
             case .next:
                 velocity < -420
             case .previous:
@@ -639,6 +682,7 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
 
         private func clearPageInteraction() {
             pendingPageDirection = nil
+            pageInteractionDirection = nil
             pageInteractionController = nil
             pageInteractionDestination = nil
             pageInteractionPreviousTab = nil
@@ -779,6 +823,7 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
             to _: UIViewController
         ) -> (any UIViewControllerAnimatedTransitioning)? {
             guard let direction = pendingPageDirection else { return nil }
+            pendingPageDirection = nil
             return NativeTabPageAnimator(direction: direction)
         }
 

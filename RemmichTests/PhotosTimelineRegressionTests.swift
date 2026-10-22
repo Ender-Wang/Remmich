@@ -140,6 +140,10 @@ struct PhotosTimelineRegressionTests {
         #expect(NativeTabLayout.adjacentDestination(from: .videos, direction: .next, compactOwner: .videos) == .weeks)
         #expect(NativeTabLayout.adjacentDestination(from: .months, direction: .previous, compactOwner: .photos) == .weeks)
         #expect(NativeTabLayout.adjacentDestination(from: .months, direction: .next, compactOwner: .videos) == .years)
+        #expect(NativeTabLayout.pageDirection(from: .photos, to: .library, compactOwner: nil) == .next)
+        #expect(NativeTabLayout.pageDirection(from: .search, to: .videos, compactOwner: nil) == .previous)
+        #expect(NativeTabLayout.pageDirection(from: .photos, to: .photos, compactOwner: nil) == nil)
+        #expect(NativeTabLayout.pageDirection(from: .weeks, to: .years, compactOwner: .photos) == .next)
     }
 
     @Test @MainActor func scrollChromeNeedsDeliberateDirectionAndRestoresAtLatest() {
