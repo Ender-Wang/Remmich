@@ -56,6 +56,15 @@ struct AssetThumbnail: View {
                         .shadow(radius: 3)
                 }
             }
+            .overlay(alignment: .bottomLeading) {
+                if asset.kind == .livePhoto {
+                    Image(systemName: "livephoto")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding([.leading, .bottom], 3)
+                        .shadow(radius: 3)
+                }
+            }
             .contentShape(.rect)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("\(asset.title), \(asset.kind.accessibilityDescription)")
@@ -538,22 +547,40 @@ struct TimelineAssetThumbnail: View {
                             .shadow(radius: 2)
                     }
                 }
-                .overlay(alignment: .bottomLeading) {
-                    HStack(spacing: 5) {
-                        if asset.livePhotoVideoID != nil {
-                            Image(systemName: "livephoto")
-                        }
-                        if asset.projectionType != nil {
-                            Image(systemName: "view.360")
-                        }
-                        if let stack = asset.stack, stack.assetCount > 1 {
-                            Label("\(stack.assetCount)", systemImage: "square.stack.3d.up.fill")
+                .overlay {
+                    if asset.livePhotoVideoID != nil
+                        || asset.projectionType != nil
+                        || (asset.stack?.assetCount ?? 0) > 1
+                    {
+                        GeometryReader { overlayGeometry in
+                            let thumbnailRect = TimelineThumbnailGeometry.renderedImageRect(
+                                in: overlayGeometry.size,
+                                aspectRatio: asset.aspectRatio,
+                                fillsContainer: assetLayout == .square
+                            )
+                            HStack(spacing: 5) {
+                                if asset.livePhotoVideoID != nil {
+                                    Image(systemName: "livephoto")
+                                }
+                                if asset.projectionType != nil {
+                                    Image(systemName: "view.360")
+                                }
+                                if let stack = asset.stack, stack.assetCount > 1 {
+                                    Label("\(stack.assetCount)", systemImage: "square.stack.3d.up.fill")
+                                }
+                            }
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .padding([.leading, .bottom], 3)
+                            .frame(
+                                width: thumbnailRect.width,
+                                height: thumbnailRect.height,
+                                alignment: .bottomLeading
+                            )
+                            .position(x: thumbnailRect.midX, y: thumbnailRect.midY)
+                            .shadow(radius: 3)
                         }
                     }
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .padding(6)
-                    .shadow(radius: 3)
                 }
                 .overlay {
                     if asset.mediaKind == .video {
