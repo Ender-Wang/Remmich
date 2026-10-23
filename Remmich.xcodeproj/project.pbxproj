@@ -35,9 +35,22 @@
 		F846995B3066C25F00C68930 /* RemmichUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RemmichUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		C6D7E8F901A2B3C4D5E6F701 /* Exceptions for "Remmich" folder in "Remmich" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = F84699433066C25E00C68930 /* Remmich */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		F84699463066C25E00C68930 /* Remmich */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				C6D7E8F901A2B3C4D5E6F701 /* Exceptions for "Remmich" folder in "Remmich" target */,
+			);
 			path = Remmich;
 			sourceTree = "<group>";
 		};
@@ -477,6 +490,7 @@
 				DEVELOPMENT_TEAM = LQS4V6877Y;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Remmich/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Remmich;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Remmich connects to your Immich server on your local network.";
@@ -516,6 +530,7 @@
 				DEVELOPMENT_TEAM = LQS4V6877Y;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Remmich/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Remmich;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Remmich connects to your Immich server on your local network.";

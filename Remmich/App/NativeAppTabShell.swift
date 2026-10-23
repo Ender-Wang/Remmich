@@ -568,7 +568,6 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
             pageInteractionDestination = destination
             pageInteractionPreviousTab = previousTab
             pendingPageDirection = direction
-
             isUpdatingTabs = true
             controller.selectedTab = tab(for: destination)
             isUpdatingTabs = false
@@ -624,11 +623,6 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
 
             let selectedTab = tab(for: destination)
             interaction.finish()
-            publishSelection(
-                destination: destination,
-                selectedTab: selectedTab,
-                previousTab: previousTab
-            )
             completePageInteractionTransition(in: controller) { [weak self] cancelled in
                 guard let self else { return }
                 if cancelled {
@@ -636,6 +630,13 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
                     if let previousDestination = self.destination(for: previousTab) {
                         parent.selection = previousDestination
                     }
+                } else {
+                    publishSelection(
+                        destination: destination,
+                        selectedTab: selectedTab,
+                        previousTab: previousTab
+                    )
+                    scheduleContentActivation(destination)
                 }
                 clearPageInteraction()
             }
