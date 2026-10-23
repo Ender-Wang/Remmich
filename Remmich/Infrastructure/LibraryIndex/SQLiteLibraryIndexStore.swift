@@ -344,6 +344,29 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
         )
     }
 
+    func finishMaintenanceIfNeeded(
+        scope: MediaAccountScope
+    ) async throws -> LibraryIndexMaintenanceReport? {
+        let database = try preparedDatabase(scope: scope)
+        try database.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        guard let accepted = try database.scalarInt64(
+            "SELECT accepted_generation FROM sync_state WHERE scope = ?",
+            [.text(scope.cacheNamespace)]
+        ) else { return nil }
+        let hasAbandonedGeneration = try database.scalarInt64(
+            "SELECT EXISTS(SELECT 1 FROM generations WHERE scope = ? AND generation <> ? LIMIT 1)",
+            [.text(scope.cacheNamespace), .int64(accepted)]
+        ) == 1
+        let pageSize = try database.scalarInt64("PRAGMA page_size") ?? 0
+        let pageCount = try database.scalarInt64("PRAGMA page_count") ?? 0
+        let freePageCount = try database.scalarInt64("PRAGMA freelist_count") ?? 0
+        let reclaimableBytes = pageSize * freePageCount
+        let hasMaterialAmplification = reclaimableBytes >= 4_000_000
+            && freePageCount * 5 >= pageCount
+        guard hasAbandonedGeneration || hasMaterialAmplification else { return nil }
+        return try await finishMaintenance(scope: scope, compact: true)
+    }
+
     func snapshot(scope: MediaAccountScope) async throws -> LibraryIndexSnapshot? {
         let database = try preparedDatabase(scope: scope)
         guard let generation = try database.scalarInt64(
@@ -420,6 +443,14 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
 
     func storageReport(scope: MediaAccountScope) async throws -> LibraryIndexStorageReport {
         let snapshot = try await snapshot(scope: scope)
+        return storageReport(snapshot: snapshot)
+    }
+
+    func storageReport(snapshot: LibraryIndexSnapshot) -> LibraryIndexStorageReport {
+        storageReport(snapshot: Optional(snapshot))
+    }
+
+    private func storageReport(snapshot: LibraryIndexSnapshot?) -> LibraryIndexStorageReport {
         let metadataBytes = metadataFileBytes()
         return .init(
             metadataBytes: metadataBytes,

@@ -181,7 +181,9 @@ struct LibraryIndexStoreTests {
             generation: abandoned,
             scope: scope
         )
-        let maintenance = try await store.finishMaintenance(scope: scope, compact: true)
+        let maintenance = try #require(
+            try await store.finishMaintenanceIfNeeded(scope: scope)
+        )
         #expect(maintenance.removedGenerations == 1)
         #expect(maintenance.removedAssetRows == 3)
         #expect(maintenance.metadataBytesAfter <= maintenance.metadataBytesBefore)

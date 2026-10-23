@@ -126,8 +126,15 @@ actor LibraryThumbnailCache {
         scope: MediaAccountScope
     ) async throws -> WarmProgress {
         let existing = try await store.snapshot(scope: scope)?.derivatives ?? []
+        return Self.cachedProgress(assets: assets, derivatives: existing)
+    }
+
+    nonisolated static func cachedProgress(
+        assets: [LibraryIndexAssetRecord],
+        derivatives: [LibraryIndexDerivativeRecord]
+    ) -> WarmProgress {
         let assetKeys = Set(assets.map { "\($0.id)|\($0.updatedAt.ISO8601Format())" })
-        let currentExisting = existing.filter {
+        let currentExisting = derivatives.filter {
             $0.derivative == .thumbnail
                 && assetKeys.contains("\($0.assetID)|\($0.sourceRevision)")
         }

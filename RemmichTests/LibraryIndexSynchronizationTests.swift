@@ -136,6 +136,51 @@ struct LibraryIndexSynchronizationTests {
         #expect(report.playbackBytes == 400)
     }
 
+    @Test @MainActor func offlineBootstrapRestoresLocalIndexAndThumbnailInventory() async throws {
+        let fixture = try IndexFixture()
+        defer { fixture.cleanup() }
+        let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        let source = IndexSource(buckets: [:])
+        let asset = Self.record(id: "cached-asset", bucket: "2026-10-01")
+        let generation = try await store.beginGeneration(scope: Self.scope)
+        try await store.upsert(assets: [asset], generation: generation, scope: Self.scope)
+        _ = try await store.acceptGeneration(
+            generation,
+            watermark: nil,
+            historicalCursor: nil,
+            expectedAssetCount: 1,
+            scope: Self.scope
+        )
+        try await store.upsert(
+            derivatives: [
+                .init(
+                    assetID: asset.id,
+                    derivative: .thumbnail,
+                    pixelSize: nil,
+                    sourceRevision: asset.updatedAt.ISO8601Format(),
+                    relativeFileKey: "thumbnail/cached-asset.jpg",
+                    byteCount: 1234,
+                    digest: "digest",
+                    isVerified: true,
+                    lastAccessedAt: .now,
+                    completedAt: .now
+                ),
+            ],
+            scope: Self.scope
+        )
+        let controller = LibraryIndexController(source: source, store: store)
+
+        let bootstrap = await controller.bootstrap(session: .fixture)
+
+        #expect(bootstrap != nil)
+        #expect(controller.storageReport.metadataBytes > 0)
+        #expect(controller.storageReport.derivativeBytes == 1234)
+        #expect(controller.storageReport.derivativeCount == 1)
+        #expect(controller.thumbnailWarmingCachedCount == 1)
+        #expect(controller.thumbnailWarmingCachedBytes == 1234)
+        #expect(controller.thumbnailWarmingEligibleCount == 1)
+    }
+
     @Test func thumbnailManifestOperationsPreserveOtherDerivativeKinds() async throws {
         let fixture = try IndexFixture()
         defer { fixture.cleanup() }

@@ -70,6 +70,7 @@ final class LibraryIndexController {
     private var accessToken: String?
     private var task: Task<Void, Never>?
     private var bootstrapCatalogTask: Task<Void, Never>?
+    private var localMaintenanceTask: Task<Void, Never>?
     private var warmingTask: Task<Void, Never>?
     private var lastPublishedAt = Date.distantPast
     private var runID: UInt64 = 0
@@ -169,6 +170,7 @@ final class LibraryIndexController {
             indexedVideoCount = snapshot.assets.count { $0.kind == .video }
             expectedAssetCount = snapshot.syncState.expectedAssetCount ?? snapshot.assets.count
             status = snapshot.syncState.isPaused ? .paused : .upToDate
+            async let storageReportTask = store.storageReport(snapshot: snapshot)
             async let thumbnailsTask = thumbnailCache.indexedThumbnails(
                 from: snapshot,
                 scope: nextScope
@@ -176,12 +178,34 @@ final class LibraryIndexController {
             async let bootstrapTask = Task.detached(priority: .userInitiated) {
                 LibraryTimelineBootstrapBuilder.buildInitial(from: snapshot)
             }.value
-            let (thumbnails, bootstrap) = await (thumbnailsTask, bootstrapTask)
+            let (restoredStorageReport, thumbnails, bootstrap) = await (
+                storageReportTask,
+                thumbnailsTask,
+                bootstrapTask
+            )
+            guard scope == nextScope else {
+                Self.logger.info("Library bootstrap discarded reason=scope-changed")
+                return nil
+            }
+            storageReport = restoredStorageReport
+            let cachedProgress = LibraryThumbnailCache.cachedProgress(
+                assets: snapshot.assets,
+                derivatives: snapshot.derivatives
+            )
+            applyThumbnailWarmingProgress(cachedProgress)
+            if thumbnailWarmingEnabled {
+                thumbnailWarmingStatus = cachedProgress.cachedCount == cachedProgress.eligibleCount
+                    ? .upToDate
+                    : .waiting
+            } else {
+                thumbnailWarmingStatus = .off
+            }
             Self.logger.info(
-                "Library bootstrap derivatives and projection ready thumbnails=\(thumbnails.count) stageMs=\(Self.elapsedMilliseconds(since: snapshotLoadedAt)) totalMs=\(Self.elapsedMilliseconds(since: bootstrapStartedAt))"
+                "Library bootstrap derivatives and projection ready thumbnails=\(thumbnails.count) cachedBytes=\(cachedProgress.cachedBytes) metadataBytes=\(restoredStorageReport.metadataBytes) stageMs=\(Self.elapsedMilliseconds(since: snapshotLoadedAt)) totalMs=\(Self.elapsedMilliseconds(since: bootstrapStartedAt))"
             )
             media?.registerWarmedThumbnails(thumbnails)
             lastPublishedBootstrapGeneration = snapshot.generation
+            scheduleLocalStorageMaintenance(scope: nextScope)
             Self.logger.info(
                 "Library bootstrap loaded generation=\(snapshot.generation) assets=\(snapshot.assets.count) thumbnails=\(thumbnails.count) complete=\(bootstrap.photos.isComplete) elapsedMs=\(Self.elapsedMilliseconds(since: bootstrapStartedAt))"
             )
@@ -365,6 +389,8 @@ final class LibraryIndexController {
         runID &+= 1
         task?.cancel()
         task = nil
+        localMaintenanceTask?.cancel()
+        localMaintenanceTask = nil
         if cancelBootstrapCatalogs {
             bootstrapCatalogTask?.cancel()
             bootstrapCatalogTask = nil
@@ -372,6 +398,34 @@ final class LibraryIndexController {
         cancelThumbnailWarming(reason: "suspended")
         if status == .indexing {
             status = .idle
+        }
+    }
+
+    private func scheduleLocalStorageMaintenance(scope expectedScope: MediaAccountScope) {
+        localMaintenanceTask?.cancel()
+        localMaintenanceTask = Task(priority: .utility) { [weak self] in
+            guard let self else { return }
+            do {
+                guard let maintenance = try await store.finishMaintenanceIfNeeded(
+                    scope: expectedScope
+                ),
+                    !Task.isCancelled,
+                    scope == expectedScope
+                else {
+                    localMaintenanceTask = nil
+                    return
+                }
+                storageReport = try await store.storageReport(scope: expectedScope)
+                Self.logger.info(
+                    "Library index offline maintenance finished removedGenerations=\(maintenance.removedGenerations) removedAssets=\(maintenance.removedAssetRows) removedGroups=\(maintenance.removedGroupRows) bytesBefore=\(maintenance.metadataBytesBefore) bytesAfter=\(maintenance.metadataBytesAfter)"
+                )
+            } catch {
+                guard !Task.isCancelled else { return }
+                Self.logger.error(
+                    "Library index offline maintenance failed error=\(Self.message(for: error), privacy: .public)"
+                )
+            }
+            localMaintenanceTask = nil
         }
     }
 
