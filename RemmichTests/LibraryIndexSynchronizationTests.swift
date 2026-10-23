@@ -14,6 +14,27 @@ struct LibraryIndexSynchronizationTests {
         #expect(AccountSettingsView.progressPercentage(completed: 0, total: 0) == "0.00")
     }
 
+    @Test func thumbnailFailureDiagnosticsIncludeAssetDetailsWithoutCredentials() {
+        let failure = LibraryThumbnailCache.ThumbnailFailure(
+            assetID: "asset-full-identifier",
+            kind: .image,
+            capturedAt: Date(timeIntervalSince1970: 100),
+            uploadedAt: Date(timeIntervalSince1970: 200),
+            updatedAt: Date(timeIntervalSince1970: 300),
+            width: 720,
+            height: 1080,
+            bucketKey: "2026-10-01",
+            requestURL: URL(string: "https://example.test/api/assets/asset-full-identifier/thumbnail?size=thumbnail"),
+            reason: "http-status-404"
+        )
+
+        #expect(failure.diagnosticText.contains("Asset ID: asset-full-identifier"))
+        #expect(failure.diagnosticText.contains("Dimensions: 720x1080"))
+        #expect(failure.diagnosticText.contains("Bucket: 2026-10-01"))
+        #expect(failure.diagnosticText.contains("Failure: http-status-404"))
+        #expect(!failure.diagnosticText.localizedCaseInsensitiveContains("bearer"))
+    }
+
     @Test func fullReconciliationPromotesDeletionsOnlyAfterSuccess() async throws {
         let fixture = try IndexFixture()
         defer { fixture.cleanup() }
@@ -451,6 +472,24 @@ struct LibraryIndexSynchronizationTests {
         #expect(try abs(#require(controller.elapsed(at: .distantFuture)) - rebuildElapsed) < 0.01)
     }
 
+    @Test @MainActor func indexFailurePublishesCopyableDiagnosticsWithoutCredentials() async throws {
+        let fixture = try IndexFixture()
+        defer { fixture.cleanup() }
+        let controller = LibraryIndexController(
+            source: FailingIndexSource(),
+            store: SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        )
+
+        controller.start(session: .fixture, endpoint: AccountSession.fixture.apiURL)
+        try await Self.waitUntilFailed(controller)
+
+        let diagnostics = try #require(controller.indexFailureDiagnostics)
+        #expect(diagnostics.contains("Operation: Sync"))
+        #expect(diagnostics.contains("Failure: fixture index failure"))
+        #expect(diagnostics.contains("Progress: 0/0 assets"))
+        #expect(!diagnostics.contains(AccountSession.fixture.accessToken))
+    }
+
     private static let scope = MediaAccountScope(session: .fixture)
 
     @MainActor
@@ -462,6 +501,17 @@ struct LibraryIndexSynchronizationTests {
             try await Task.sleep(for: .milliseconds(10))
         }
         Issue.record("Timed out waiting for the library index to finish")
+    }
+
+    @MainActor
+    private static func waitUntilFailed(_ controller: LibraryIndexController) async throws {
+        for _ in 0 ..< 500 {
+            if case .failed = controller.status {
+                return
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        Issue.record("Timed out waiting for the library index to fail")
     }
 
     private static func asset(
@@ -573,6 +623,29 @@ private actor IndexSource: TimelineReading {
     }
 
     func memories() -> [TimelineMemorySummary] {
+        []
+    }
+}
+
+private struct FailingIndexSource: TimelineReading {
+    struct Failure: LocalizedError {
+        var errorDescription: String? {
+            "fixture index failure"
+        }
+    }
+
+    func bucketSummaries(query _: TimelineQuery) async throws -> [TimelineBucketSummary] {
+        throw Failure()
+    }
+
+    func assets(
+        in _: TimelineBucketID,
+        query _: TimelineQuery
+    ) async throws -> [TimelineAssetSummary] {
+        []
+    }
+
+    func memories() async throws -> [TimelineMemorySummary] {
         []
     }
 }

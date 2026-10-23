@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct AccountSettingsView: View {
     private enum SettingsPage: String, CaseIterable, Identifiable {
@@ -34,6 +35,8 @@ struct AccountSettingsView: View {
     @State private var showsThumbnailClearConfirmation = false
     @State private var libraryIndexClock = Date()
     @State private var selectedPage = SettingsPage.account
+    @State private var copiedIndexFailureDiagnostics = false
+    @State private var copiedThumbnailFailureDiagnostics = false
 
     init(
         session: AccountSession,
@@ -322,7 +325,7 @@ struct AccountSettingsView: View {
 
     private var libraryIndexSection: some View {
         VStack(alignment: .leading, spacing: 18) {
-            settingsValue("Index status", value: libraryIndexStatus)
+            indexStatus
             if libraryIndex.expectedAssetCount > 0 {
                 ProgressView(value: libraryIndex.fractionCompleted)
                     .accessibilityLabel("Library indexing progress")
@@ -375,7 +378,7 @@ struct AccountSettingsView: View {
 
             Divider()
 
-            settingsValue("Thumbnail cache", value: thumbnailWarmingStatus)
+            thumbnailCacheStatus
             if libraryIndex.thumbnailWarmingStatus != .off,
                libraryIndex.thumbnailWarmingEligibleCount > 0
             {
@@ -591,13 +594,32 @@ struct AccountSettingsView: View {
         return "\(server) · \(account.userID.prefix(8))"
     }
 
-    private var libraryIndexStatus: String {
+    @ViewBuilder
+    private var indexStatus: some View {
         switch libraryIndex.status {
-        case .idle: "Waiting"
-        case .indexing: "Indexing"
-        case .paused: "Paused"
-        case .upToDate: "Up to date"
-        case let .failed(message): "Failed: \(message)"
+        case .idle:
+            settingsStatus("Index status", systemImage: "clock", accessibilityValue: "Waiting")
+        case .indexing:
+            settingsStatus(
+                "Index status",
+                systemImage: "arrow.trianglehead.2.clockwise",
+                accessibilityValue: "Indexing"
+            )
+        case .paused:
+            settingsStatus("Index status", systemImage: "pause.fill", accessibilityValue: "Paused")
+        case .upToDate:
+            settingsStatus(
+                "Index status",
+                systemImage: "checkmark.circle.fill",
+                tint: .green,
+                accessibilityValue: "Up to date"
+            )
+        case .failed:
+            copyableFailureStatus(
+                label: "Index status",
+                diagnostics: libraryIndex.indexFailureDiagnostics,
+                copyTrigger: $copiedIndexFailureDiagnostics
+            )
         }
     }
 
@@ -633,14 +655,90 @@ struct AccountSettingsView: View {
         return "~\(indexOnlyLabel)–\(accumulatedLabel) / 10K assets"
     }
 
-    private var thumbnailWarmingStatus: String {
+    @ViewBuilder
+    private var thumbnailCacheStatus: some View {
         switch libraryIndex.thumbnailWarmingStatus {
-        case .off: "Off"
-        case .waiting: "Waiting"
-        case .warming: "Caching"
-        case .upToDate: "Up to date"
-        case let .failed(message): message
+        case .off:
+            settingsStatus("Thumbnail cache", systemImage: "power", accessibilityValue: "Off")
+        case .waiting:
+            settingsStatus("Thumbnail cache", systemImage: "clock", accessibilityValue: "Waiting")
+        case .warming:
+            settingsStatus(
+                "Thumbnail cache",
+                systemImage: "arrow.trianglehead.2.clockwise",
+                accessibilityValue: "Caching"
+            )
+        case .upToDate:
+            settingsStatus(
+                "Thumbnail cache",
+                systemImage: "checkmark.circle.fill",
+                tint: .green,
+                accessibilityValue: "Up to date"
+            )
+        case .failed:
+            copyableFailureStatus(
+                label: "Thumbnail cache",
+                diagnostics: libraryIndex.thumbnailFailureDiagnostics,
+                copyTrigger: $copiedThumbnailFailureDiagnostics
+            )
         }
+    }
+
+    private func settingsStatus(
+        _ label: String,
+        systemImage: String,
+        tint: Color = .primary,
+        accessibilityValue: String
+    ) -> some View {
+        LabeledContent {
+            Image(systemName: systemImage)
+                .foregroundStyle(tint)
+                .frame(width: 28, height: 44)
+                .frame(width: 72, alignment: .trailing)
+                .accessibilityHidden(true)
+        } label: {
+            Text(label)
+                .bold()
+        }
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .combine)
+        .accessibilityValue(accessibilityValue)
+    }
+
+    private func copyableFailureStatus(
+        label: String,
+        diagnostics: String?,
+        copyTrigger: Binding<Bool>
+    ) -> some View {
+        LabeledContent {
+            HStack(spacing: 0) {
+                if let diagnostics {
+                    Button {
+                        UIPasteboard.general.string = diagnostics
+                        copyTrigger.wrappedValue.toggle()
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                            .foregroundStyle(.red)
+                    }
+                    .buttonStyle(.plain)
+                    .frame(width: 44, height: 44)
+                    .contentShape(.rect)
+                    .accessibilityLabel("Copy \(label.lowercased()) failure information")
+                    .accessibilityHint("Copies detailed failure diagnostics to the clipboard")
+                }
+
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.red)
+                    .frame(width: 28, height: 44)
+                    .accessibilityHidden(true)
+            }
+        } label: {
+            Text(label)
+                .bold()
+        }
+        .frame(maxWidth: .infinity)
+        .accessibilityValue("Failed")
+        .sensoryFeedback(.success, trigger: copyTrigger.wrappedValue)
     }
 
     private var thumbnailWarmingProgressText: String {

@@ -25,6 +25,55 @@ actor LibraryThumbnailCache {
         let cachedCount: Int
         let cachedBytes: Int64
         let eligibleCount: Int
+        let failures: [ThumbnailFailure]
+
+        init(
+            processedCount: Int,
+            pendingCount: Int,
+            cachedCount: Int,
+            cachedBytes: Int64,
+            eligibleCount: Int,
+            failures: [ThumbnailFailure] = []
+        ) {
+            self.processedCount = processedCount
+            self.pendingCount = pendingCount
+            self.cachedCount = cachedCount
+            self.cachedBytes = cachedBytes
+            self.eligibleCount = eligibleCount
+            self.failures = failures
+        }
+    }
+
+    nonisolated struct ThumbnailFailure: Equatable, Sendable {
+        let assetID: String
+        let kind: LibraryIndexAssetKind
+        let capturedAt: Date
+        let uploadedAt: Date
+        let updatedAt: Date
+        let width: Int?
+        let height: Int?
+        let bucketKey: String
+        let requestURL: URL?
+        let reason: String
+
+        var diagnosticText: String {
+            let dimensions = if let width, let height {
+                "\(width)x\(height)"
+            } else {
+                "unknown"
+            }
+            return """
+            Asset ID: \(assetID)
+            Type: \(kind.rawValue)
+            Captured: \(capturedAt.ISO8601Format())
+            Uploaded: \(uploadedAt.ISO8601Format())
+            Updated: \(updatedAt.ISO8601Format())
+            Dimensions: \(dimensions)
+            Bucket: \(bucketKey)
+            Request: \(requestURL?.absoluteString ?? "unavailable")
+            Failure: \(reason)
+            """
+        }
     }
 
     nonisolated struct AvailableThumbnail: Sendable {
@@ -75,30 +124,35 @@ actor LibraryThumbnailCache {
         var processedCount = 0
         var successfulCount = 0
         var successfulBytes: Int64 = 0
+        var failures: [ThumbnailFailure] = []
         var lastProgressAt = Date.distantPast
         var currentProgress = WarmProgress(
             processedCount: 0,
             pendingCount: pending.count,
             cachedCount: existingCount,
             cachedBytes: existingBytes,
-            eligibleCount: assets.count
+            eligibleCount: assets.count,
+            failures: []
         )
         await progress?(currentProgress)
         lastProgressAt = Date()
 
-        try await withThrowingTaskGroup(of: LibraryIndexDerivativeRecord?.self) { group in
+        try await withThrowingTaskGroup(of: DownloadResult.self) { group in
             var iterator = pending.makeIterator()
             for _ in 0 ..< 2 {
                 if let asset = iterator.next() {
                     group.addTask { try await Self.download(asset, endpoint, accessToken, directory) }
                 }
             }
-            while let record = try await group.next() {
+            while let result = try await group.next() {
                 try Task.checkCancellation()
-                if let record {
+                switch result {
+                case let .success(record):
                     try await store.upsert(derivatives: [record], scope: scope)
                     successfulCount += 1
                     successfulBytes += record.byteCount
+                case let .failure(failure):
+                    failures.append(failure)
                 }
                 processedCount += 1
                 currentProgress = .init(
@@ -106,7 +160,8 @@ actor LibraryThumbnailCache {
                     pendingCount: pending.count,
                     cachedCount: existingCount + successfulCount,
                     cachedBytes: existingBytes + successfulBytes,
-                    eligibleCount: assets.count
+                    eligibleCount: assets.count,
+                    failures: failures
                 )
                 let now = Date()
                 if processedCount == pending.count || now.timeIntervalSince(lastProgressAt) >= 1 {
@@ -143,7 +198,8 @@ actor LibraryThumbnailCache {
             pendingCount: assets.count - currentExisting.count,
             cachedCount: currentExisting.count,
             cachedBytes: currentExisting.reduce(Int64(0)) { $0 + $1.byteCount },
-            eligibleCount: assets.count
+            eligibleCount: assets.count,
+            failures: []
         )
     }
 
@@ -172,18 +228,20 @@ actor LibraryThumbnailCache {
         records.reserveCapacity(assets.count)
         var processedCount = 0
         var cachedBytes: Int64 = 0
+        var failures: [ThumbnailFailure] = []
         var lastProgressAt = Date.distantPast
         var currentProgress = WarmProgress(
             processedCount: 0,
             pendingCount: assets.count,
             cachedCount: 0,
             cachedBytes: 0,
-            eligibleCount: assets.count
+            eligibleCount: assets.count,
+            failures: []
         )
         await progress?(currentProgress)
         lastProgressAt = Date()
 
-        try await withThrowingTaskGroup(of: LibraryIndexDerivativeRecord?.self) { group in
+        try await withThrowingTaskGroup(of: DownloadResult.self) { group in
             var iterator = assets.makeIterator()
             for _ in 0 ..< 2 {
                 if let asset = iterator.next() {
@@ -192,11 +250,14 @@ actor LibraryThumbnailCache {
                     }
                 }
             }
-            while let record = try await group.next() {
+            while let result = try await group.next() {
                 try Task.checkCancellation()
-                if let record {
+                switch result {
+                case let .success(record):
                     records.append(record)
                     cachedBytes += record.byteCount
+                case let .failure(failure):
+                    failures.append(failure)
                 }
                 processedCount += 1
                 currentProgress = .init(
@@ -204,7 +265,8 @@ actor LibraryThumbnailCache {
                     pendingCount: assets.count,
                     cachedCount: records.count,
                     cachedBytes: cachedBytes,
-                    eligibleCount: assets.count
+                    eligibleCount: assets.count,
+                    failures: failures
                 )
                 let now = Date()
                 if processedCount == assets.count || now.timeIntervalSince(lastProgressAt) >= 1 {
@@ -364,12 +426,17 @@ actor LibraryThumbnailCache {
         }
     }
 
+    private nonisolated enum DownloadResult: Sendable {
+        case success(LibraryIndexDerivativeRecord)
+        case failure(ThumbnailFailure)
+    }
+
     private nonisolated static func download(
         _ asset: LibraryIndexAssetRecord,
         _ endpoint: URL,
         _ accessToken: String,
         _ directory: URL
-    ) async throws -> LibraryIndexDerivativeRecord? {
+    ) async throws -> DownloadResult {
         try Task.checkCancellation()
         var components = URLComponents(
             url: endpoint.appending(path: "assets/\(asset.id)/thumbnail"),
@@ -380,7 +447,7 @@ actor LibraryThumbnailCache {
             logger.error(
                 "Thumbnail unavailable asset=\(asset.id.prefix(8), privacy: .public) reason=invalid-url"
             )
-            return nil
+            return .failure(thumbnailFailure(asset: asset, requestURL: nil, reason: "invalid-url"))
         }
         var request = URLRequest(url: url)
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
@@ -389,19 +456,25 @@ actor LibraryThumbnailCache {
             logger.error(
                 "Thumbnail unavailable asset=\(asset.id.prefix(8), privacy: .public) reason=non-http-response"
             )
-            return nil
+            return .failure(thumbnailFailure(asset: asset, requestURL: url, reason: "non-http-response"))
         }
         guard (200 ..< 300).contains(response.statusCode) else {
             logger.error(
                 "Thumbnail unavailable asset=\(asset.id.prefix(8), privacy: .public) reason=http-status status=\(response.statusCode)"
             )
-            return nil
+            return .failure(
+                thumbnailFailure(
+                    asset: asset,
+                    requestURL: url,
+                    reason: "http-status-\(response.statusCode)"
+                )
+            )
         }
         guard !data.isEmpty else {
             logger.error(
                 "Thumbnail unavailable asset=\(asset.id.prefix(8), privacy: .public) reason=empty-response"
             )
-            return nil
+            return .failure(thumbnailFailure(asset: asset, requestURL: url, reason: "empty-response"))
         }
         try Task.checkCancellation()
         let filename = "\(asset.id)-\(stableRevision(asset.updatedAt)).bin"
@@ -409,7 +482,7 @@ actor LibraryThumbnailCache {
         try data.write(to: fileURL, options: .atomic)
         let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         let now = Date()
-        return .init(
+        return .success(.init(
             assetID: asset.id,
             derivative: .thumbnail,
             pixelSize: nil,
@@ -420,6 +493,25 @@ actor LibraryThumbnailCache {
             isVerified: true,
             lastAccessedAt: now,
             completedAt: now
+        ))
+    }
+
+    private nonisolated static func thumbnailFailure(
+        asset: LibraryIndexAssetRecord,
+        requestURL: URL?,
+        reason: String
+    ) -> ThumbnailFailure {
+        .init(
+            assetID: asset.id,
+            kind: asset.kind,
+            capturedAt: asset.capturedAt,
+            uploadedAt: asset.uploadedAt,
+            updatedAt: asset.updatedAt,
+            width: asset.width,
+            height: asset.height,
+            bucketKey: asset.bucketKey,
+            requestURL: requestURL,
+            reason: reason
         )
     }
 

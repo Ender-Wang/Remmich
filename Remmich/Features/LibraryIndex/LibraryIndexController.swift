@@ -26,6 +26,11 @@ final class LibraryIndexController {
         case failed(String)
     }
 
+    private enum IndexOperation: String {
+        case sync = "Sync"
+        case rebuild = "Rebuild"
+    }
+
     private(set) var status: Status = .idle
     private(set) var indexedAssetCount = 0
     private(set) var indexedPhotoCount = 0
@@ -34,6 +39,7 @@ final class LibraryIndexController {
     private(set) var startedAt: Date?
     private(set) var completedElapsed: TimeInterval?
     private(set) var lastUpdatedAt: Date?
+    private(set) var indexFailedAt: Date?
     private(set) var storageReport = LibraryIndexStorageReport(
         metadataBytes: 0,
         derivativeBytes: 0,
@@ -56,6 +62,8 @@ final class LibraryIndexController {
     private(set) var thumbnailWarmingStartedAt: Date?
     private(set) var thumbnailWarmingCompletedElapsed: TimeInterval?
     private(set) var thumbnailWarmingLastUpdatedAt: Date?
+    private(set) var thumbnailWarmingFailedAt: Date?
+    private(set) var thumbnailWarmingFailures: [LibraryThumbnailCache.ThumbnailFailure] = []
     @ObservationIgnored
     var acceptedBootstrapDidChange: ((LibraryTimelineBootstrap) -> Void)?
     @ObservationIgnored
@@ -77,6 +85,7 @@ final class LibraryIndexController {
     private var warmingRunID: UInt64 = 0
     private var lastWarmingLoggedMilestone = -1
     private var lastPublishedBootstrapGeneration: Int64?
+    private var indexOperation = IndexOperation.sync
 
     init(
         source: any TimelineReading,
@@ -109,6 +118,45 @@ final class LibraryIndexController {
             1,
             max(0, Double(thumbnailWarmingCachedCount) / Double(thumbnailWarmingEligibleCount))
         )
+    }
+
+    var indexFailureDiagnostics: String? {
+        guard case let .failed(message) = status else { return nil }
+        let failedAt = indexFailedAt?.ISO8601Format() ?? "unknown"
+        let elapsed = completedElapsed.map { String(format: "%.3f seconds", $0) } ?? "unknown"
+        let endpoint = endpoint?.absoluteString ?? "unavailable"
+        return """
+        Remmich library index failure
+        Operation: \(indexOperation.rawValue)
+        Failed at: \(failedAt)
+        Elapsed: \(elapsed)
+        Endpoint: \(endpoint)
+        Progress: \(indexedAssetCount)/\(expectedAssetCount) assets
+        Photos: \(indexedPhotoCount)
+        Videos: \(indexedVideoCount)
+        Failure: \(message)
+        """
+    }
+
+    var thumbnailFailureDiagnostics: String? {
+        guard case let .failed(message) = thumbnailWarmingStatus else { return nil }
+        let failedAt = thumbnailWarmingFailedAt?.ISO8601Format() ?? "unknown"
+        let endpoint = endpoint?.absoluteString ?? "unavailable"
+        let heading = """
+        Remmich thumbnail cache failure
+        Failed at: \(failedAt)
+        Endpoint: \(endpoint)
+        Progress: \(thumbnailWarmingCachedCount)/\(thumbnailWarmingEligibleCount) thumbnails
+        Failure: \(message)
+        """
+        guard !thumbnailWarmingFailures.isEmpty else { return heading }
+        return ([heading] + thumbnailWarmingFailures.enumerated().map { index, failure in
+            """
+
+            Failure \(index + 1)
+            \(failure.diagnosticText)
+            """
+        }).joined(separator: "\n")
     }
 
     func elapsed(at date: Date) -> TimeInterval? {
@@ -245,6 +293,7 @@ final class LibraryIndexController {
             expectedAssetCount = 0
             startedAt = nil
             thumbnailWarmingLastUpdatedAt = nil
+            thumbnailWarmingFailedAt = nil
         }
         refreshStoredAccounts()
         run(fullReconciliation: false)
@@ -316,7 +365,9 @@ final class LibraryIndexController {
             thumbnailWarmingPendingCount = 0
             thumbnailWarmingStartedAt = nil
             thumbnailWarmingCompletedElapsed = nil
+            thumbnailWarmingFailures = []
             thumbnailWarmingLastUpdatedAt = nil
+            thumbnailWarmingFailedAt = nil
             thumbnailWarmingStatus = .off
         }
     }
@@ -442,6 +493,7 @@ final class LibraryIndexController {
         startedAt = nil
         completedElapsed = nil
         lastUpdatedAt = nil
+        indexFailedAt = nil
         thumbnailWarmingCachedCount = 0
         thumbnailWarmingCachedBytes = 0
         thumbnailWarmingEligibleCount = 0
@@ -449,7 +501,9 @@ final class LibraryIndexController {
         thumbnailWarmingPendingCount = 0
         thumbnailWarmingStartedAt = nil
         thumbnailWarmingCompletedElapsed = nil
+        thumbnailWarmingFailures = []
         thumbnailWarmingLastUpdatedAt = nil
+        thumbnailWarmingFailedAt = nil
         thumbnailWarmingStatus = thumbnailWarmingEnabled ? .waiting : .off
         lastPublishedBootstrapGeneration = nil
     }
@@ -489,6 +543,8 @@ final class LibraryIndexController {
         let currentRunID = runID
         startedAt = Date()
         completedElapsed = nil
+        indexFailedAt = nil
+        indexOperation = fullReconciliation ? .rebuild : .sync
         lastPublishedAt = .distantPast
         if fullReconciliation {
             indexedAssetCount = 0
@@ -531,6 +587,7 @@ final class LibraryIndexController {
                 publish(result, force: true)
                 completedElapsed = Date().timeIntervalSince(runStartedAt)
                 status = .upToDate
+                indexFailedAt = nil
                 lastUpdatedAt = Date()
                 storageReport = try await store.storageReport(scope: scope)
                 storedAccounts = try await store.storedAccounts()
@@ -572,6 +629,7 @@ final class LibraryIndexController {
                 if currentRunID == runID {
                     completedElapsed = Date().timeIntervalSince(runStartedAt)
                     status = .failed(Self.message(for: error))
+                    indexFailedAt = Date()
                 }
                 Self.logger.error(
                     "Library index failed elapsedMs=\(Self.elapsedMilliseconds(since: runStartedAt)) error=\(Self.message(for: error), privacy: .public)"
@@ -648,6 +706,8 @@ final class LibraryIndexController {
         thumbnailWarmingPendingCount = 0
         thumbnailWarmingStartedAt = Date()
         thumbnailWarmingCompletedElapsed = nil
+        thumbnailWarmingFailures = []
+        thumbnailWarmingFailedAt = nil
         lastWarmingLoggedMilestone = -1
         let cache = thumbnailCache
         let store = store
@@ -699,12 +759,15 @@ final class LibraryIndexController {
                 thumbnailWarmingCompletedElapsed = Date().timeIntervalSince(startedAt)
                 thumbnailWarmingLastUpdatedAt = Date()
                 let unavailableCount = finalProgress.eligibleCount - finalProgress.cachedCount
+                thumbnailWarmingFailures = finalProgress.failures
                 if unavailableCount == 0 {
                     thumbnailWarmingStatus = thumbnailWarmingEnabled ? .upToDate : .off
+                    thumbnailWarmingFailedAt = nil
                 } else {
                     thumbnailWarmingStatus = .failed(
                         "\(unavailableCount.formatted()) failed"
                     )
+                    thumbnailWarmingFailedAt = Date()
                 }
                 try await media?.registerWarmedThumbnails(cache.availableThumbnails(scope: scope))
                 Self.logger.info(
@@ -730,6 +793,7 @@ final class LibraryIndexController {
                         thumbnailWarmingStatus = .failed(
                             "Failed: \(Self.message(for: error))"
                         )
+                        thumbnailWarmingFailedAt = Date()
                     }
                     Self.logger.error(
                         "Thumbnail warming failed elapsedMs=\(Self.elapsedMilliseconds(since: startedAt)) error=\(Self.message(for: error), privacy: .public)"
@@ -786,6 +850,9 @@ final class LibraryIndexController {
         thumbnailWarmingEligibleCount = progress.eligibleCount
         thumbnailWarmingProcessedCount = progress.processedCount
         thumbnailWarmingPendingCount = progress.pendingCount
+        if !progress.failures.isEmpty {
+            thumbnailWarmingFailures = progress.failures
+        }
     }
 
     private func publish(_ result: LibraryIndexSyncResult, force: Bool) {
