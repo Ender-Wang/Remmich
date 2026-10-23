@@ -47,13 +47,12 @@ struct AssetThumbnail: View {
                         .shadow(radius: 2)
                 }
             }
-            .overlay(alignment: .bottomTrailing) {
-                if let systemImage = asset.kind.systemImage {
-                    Label(asset.duration ?? "", systemImage: systemImage)
+            .overlay(alignment: .bottom) {
+                if asset.kind == .video, let duration = asset.duration {
+                    Text(duration)
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.white)
-                        .labelStyle(.titleAndIcon)
-                        .padding(6)
+                        .padding(.bottom, 3)
                         .shadow(radius: 3)
                 }
             }
@@ -556,13 +555,26 @@ struct TimelineAssetThumbnail: View {
                     .padding(6)
                     .shadow(radius: 3)
                 }
-                .overlay(alignment: .bottomTrailing) {
+                .overlay {
                     if asset.mediaKind == .video {
-                        Label(Self.duration(asset.durationMilliseconds), systemImage: "play.fill")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.white)
-                            .padding(6)
-                            .shadow(radius: 3)
+                        GeometryReader { overlayGeometry in
+                            let thumbnailRect = TimelineThumbnailGeometry.renderedImageRect(
+                                in: overlayGeometry.size,
+                                aspectRatio: asset.aspectRatio,
+                                fillsContainer: assetLayout == .square
+                            )
+                            Text(Self.duration(asset.durationMilliseconds))
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .padding(.bottom, 3)
+                                .frame(
+                                    width: thumbnailRect.width,
+                                    height: thumbnailRect.height,
+                                    alignment: .bottom
+                                )
+                                .position(x: thumbnailRect.midX, y: thumbnailRect.midY)
+                                .shadow(radius: 3)
+                        }
                     }
                 }
                 .onAppear { visibilityChanged(asset.id, descriptor) }
@@ -610,5 +622,41 @@ struct TimelineAssetThumbnail: View {
 
     private static func targetPixels(for points: CGFloat, scale: CGFloat) -> Int {
         min(2048, max(1, Int((points * scale).rounded(.up))))
+    }
+}
+
+nonisolated enum TimelineThumbnailGeometry {
+    static func renderedImageRect(
+        in containerSize: CGSize,
+        aspectRatio: Double,
+        fillsContainer: Bool
+    ) -> CGRect {
+        let container = CGRect(origin: .zero, size: containerSize)
+        guard !fillsContainer,
+              containerSize.width > 0,
+              containerSize.height > 0,
+              aspectRatio.isFinite,
+              aspectRatio > 0
+        else { return container }
+
+        let ratio = CGFloat(aspectRatio)
+        let containerRatio = containerSize.width / containerSize.height
+        if ratio > containerRatio {
+            let height = containerSize.width / ratio
+            return CGRect(
+                x: 0,
+                y: (containerSize.height - height) / 2,
+                width: containerSize.width,
+                height: height
+            )
+        }
+
+        let width = containerSize.height * ratio
+        return CGRect(
+            x: (containerSize.width - width) / 2,
+            y: 0,
+            width: width,
+            height: containerSize.height
+        )
     }
 }

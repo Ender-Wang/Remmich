@@ -7,6 +7,40 @@ import UIKit
 
 @Suite("Server-backed Photos timeline")
 struct PhotosTimelineRegressionTests {
+    @Test func videoDurationUsesFullThumbnailBoundsInSquareLayout() {
+        let rect = TimelineThumbnailGeometry.renderedImageRect(
+            in: CGSize(width: 100, height: 100),
+            aspectRatio: 16.0 / 9.0,
+            fillsContainer: true
+        )
+
+        #expect(rect == CGRect(x: 0, y: 0, width: 100, height: 100))
+    }
+
+    @Test func videoDurationFollowsLandscapeImageBottomInNaturalLayout() {
+        let rect = TimelineThumbnailGeometry.renderedImageRect(
+            in: CGSize(width: 100, height: 100),
+            aspectRatio: 16.0 / 9.0,
+            fillsContainer: false
+        )
+
+        #expect(abs(rect.minY - 21.875) < 0.000_001)
+        #expect(abs(rect.maxY - 78.125) < 0.000_001)
+        #expect(rect.width == 100)
+    }
+
+    @Test func videoDurationFollowsPortraitImageBottomInNaturalLayout() {
+        let rect = TimelineThumbnailGeometry.renderedImageRect(
+            in: CGSize(width: 100, height: 100),
+            aspectRatio: 2.0 / 3.0,
+            fillsContainer: false
+        )
+
+        #expect(abs(rect.minX - 16.666_667) < 0.000_001)
+        #expect(rect.maxY == 100)
+        #expect(rect.height == 100)
+    }
+
     @Test @MainActor func rotationVisualHandoffEligibilityTracksEachTimeline() {
         let state = TimelineRotationState()
 
