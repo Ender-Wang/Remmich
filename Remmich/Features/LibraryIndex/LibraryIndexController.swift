@@ -458,10 +458,10 @@ final class LibraryIndexController {
             guard let self else { return }
             do {
                 guard let maintenance = try await store.finishMaintenanceIfNeeded(
-                    scope: expectedScope
-                ),
-                    !Task.isCancelled,
-                    scope == expectedScope
+                          scope: expectedScope
+                      ),
+                      !Task.isCancelled,
+                      scope == expectedScope
                 else {
                     localMaintenanceTask = nil
                     return

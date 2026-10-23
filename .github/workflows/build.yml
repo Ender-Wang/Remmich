@@ -25,11 +25,22 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
 
-      - name: Update SwiftFormat
+      - name: Install pinned SwiftFormat
         run: |
-          brew update
-          brew upgrade swiftformat
-          test "$(swiftformat --version)" = "0.64.0"
+          swiftformat_version="$(tr -d '[:space:]' < .swiftformat-version)"
+          swiftformat_sha256="$(tr -d '[:space:]' < .swiftformat-sha256)"
+          swiftformat_archive="$RUNNER_TEMP/swiftformat-$swiftformat_version.zip"
+          swiftformat_directory="$RUNNER_TEMP/swiftformat-$swiftformat_version"
+          curl -fL --retry 3 \
+            --output "$swiftformat_archive" \
+            "https://github.com/nicklockwood/SwiftFormat/releases/download/$swiftformat_version/swiftformat.zip"
+          printf '%s  %s\n' "$swiftformat_sha256" "$swiftformat_archive" \
+            | shasum -a 256 -c -
+          mkdir -p "$swiftformat_directory"
+          unzip -q "$swiftformat_archive" -d "$swiftformat_directory"
+          chmod +x "$swiftformat_directory/swiftformat"
+          test "$("$swiftformat_directory/swiftformat" --version)" = "$swiftformat_version"
+          echo "$swiftformat_directory" >> "$GITHUB_PATH"
 
       - name: Report toolchain
         run: |
