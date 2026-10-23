@@ -221,7 +221,11 @@ struct AccountSettingsView: View {
             VStack(alignment: .leading, spacing: 18) {
                 Label("Remmich never changes data on your Immich server.", systemImage: "lock.shield")
                     .foregroundStyle(.secondary)
-                Button("Sign Out", role: .destructive) { showsSignOutChoices = true }
+                settingsActionRow {
+                    settingsActionButton("Sign Out", role: .destructive) {
+                        showsSignOutChoices = true
+                    }
+                }
             }
 
             Text("Remmich \(appVersion) · build \(appBuild)")
@@ -294,16 +298,22 @@ struct AccountSettingsView: View {
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .lineLimit(2 ... 5)
-            Button {
-                validateAndSaveProfile()
-            } label: {
-                if isSaving {
-                    ProgressView()
-                } else {
-                    Text("Save Connection Profile")
+            settingsActionRow {
+                Button {
+                    validateAndSaveProfile()
+                } label: {
+                    if isSaving {
+                        ProgressView()
+                    } else {
+                        Text("Save Connection Profile")
+                    }
                 }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.capsule)
+                .controlSize(.regular)
+                .foregroundStyle(.primary)
+                .disabled(isSaving)
             }
-            .disabled(isSaving)
             Text(connectionProfileHelp)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
@@ -345,23 +355,23 @@ struct AccountSettingsView: View {
                 }
             }
             .font(.footnote.monospacedDigit())
-            HStack {
-                if libraryIndex.status == .paused {
-                    Button("Resume") { libraryIndex.resume() }
-                } else {
-                    Button("Pause") { libraryIndex.pause() }
+            settingsTripleActionRow {
+                settingsActionButton("Sync Now") { libraryIndex.syncNow() }
+            } center: {
+                switch libraryIndex.status {
+                case .failed:
+                    settingsActionButton("Retry") { libraryIndex.retry() }
+                case .paused:
+                    settingsActionButton("Resume") { libraryIndex.resume() }
+                default:
+                    settingsActionButton("Pause") { libraryIndex.pause() }
                         .disabled(libraryIndex.status != .indexing)
                 }
-                if case .failed = libraryIndex.status {
-                    Button("Retry") { libraryIndex.retry() }
+            } trailing: {
+                settingsActionButton("Rebuild") {
+                    libraryIndex.fullSyncAndVerify()
                 }
             }
-            HStack {
-                Button("Sync Now") { libraryIndex.syncNow() }
-                Spacer(minLength: 16)
-                Button("Rebuild & Verify Index") { libraryIndex.fullSyncAndVerify() }
-            }
-            .frame(maxWidth: .infinity)
 
             Divider()
 
@@ -401,17 +411,20 @@ struct AccountSettingsView: View {
                 Text("Auto-warm Timeline Thumbnails")
                     .bold()
             }
-            HStack {
-                Button("Sync Cache Now") { libraryIndex.syncThumbnailCache() }
-                Spacer(minLength: 16)
-                Button("Rebuild Cache", role: .destructive) {
+            settingsTripleActionRow {
+                settingsActionButton("Sync Now") {
+                    libraryIndex.syncThumbnailCache()
+                }
+                .disabled(libraryIndex.thumbnailWarmingStatus == .warming)
+            } center: {
+                settingsActionButton("Rebuild") {
                     showsThumbnailRebuildConfirmation = true
                 }
-            }
-            .frame(maxWidth: .infinity)
-            .disabled(libraryIndex.thumbnailWarmingStatus == .warming)
-            Button("Clear Thumbnails", role: .destructive) {
-                showsThumbnailClearConfirmation = true
+                .disabled(libraryIndex.thumbnailWarmingStatus == .warming)
+            } trailing: {
+                settingsActionButton("Clear", role: .destructive) {
+                    showsThumbnailClearConfirmation = true
+                }
             }
             Text("The metadata index is account-scoped and remains available when thumbnail bytes are cleared.")
                 .font(.footnote)
@@ -429,10 +442,12 @@ struct AccountSettingsView: View {
                         )
                         .font(.footnote)
                         .foregroundStyle(.secondary)
-                        Button("Delete Local Data", role: .destructive) {
-                            pendingAccountDeletion = account
+                        settingsActionRow {
+                            settingsActionButton("Delete Local Data", role: .destructive) {
+                                pendingAccountDeletion = account
+                            }
+                            .font(.footnote.weight(.semibold))
                         }
-                        .font(.footnote.weight(.semibold))
                     }
                 }
             }
@@ -508,6 +523,60 @@ struct AccountSettingsView: View {
             Text(label)
                 .bold()
         }
+    }
+
+    private func settingsActionButton(
+        _ title: String,
+        role: ButtonRole? = nil,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(role: role, action: action) {
+            Text(title)
+                .multilineTextAlignment(.center)
+        }
+        .buttonStyle(.glass)
+        .buttonBorderShape(.capsule)
+        .controlSize(.regular)
+        .foregroundStyle(role == .destructive ? Color.red : Color.primary)
+    }
+
+    private func settingsActionRow(
+        @ViewBuilder content: () -> some View
+    ) -> some View {
+        HStack(spacing: 12) {
+            Spacer(minLength: 0)
+            content()
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
+    private func settingsPairedActionRow(
+        @ViewBuilder leading: () -> some View,
+        @ViewBuilder trailing: () -> some View
+    ) -> some View {
+        HStack(spacing: 12) {
+            leading()
+                .frame(maxWidth: .infinity, alignment: .center)
+            trailing()
+                .frame(maxWidth: .infinity, alignment: .center)
+        }
+        .frame(maxWidth: .infinity, alignment: .center)
+    }
+
+    private func settingsTripleActionRow(
+        @ViewBuilder leading: () -> some View,
+        @ViewBuilder center: () -> some View,
+        @ViewBuilder trailing: () -> some View
+    ) -> some View {
+        HStack(spacing: 8) {
+            leading()
+                .frame(maxWidth: .infinity, alignment: .center)
+            center()
+                .frame(maxWidth: .infinity, alignment: .center)
+            trailing()
+                .frame(maxWidth: .infinity, alignment: .center)
+        }
+        .frame(maxWidth: .infinity, alignment: .center)
     }
 
     private func performSignOut(deleteLocalData: Bool) {
