@@ -602,7 +602,10 @@ struct AccountSettingsView: View {
     }
 
     private var libraryIndexProgressText: String {
-        let percentage = Int((libraryIndex.fractionCompleted * 100).rounded())
+        let percentage = Self.progressPercentage(
+            completed: libraryIndex.indexedAssetCount,
+            total: libraryIndex.expectedAssetCount
+        )
         return "\(percentage)% (\(libraryIndex.indexedAssetCount.formatted())/\(libraryIndex.expectedAssetCount.formatted())) assets indexed"
     }
 
@@ -641,8 +644,20 @@ struct AccountSettingsView: View {
     }
 
     private var thumbnailWarmingProgressText: String {
-        let percentage = Int((libraryIndex.thumbnailWarmingFractionCompleted * 100).rounded())
+        let percentage = Self.progressPercentage(
+            completed: libraryIndex.thumbnailWarmingCachedCount,
+            total: libraryIndex.thumbnailWarmingEligibleCount
+        )
         return "\(percentage)% (\(libraryIndex.thumbnailWarmingCachedCount.formatted())/\(libraryIndex.thumbnailWarmingEligibleCount.formatted())) thumbnails cached"
+    }
+
+    nonisolated static func progressPercentage(completed: Int, total: Int) -> String {
+        guard total > 0 else { return "0.00" }
+        let boundedCompleted = min(total, max(0, completed))
+        let hundredths = Int64(boundedCompleted) * 10000 / Int64(total)
+        return (Double(hundredths) / 100).formatted(
+            .number.precision(.fractionLength(2))
+        )
     }
 
     private var thumbnailCacheInventory: String {

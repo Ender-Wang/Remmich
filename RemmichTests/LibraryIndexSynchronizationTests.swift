@@ -4,6 +4,16 @@ import Testing
 
 @Suite(.serialized)
 struct LibraryIndexSynchronizationTests {
+    @Test func progressPercentageKeepsIncompleteCountsBelowOneHundred() {
+        #expect(
+            AccountSettingsView.progressPercentage(completed: 26845, total: 26846)
+                == "99.99"
+        )
+        #expect(AccountSettingsView.progressPercentage(completed: 1, total: 3) == "33.33")
+        #expect(AccountSettingsView.progressPercentage(completed: 3, total: 3) == "100.00")
+        #expect(AccountSettingsView.progressPercentage(completed: 0, total: 0) == "0.00")
+    }
+
     @Test func fullReconciliationPromotesDeletionsOnlyAfterSuccess() async throws {
         let fixture = try IndexFixture()
         defer { fixture.cleanup() }
