@@ -11,6 +11,96 @@ struct AccountSettingsView: View {
         }
     }
 
+    private struct StatusNote {
+        let elapsed: String
+        let elapsedAccessibilityValue: String
+        let remaining: String?
+        let lastSync: String
+        let lastSyncAccessibilityValue: String
+
+        var showsRemaining: Bool {
+            remaining != nil
+        }
+    }
+
+    private struct StatusPresentation {
+        let systemImage: String
+        let tint: Color
+        let accessibilityValue: String
+    }
+
+    private struct AnimatedStatusIcon: View {
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+        let systemImage: String
+        let tint: Color
+        let isActive: Bool
+
+        @State private var displayedSystemImage: String
+        @State private var rotates: Bool
+        @State private var wasActive: Bool
+
+        init(systemImage: String, tint: Color, isActive: Bool) {
+            self.systemImage = systemImage
+            self.tint = tint
+            self.isActive = isActive
+            _displayedSystemImage = State(initialValue: systemImage)
+            _rotates = State(initialValue: false)
+            _wasActive = State(initialValue: isActive)
+        }
+
+        var body: some View {
+            Image(systemName: displayedSystemImage)
+                .foregroundStyle(tint)
+                .contentTransition(.symbolEffect(.replace))
+                .symbolEffect(
+                    .rotate.clockwise.wholeSymbol,
+                    options: .repeating.speed(0.72),
+                    isActive: rotates && !reduceMotion
+                )
+                .task(id: "\(systemImage)|\(isActive)|\(reduceMotion)") {
+                    if isActive {
+                        if displayedSystemImage != systemImage {
+                            withAnimation(reduceMotion ? nil : .snappy(duration: 0.2)) {
+                                displayedSystemImage = systemImage
+                            }
+                        }
+                        await Task.yield()
+                        guard !Task.isCancelled else { return }
+                        wasActive = true
+                        rotates = true
+                    } else {
+                        let settlesFromRotation = wasActive
+                        rotates = false
+                        wasActive = false
+                        guard displayedSystemImage != systemImage else { return }
+                        if settlesFromRotation, !reduceMotion {
+                            try? await Task.sleep(for: .milliseconds(450))
+                            guard !Task.isCancelled else { return }
+                        }
+                        withAnimation(reduceMotion ? nil : .snappy(duration: 0.2)) {
+                            displayedSystemImage = systemImage
+                        }
+                    }
+                }
+                .accessibilityHidden(true)
+        }
+    }
+
+    private enum StatusNoteLayout {
+        static let spacing: CGFloat = 4
+        static let settledElapsedWidth: CGFloat = 60
+        static let activeElapsedWidth: CGFloat = 96
+        static let lastSyncWidth: CGFloat = 120
+    }
+
+    private enum SettingsIconLayout {
+        static let size: CGFloat = 16
+        static let frame: CGFloat = 20
+        static let actionSize: CGFloat = 13
+        static let actionFrame: CGFloat = 15
+    }
+
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -70,9 +160,17 @@ struct AccountSettingsView: View {
                 Text("Remmich")
                     .font(.title.bold())
                 Spacer()
+                if !showsCloseControl, !accountDisplayName.isEmpty {
+                    Text(accountDisplayName)
+                        .font(.headline.weight(.semibold))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: accountNameMaxWidth, alignment: .trailing)
+                        .padding(.trailing, 48)
+                        .accessibilityLabel("Immich account \(accountDisplayName)")
+                }
                 if showsCloseControl {
-                    Button("Close") { closePanel() }
-                        .buttonStyle(.glass)
+                    settingsActionButton("Close", systemImage: "xmark", action: closePanel)
                 }
             }
             .frame(minHeight: 44)
@@ -82,10 +180,12 @@ struct AccountSettingsView: View {
             Picker("Settings Page", selection: pickerSelection) {
                 ForEach(SettingsPage.allCases) { page in
                     Text(page.rawValue)
+                        .fontWeight(.bold)
                         .tag(page)
                 }
             }
             .pickerStyle(.segmented)
+            .font(.body.weight(.bold))
             .labelsHidden()
             .padding(.horizontal, 24)
             .padding(.bottom, 16)
@@ -196,6 +296,14 @@ struct AccountSettingsView: View {
         }
     }
 
+    private var accountDisplayName: String {
+        session.name.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var accountNameMaxWidth: CGFloat {
+        UIDevice.current.userInterfaceIdiom == .pad ? 220 : 140
+    }
+
     private var pickerSelection: Binding<SettingsPage> {
         Binding(
             get: { selectedPage },
@@ -212,30 +320,60 @@ struct AccountSettingsView: View {
     }
 
     private var accountPage: some View {
-        VStack(alignment: .leading, spacing: 28) {
+        VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 18) {
-                settingsValue("User", value: session.userEmail)
-                settingsValue("Server", value: activeRoute?.endpoint.absoluteString ?? routeStatusLabel)
-                settingsValue("Immich version", value: session.serverVersion.description)
+                settingsValue("User", systemImage: "person.crop.circle", value: session.userEmail)
+                settingsValue(
+                    "Server",
+                    systemImage: "server.rack",
+                    value: activeRoute?.endpoint.absoluteString ?? routeStatusLabel
+                )
+                settingsValue(
+                    "Immich version",
+                    systemImage: "info.circle",
+                    value: session.serverVersion.description
+                )
             }
 
             connectionSection
+                .padding(.top, 28)
+            accountFooter
+        }
+    }
 
-            VStack(alignment: .leading, spacing: 18) {
-                Label("Remmich never changes data on your Immich server.", systemImage: "lock.shield")
-                    .foregroundStyle(.secondary)
-                settingsActionRow {
-                    settingsActionButton("Sign Out", role: .destructive) {
-                        showsSignOutChoices = true
-                    }
+    private var accountFooter: some View {
+        VStack(spacing: 0) {
+            Divider()
+                .padding(.vertical, 22)
+
+            HStack(alignment: .center, spacing: 12) {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "lock.shield")
+                        .frame(height: 16)
+                        .accessibilityHidden(true)
+                    Text("Remmich never changes data on your Immich server.")
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                }
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                settingsActionButton(
+                    "Sign Out",
+                    systemImage: "rectangle.portrait.and.arrow.right",
+                    role: .destructive
+                ) {
+                    showsSignOutChoices = true
                 }
             }
 
             Text("Remmich \(appVersion) · build \(appBuild)")
-                .font(.footnote)
+                .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .center)
                 .multilineTextAlignment(.center)
+                .padding(.top, 18)
         }
     }
 
@@ -274,9 +412,10 @@ struct AccountSettingsView: View {
         accountSection("Connection") {
             settingsValue(
                 "Route",
+                systemImage: "arrow.triangle.branch",
                 value: activeRoute?.kind.rawValue.capitalized ?? "None"
             )
-            settingsValue("Status", value: routeStatusLabel)
+            settingsValue("Status", systemImage: "dot.radiowaves.left.and.right", value: routeStatusLabel)
             if routeStatus != .connected {
                 Text(routeStatusDetail)
                     .font(.footnote)
@@ -285,22 +424,28 @@ struct AccountSettingsView: View {
 
             Divider()
 
-            Text("Connection Profile")
+            settingsIconLabel("Connection Profile", systemImage: "slider.horizontal.3", weight: .bold)
                 .font(.subheadline.weight(.bold))
             if ssidEntitlementEnabled {
-                TextField("Preferred Wi-Fi name", text: $profile.preferredSSID)
+                settingsField(systemImage: "wifi") {
+                    TextField("Preferred Wi-Fi name", text: $profile.preferredSSID)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                }
+            }
+            settingsField(systemImage: "network") {
+                TextField("Local server address", text: $localAddress)
+                    .textContentType(.URL)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
             }
-            TextField("Local server address", text: $localAddress)
-                .textContentType(.URL)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-            TextField("External addresses, one per line", text: $externalAddresses, axis: .vertical)
-                .textContentType(.URL)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .lineLimit(2 ... 5)
+            settingsField(systemImage: "globe") {
+                TextField("External addresses, one per line", text: $externalAddresses, axis: .vertical)
+                    .textContentType(.URL)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .lineLimit(2 ... 5)
+            }
             settingsActionRow {
                 Button {
                     validateAndSaveProfile()
@@ -308,7 +453,7 @@ struct AccountSettingsView: View {
                     if isSaving {
                         ProgressView()
                     } else {
-                        Text("Save Connection Profile")
+                        settingsActionLabel("Save Connection Profile", systemImage: "checkmark")
                     }
                 }
                 .buttonStyle(.glass)
@@ -325,85 +470,91 @@ struct AccountSettingsView: View {
 
     private var libraryIndexSection: some View {
         VStack(alignment: .leading, spacing: 18) {
-            indexStatus
-            if libraryIndex.expectedAssetCount > 0 {
-                ProgressView(value: libraryIndex.fractionCompleted)
+            VStack(alignment: .leading, spacing: 8) {
+                indexStatus
+                ProgressView(value: displayedIndexFractionCompleted)
+                    .animation(
+                        reduceMotion ? nil : .smooth(duration: 0.22),
+                        value: displayedIndexFractionCompleted
+                    )
                     .accessibilityLabel("Library indexing progress")
                     .accessibilityValue("\(libraryIndexProgressText). \(libraryIndexMediaBreakdown)")
-            }
-            VStack(alignment: .leading, spacing: 6) {
-                if libraryIndex.expectedAssetCount > 0 {
+                VStack(alignment: .leading, spacing: 6) {
                     Text(libraryIndexProgressText)
-                    libraryIndexTiming
-                }
-                if let lastUpdatedAt = libraryIndex.lastUpdatedAt {
-                    libraryIndexDetail(
-                        "Last sync",
-                        value: lastUpdatedAt.formatted(date: .abbreviated, time: .shortened)
+                    Text(
+                        "\(libraryIndex.indexedAssetCount.formatted()) indexed · \(ByteCountFormatter.string(fromByteCount: libraryIndex.storageReport.metadataBytes, countStyle: .file))"
                     )
-                }
-                libraryIndexDetail(
-                    "Index database",
-                    value: ByteCountFormatter.string(
-                        fromByteCount: libraryIndex.storageReport.metadataBytes,
-                        countStyle: .file
-                    )
-                )
-                if let libraryIndexDatabaseSizeEstimate {
-                    Text(libraryIndexDatabaseSizeEstimate)
-                    Text("Index only → with thumbnail inventory")
-                }
-                if libraryIndex.expectedAssetCount > 0 {
+                    if let libraryIndexDatabaseSizeEstimate {
+                        Text(libraryIndexDatabaseSizeEstimate)
+                        Text("Index only → with thumbnail inventory")
+                    }
                     Text(libraryIndexMediaBreakdown)
                 }
+                .font(.footnote.monospacedDigit())
             }
-            .font(.footnote.monospacedDigit())
-            settingsTripleActionRow {
-                settingsActionButton("Sync Now") { libraryIndex.syncNow() }
-            } center: {
-                switch libraryIndex.status {
-                case .failed:
-                    settingsActionButton("Retry") { libraryIndex.retry() }
-                case .paused:
-                    settingsActionButton("Resume") { libraryIndex.resume() }
-                default:
-                    settingsActionButton("Pause") { libraryIndex.pause() }
-                        .disabled(libraryIndex.status != .indexing)
-                }
-            } trailing: {
-                settingsActionButton("Rebuild") {
-                    libraryIndex.fullSyncAndVerify()
-                }
-            }
-
-            Divider()
-
-            thumbnailCacheStatus
-            if libraryIndex.thumbnailWarmingStatus != .off,
-               libraryIndex.thumbnailWarmingEligibleCount > 0
-            {
-                ProgressView(value: libraryIndex.thumbnailWarmingFractionCompleted)
-                    .accessibilityLabel("Timeline thumbnail caching progress")
-                    .accessibilityValue(thumbnailWarmingProgressText)
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(thumbnailWarmingProgressText)
-                    thumbnailWarmingTiming
-                    thumbnailCacheLastSync
-                    Text(thumbnailCacheInventory)
-                    if let thumbnailCacheSizeEstimate {
-                        Text(thumbnailCacheSizeEstimate)
+            VStack(alignment: .leading, spacing: 0) {
+                settingsTripleActionRow {
+                    settingsActionButton(
+                        "Sync Now",
+                        systemImage: "arrow.triangle.2.circlepath"
+                    ) { libraryIndex.syncNow() }
+                } center: {
+                    ZStack {
+                        switch libraryIndex.status {
+                        case .failed:
+                            settingsActionButton("Retry", systemImage: "arrow.clockwise") {
+                                libraryIndex.retry()
+                            }
+                            .transition(.opacity)
+                        case .paused:
+                            settingsActionButton("Resume", systemImage: "play.fill") {
+                                libraryIndex.resume()
+                            }
+                            .transition(.opacity)
+                        case .indexing:
+                            settingsActionButton("Pause", systemImage: "pause.fill") {
+                                libraryIndex.pause()
+                            }
+                            .transition(.opacity)
+                        case .idle, .upToDate:
+                            EmptyView()
+                        }
+                    }
+                    .frame(height: 44)
+                    .animation(
+                        reduceMotion ? nil : .snappy(duration: 0.22, extraBounce: 0),
+                        value: libraryIndex.status
+                    )
+                } trailing: {
+                    settingsActionButton("Rebuild", systemImage: "arrow.counterclockwise.circle") {
+                        libraryIndex.fullSyncAndVerify()
                     }
                 }
-                .font(.footnote.monospacedDigit())
-            } else {
-                VStack(alignment: .leading, spacing: 6) {
-                    thumbnailCacheLastSync
-                    Text(thumbnailCacheInventory)
-                    if let thumbnailCacheSizeEstimate {
-                        Text(thumbnailCacheSizeEstimate)
+
+                Color.clear
+                    .frame(height: 44)
+                Divider()
+                Color.clear
+                    .frame(height: 36)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    thumbnailCacheStatus
+                    ProgressView(value: displayedThumbnailFractionCompleted)
+                        .animation(
+                            reduceMotion ? nil : .smooth(duration: 0.22),
+                            value: displayedThumbnailFractionCompleted
+                        )
+                        .accessibilityLabel("Timeline thumbnail caching progress")
+                        .accessibilityValue(thumbnailWarmingProgressText)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(thumbnailWarmingProgressText)
+                        Text(thumbnailCacheInventory)
+                        if let thumbnailCacheSizeEstimate {
+                            Text(thumbnailCacheSizeEstimate)
+                        }
                     }
+                    .font(.footnote.monospacedDigit())
                 }
-                .font(.footnote.monospacedDigit())
             }
             Toggle(
                 isOn: Binding(
@@ -411,21 +562,21 @@ struct AccountSettingsView: View {
                     set: { libraryIndex.setThumbnailWarmingEnabled($0) }
                 )
             ) {
-                Text("Auto-warm Timeline Thumbnails")
+                Text("Auto-cache Thumbnails")
                     .bold()
             }
             settingsTripleActionRow {
-                settingsActionButton("Sync Now") {
+                settingsActionButton("Sync Now", systemImage: "arrow.triangle.2.circlepath") {
                     libraryIndex.syncThumbnailCache()
                 }
                 .disabled(libraryIndex.thumbnailWarmingStatus == .warming)
             } center: {
-                settingsActionButton("Rebuild") {
+                settingsActionButton("Rebuild", systemImage: "arrow.counterclockwise.circle") {
                     showsThumbnailRebuildConfirmation = true
                 }
                 .disabled(libraryIndex.thumbnailWarmingStatus == .warming)
             } trailing: {
-                settingsActionButton("Clear", role: .destructive) {
+                settingsActionButton("Clear", systemImage: "trash", role: .destructive) {
                     showsThumbnailClearConfirmation = true
                 }
             }
@@ -434,22 +585,28 @@ struct AccountSettingsView: View {
                 .foregroundStyle(.secondary)
             if !retainedAccounts.isEmpty {
                 Divider()
-                Text("Stored Account Data")
-                    .font(.subheadline.weight(.bold))
+                settingsIconLabel(
+                    "Stored Account Data",
+                    systemImage: "person.2.crop.square.stack",
+                    weight: .bold
+                )
+                .font(.subheadline.weight(.bold))
                 ForEach(retainedAccounts) { account in
                     VStack(alignment: .leading, spacing: 6) {
-                        Text(Self.accountLabel(account))
-                            .font(.subheadline)
+                        settingsIconLabel(
+                            Self.accountLabel(account),
+                            systemImage: "person.crop.circle"
+                        )
+                        .font(.subheadline)
                         Text(
                             "\(account.indexedAssetCount.formatted()) indexed assets · \(account.derivativeCount.formatted()) cached files · \(ByteCountFormatter.string(fromByteCount: account.derivativeBytes, countStyle: .file))"
                         )
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         settingsActionRow {
-                            settingsActionButton("Delete Local Data", role: .destructive) {
+                            settingsActionButton("Delete Local Data", systemImage: "trash", role: .destructive) {
                                 pendingAccountDeletion = account
                             }
-                            .font(.footnote.weight(.semibold))
                         }
                     }
                 }
@@ -462,85 +619,84 @@ struct AccountSettingsView: View {
         return libraryIndex.storedAccounts.filter { $0.namespace != currentNamespace }
     }
 
-    private var libraryIndexTiming: some View {
-        libraryIndexTiming(at: libraryIndex.status == .indexing ? libraryIndexClock : Date())
-    }
-
-    private var thumbnailWarmingTiming: some View {
-        let date = libraryIndex.thumbnailWarmingStatus == .warming ? libraryIndexClock : Date()
-        return Group {
-            if let elapsed = libraryIndex.thumbnailWarmingElapsed(at: date) {
-                let label = if let remaining = libraryIndex.thumbnailWarmingEstimatedRemaining(at: date) {
-                    "Elapsed (\(Self.duration(remaining)) remaining)"
-                } else {
-                    "Elapsed"
-                }
-                libraryIndexDetail(label, value: Self.duration(elapsed))
-            }
-        }
-        .transaction { transaction in
-            transaction.animation = nil
-        }
-    }
-
-    @ViewBuilder
-    private var thumbnailCacheLastSync: some View {
-        if let lastUpdatedAt = libraryIndex.thumbnailWarmingLastUpdatedAt {
-            libraryIndexDetail(
-                "Last sync",
-                value: lastUpdatedAt.formatted(date: .abbreviated, time: .shortened)
-            )
-        }
-    }
-
-    private func libraryIndexTiming(at date: Date) -> some View {
-        Group {
-            if let elapsed = libraryIndex.elapsed(at: date) {
-                let label = if let remaining = libraryIndex.estimatedRemaining(at: date) {
-                    "Elapsed (\(Self.duration(remaining)) remaining)"
-                } else {
-                    "Elapsed"
-                }
-                libraryIndexDetail(label, value: Self.duration(elapsed))
-            }
-        }
-        .transaction { transaction in
-            transaction.animation = nil
-        }
-    }
-
-    private func libraryIndexDetail(_ label: String, value: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(label)
-                .bold()
-            Spacer(minLength: 8)
-            Text(value)
-                .multilineTextAlignment(.trailing)
-        }
-    }
-
-    private func settingsValue(_ label: String, value: String) -> some View {
+    private func settingsValue(
+        _ label: String,
+        systemImage: String,
+        value: String
+    ) -> some View {
         LabeledContent {
             Text(value)
         } label: {
-            Text(label)
-                .bold()
+            settingsLabel(label, systemImage: systemImage)
+        }
+    }
+
+    private func settingsLabel(_ title: String, systemImage: String) -> some View {
+        settingsIconLabel(title, systemImage: systemImage, weight: .bold)
+    }
+
+    private func settingsIconLabel(
+        _ title: String,
+        systemImage: String,
+        weight: Font.Weight? = nil
+    ) -> some View {
+        HStack(spacing: 8) {
+            settingsIcon(systemImage)
+            Text(title)
+                .fontWeight(weight)
+        }
+    }
+
+    private func settingsIcon(_ systemImage: String) -> some View {
+        Image(systemName: systemImage)
+            .symbolRenderingMode(.monochrome)
+            .font(.system(size: SettingsIconLayout.size, weight: .medium))
+            .frame(width: SettingsIconLayout.frame, height: SettingsIconLayout.frame)
+            .accessibilityHidden(true)
+    }
+
+    private func settingsField(
+        systemImage: String,
+        @ViewBuilder content: () -> some View
+    ) -> some View {
+        HStack(alignment: .center, spacing: 8) {
+            settingsIcon(systemImage)
+                .foregroundStyle(.secondary)
+            content()
         }
     }
 
     private func settingsActionButton(
         _ title: String,
+        systemImage: String,
         role: ButtonRole? = nil,
         action: @escaping () -> Void
     ) -> some View {
         Button(role: role, action: action) {
-            Text(title)
-                .multilineTextAlignment(.center)
+            settingsActionLabel(title, systemImage: systemImage)
         }
         .buttonStyle(.glass)
         .buttonBorderShape(.capsule)
         .controlSize(.regular)
         .foregroundStyle(role == .destructive ? Color.red : Color.primary)
+    }
+
+    private func settingsActionLabel(_ title: String, systemImage: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: systemImage)
+                .symbolRenderingMode(.monochrome)
+                .font(.system(size: SettingsIconLayout.actionSize, weight: .semibold))
+                .frame(
+                    width: SettingsIconLayout.actionFrame,
+                    height: SettingsIconLayout.actionFrame
+                )
+                .accessibilityHidden(true)
+            Text(title)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: true, vertical: false)
+        }
+        .font(.caption.weight(.semibold))
+        .lineLimit(1)
     }
 
     private func settingsActionRow(
@@ -596,39 +752,77 @@ struct AccountSettingsView: View {
 
     @ViewBuilder
     private var indexStatus: some View {
-        switch libraryIndex.status {
-        case .idle:
-            settingsStatus("Index status", systemImage: "clock", accessibilityValue: "Waiting")
-        case .indexing:
+        if case .failed = libraryIndex.status {
+            copyableFailureStatus(
+                label: "Index status",
+                note: libraryIndexStatusNote,
+                diagnostics: libraryIndex.indexFailureDiagnostics,
+                copyTrigger: $copiedIndexFailureDiagnostics
+            )
+        } else {
             settingsStatus(
                 "Index status",
+                note: libraryIndexStatusNote,
+                systemImage: indexStatusPresentation.systemImage,
+                tint: indexStatusPresentation.tint,
+                isActive: libraryIndex.status == .indexing,
+                accessibilityValue: indexStatusPresentation.accessibilityValue
+            )
+        }
+    }
+
+    private var indexStatusPresentation: StatusPresentation {
+        switch libraryIndex.status {
+        case .idle:
+            StatusPresentation(systemImage: "clock", tint: .primary, accessibilityValue: "Waiting")
+        case .indexing:
+            StatusPresentation(
                 systemImage: "arrow.trianglehead.2.clockwise",
+                tint: .primary,
                 accessibilityValue: "Indexing"
             )
         case .paused:
-            settingsStatus("Index status", systemImage: "pause.fill", accessibilityValue: "Paused")
+            StatusPresentation(
+                systemImage: "pause.fill",
+                tint: .primary,
+                accessibilityValue: "Paused"
+            )
         case .upToDate:
-            settingsStatus(
-                "Index status",
+            StatusPresentation(
                 systemImage: "checkmark.circle.fill",
                 tint: .green,
                 accessibilityValue: "Up to date"
             )
         case .failed:
-            copyableFailureStatus(
-                label: "Index status",
-                diagnostics: libraryIndex.indexFailureDiagnostics,
-                copyTrigger: $copiedIndexFailureDiagnostics
+            StatusPresentation(
+                systemImage: "exclamationmark.triangle.fill",
+                tint: .red,
+                accessibilityValue: "Failed"
             )
         }
     }
 
     private var libraryIndexProgressText: String {
         let percentage = Self.progressPercentage(
-            completed: libraryIndex.indexedAssetCount,
-            total: libraryIndex.expectedAssetCount
+            completed: displayedIndexCompletedCount,
+            total: displayedIndexTotalCount
         )
-        return "\(percentage)% (\(libraryIndex.indexedAssetCount.formatted())/\(libraryIndex.expectedAssetCount.formatted())) assets indexed"
+        return "\(percentage)% (\(displayedIndexCompletedCount.formatted())/\(displayedIndexTotalCount.formatted())) assets indexed"
+    }
+
+    private var displayedIndexCompletedCount: Int {
+        libraryIndex.indexedAssetCount
+    }
+
+    private var displayedIndexTotalCount: Int {
+        max(libraryIndex.expectedAssetCount, displayedIndexCompletedCount)
+    }
+
+    private var displayedIndexFractionCompleted: Double {
+        Self.progressFraction(
+            completed: displayedIndexCompletedCount,
+            total: displayedIndexTotalCount
+        )
     }
 
     private var libraryIndexMediaBreakdown: String {
@@ -657,56 +851,79 @@ struct AccountSettingsView: View {
 
     @ViewBuilder
     private var thumbnailCacheStatus: some View {
+        if case .failed = libraryIndex.thumbnailWarmingStatus {
+            copyableFailureStatus(
+                label: "Cache status",
+                note: thumbnailCacheStatusNote,
+                diagnostics: libraryIndex.thumbnailFailureDiagnostics,
+                copyTrigger: $copiedThumbnailFailureDiagnostics
+            )
+        } else {
+            settingsStatus(
+                "Cache status",
+                note: thumbnailCacheStatusNote,
+                systemImage: thumbnailCacheStatusPresentation.systemImage,
+                tint: thumbnailCacheStatusPresentation.tint,
+                isActive: libraryIndex.thumbnailWarmingStatus == .warming,
+                accessibilityValue: thumbnailCacheStatusPresentation.accessibilityValue
+            )
+        }
+    }
+
+    private var thumbnailCacheStatusPresentation: StatusPresentation {
         switch libraryIndex.thumbnailWarmingStatus {
         case .off:
-            settingsStatus("Thumbnail cache", systemImage: "power", accessibilityValue: "Off")
+            StatusPresentation(systemImage: "power", tint: .primary, accessibilityValue: "Off")
         case .waiting:
-            settingsStatus("Thumbnail cache", systemImage: "clock", accessibilityValue: "Waiting")
+            StatusPresentation(systemImage: "clock", tint: .primary, accessibilityValue: "Waiting")
         case .warming:
-            settingsStatus(
-                "Thumbnail cache",
+            StatusPresentation(
                 systemImage: "arrow.trianglehead.2.clockwise",
+                tint: .primary,
                 accessibilityValue: "Caching"
             )
         case .upToDate:
-            settingsStatus(
-                "Thumbnail cache",
+            StatusPresentation(
                 systemImage: "checkmark.circle.fill",
                 tint: .green,
                 accessibilityValue: "Up to date"
             )
         case .failed:
-            copyableFailureStatus(
-                label: "Thumbnail cache",
-                diagnostics: libraryIndex.thumbnailFailureDiagnostics,
-                copyTrigger: $copiedThumbnailFailureDiagnostics
+            StatusPresentation(
+                systemImage: "exclamationmark.triangle.fill",
+                tint: .red,
+                accessibilityValue: "Failed"
             )
         }
     }
 
     private func settingsStatus(
         _ label: String,
+        note: StatusNote,
         systemImage: String,
         tint: Color = .primary,
+        isActive: Bool,
         accessibilityValue: String
     ) -> some View {
         LabeledContent {
-            Image(systemName: systemImage)
-                .foregroundStyle(tint)
+            AnimatedStatusIcon(systemImage: systemImage, tint: tint, isActive: isActive)
                 .frame(width: 28, height: 44)
                 .frame(width: 72, alignment: .trailing)
-                .accessibilityHidden(true)
         } label: {
-            Text(label)
-                .bold()
+            statusLabel(label, note: note)
         }
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .combine)
         .accessibilityValue(accessibilityValue)
+        .animation(
+            reduceMotion ? nil : .snappy(duration: 0.26, extraBounce: 0.02),
+            value: systemImage
+        )
     }
 
     private func copyableFailureStatus(
         label: String,
+        note: StatusNote,
         diagnostics: String?,
         copyTrigger: Binding<Bool>
     ) -> some View {
@@ -733,20 +950,172 @@ struct AccountSettingsView: View {
                     .accessibilityHidden(true)
             }
         } label: {
-            Text(label)
-                .bold()
+            statusLabel(label, note: note)
         }
         .frame(maxWidth: .infinity)
         .accessibilityValue("Failed")
         .sensoryFeedback(.success, trigger: copyTrigger.wrappedValue)
     }
 
+    private func statusLabel(_ label: String, note: StatusNote) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label)
+                .bold()
+            HStack(spacing: StatusNoteLayout.spacing) {
+                elapsedStatusNote(note)
+                statusNoteItem(
+                    note.lastSync,
+                    systemImage: "calendar.badge.clock",
+                    accessibilityLabel: "Last sync",
+                    accessibilityValue: note.lastSyncAccessibilityValue,
+                    width: StatusNoteLayout.lastSyncWidth
+                )
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .animation(
+            reduceMotion ? nil : .snappy(duration: 0.26, extraBounce: 0.02),
+            value: note.showsRemaining
+        )
+    }
+
+    private func elapsedStatusNote(_ note: StatusNote) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 5) {
+            Image(systemName: "timer")
+                .frame(width: 14)
+                .accessibilityHidden(true)
+            Text(note.elapsed)
+                .contentTransition(.numericText())
+            if let remaining = note.remaining {
+                Text("· \(remaining)")
+                    .transition(.opacity)
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .monospacedDigit()
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
+        .frame(
+            width: note.showsRemaining
+                ? StatusNoteLayout.activeElapsedWidth
+                : StatusNoteLayout.settledElapsedWidth,
+            alignment: .leading
+        )
+        .clipped()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Elapsed")
+        .accessibilityValue(note.elapsedAccessibilityValue)
+    }
+
+    private func statusNoteItem(
+        _ text: String,
+        systemImage: String,
+        accessibilityLabel: String,
+        accessibilityValue: String,
+        width: CGFloat
+    ) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 5) {
+            Image(systemName: systemImage)
+                .frame(width: 14)
+                .accessibilityHidden(true)
+            Text(text)
+                .contentTransition(.numericText())
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .allowsTightening(true)
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .monospacedDigit()
+        .frame(width: width, alignment: .leading)
+        .clipped()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityValue(accessibilityValue)
+    }
+
+    private var libraryIndexStatusNote: StatusNote {
+        statusNote(
+            elapsed: libraryIndex.elapsed(
+                at: libraryIndex.status == .indexing ? libraryIndexClock : Date()
+            ),
+            remaining: libraryIndex.status == .indexing
+                ? libraryIndex.estimatedRemaining(at: libraryIndexClock)
+                : nil,
+            lastSync: libraryIndex.lastUpdatedAt
+        )
+    }
+
+    private var thumbnailCacheStatusNote: StatusNote {
+        let date = libraryIndex.thumbnailWarmingStatus == .warming ? libraryIndexClock : Date()
+        return statusNote(
+            elapsed: libraryIndex.thumbnailWarmingElapsed(at: date),
+            remaining: libraryIndex.thumbnailWarmingStatus == .warming
+                ? libraryIndex.thumbnailWarmingEstimatedRemaining(at: date)
+                : nil,
+            lastSync: libraryIndex.thumbnailWarmingLastUpdatedAt
+        )
+    }
+
+    private func statusNote(
+        elapsed: TimeInterval?,
+        remaining: TimeInterval?,
+        lastSync: Date?
+    ) -> StatusNote {
+        let elapsedLine = elapsed.map(Self.compactDuration) ?? "—"
+        let elapsedAccessibilityValue = if let elapsed {
+            if let remaining {
+                "\(Self.duration(elapsed)), \(Self.duration(remaining)) remaining"
+            } else {
+                Self.duration(elapsed)
+            }
+        } else {
+            "—"
+        }
+        let lastSyncLine = if let lastSync {
+            Self.compactLastSync(lastSync)
+        } else {
+            "—"
+        }
+        let lastSyncAccessibilityValue = lastSync?.formatted(date: .abbreviated, time: .shortened) ?? "—"
+        return StatusNote(
+            elapsed: elapsedLine,
+            elapsedAccessibilityValue: elapsedAccessibilityValue,
+            remaining: remaining.map(Self.compactDuration),
+            lastSync: lastSyncLine,
+            lastSyncAccessibilityValue: lastSyncAccessibilityValue
+        )
+    }
+
     private var thumbnailWarmingProgressText: String {
         let percentage = Self.progressPercentage(
-            completed: libraryIndex.thumbnailWarmingCachedCount,
-            total: libraryIndex.thumbnailWarmingEligibleCount
+            completed: displayedThumbnailCompletedCount,
+            total: displayedThumbnailTotalCount
         )
-        return "\(percentage)% (\(libraryIndex.thumbnailWarmingCachedCount.formatted())/\(libraryIndex.thumbnailWarmingEligibleCount.formatted())) thumbnails cached"
+        return "\(percentage)% (\(displayedThumbnailCompletedCount.formatted())/\(displayedThumbnailTotalCount.formatted())) thumbnails cached"
+    }
+
+    private var displayedThumbnailCompletedCount: Int {
+        if libraryIndex.thumbnailWarmingEligibleCount > 0 {
+            libraryIndex.thumbnailWarmingCachedCount
+        } else {
+            libraryIndex.storageReport.derivativeCount
+        }
+    }
+
+    private var displayedThumbnailTotalCount: Int {
+        if libraryIndex.thumbnailWarmingEligibleCount > 0 {
+            return libraryIndex.thumbnailWarmingEligibleCount
+        }
+        return max(libraryIndex.indexedAssetCount, displayedThumbnailCompletedCount)
+    }
+
+    private var displayedThumbnailFractionCompleted: Double {
+        Self.progressFraction(
+            completed: displayedThumbnailCompletedCount,
+            total: displayedThumbnailTotalCount
+        )
     }
 
     nonisolated static func progressPercentage(completed: Int, total: Int) -> String {
@@ -756,6 +1125,11 @@ struct AccountSettingsView: View {
         return (Double(hundredths) / 100).formatted(
             .number.precision(.fractionLength(2))
         )
+    }
+
+    nonisolated static func progressFraction(completed: Int, total: Int) -> Double {
+        guard total > 0 else { return 0 }
+        return min(1, max(0, Double(completed) / Double(total)))
     }
 
     private var thumbnailCacheInventory: String {
@@ -789,6 +1163,27 @@ struct AccountSettingsView: View {
         formatter.allowedUnits = seconds >= 3600 ? [.hour, .minute] : seconds >= 60 ? [.minute, .second] : [.second]
         formatter.unitsStyle = .abbreviated
         return formatter.string(from: max(0, seconds)) ?? "0 sec"
+    }
+
+    private static func compactDuration(_ seconds: TimeInterval) -> String {
+        let totalSeconds = max(0, Int(seconds.rounded(.down)))
+        let hours = totalSeconds / 3600
+        let minutes = totalSeconds % 3600 / 60
+        let seconds = totalSeconds % 60
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, seconds)
+        }
+        return String(format: "%d:%02d", minutes, seconds)
+    }
+
+    private static func compactLastSync(_ date: Date) -> String {
+        date.formatted(
+            .dateTime
+                .month(.abbreviated)
+                .day()
+                .hour()
+                .minute()
+        )
     }
 
     private func validateAndSaveProfile() {
