@@ -69,6 +69,7 @@ final class LibraryIndexController {
     private(set) var thumbnailWarmingCompletedElapsed: TimeInterval?
     private(set) var thumbnailWarmingLastUpdatedAt: Date?
     private(set) var thumbnailWarmingFailedAt: Date?
+    private(set) var thumbnailWarmingThermalState: ProcessInfo.ThermalState?
     private(set) var thumbnailWarmingFailures: [LibraryThumbnailCache.ThumbnailFailure] = []
     @ObservationIgnored
     var acceptedBootstrapDidChange: ((LibraryTimelineBootstrap) -> Void)?
@@ -351,6 +352,7 @@ final class LibraryIndexController {
             warmThumbnails()
         } else {
             cancelThumbnailWarming(reason: "disabled")
+            thumbnailWarmingThermalState = nil
             thumbnailWarmingStatus = .off
         }
     }
@@ -368,6 +370,7 @@ final class LibraryIndexController {
         }
         warmingTask?.cancel()
         warmingTask = nil
+        thumbnailWarmingThermalState = nil
         thumbnailWarmingPaused = true
         UserDefaults.standard.set(true, forKey: "library-index-thumbnail-warming-paused")
         thumbnailWarmingStatus = .paused
@@ -385,6 +388,7 @@ final class LibraryIndexController {
         UserDefaults.standard.set(false, forKey: "library-index-thumbnail-warming")
         UserDefaults.standard.set(false, forKey: "library-index-thumbnail-warming-paused")
         cancelThumbnailWarming(reason: "clear-thumbnails")
+        thumbnailWarmingThermalState = nil
         thumbnailWarmingStatus = .off
         guard let scope else { return }
         Task {
@@ -719,17 +723,20 @@ final class LibraryIndexController {
             return
         }
         guard !ProcessInfo.processInfo.isLowPowerModeEnabled else {
+            thumbnailWarmingThermalState = nil
             thumbnailWarmingStatus = .waiting
             Self.logger.info("Thumbnail warming deferred reason=low-power-mode")
             return
         }
         guard thermalState == .nominal || thermalState == .fair else {
+            thumbnailWarmingThermalState = thermalState
             thumbnailWarmingStatus = .waiting
             Self.logger.info(
                 "Thumbnail warming deferred reason=thermal state=\(Self.label(for: thermalState), privacy: .public)"
             )
             return
         }
+        thumbnailWarmingThermalState = nil
         guard let scope, let endpoint, let accessToken else {
             thumbnailWarmingStatus = .waiting
             Self.logger.info("Thumbnail warming deferred reason=session-unavailable")
@@ -872,6 +879,7 @@ final class LibraryIndexController {
 
     private func resumeThumbnailWarming() {
         thumbnailWarmingPaused = false
+        thumbnailWarmingThermalState = nil
         UserDefaults.standard.set(false, forKey: "library-index-thumbnail-warming-paused")
     }
 

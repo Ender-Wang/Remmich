@@ -882,9 +882,26 @@ struct AccountSettingsView: View {
                 systemImage: thumbnailCacheStatusPresentation.systemImage,
                 tint: thumbnailCacheStatusPresentation.tint,
                 isActive: libraryIndex.thumbnailWarmingStatus == .warming,
-                accessibilityValue: thumbnailCacheStatusPresentation.accessibilityValue
+                accessibilityValue: thumbnailCacheStatusAccessibilityValue,
+                advisorySystemImage: thumbnailCacheThermalWarningSystemImage,
+                advisoryTint: thumbnailCacheThermalWarningTint
             )
         }
+    }
+
+    private var thumbnailCacheThermalWarningSystemImage: String? {
+        libraryIndex.thumbnailWarmingThermalState == nil ? nil : "thermometer.high"
+    }
+
+    private var thumbnailCacheThermalWarningTint: Color {
+        libraryIndex.thumbnailWarmingThermalState == .critical ? .red : .orange
+    }
+
+    private var thumbnailCacheStatusAccessibilityValue: String {
+        guard libraryIndex.thumbnailWarmingThermalState != nil else {
+            return thumbnailCacheStatusPresentation.accessibilityValue
+        }
+        return "\(thumbnailCacheStatusPresentation.accessibilityValue), waiting for device temperature to decrease"
     }
 
     private var thumbnailCacheStatusPresentation: StatusPresentation {
@@ -926,12 +943,23 @@ struct AccountSettingsView: View {
         systemImage: String,
         tint: Color = .primary,
         isActive: Bool,
-        accessibilityValue: String
+        accessibilityValue: String,
+        advisorySystemImage: String? = nil,
+        advisoryTint: Color = .orange
     ) -> some View {
         LabeledContent {
-            AnimatedStatusIcon(systemImage: systemImage, tint: tint, isActive: isActive)
-                .frame(width: 28, height: 44)
-                .frame(width: 72, alignment: .trailing)
+            HStack(spacing: 0) {
+                if let advisorySystemImage {
+                    Image(systemName: advisorySystemImage)
+                        .foregroundStyle(advisoryTint)
+                        .frame(width: 28, height: 44)
+                        .transition(.opacity)
+                        .accessibilityHidden(true)
+                }
+                AnimatedStatusIcon(systemImage: systemImage, tint: tint, isActive: isActive)
+                    .frame(width: 28, height: 44)
+            }
+            .frame(width: 72, alignment: .trailing)
         } label: {
             statusLabel(label, note: note)
         }
@@ -940,7 +968,7 @@ struct AccountSettingsView: View {
         .accessibilityValue(accessibilityValue)
         .animation(
             reduceMotion ? nil : .snappy(duration: 0.26, extraBounce: 0.02),
-            value: systemImage
+            value: "\(systemImage)|\(advisorySystemImage ?? "none")"
         )
     }
 
