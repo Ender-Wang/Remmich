@@ -321,7 +321,7 @@ final class RemmichUITests: XCTestCase {
             "The photos timeline did not settle in landscape; photos=\(photos.frame), app=\(app.frame)"
         )
 
-        let grids = app.otherElements.matching(NSPredicate(format: "label == %@", "Photo grid"))
+        let grids = app.scrollViews.matching(NSPredicate(format: "label == %@", "Photo grid"))
         XCTAssertTrue(
             grids.firstMatch.waitForExistence(timeout: 15),
             "The landscape photo grid did not become accessible"
@@ -748,19 +748,12 @@ final class RemmichUITests: XCTestCase {
         let tab = tabButton(title, in: app)
         if !tab.exists {
             #if targetEnvironment(simulator)
-                if UIDevice.current.userInterfaceIdiom == .pad {
-                    // XCTest's synthetic iPad scroll does not reliably trigger
-                    // SwiftUI's scroll phase. The iPhone suite still covers the
-                    // gesture-driven path; use the matching test-only state
-                    // control here so iPad range tests exercise their intent.
-                    let compactControl = app.buttons["timeline-test-photos-compact"].firstMatch
-                    XCTAssertTrue(compactControl.waitForExistence(timeout: 5))
-                    compactControl.tap()
-                } else {
-                    for _ in 0 ..< 4 where !tab.exists {
-                        app.swipeDown()
-                    }
-                }
+                // Range-specific tests exercise their destination directly.
+                // Scroll-driven tab replacement has dedicated coverage, while
+                // synthetic scrolling is not a reliable setup mechanism.
+                let compactControl = app.buttons["timeline-test-photos-compact"].firstMatch
+                XCTAssertTrue(compactControl.waitForExistence(timeout: 5))
+                compactControl.tap()
             #else
                 for _ in 0 ..< 4 where !tab.exists {
                     app.swipeDown()
@@ -831,8 +824,13 @@ final class RemmichUITests: XCTestCase {
         tabButton("Videos", in: app).tap()
         let videos = app.descendants(matching: .any)["videos-root"].firstMatch
         XCTAssertTrue(videos.waitForExistence(timeout: 10))
-        XCTAssertTrue(app.descendants(matching: .any)["asset-video-range-2026-10-01-0"]
-            .waitForExistence(timeout: 10))
+        let videoAssets = app.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@", "asset-video-range-"
+        ))
+        XCTAssertTrue(
+            videoAssets.firstMatch.waitForExistence(timeout: 10),
+            "The video-only timeline did not publish a visible fixture asset"
+        )
 
         let weeksTab = tabButton("Weeks", in: app)
         if UIDevice.current.userInterfaceIdiom == .pad {

@@ -72,7 +72,7 @@ jobs:
             -destination "$IPHONE_DESTINATION" \
             -derivedDataPath "$DERIVED_DATA_PATH" \
             -skipPackagePluginValidation \
-            -jobs 6 \
+            -jobs 2 \
             -parallel-testing-enabled NO \
             COMPILER_INDEX_STORE_ENABLE=NO \
             | xcbeautify

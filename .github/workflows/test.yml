@@ -66,7 +66,7 @@ jobs:
           ref: ${{ steps.test-products.outputs.tested-revision }}
 
       - name: Test Immich API package
-        run: swift test --jobs 6 --package-path Packages/ImmichAPI
+        run: swift test --jobs 2 --package-path Packages/ImmichAPI
 
       - name: Boot iPhone simulator
         run: |
@@ -80,7 +80,7 @@ jobs:
             -xctestrun "$XCTESTRUN_PATH" \
             -destination "$IPHONE_DESTINATION" \
             -resultBundlePath "$RUNNER_TEMP/RemmichUnitTests.xcresult" \
-            -jobs 6 \
+            -jobs 2 \
             -parallel-testing-enabled NO \
             -only-testing:RemmichTests \
             COMPILER_INDEX_STORE_ENABLE=NO \
@@ -96,7 +96,7 @@ jobs:
               -xctestrun "$XCTESTRUN_PATH" \
               -destination "$IPHONE_DESTINATION" \
               -resultBundlePath "$result_bundle" \
-              -jobs 6 \
+              -jobs 2 \
               -parallel-testing-enabled NO \
               -only-testing:RemmichUITests \
               -test-timeouts-enabled YES \
@@ -142,7 +142,7 @@ jobs:
             -xctestrun "$XCTESTRUN_PATH" \
             -destination "$IPAD_DESTINATION" \
             -resultBundlePath "$RUNNER_TEMP/RemmichIPadLayoutTests.xcresult" \
-            -jobs 6 \
+            -jobs 2 \
             -parallel-testing-enabled NO \
             -only-testing:RemmichUITests \
             -test-timeouts-enabled YES \

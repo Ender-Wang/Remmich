@@ -880,6 +880,8 @@ struct PhotosView: View {
                         }
                     }
                     .coordinateSpace(name: timelineFrameCoordinateSpaceName)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityLabel(contentName == "Videos" ? "Video grid" : "Photo grid")
                     .defaultScrollAnchor(.bottom)
                     .scrollPosition($timelinePosition)
                     .scrollEdgeEffectHidden(for: .bottom)
