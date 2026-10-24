@@ -329,20 +329,6 @@ struct AssetViewerView: View {
                         )
 
                         Spacer()
-
-                        if let selectedIndex = session.selectedIndex {
-                            Text("\(selectedIndex + 1)/\(session.assets.count)")
-                                .font(.subheadline.weight(.semibold))
-                                .monospacedDigit()
-                                .padding(.horizontal, 14)
-                                .frame(height: controlVisualSize)
-                                .glassEffect(.regular, in: Capsule())
-                                .frame(height: controlHitSize)
-                                .accessibilityLabel(
-                                    "Asset \(selectedIndex + 1) of \(session.assets.count)"
-                                )
-                                .accessibilityIdentifier("asset-viewer-position")
-                        }
                     }
 
                     if let selectedAsset = session.selectedAsset {

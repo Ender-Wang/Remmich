@@ -458,20 +458,20 @@ final class RemmichUITests: XCTestCase {
         let share = app.buttons["asset-viewer-share"]
         let download = app.buttons["asset-viewer-download"]
         let locate = app.buttons["asset-viewer-locate"]
-        let position = app.staticTexts["asset-viewer-position"]
+        let context = app.descendants(matching: .any)["asset-viewer-context"]
         let filmstrip = app.descendants(matching: .any)["asset-viewer-filmstrip-asset-1"]
         XCTAssertTrue(back.waitForExistence(timeout: 10))
         XCTAssertTrue(info.waitForExistence(timeout: 5))
-        XCTAssertTrue(position.waitForExistence(timeout: 5))
+        XCTAssertTrue(context.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["asset-viewer-position"].exists)
         XCTAssertTrue(share.exists)
         XCTAssertTrue(download.exists)
         XCTAssertTrue(locate.exists)
         XCTAssertTrue(filmstrip.waitForExistence(timeout: 5))
         XCTAssertGreaterThan(back.frame.minY, app.frame.minY + 20)
         XCTAssertTrue(waitUntil(timeout: 5) {
-            abs(back.frame.midY - position.frame.midY) <= 4
+            abs(back.frame.midY - context.frame.midY) <= 4
                 && abs(back.frame.minX - share.frame.minX) <= 4
-                && abs(position.frame.maxX - locate.frame.maxX) <= 4
                 && abs(share.frame.midY - info.frame.midY) <= 4
                 && abs(info.frame.midY - download.frame.midY) <= 4
                 && abs(download.frame.midY - locate.frame.midY) <= 4
