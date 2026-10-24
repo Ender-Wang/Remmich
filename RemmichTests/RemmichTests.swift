@@ -1129,6 +1129,44 @@ struct RemmichTests {
         #expect(!cached.isFinal)
     }
 
+    @Test @MainActor func viewerCanLoadManagedThumbnailWithoutActiveRoute() async throws {
+        let media = MediaLibraryController()
+        media.configure(session: .fixture, activeEndpoint: nil)
+        let asset = Self.timelineAsset(id: "offline-viewer-asset")
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 12, height: 18)).image { context in
+            UIColor.systemBlue.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 12, height: 18))
+        }
+        let data = try #require(image.jpegData(compressionQuality: 0.8))
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appending(path: "thumbnail.jpg")
+        try data.write(to: file)
+        media.registerWarmedThumbnails([
+            .init(
+                assetID: asset.id,
+                sourceRevision: asset.thumbnailRevision.ISO8601Format(),
+                fileURL: file
+            ),
+        ])
+
+        let target = MediaPixelSize(width: 1206, height: 2622)
+        let fallback = try #require(media.viewerThumbnailFallbackRequest(
+            for: asset,
+            targetPixels: target
+        ))
+        #expect(media.imageRequest(for: MediaLibraryController.viewerPreviewDescriptor(
+            for: asset,
+            targetPixels: target
+        )) == nil)
+        let pipeline = try #require(media.pipeline)
+        let response = try await pipeline.imageTask(with: fallback).response
+        #expect(response.image.size.width > 0)
+        #expect(response.image.size.height > 0)
+    }
+
     @Test @MainActor func reusedThumbnailRequestHasDistinctIdentityAndBoundedDecode() throws {
         let media = MediaLibraryController()
         media.configure(session: .fixture, activeEndpoint: AccountSession.fixture.apiURL)

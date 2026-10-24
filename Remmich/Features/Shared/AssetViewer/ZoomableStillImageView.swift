@@ -3,6 +3,8 @@ import SwiftUI
 import UIKit
 
 struct ZoomableStillImageView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     let asset: TimelineAssetSummary
     let media: MediaLibraryController
     let targetPixels: MediaPixelSize
@@ -15,6 +17,7 @@ struct ZoomableStillImageView: View {
     @State private var failed = false
     @State private var loadedTargetPixels: MediaPixelSize?
     @State private var loadedFileSizeBytes: Int?
+    @State private var isShowingThumbnailFallback = false
 
     init(
         asset: TimelineAssetSummary,
@@ -46,21 +49,20 @@ struct ZoomableStillImageView: View {
             Color(uiColor: .systemBackground)
 
             if let image {
-                ZoomableImageScrollView(
-                    image: image,
-                    assetID: asset.id,
-                    zoomChanged: zoomChanged,
-                    toggleChrome: toggleChrome
-                )
-            } else if failed {
-                ContentUnavailableView(
-                    "Unable to Load Photo",
-                    systemImage: "photo.badge.exclamationmark"
-                )
-                .foregroundStyle(.secondary)
-            } else {
-                ProgressView()
-                    .tint(.primary)
+                zoomableImage(image)
+            }
+
+            if image == nil {
+                if failed {
+                    ContentUnavailableView(
+                        "Unable to Load Photo",
+                        systemImage: "photo.badge.exclamationmark"
+                    )
+                    .foregroundStyle(.secondary)
+                } else {
+                    ProgressView()
+                        .tint(.primary)
+                }
             }
         }
         .task(id: loadID) {
@@ -75,14 +77,32 @@ struct ZoomableStillImageView: View {
     }
 
     private func loadPreview() async {
-        guard let pipeline = media.pipeline,
-              let request = media.imageRequest(
-                  for: MediaLibraryController.viewerPreviewDescriptor(
-                      for: asset,
-                      targetPixels: targetPixels
-                  )
-              )
-        else { return }
+        guard let pipeline = media.pipeline else { return }
+        if image == nil,
+           let fallbackRequest = media.viewerThumbnailFallbackRequest(
+               for: asset,
+               targetPixels: targetPixels
+           )
+        {
+            do {
+                let fallback = try await pipeline.imageTask(with: fallbackRequest).response
+                guard !Task.isCancelled else { return }
+                image = fallback.image
+                isShowingThumbnailFallback = true
+                failed = false
+            } catch {
+                guard !Task.isCancelled else { return }
+            }
+        }
+        guard let request = media.imageRequest(
+            for: MediaLibraryController.viewerPreviewDescriptor(
+                for: asset,
+                targetPixels: targetPixels
+            )
+        ) else {
+            failed = image == nil
+            return
+        }
         if loadedTargetPixels == targetPixels {
             if reportsPreviewMetadata, let image {
                 await reportMetadata(for: image, pipeline: pipeline, request: request)
@@ -96,6 +116,8 @@ struct ZoomableStillImageView: View {
             let response = try await pipeline.imageTask(with: request).response
             guard !Task.isCancelled else { return }
             image = response.image
+            await Task.yield()
+            isShowingThumbnailFallback = false
             loadedTargetPixels = targetPixels
             if let expectedLength = response.urlResponse?.expectedContentLength,
                expectedLength > 0
@@ -111,6 +133,16 @@ struct ZoomableStillImageView: View {
                 failed = true
             }
         }
+    }
+
+    private func zoomableImage(_ image: UIImage) -> some View {
+        ZoomableImageScrollView(
+            image: image,
+            assetID: asset.id,
+            crossfadesImageChanges: isShowingThumbnailFallback && !reduceMotion,
+            zoomChanged: zoomChanged,
+            toggleChrome: toggleChrome
+        )
     }
 
     private func reportMetadata(
@@ -168,6 +200,7 @@ struct ZoomableStillImageView: View {
 private struct ZoomableImageScrollView: UIViewRepresentable {
     let image: UIImage
     let assetID: String
+    let crossfadesImageChanges: Bool
     let zoomChanged: (Bool) -> Void
     let toggleChrome: () -> Void
 
@@ -223,7 +256,17 @@ private struct ZoomableImageScrollView: UIViewRepresentable {
             context.coordinator.isResettingZoom = false
         }
         if context.coordinator.imageView.image !== image {
-            context.coordinator.imageView.image = image
+            if crossfadesImageChanges, context.coordinator.imageView.image != nil {
+                UIView.transition(
+                    with: context.coordinator.imageView,
+                    duration: 0.18,
+                    options: [.transitionCrossDissolve, .beginFromCurrentState, .allowAnimatedContent]
+                ) {
+                    context.coordinator.imageView.image = image
+                }
+            } else {
+                context.coordinator.imageView.image = image
+            }
         }
         scrollView.setNeedsLayout()
     }

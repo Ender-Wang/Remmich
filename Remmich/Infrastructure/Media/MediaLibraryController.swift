@@ -242,6 +242,43 @@ final class MediaLibraryController {
         )
     }
 
+    func viewerThumbnailFallbackRequest(
+        for asset: TimelineAssetSummary,
+        targetPixels: MediaPixelSize
+    ) -> ImageRequest? {
+        #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("-ui-testing-signed-in") {
+                let data = PreviewMediaFixtures.data(for: asset.id)
+                var request = ImageRequest(id: "ui-fixture-viewer-fallback-\(asset.id)", data: { data })
+                request.thumbnail = .init(
+                    size: .init(width: targetPixels.width, height: targetPixels.height),
+                    unit: .pixels,
+                    contentMode: .aspectFit
+                )
+                return request
+            }
+        #endif
+        guard let scope,
+              let fileURL = warmedThumbnailURLs[Self.warmedThumbnailKey(
+                  assetID: asset.id,
+                  revision: asset.thumbnailRevision
+              )],
+              FileManager.default.fileExists(atPath: fileURL.path)
+        else { return nil }
+        var request = ImageRequest(
+            id: "\(scope.cacheNamespace):viewer-thumbnail-fallback:\(asset.id):\(asset.thumbnailRevision.ISO8601Format())",
+            data: { try Data(contentsOf: fileURL) }
+        )
+        request.thumbnail = .init(
+            size: .init(width: targetPixels.width, height: targetPixels.height),
+            unit: .pixels,
+            contentMode: .aspectFit
+        )
+        request.options.insert(.disableDiskCache)
+        request.priority = .high
+        return request
+    }
+
     func profileImageRequest(targetPixels: Int) -> ImageRequest? {
         #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("-ui-testing-signed-in") {
