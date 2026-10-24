@@ -571,10 +571,27 @@ struct AccountSettingsView: View {
                 }
                 .disabled(libraryIndex.thumbnailWarmingStatus == .warming)
             } center: {
-                settingsActionButton("Rebuild", systemImage: "arrow.counterclockwise.circle") {
-                    showsThumbnailRebuildConfirmation = true
+                ZStack {
+                    if libraryIndex.thumbnailWarmingStatus == .warming {
+                        settingsActionButton("Pause", systemImage: "pause.fill") {
+                            libraryIndex.pauseThumbnailCache()
+                        }
+                        .transition(.opacity)
+                    } else {
+                        settingsActionButton(
+                            "Rebuild",
+                            systemImage: "arrow.counterclockwise.circle"
+                        ) {
+                            showsThumbnailRebuildConfirmation = true
+                        }
+                        .transition(.opacity)
+                    }
                 }
-                .disabled(libraryIndex.thumbnailWarmingStatus == .warming)
+                .frame(height: 44)
+                .animation(
+                    reduceMotion ? nil : .snappy(duration: 0.22, extraBounce: 0),
+                    value: libraryIndex.thumbnailWarmingStatus
+                )
             } trailing: {
                 settingsActionButton("Clear", systemImage: "trash", role: .destructive) {
                     showsThumbnailClearConfirmation = true
@@ -881,6 +898,12 @@ struct AccountSettingsView: View {
                 systemImage: "arrow.trianglehead.2.clockwise",
                 tint: .primary,
                 accessibilityValue: "Caching"
+            )
+        case .paused:
+            StatusPresentation(
+                systemImage: "pause.circle.fill",
+                tint: .primary,
+                accessibilityValue: "Paused"
             )
         case .upToDate:
             StatusPresentation(

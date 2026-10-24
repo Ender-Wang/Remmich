@@ -22,6 +22,7 @@ final class LibraryIndexController {
         case off
         case waiting
         case warming
+        case paused
         case upToDate
         case failed(String)
     }
@@ -52,6 +53,9 @@ final class LibraryIndexController {
     private(set) var storedAccounts: [StoredLibraryAccount] = []
     private(set) var thumbnailWarmingEnabled = UserDefaults.standard.bool(
         forKey: "library-index-thumbnail-warming"
+    )
+    private(set) var thumbnailWarmingPaused = UserDefaults.standard.bool(
+        forKey: "library-index-thumbnail-warming-paused"
     )
     private(set) var thumbnailWarmingStatus: ThumbnailWarmingStatus = .off
     private(set) var thumbnailWarmingCachedCount = 0
@@ -99,7 +103,11 @@ final class LibraryIndexController {
         self.media = media
         synchronizer = LibraryIndexSynchronizer(source: source, store: store)
         thumbnailCache = LibraryThumbnailCache(store: store, assetDetails: assetDetails)
-        thumbnailWarmingStatus = thumbnailWarmingEnabled ? .waiting : .off
+        thumbnailWarmingStatus = if thumbnailWarmingEnabled {
+            thumbnailWarmingPaused ? .paused : .waiting
+        } else {
+            .off
+        }
     }
 
     var fractionCompleted: Double {
@@ -335,7 +343,9 @@ final class LibraryIndexController {
 
     func setThumbnailWarmingEnabled(_ enabled: Bool) {
         thumbnailWarmingEnabled = enabled
+        thumbnailWarmingPaused = false
         UserDefaults.standard.set(enabled, forKey: "library-index-thumbnail-warming")
+        UserDefaults.standard.set(false, forKey: "library-index-thumbnail-warming-paused")
         if enabled {
             thumbnailWarmingStatus = .waiting
             warmThumbnails()
@@ -346,16 +356,34 @@ final class LibraryIndexController {
     }
 
     func syncThumbnailCache() {
+        resumeThumbnailWarming()
         warmThumbnails(manual: true)
     }
 
+    func pauseThumbnailCache() {
+        guard thumbnailWarmingStatus == .warming else { return }
+        warmingRunID &+= 1
+        thumbnailWarmingCompletedElapsed = thumbnailWarmingStartedAt.map {
+            Date().timeIntervalSince($0)
+        }
+        warmingTask?.cancel()
+        warmingTask = nil
+        thumbnailWarmingPaused = true
+        UserDefaults.standard.set(true, forKey: "library-index-thumbnail-warming-paused")
+        thumbnailWarmingStatus = .paused
+        Self.logger.info("Offline asset caching paused")
+    }
+
     func rebuildThumbnailCache() {
+        resumeThumbnailWarming()
         warmThumbnails(manual: true, rebuild: true)
     }
 
     func clearThumbnails() {
         thumbnailWarmingEnabled = false
+        thumbnailWarmingPaused = false
         UserDefaults.standard.set(false, forKey: "library-index-thumbnail-warming")
+        UserDefaults.standard.set(false, forKey: "library-index-thumbnail-warming-paused")
         cancelThumbnailWarming(reason: "clear-thumbnails")
         thumbnailWarmingStatus = .off
         guard let scope else { return }
@@ -686,6 +714,10 @@ final class LibraryIndexController {
     private func warmThumbnails(manual: Bool = false, rebuild: Bool = false) {
         let thermalState = ProcessInfo.processInfo.thermalState
         guard thumbnailWarmingEnabled || manual else { return }
+        guard thumbnailWarmingStatus != .paused || manual else {
+            Self.logger.info("Thumbnail warming deferred reason=paused")
+            return
+        }
         guard !ProcessInfo.processInfo.isLowPowerModeEnabled else {
             thumbnailWarmingStatus = .waiting
             Self.logger.info("Thumbnail warming deferred reason=low-power-mode")
@@ -822,7 +854,7 @@ final class LibraryIndexController {
     private func cancelThumbnailWarming(reason: String) {
         warmingRunID &+= 1
         guard let warmingTask else {
-            if thumbnailWarmingEnabled {
+            if thumbnailWarmingEnabled, thumbnailWarmingStatus != .paused {
                 thumbnailWarmingStatus = .waiting
             }
             return
@@ -836,6 +868,11 @@ final class LibraryIndexController {
         Self.logger.info(
             "Thumbnail warming cancellation requested reason=\(reason, privacy: .public)"
         )
+    }
+
+    private func resumeThumbnailWarming() {
+        thumbnailWarmingPaused = false
+        UserDefaults.standard.set(false, forKey: "library-index-thumbnail-warming-paused")
     }
 
     private func publishThumbnailWarmingProgress(
