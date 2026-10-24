@@ -76,6 +76,7 @@ private struct RestoringAppShellView: View {
             videosScrollRequest: 0,
             groupedScrollRequests: [:],
             groupedMediaOwner: .photos,
+            libraryContentRevision: .restoring,
             photosRetapped: {},
             videosRetapped: {},
             libraryRetapped: {},

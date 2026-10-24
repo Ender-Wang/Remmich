@@ -164,6 +164,18 @@ enum NativeTabLayout {
 
 /// One UIKit-owned tab bar on both devices. UIKit owns the Liquid Glass treatment
 /// and animates the range tabs when either media timeline changes browsing mode.
+nonisolated struct NativeLibraryContentRevision: Equatable {
+    let profile: ConnectionProfile?
+    let activeRoute: ActiveConnectionRoute?
+    let routeStatus: ConnectionRouteStatus
+
+    static let restoring = Self(
+        profile: nil,
+        activeRoute: nil,
+        routeStatus: .waitingForNetwork
+    )
+}
+
 struct NativeAppTabShell: UIViewControllerRepresentable {
     @Binding var selection: NativeTabDestination
     @Binding var tabBarTop: CGFloat
@@ -176,6 +188,7 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
     let videosScrollRequest: Int
     let groupedScrollRequests: [NativeTabDestination: Int]
     let groupedMediaOwner: NativeTabDestination
+    let libraryContentRevision: NativeLibraryContentRevision
     let photosRetapped: () -> Void
     let videosRetapped: () -> Void
     let libraryRetapped: () -> Void
@@ -223,6 +236,7 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
         private var parent: NativeAppTabShell
         private var installedTabs: [NativeTabDestination]?
         private var isUpdatingTabs = false
+        private var didResolveLibrary = false
         private var tabBarShouldBeHidden = false
         private var didResolveVideos = false
         private var contentActivationGeneration = 0
@@ -312,7 +326,11 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
 
         private lazy var libraryTab = UITab(
             title: "Library", image: UIImage(systemName: "square.grid.2x2"), identifier: "library"
-        ) { [weak self] _ in self?.libraryController ?? UIViewController() }
+        ) { [weak self] _ in
+            guard let self else { return UIViewController() }
+            didResolveLibrary = true
+            return libraryController
+        }
 
         private lazy var yearsTab = UITab(
             title: "Years", image: UIImage(systemName: "calendar.circle"), identifier: "years"
@@ -391,6 +409,11 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
             }
             if previous.videosScrollRequest != next.videosScrollRequest {
                 videosController.rootView = next.videos
+            }
+            if didResolveLibrary,
+               previous.libraryContentRevision != next.libraryContentRevision
+            {
+                libraryController.rootView = next.library
             }
             if mediaLayoutChanged
                 || previous.groupedScrollRequests != next.groupedScrollRequests

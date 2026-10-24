@@ -59,6 +59,11 @@ struct AppShellView: View {
             videosScrollRequest: videosScrollRequest,
             groupedScrollRequests: groupedScrollRequests,
             groupedMediaOwner: groupedMediaOwner,
+            libraryContentRevision: .init(
+                profile: profile,
+                activeRoute: activeRoute,
+                routeStatus: routeStatus
+            ),
             photosRetapped: {
                 photosScrollRequest &+= 1
                 compactPhotosTabs = false
