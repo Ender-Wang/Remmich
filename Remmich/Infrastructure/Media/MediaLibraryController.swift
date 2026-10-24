@@ -279,6 +279,17 @@ final class MediaLibraryController {
         return request
     }
 
+    func viewerThumbnailFallbackByteCount(for asset: TimelineAssetSummary) -> Int? {
+        guard let fileURL = warmedThumbnailURLs[Self.warmedThumbnailKey(
+                  assetID: asset.id,
+                  revision: asset.thumbnailRevision
+              )],
+              let byteCount = try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+              byteCount > 0
+        else { return nil }
+        return byteCount
+    }
+
     func profileImageRequest(targetPixels: Int) -> ImageRequest? {
         #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("-ui-testing-signed-in") {

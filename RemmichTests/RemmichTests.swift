@@ -1073,6 +1073,24 @@ struct RemmichTests {
         #expect(dimensionsOnly.displayText == "Preview · 12 × 18 px")
     }
 
+    @Test func viewerRenderedImageMetadataNamesItsActualSource() {
+        let thumbnail = AssetViewerRenderedImageMetadata(
+            source: .thumbnail,
+            pixelSize: .init(width: 720, height: 1080),
+            fileSizeBytes: 438_272
+        )
+        let preview = AssetViewerRenderedImageMetadata(
+            source: .preview,
+            pixelSize: .init(width: 1206, height: 1809),
+            fileSizeBytes: nil
+        )
+
+        #expect(thumbnail.displayText.contains("Thumbnail"))
+        #expect(thumbnail.displayText.contains("720 × 1,080 px"))
+        #expect(!thumbnail.displayText.contains("cached"))
+        #expect(preview.displayText == "Preview · 1,206 × 1,809 px")
+    }
+
     @Test @MainActor func viewerPreviewCanSeedRecreatedPageFromMemory() throws {
         let media = MediaLibraryController()
         media.configure(session: .fixture, activeEndpoint: AccountSession.fixture.apiURL)

@@ -26,6 +26,48 @@ nonisolated struct AssetViewerPreviewMetadata: Equatable, Sendable {
     }
 }
 
+nonisolated enum AssetViewerRenderedImageSource: Equatable, Sendable {
+    case thumbnail
+    case preview
+
+    var title: String {
+        switch self {
+        case .thumbnail:
+            "Thumbnail"
+        case .preview:
+            "Preview"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .thumbnail:
+            "photo.on.rectangle"
+        case .preview:
+            "photo"
+        }
+    }
+}
+
+nonisolated struct AssetViewerRenderedImageMetadata: Equatable, Sendable {
+    let source: AssetViewerRenderedImageSource
+    let pixelSize: MediaPixelSize
+    let fileSizeBytes: Int?
+
+    var displayText: String {
+        let width = pixelSize.width.formatted()
+        let height = pixelSize.height.formatted()
+        var components = [source.title, "\(width) × \(height) px"]
+        if let fileSizeBytes, fileSizeBytes > 0 {
+            components.append(ByteCountFormatter.string(
+                fromByteCount: Int64(fileSizeBytes),
+                countStyle: .file
+            ))
+        }
+        return components.joined(separator: " · ")
+    }
+}
+
 struct AssetViewerInfoView: View {
     let state: AssetViewerDetailState
     let previewMetadata: AssetViewerPreviewMetadata?

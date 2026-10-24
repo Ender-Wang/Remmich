@@ -18,6 +18,10 @@ struct AssetViewerView: View {
     @State private var detailStates: [String: AssetViewerDetailState] = [:]
     @State private var refreshedDetailAssetIDs: Set<String> = []
     @State private var previewMetadataByAssetID: [String: AssetViewerPreviewMetadata] = [:]
+    @State private var renderedImageMetadataByAssetID: [String: AssetViewerRenderedImageMetadata] = [:]
+    @State private var presentedImageStatusAssetIDs: Set<String> = []
+    @State private var visibleImageStatusAssetID: String?
+    @State private var imageStatusDismissTask: Task<Void, Never>?
     @State private var neighborLoadTask: Task<Void, Never>?
     @State private var infoContentHeight: CGFloat = 220
     @State private var infoDragTranslation: CGFloat = 0
@@ -165,6 +169,7 @@ struct AssetViewerView: View {
         }
         .onChange(of: session.selectedAssetID) { _, newAssetID in
             zoomedAssetID = nil
+            hideRenderedImageStatus()
             updateViewerPrefetch()
             if pagerPosition != newAssetID {
                 pagerPosition = newAssetID
@@ -172,11 +177,13 @@ struct AssetViewerView: View {
             if !pagerWindowAssets.contains(where: { $0.id == newAssetID }) {
                 pagerWindowCenterID = newAssetID
             }
+            presentRenderedImageStatusIfNeeded(for: newAssetID)
         }
         .onAppear { visibilityChanged(true) }
         .onDisappear {
             neighborLoadTask?.cancel()
             pagerSelectionTask?.cancel()
+            imageStatusDismissTask?.cancel()
             media.cancelViewerPrefetching()
             visibilityChanged(false)
         }
@@ -295,26 +302,109 @@ struct AssetViewerView: View {
         asset: TimelineAssetSummary,
         requestSize: CGSize
     ) -> some View {
-        AssetViewerFitPage(
-            asset: asset,
-            media: media,
-            isSelected: asset.id == session.selectedAssetID,
-            dismissesInfo: showsInfo,
-            targetPixels: .init(
-                width: Int(max(1, requestSize.width * displayScale)),
-                height: Int(max(1, requestSize.height * displayScale))
-            ),
-            previewMetadataChanged: { metadata in
-                previewMetadataByAssetID[asset.id] = metadata
-            },
-            resumePosition: { session.playbackPosition(for: asset.id) },
-            savePosition: { session.setPlaybackPosition($0, for: asset.id) },
-            zoomChanged: { isZoomed in
-                guard asset.id == session.selectedAssetID else { return }
-                zoomedAssetID = isZoomed ? asset.id : nil
-            },
-            toggleChrome: mediaTapped
+        ZStack {
+            AssetViewerFitPage(
+                asset: asset,
+                media: media,
+                isSelected: asset.id == session.selectedAssetID,
+                dismissesInfo: showsInfo,
+                targetPixels: .init(
+                    width: Int(max(1, requestSize.width * displayScale)),
+                    height: Int(max(1, requestSize.height * displayScale))
+                ),
+                previewMetadataChanged: { metadata in
+                    previewMetadataByAssetID[asset.id] = metadata
+                },
+                renderedImageMetadataChanged: { metadata in
+                    renderedImageMetadataByAssetID[asset.id] = metadata
+                    presentRenderedImageStatusIfNeeded(for: asset.id)
+                },
+                resumePosition: { session.playbackPosition(for: asset.id) },
+                savePosition: { session.setPlaybackPosition($0, for: asset.id) },
+                zoomChanged: { isZoomed in
+                    guard asset.id == session.selectedAssetID else { return }
+                    zoomedAssetID = isZoomed ? asset.id : nil
+                },
+                toggleChrome: mediaTapped
+            )
+
+            if asset.mediaKind != .video,
+               asset.id == session.selectedAssetID,
+               let metadata = renderedImageMetadataByAssetID[asset.id]
+            {
+                GeometryReader { geometry in
+                    let statusPosition = renderedImageStatusPosition(
+                        metadata: metadata,
+                        containerSize: geometry.size
+                    )
+                    let revealEdge = min(
+                        renderedImageBottom(metadata: metadata, containerSize: geometry.size),
+                        statusPosition.y - 18
+                    )
+                    ZStack {
+                        if !chromeVisible,
+                           !showsInfo,
+                           visibleImageStatusAssetID == asset.id
+                        {
+                            renderedImageStatus(metadata)
+                                .position(statusPosition)
+                                .transition(.offset(y: -44))
+                        }
+                    }
+                    .frame(width: geometry.size.width, height: geometry.size.height)
+                    .mask {
+                        Rectangle()
+                            .frame(
+                                width: geometry.size.width,
+                                height: max(0, geometry.size.height - revealEdge)
+                            )
+                            .position(
+                                x: geometry.size.width / 2,
+                                y: revealEdge + (geometry.size.height - revealEdge) / 2
+                            )
+                    }
+                }
+                .allowsHitTesting(false)
+            }
+        }
+    }
+
+    private func renderedImageStatus(_ metadata: AssetViewerRenderedImageMetadata) -> some View {
+        Label(metadata.displayText, systemImage: metadata.source.systemImage)
+            .font(.caption.weight(.semibold))
+            .lineLimit(1)
+            .minimumScaleFactor(0.75)
+            .padding(.horizontal, 12)
+            .frame(minHeight: 32)
+            .glassEffect(.regular, in: Capsule())
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(metadata.displayText)
+            .accessibilityIdentifier("asset-viewer-image-quality")
+    }
+
+    private func renderedImageStatusPosition(
+        metadata: AssetViewerRenderedImageMetadata,
+        containerSize: CGSize
+    ) -> CGPoint {
+        let imageBottom = renderedImageBottom(metadata: metadata, containerSize: containerSize)
+        return CGPoint(
+            x: containerSize.width / 2,
+            y: min(imageBottom + 24, containerSize.height - 52)
         )
+    }
+
+    private func renderedImageBottom(
+        metadata: AssetViewerRenderedImageMetadata,
+        containerSize: CGSize
+    ) -> CGFloat {
+        let imageWidth = CGFloat(metadata.pixelSize.width)
+        let imageHeight = CGFloat(metadata.pixelSize.height)
+        let scale = min(
+            containerSize.width / max(1, imageWidth),
+            containerSize.height / max(1, imageHeight)
+        )
+        let fittedHeight = imageHeight * scale
+        return (containerSize.height + fittedHeight) / 2
     }
 
     private func chrome(infoProgress: CGFloat) -> some View {
@@ -674,8 +764,14 @@ struct AssetViewerView: View {
 
     private func toggleChrome() {
         guard !showsInfo else { return }
+        let revealsStatus = chromeVisible
         withAnimation(mediaFrameAnimation) {
             chromeVisible.toggle()
+        }
+        if revealsStatus {
+            presentRenderedImageStatusIfNeeded(for: session.selectedAssetID)
+        } else {
+            hideRenderedImageStatus()
         }
     }
 
@@ -689,6 +785,7 @@ struct AssetViewerView: View {
 
     private func setInfoVisible(_ visible: Bool) {
         guard visible != showsInfo else { return }
+        hideRenderedImageStatus()
         withAnimation(infoAnimation) {
             chromeVisible = true
             infoDragTranslation = 0
@@ -712,6 +809,49 @@ struct AssetViewerView: View {
 
     private var mediaFrameAnimation: Animation? {
         reduceMotion ? nil : .easeInOut(duration: 0.28)
+    }
+
+    private var renderedImageStatusEntranceAnimation: Animation? {
+        reduceMotion ? nil : .spring(duration: 0.28, bounce: 0.06)
+    }
+
+    private var renderedImageStatusExitAnimation: Animation? {
+        reduceMotion ? nil : .easeIn(duration: 0.22)
+    }
+
+    private func presentRenderedImageStatusIfNeeded(for assetID: String) {
+        guard !chromeVisible,
+              !showsInfo,
+              session.selectedAssetID == assetID,
+              session.selectedAsset?.mediaKind != .video,
+              renderedImageMetadataByAssetID[assetID] != nil,
+              !presentedImageStatusAssetIDs.contains(assetID)
+        else { return }
+
+        imageStatusDismissTask?.cancel()
+        presentedImageStatusAssetIDs.insert(assetID)
+        withAnimation(renderedImageStatusEntranceAnimation) {
+            visibleImageStatusAssetID = assetID
+        }
+        imageStatusDismissTask = Task { @MainActor in
+            if !reduceMotion {
+                try? await Task.sleep(for: .milliseconds(280))
+            }
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled, visibleImageStatusAssetID == assetID else { return }
+            withAnimation(renderedImageStatusExitAnimation) {
+                visibleImageStatusAssetID = nil
+            }
+        }
+    }
+
+    private func hideRenderedImageStatus() {
+        imageStatusDismissTask?.cancel()
+        imageStatusDismissTask = nil
+        guard visibleImageStatusAssetID != nil else { return }
+        withAnimation(renderedImageStatusExitAnimation) {
+            visibleImageStatusAssetID = nil
+        }
     }
 
     private func loadSelectedAssetDetail() async {
@@ -785,6 +925,7 @@ private struct AssetViewerFitPage: View {
     let dismissesInfo: Bool
     let targetPixels: MediaPixelSize
     let previewMetadataChanged: (AssetViewerPreviewMetadata) -> Void
+    let renderedImageMetadataChanged: (AssetViewerRenderedImageMetadata) -> Void
     let resumePosition: () -> Double
     let savePosition: (Double) -> Void
     let zoomChanged: (Bool) -> Void
@@ -808,7 +949,9 @@ private struct AssetViewerFitPage: View {
                     media: media,
                     targetPixels: targetPixels,
                     reportsPreviewMetadata: isSelected && dismissesInfo,
+                    reportsRenderedImageMetadata: isSelected,
                     previewMetadataChanged: previewMetadataChanged,
+                    renderedImageMetadataChanged: renderedImageMetadataChanged,
                     zoomChanged: zoomChanged,
                     toggleChrome: toggleChrome
                 )

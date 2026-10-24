@@ -9,7 +9,9 @@ struct ZoomableStillImageView: View {
     let media: MediaLibraryController
     let targetPixels: MediaPixelSize
     let reportsPreviewMetadata: Bool
+    let reportsRenderedImageMetadata: Bool
     let previewMetadataChanged: (AssetViewerPreviewMetadata) -> Void
+    let renderedImageMetadataChanged: (AssetViewerRenderedImageMetadata) -> Void
     let zoomChanged: (Bool) -> Void
     let toggleChrome: () -> Void
 
@@ -18,13 +20,16 @@ struct ZoomableStillImageView: View {
     @State private var loadedTargetPixels: MediaPixelSize?
     @State private var loadedFileSizeBytes: Int?
     @State private var isShowingThumbnailFallback = false
+    @State private var renderedSource: AssetViewerRenderedImageSource?
 
     init(
         asset: TimelineAssetSummary,
         media: MediaLibraryController,
         targetPixels: MediaPixelSize,
         reportsPreviewMetadata: Bool,
+        reportsRenderedImageMetadata: Bool,
         previewMetadataChanged: @escaping (AssetViewerPreviewMetadata) -> Void,
+        renderedImageMetadataChanged: @escaping (AssetViewerRenderedImageMetadata) -> Void,
         zoomChanged: @escaping (Bool) -> Void,
         toggleChrome: @escaping () -> Void
     ) {
@@ -32,7 +37,9 @@ struct ZoomableStillImageView: View {
         self.media = media
         self.targetPixels = targetPixels
         self.reportsPreviewMetadata = reportsPreviewMetadata
+        self.reportsRenderedImageMetadata = reportsRenderedImageMetadata
         self.previewMetadataChanged = previewMetadataChanged
+        self.renderedImageMetadataChanged = renderedImageMetadataChanged
         self.zoomChanged = zoomChanged
         self.toggleChrome = toggleChrome
 
@@ -42,6 +49,7 @@ struct ZoomableStillImageView: View {
         )
         _image = State(initialValue: cachedPreview?.image)
         _loadedTargetPixels = State(initialValue: cachedPreview?.isFinal == true ? targetPixels : nil)
+        _renderedSource = State(initialValue: cachedPreview == nil ? nil : .preview)
     }
 
     var body: some View {
@@ -73,11 +81,14 @@ struct ZoomableStillImageView: View {
     }
 
     private var loadID: String {
-        "\(asset.id)|\(targetPixels.width)x\(targetPixels.height)|\(reportsPreviewMetadata)"
+        "\(asset.id)|\(targetPixels.width)x\(targetPixels.height)|\(reportsPreviewMetadata)|\(reportsRenderedImageMetadata)"
     }
 
     private func loadPreview() async {
         guard let pipeline = media.pipeline else { return }
+        if reportsRenderedImageMetadata, let image, let renderedSource {
+            publishRenderedMetadata(for: image, source: renderedSource)
+        }
         if image == nil,
            let fallbackRequest = media.viewerThumbnailFallbackRequest(
                for: asset,
@@ -89,7 +100,12 @@ struct ZoomableStillImageView: View {
                 guard !Task.isCancelled else { return }
                 image = fallback.image
                 isShowingThumbnailFallback = true
+                renderedSource = .thumbnail
+                loadedFileSizeBytes = media.viewerThumbnailFallbackByteCount(for: asset)
                 failed = false
+                if reportsRenderedImageMetadata {
+                    publishRenderedMetadata(for: fallback.image, source: .thumbnail)
+                }
             } catch {
                 guard !Task.isCancelled else { return }
             }
@@ -104,7 +120,7 @@ struct ZoomableStillImageView: View {
             return
         }
         if loadedTargetPixels == targetPixels {
-            if reportsPreviewMetadata, let image {
+            if reportsPreviewMetadata || reportsRenderedImageMetadata, let image {
                 await reportMetadata(for: image, pipeline: pipeline, request: request)
             }
             return
@@ -118,13 +134,15 @@ struct ZoomableStillImageView: View {
             image = response.image
             await Task.yield()
             isShowingThumbnailFallback = false
+            renderedSource = .preview
             loadedTargetPixels = targetPixels
+            loadedFileSizeBytes = nil
             if let expectedLength = response.urlResponse?.expectedContentLength,
                expectedLength > 0
             {
                 loadedFileSizeBytes = Int(expectedLength)
             }
-            if reportsPreviewMetadata {
+            if reportsPreviewMetadata || reportsRenderedImageMetadata {
                 await reportMetadata(for: response.image, pipeline: pipeline, request: request)
             }
         } catch {
@@ -150,7 +168,6 @@ struct ZoomableStillImageView: View {
         pipeline: ImagePipeline,
         request: ImageRequest
     ) async {
-        guard reportsPreviewMetadata else { return }
         let pixelSize: MediaPixelSize = if let bitmap = image.cgImage {
             .init(width: bitmap.width, height: bitmap.height)
         } else {
@@ -160,19 +177,48 @@ struct ZoomableStillImageView: View {
             )
         }
         guard !Task.isCancelled else { return }
-        previewMetadataChanged(.init(
-            pixelSize: pixelSize,
-            fileSizeBytes: loadedFileSizeBytes
-        ))
+        publishMetadata(pixelSize: pixelSize, fileSizeBytes: loadedFileSizeBytes)
 
         guard loadedFileSizeBytes == nil,
               let byteCount = await cachedPreviewByteCount(pipeline: pipeline, request: request),
               byteCount > 0,
               !Task.isCancelled,
-              reportsPreviewMetadata
+              reportsPreviewMetadata || reportsRenderedImageMetadata
         else { return }
         loadedFileSizeBytes = byteCount
-        previewMetadataChanged(.init(pixelSize: pixelSize, fileSizeBytes: byteCount))
+        publishMetadata(pixelSize: pixelSize, fileSizeBytes: byteCount)
+    }
+
+    private func publishRenderedMetadata(
+        for image: UIImage,
+        source: AssetViewerRenderedImageSource
+    ) {
+        let pixelSize: MediaPixelSize = if let bitmap = image.cgImage {
+            .init(width: bitmap.width, height: bitmap.height)
+        } else {
+            .init(
+                width: Int((image.size.width * image.scale).rounded()),
+                height: Int((image.size.height * image.scale).rounded())
+            )
+        }
+        renderedImageMetadataChanged(.init(
+            source: source,
+            pixelSize: pixelSize,
+            fileSizeBytes: loadedFileSizeBytes
+        ))
+    }
+
+    private func publishMetadata(pixelSize: MediaPixelSize, fileSizeBytes: Int?) {
+        if reportsPreviewMetadata {
+            previewMetadataChanged(.init(pixelSize: pixelSize, fileSizeBytes: fileSizeBytes))
+        }
+        if reportsRenderedImageMetadata {
+            renderedImageMetadataChanged(.init(
+                source: .preview,
+                pixelSize: pixelSize,
+                fileSizeBytes: fileSizeBytes
+            ))
+        }
     }
 
     private func cachedPreviewByteCount(

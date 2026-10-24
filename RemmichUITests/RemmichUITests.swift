@@ -554,6 +554,33 @@ final class RemmichUITests: XCTestCase {
     }
 
     @MainActor
+    func testAssetViewerDisplayModeShowsRenderedImageQuality() {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = ["-ui-testing-signed-in"]
+        app.launch()
+
+        let asset = app.descendants(matching: .any)["asset-asset-1"].firstMatch
+        XCTAssertTrue(asset.waitForExistence(timeout: 10))
+        asset.tap()
+
+        let viewer = app.descendants(matching: .any)["asset-viewer-still-asset-1"]
+        XCTAssertTrue(viewer.waitForExistence(timeout: 10))
+        viewer.tap()
+
+        let quality = app.staticTexts["asset-viewer-image-quality"]
+        XCTAssertTrue(quality.waitForExistence(timeout: 10))
+        XCTAssertTrue(quality.label.contains("Preview"))
+        XCTAssertTrue(quality.label.contains("px"))
+        XCTAssertTrue(waitUntil(timeout: 4) { !quality.exists })
+
+        viewer.tap()
+        XCTAssertTrue(app.buttons["asset-viewer-back"].waitForExistence(timeout: 2))
+        viewer.tap()
+        XCTAssertFalse(quality.waitForExistence(timeout: 1))
+    }
+
+    @MainActor
     func testVideoViewerUsesNativePlayerAndRestoresTimeline() {
         let app = XCUIApplication()
         app.launchArguments = ["-ui-testing-signed-in"]
