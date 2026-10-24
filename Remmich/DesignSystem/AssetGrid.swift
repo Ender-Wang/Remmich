@@ -452,6 +452,8 @@ struct TimelineDeterministicAssetRow: View {
     let itemSide: CGFloat
     let spacing: CGFloat
     let assetLayout: PhotosAssetLayout
+    var naturalAspectProgress: CGFloat?
+    var requestSide: CGFloat?
     let visibilityChanged: (String, MediaRequestDescriptor?) -> Void
     let viewportChanged: (TimelineAssetSummary, Bool) -> Void
     let transitionNamespace: Namespace.ID?
@@ -467,6 +469,8 @@ struct TimelineDeterministicAssetRow: View {
                         asset: asset,
                         media: media,
                         assetLayout: assetLayout,
+                        naturalAspectProgress: naturalAspectProgress,
+                        requestSide: requestSide,
                         visibilityChanged: visibilityChanged,
                         viewportChanged: viewportChanged,
                         transitionNamespace: transitionNamespace,
@@ -502,33 +506,45 @@ struct TimelineAssetThumbnail: View {
     let asset: TimelineAssetSummary
     let media: MediaLibraryController
     let assetLayout: PhotosAssetLayout
+    var naturalAspectProgress: CGFloat?
+    var requestSide: CGFloat?
     let visibilityChanged: (String, MediaRequestDescriptor?) -> Void
     let viewportChanged: (TimelineAssetSummary, Bool) -> Void
     let transitionNamespace: Namespace.ID?
     let assetSelected: (TimelineAssetSummary) -> Void
     var priority: ImageRequest.Priority = .normal
 
+    private var resolvedNaturalAspectProgress: CGFloat {
+        naturalAspectProgress
+            .map { min(1, max(0, $0)) }
+            ?? (assetLayout == .naturalAspect ? 1 : 0)
+    }
+
     var body: some View {
         Button {
             assetSelected(asset)
         } label: {
             GeometryReader { proxy in
-                let widthPixels = Self.targetPixels(for: proxy.size.width, scale: displayScale)
-                let heightPixels = Self.targetPixels(for: proxy.size.height, scale: displayScale)
+                let requestPoints = requestSide ?? max(proxy.size.width, proxy.size.height)
+                let requestPixels = Self.targetPixels(for: requestPoints, scale: displayScale)
+                let progress = resolvedNaturalAspectProgress
                 let descriptor = MediaRequestDescriptor(
                     assetID: asset.id,
                     updatedAt: asset.thumbnailRevision,
                     derivative: .thumbnail,
-                    targetPixels: .init(width: widthPixels, height: heightPixels)
+                    targetPixels: .init(width: requestPixels, height: requestPixels)
                 )
                 ImmichThumbnail(
                     descriptor: descriptor,
                     media: media,
-                    contentMode: assetLayout == .square ? .fill : .fit,
-                    showsBackground: assetLayout == .square,
-                    imageCornerRadius: assetLayout == .naturalAspect
-                        ? DesignMetrics.compactCornerRadius
-                        : 0,
+                    contentMode: .fit,
+                    showsBackground: true,
+                    backgroundOpacity: 1 - Double(progress),
+                    imageCornerRadius: DesignMetrics.compactCornerRadius * progress,
+                    imageScale: TimelineThumbnailGeometry.imageScale(
+                        aspectRatio: asset.aspectRatio,
+                        naturalAspectProgress: progress
+                    ),
                     priority: priority,
                     didLoad: {
                         media.retainTimelineThumbnail(
@@ -556,7 +572,7 @@ struct TimelineAssetThumbnail: View {
                             let thumbnailRect = TimelineThumbnailGeometry.renderedImageRect(
                                 in: overlayGeometry.size,
                                 aspectRatio: asset.aspectRatio,
-                                fillsContainer: assetLayout == .square
+                                naturalAspectProgress: progress
                             )
                             HStack(spacing: 5) {
                                 if asset.livePhotoVideoID != nil {
@@ -588,7 +604,7 @@ struct TimelineAssetThumbnail: View {
                             let thumbnailRect = TimelineThumbnailGeometry.renderedImageRect(
                                 in: overlayGeometry.size,
                                 aspectRatio: asset.aspectRatio,
-                                fillsContainer: assetLayout == .square
+                                naturalAspectProgress: progress
                             )
                             Text(Self.duration(asset.durationMilliseconds))
                                 .font(.caption2.weight(.semibold))
@@ -658,9 +674,20 @@ nonisolated enum TimelineThumbnailGeometry {
         aspectRatio: Double,
         fillsContainer: Bool
     ) -> CGRect {
+        renderedImageRect(
+            in: containerSize,
+            aspectRatio: aspectRatio,
+            naturalAspectProgress: fillsContainer ? 0 : 1
+        )
+    }
+
+    static func renderedImageRect(
+        in containerSize: CGSize,
+        aspectRatio: Double,
+        naturalAspectProgress: CGFloat
+    ) -> CGRect {
         let container = CGRect(origin: .zero, size: containerSize)
-        guard !fillsContainer,
-              containerSize.width > 0,
+        guard containerSize.width > 0,
               containerSize.height > 0,
               aspectRatio.isFinite,
               aspectRatio > 0
@@ -668,22 +695,51 @@ nonisolated enum TimelineThumbnailGeometry {
 
         let ratio = CGFloat(aspectRatio)
         let containerRatio = containerSize.width / containerSize.height
+        let fitted: CGRect
         if ratio > containerRatio {
             let height = containerSize.width / ratio
-            return CGRect(
+            fitted = CGRect(
                 x: 0,
                 y: (containerSize.height - height) / 2,
                 width: containerSize.width,
                 height: height
             )
+        } else {
+            let width = containerSize.height * ratio
+            fitted = CGRect(
+                x: (containerSize.width - width) / 2,
+                y: 0,
+                width: width,
+                height: containerSize.height
+            )
         }
-
-        let width = containerSize.height * ratio
-        return CGRect(
-            x: (containerSize.width - width) / 2,
-            y: 0,
-            width: width,
-            height: containerSize.height
+        let progress = min(1, max(0, naturalAspectProgress))
+        let coverScale = max(
+            container.width / fitted.width,
+            container.height / fitted.height
         )
+        let scale = coverScale + (1 - coverScale) * progress
+        let scaledSize = CGSize(
+            width: fitted.width * scale,
+            height: fitted.height * scale
+        )
+        let scaled = CGRect(
+            x: container.midX - scaledSize.width / 2,
+            y: container.midY - scaledSize.height / 2,
+            width: scaledSize.width,
+            height: scaledSize.height
+        )
+        return scaled.intersection(container)
+    }
+
+    static func imageScale(
+        aspectRatio: Double,
+        naturalAspectProgress: CGFloat
+    ) -> CGFloat {
+        guard aspectRatio.isFinite, aspectRatio > 0 else { return 1 }
+        let ratio = CGFloat(aspectRatio)
+        let coverScale = max(ratio, 1 / ratio)
+        let progress = min(1, max(0, naturalAspectProgress))
+        return coverScale + (1 - coverScale) * progress
     }
 }

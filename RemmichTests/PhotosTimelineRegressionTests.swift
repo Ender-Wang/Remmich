@@ -41,6 +41,41 @@ struct PhotosTimelineRegressionTests {
         #expect(rect.height == 100)
     }
 
+    @Test func thumbnailGeometryTracksTheVisibleImageDuringLayoutMorph() {
+        let square = TimelineThumbnailGeometry.renderedImageRect(
+            in: CGSize(width: 100, height: 100),
+            aspectRatio: 16.0 / 9.0,
+            naturalAspectProgress: 0
+        )
+        let midpoint = TimelineThumbnailGeometry.renderedImageRect(
+            in: CGSize(width: 100, height: 100),
+            aspectRatio: 16.0 / 9.0,
+            naturalAspectProgress: 0.5
+        )
+        let natural = TimelineThumbnailGeometry.renderedImageRect(
+            in: CGSize(width: 100, height: 100),
+            aspectRatio: 16.0 / 9.0,
+            naturalAspectProgress: 1
+        )
+
+        #expect(square == CGRect(x: 0, y: 0, width: 100, height: 100))
+        #expect(midpoint.minY > square.minY)
+        #expect(midpoint.minY < natural.minY)
+        #expect(midpoint.maxY < square.maxY)
+        #expect(midpoint.maxY > natural.maxY)
+    }
+
+    @Test func pinchMagnificationMapsContinuouslyAcrossTheLayoutDeadZone() {
+        #expect(PhotosView.naturalAspectProgress(magnification: 1, layout: .square) == 0)
+        #expect(abs(PhotosView.naturalAspectProgress(magnification: 0.8, layout: .square) - 0.5) < 0.000_001)
+        #expect(abs(PhotosView.naturalAspectProgress(magnification: 0.78, layout: .square) - 0.55) < 0.000_001)
+        #expect(PhotosView.naturalAspectProgress(magnification: 0.6, layout: .square) == 1)
+        #expect(PhotosView.naturalAspectProgress(magnification: 1, layout: .naturalAspect) == 1)
+        #expect(abs(PhotosView.naturalAspectProgress(magnification: 1.25, layout: .naturalAspect) - 0.5) < 0.000_001)
+        #expect(abs(PhotosView.naturalAspectProgress(magnification: 1.28, layout: .naturalAspect) - 0.44) < 0.000_001)
+        #expect(PhotosView.naturalAspectProgress(magnification: 1.5, layout: .naturalAspect) == 0)
+    }
+
     @Test @MainActor func rotationVisualHandoffEligibilityTracksEachTimeline() {
         let state = TimelineRotationState()
 

@@ -7,7 +7,9 @@ struct ImmichThumbnail: View {
     let media: MediaLibraryController
     var contentMode: ContentMode = .fill
     var showsBackground = true
+    var backgroundOpacity = 1.0
     var imageCornerRadius: CGFloat = 0
+    var imageScale: CGFloat = 1
     var priority: ImageRequest.Priority = .normal
     var didLoad: (ImageResponse) -> Void = { _ in }
 
@@ -20,7 +22,9 @@ struct ImmichThumbnail: View {
         ) { state in
             ZStack {
                 if showsBackground {
-                    Rectangle().fill(.quaternary)
+                    Rectangle()
+                        .fill(.quaternary)
+                        .opacity(backgroundOpacity)
                 }
                 if let image = state.image {
                     GeometryReader { geometry in
@@ -33,6 +37,7 @@ struct ImmichThumbnail: View {
                                     style: .continuous
                                 )
                             )
+                            .scaleEffect(imageScale)
                             .frame(
                                 width: geometry.size.width,
                                 height: geometry.size.height,

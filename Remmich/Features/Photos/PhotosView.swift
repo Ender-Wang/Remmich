@@ -314,6 +314,9 @@ nonisolated enum TimelinePresentationLadder {
 }
 
 struct PhotosView: View {
+    private nonisolated static let coarserLayoutVisualEndpoint: CGFloat = 0.6
+    private nonisolated static let finerLayoutVisualEndpoint: CGFloat = 1.5
+
     private static let logger = Logger(
         subsystem: "io.github.ender-wang.Remmich",
         category: "PhotosTimeline"
@@ -347,10 +350,10 @@ struct PhotosView: View {
     @State private var timelineSections: [TimelineSection]
     @State private var timelineResumeTask: Task<Void, Never>?
     @State private var contentRestoreTask: Task<Void, Never>?
-    @State private var layoutRestoreTask: Task<Void, Never>?
     @State private var pendingViewportAnchor: TimelineViewportAnchor?
-    @State private var layoutAnchorID: String?
     @State private var pinchInteraction = PhotosRangePinchInteraction()
+    @State private var layoutMorphProgress: CGFloat?
+    @State private var layoutMorphResetTask: Task<Void, Never>?
     @State private var compactChrome = false
     @State private var libraryRange: TimelineLibraryRange = .all
     @State private var initialAssetByRoute: [PhotosRangeRoute: String] = [:]
@@ -558,7 +561,7 @@ struct PhotosView: View {
             timelineResumeTask?.cancel()
             contentRestoreTask?.cancel()
             pendingViewportAnchor = nil
-            layoutRestoreTask?.cancel()
+            layoutMorphResetTask?.cancel()
             latestJumpTask?.cancel()
             latestJumpTask = nil
             store.completeJump()
@@ -811,9 +814,6 @@ struct PhotosView: View {
         guard let next = TimelinePresentationLadder.selection(after: gesture.direction, from: current)
         else { return }
 
-        if next.range == .all, next.assetLayout != current.assetLayout {
-            layoutAnchorID = centerVisibleAssetID
-        }
         do {
             try presentation.setAssetLayout(next.assetLayout)
         } catch {
@@ -852,7 +852,7 @@ struct PhotosView: View {
                 key: layoutKey
             )
 
-            ScrollViewReader { proxy in
+            ScrollViewReader { _ in
                 VStack(spacing: 0) {
                     if case let .failed(message) = store.refreshState {
                         TimelineRefreshError(message: message) {
@@ -862,9 +862,13 @@ struct PhotosView: View {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 0) {
                             ForEach(layout.rows) { row in
-                                timelineRow(row, layout: layout)
-                                    .frame(width: layoutWidth, height: row.height, alignment: .topLeading)
-                                    .id(row.id)
+                                timelineRow(
+                                    row,
+                                    layout: layout,
+                                    requestSide: layout.itemSide
+                                )
+                                .frame(width: layoutWidth, height: row.height, alignment: .topLeading)
+                                .id(row.id)
                             }
                             Color.clear
                                 .frame(height: TimelineDeterministicLayout.bottomSpacing)
@@ -888,6 +892,8 @@ struct PhotosView: View {
                     .scrollEdgeEffectHidden(for: .bottom)
                     .photosRangePinchGesture(
                         interaction: pinchInteraction,
+                        onMagnificationChanged: updateLayoutMorph,
+                        onMagnificationEnded: finishLayoutMorph,
                         onPinch: pinchLibraryRange
                     )
                     .accessibilityAction(named: layoutAccessibilityActionName) {
@@ -1049,21 +1055,6 @@ struct PhotosView: View {
                         else { return }
                         advanceRotationTransaction(using: snapshot, layout: layout)
                     }
-                    .onChange(of: presentation.preferences.assetLayout) {
-                        guard let layoutAnchorID else { return }
-                        layoutRestoreTask?.cancel()
-                        layoutRestoreTask = Task { @MainActor in
-                            await Task.yield()
-                            guard !Task.isCancelled else { return }
-                            var transaction = Transaction(animation: nil)
-                            transaction.disablesAnimations = true
-                            withTransaction(transaction) {
-                                proxy.scrollTo(layoutAnchorID, anchor: .center)
-                            }
-                            self.layoutAnchorID = nil
-                            layoutRestoreTask = nil
-                        }
-                    }
                 }
                 .onChange(of: scrollToLatestRequest) {
                     guard navigationPath.isEmpty,
@@ -1111,7 +1102,8 @@ struct PhotosView: View {
     @ViewBuilder
     private func timelineRow(
         _ row: TimelineDeterministicLayout.Row,
-        layout: TimelineDeterministicLayout
+        layout: TimelineDeterministicLayout,
+        requestSide: CGFloat
     ) -> some View {
         switch row.content {
         case let .header(group):
@@ -1128,6 +1120,8 @@ struct PhotosView: View {
                 itemSide: layout.itemSide,
                 spacing: layout.key.spacing,
                 assetLayout: presentation.preferences.assetLayout,
+                naturalAspectProgress: timelineNaturalAspectProgress,
+                requestSide: requestSide,
                 visibilityChanged: updateVisibility,
                 viewportChanged: updateViewport,
                 transitionNamespace: viewerNamespace,
@@ -1194,8 +1188,71 @@ struct PhotosView: View {
     }
 
     private var timelineItemSpacing: CGFloat {
-        guard presentation.preferences.assetLayout == .naturalAspect else { return 2 }
-        return UIDevice.current.userInterfaceIdiom == .pad ? 24 : 12
+        2
+    }
+
+    private var timelineNaturalAspectProgress: CGFloat {
+        layoutMorphProgress
+            ?? (presentation.preferences.assetLayout == .naturalAspect ? 1 : 0)
+    }
+
+    private var layoutMorphAnimation: Animation {
+        .snappy(duration: 0.32, extraBounce: 0.03)
+    }
+
+    private func updateLayoutMorph(magnification: CGFloat) {
+        guard navigationPath.isEmpty, libraryRange == .all else { return }
+        let layout = presentation.preferences.assetLayout
+        let movesBetweenAssetLayouts = if magnification < 1 {
+            layout == .square
+        } else {
+            layout == .naturalAspect
+        }
+        guard movesBetweenAssetLayouts else { return }
+
+        layoutMorphResetTask?.cancel()
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            layoutMorphProgress = Self.naturalAspectProgress(
+                magnification: magnification,
+                layout: layout
+            )
+        }
+    }
+
+    private func finishLayoutMorph() {
+        layoutMorphResetTask?.cancel()
+        let settledProgress: CGFloat = presentation.preferences.assetLayout == .naturalAspect ? 1 : 0
+        if reduceMotion {
+            layoutMorphProgress = nil
+            return
+        }
+        withAnimation(layoutMorphAnimation) {
+            layoutMorphProgress = settledProgress
+        }
+        layoutMorphResetTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(320))
+            guard !Task.isCancelled else { return }
+            layoutMorphProgress = nil
+            layoutMorphResetTask = nil
+        }
+    }
+
+    nonisolated static func naturalAspectProgress(
+        magnification: CGFloat,
+        layout: PhotosAssetLayout
+    ) -> CGFloat {
+        switch layout {
+        case .square:
+            let distance = max(0, 1 - magnification)
+            let visualDistance = 1 - Self.coarserLayoutVisualEndpoint
+            return min(1, distance / visualDistance)
+        case .naturalAspect:
+            let distance = max(0, magnification - 1)
+            let visualDistance = Self.finerLayoutVisualEndpoint - 1
+            return 1 - min(1, distance / visualDistance)
+        }
     }
 
     private func timelineColumnCount(width: CGFloat, height: CGFloat) -> Int {
@@ -1584,7 +1641,6 @@ struct PhotosView: View {
             || latestJumpTask != nil
             || viewportRuntime.rotationTransaction != nil
             || contentRestoreTask != nil
-            || layoutRestoreTask != nil
         if let compact = viewportRuntime.chromeTracker.update(
             offsetDelta: new.offset - old.offset,
             bottomGap: new.bottomGap,

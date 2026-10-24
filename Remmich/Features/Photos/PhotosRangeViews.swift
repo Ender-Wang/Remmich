@@ -62,13 +62,16 @@ nonisolated enum PhotosWeekRouteOrigin: Hashable {
 }
 
 nonisolated enum PhotosPinchDirection: Equatable {
+    static let coarserThreshold: CGFloat = 0.78
+    static let finerThreshold: CGFloat = 1.28
+
     case coarser
     case finer
 
     init?(magnification: CGFloat) {
-        if magnification <= 0.78 {
+        if magnification <= Self.coarserThreshold {
             self = .coarser
-        } else if magnification >= 1.28 {
+        } else if magnification >= Self.finerThreshold {
             self = .finer
         } else {
             return nil
@@ -132,17 +135,21 @@ private extension EnvironmentValues {
 
 private struct PhotosRangePinchModifier: ViewModifier {
     let interaction: PhotosRangePinchInteraction
+    let onMagnificationChanged: ((CGFloat) -> Void)?
+    let onMagnificationEnded: (() -> Void)?
     let onPinch: ((PhotosPinchGesture) -> Void)?
 
     func body(content: Content) -> some View {
         content
             .environment(\.photosRangePinchInteraction, interaction)
-            .highPriorityGesture(MagnifyGesture().onChanged { _ in
+            .highPriorityGesture(MagnifyGesture().onChanged { value in
                 guard onPinch != nil else { return }
                 interaction.begin()
+                onMagnificationChanged?(value.magnification)
             }.onEnded { value in
                 guard let onPinch else { return }
                 interaction.handle(magnification: value.magnification, onPinch: onPinch)
+                onMagnificationEnded?()
             })
     }
 }
@@ -151,10 +158,17 @@ extension View {
     @ViewBuilder
     func photosRangePinchGesture(
         interaction: PhotosRangePinchInteraction?,
+        onMagnificationChanged: ((CGFloat) -> Void)? = nil,
+        onMagnificationEnded: (() -> Void)? = nil,
         onPinch: ((PhotosPinchGesture) -> Void)?
     ) -> some View {
         if let interaction {
-            modifier(PhotosRangePinchModifier(interaction: interaction, onPinch: onPinch))
+            modifier(PhotosRangePinchModifier(
+                interaction: interaction,
+                onMagnificationChanged: onMagnificationChanged,
+                onMagnificationEnded: onMagnificationEnded,
+                onPinch: onPinch
+            ))
         } else {
             self
         }
