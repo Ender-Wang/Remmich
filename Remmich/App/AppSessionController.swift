@@ -46,6 +46,7 @@ final class AppSessionController {
     private let networkMonitoringEnabled: Bool
     private let pathChangeDebounce: Duration
     private let photosForegroundRetryEnabled: Bool
+    private let persistentAssetDetails: CachedAssetDetailReader
     private let locationManager = CLLocationManager()
     private let pathMonitor = NWPathMonitor()
     private let routeEvaluationGate = RouteEvaluationGate()
@@ -67,7 +68,18 @@ final class AppSessionController {
         timeline: ImmichTimelineRepository = .init()
     ) {
         self.timeline = timeline
-        libraryIndex = LibraryIndexController(source: timeline, media: media)
+        let libraryIndexStore = SQLiteLibraryIndexStore()
+        libraryIndex = LibraryIndexController(
+            source: timeline,
+            store: libraryIndexStore,
+            media: media,
+            assetDetails: timeline
+        )
+        let persistentAssetDetails = CachedAssetDetailReader(
+            source: timeline,
+            store: libraryIndexStore
+        )
+        self.persistentAssetDetails = persistentAssetDetails
         let arguments = ProcessInfo.processInfo.arguments
         photosForegroundRetryEnabled = !arguments.contains("-ui-testing-photos-retry")
         let previewMode: PreviewTimelineReader.Mode = if arguments.contains("-ui-testing-photos-empty") {
@@ -98,7 +110,7 @@ final class AppSessionController {
         assetDetails = if let previewReader {
             previewReader
         } else {
-            timeline
+            persistentAssetDetails
         }
         photos = PhotosTimelineStore(
             reader: photosReader,
@@ -137,6 +149,7 @@ final class AppSessionController {
         startNetworkMonitoring()
         if ProcessInfo.processInfo.arguments.contains("-ui-testing-signed-in") {
             let session = AccountSession.fixture
+            await persistentAssetDetails.configure(session: session)
             media.configure(session: session, activeEndpoint: session.apiURL)
             if await timeline.configure(session: session, activeEndpoint: session.apiURL) {
                 photos.routeDidChange(isReachable: true)
@@ -165,6 +178,7 @@ final class AppSessionController {
             )
             isRestoringSession = true
             defer { isRestoringSession = false }
+            await persistentAssetDetails.configure(session: session)
             media.configure(session: session, activeEndpoint: nil)
             Self.startupLogger.info(
                 "Media pipeline configured elapsedMs=\(Self.elapsedMilliseconds(since: startupStartedAt))"
@@ -222,6 +236,7 @@ final class AppSessionController {
             routeGeneration += 1
             activeRoute = .init(kind: .direct, endpoint: session.apiURL)
             routeStatus = .connected
+            await persistentAssetDetails.configure(session: session)
             media.configure(session: session, activeEndpoint: session.apiURL)
             let routeChanged = await timeline.configure(
                 session: session,
@@ -249,6 +264,7 @@ final class AppSessionController {
         activeRoute = nil
         routeStatus = .waitingForNetwork
         media.clearAll()
+        await persistentAssetDetails.clearSession()
         await timeline.clear()
         photos.reset()
         videos.reset()

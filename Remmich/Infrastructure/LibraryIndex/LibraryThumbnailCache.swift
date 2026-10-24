@@ -14,7 +14,7 @@ actor LibraryThumbnailCache {
         var errorDescription: String? {
             switch self {
             case let .incomplete(cached, eligible):
-                "Downloaded \(cached.formatted()) of \(eligible.formatted()) thumbnails; the existing cache was kept."
+                "Cached \(cached.formatted()) of \(eligible.formatted()) thumbnail and metadata pairs; the existing thumbnail cache was kept."
             }
         }
     }
@@ -23,6 +23,8 @@ actor LibraryThumbnailCache {
         let processedCount: Int
         let pendingCount: Int
         let cachedCount: Int
+        let thumbnailCachedCount: Int
+        let metadataCachedCount: Int
         let cachedBytes: Int64
         let eligibleCount: Int
         let failures: [ThumbnailFailure]
@@ -31,6 +33,8 @@ actor LibraryThumbnailCache {
             processedCount: Int,
             pendingCount: Int,
             cachedCount: Int,
+            thumbnailCachedCount: Int? = nil,
+            metadataCachedCount: Int? = nil,
             cachedBytes: Int64,
             eligibleCount: Int,
             failures: [ThumbnailFailure] = []
@@ -38,6 +42,8 @@ actor LibraryThumbnailCache {
             self.processedCount = processedCount
             self.pendingCount = pendingCount
             self.cachedCount = cachedCount
+            self.thumbnailCachedCount = thumbnailCachedCount ?? cachedCount
+            self.metadataCachedCount = metadataCachedCount ?? cachedCount
             self.cachedBytes = cachedBytes
             self.eligibleCount = eligibleCount
             self.failures = failures
@@ -84,9 +90,15 @@ actor LibraryThumbnailCache {
 
     private let rootURL: URL
     private let store: any LibraryIndexStoring
+    private let assetDetails: (any AssetDetailReading)?
 
-    init(store: any LibraryIndexStoring, rootURL: URL? = nil) {
+    init(
+        store: any LibraryIndexStoring,
+        rootURL: URL? = nil,
+        assetDetails: (any AssetDetailReading)? = nil
+    ) {
         self.store = store
+        self.assetDetails = assetDetails
         if let rootURL {
             self.rootURL = rootURL
         } else {
@@ -108,28 +120,35 @@ actor LibraryThumbnailCache {
             .appending(path: MediaDerivative.thumbnail.rawValue, directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let existing = try await store.snapshot(scope: scope)?.derivatives ?? []
+        let eligibleIDs = Set(assets.map(\.id))
+        let detailSource = assetDetails
         let assetKeys = Set(assets.map { "\($0.id)|\($0.updatedAt.ISO8601Format())" })
         let currentExisting = existing.filter {
             $0.derivative == .thumbnail
                 && assetKeys.contains("\($0.assetID)|\($0.sourceRevision)")
         }
-        let existingKeys = Set(currentExisting.map {
-            "\($0.assetID)|\($0.sourceRevision)"
-        })
+        let existingKeys = Set(currentExisting.map { "\($0.assetID)|\($0.sourceRevision)" })
+        var thumbnailIDs = Set(currentExisting.map(\.assetID))
+        var metadataIDs = if assetDetails == nil {
+            eligibleIDs
+        } else {
+            try await store.cachedAssetDetailIDs(scope: scope)
+        }
         let pending = assets.filter {
             !existingKeys.contains("\($0.id)|\($0.updatedAt.ISO8601Format())")
+                || !metadataIDs.contains($0.id)
         }
-        let existingCount = assets.count - pending.count
         let existingBytes = currentExisting.reduce(Int64(0)) { $0 + $1.byteCount }
         var processedCount = 0
-        var successfulCount = 0
         var successfulBytes: Int64 = 0
         var failures: [ThumbnailFailure] = []
         var lastProgressAt = Date.distantPast
         var currentProgress = WarmProgress(
             processedCount: 0,
             pendingCount: pending.count,
-            cachedCount: existingCount,
+            cachedCount: thumbnailIDs.intersection(metadataIDs).count,
+            thumbnailCachedCount: thumbnailIDs.count,
+            metadataCachedCount: metadataIDs.intersection(eligibleIDs).count,
             cachedBytes: existingBytes,
             eligibleCount: assets.count,
             failures: []
@@ -137,28 +156,46 @@ actor LibraryThumbnailCache {
         await progress?(currentProgress)
         lastProgressAt = Date()
 
-        try await withThrowingTaskGroup(of: DownloadResult.self) { group in
+        try await withThrowingTaskGroup(of: AssetCacheResult.self) { group in
             var iterator = pending.makeIterator()
             for _ in 0 ..< 2 {
                 if let asset = iterator.next() {
-                    group.addTask { try await Self.download(asset, endpoint, accessToken, directory) }
+                    let needsThumbnail = !existingKeys.contains(
+                        "\(asset.id)|\(asset.updatedAt.ISO8601Format())"
+                    )
+                    let needsMetadata = !metadataIDs.contains(asset.id)
+                    group.addTask {
+                        try await Self.cache(
+                            asset,
+                            needsThumbnail: needsThumbnail,
+                            needsMetadata: needsMetadata,
+                            endpoint: endpoint,
+                            accessToken: accessToken,
+                            directory: directory,
+                            assetDetails: detailSource
+                        )
+                    }
                 }
             }
             while let result = try await group.next() {
                 try Task.checkCancellation()
-                switch result {
-                case let .success(record):
+                if let record = result.thumbnailRecord {
                     try await store.upsert(derivatives: [record], scope: scope)
-                    successfulCount += 1
+                    thumbnailIDs.insert(record.assetID)
                     successfulBytes += record.byteCount
-                case let .failure(failure):
-                    failures.append(failure)
                 }
+                if let detail = result.assetDetail {
+                    try await store.upsert(assetDetail: detail, scope: scope)
+                    metadataIDs.insert(detail.id)
+                }
+                failures.append(contentsOf: result.failures)
                 processedCount += 1
                 currentProgress = .init(
                     processedCount: processedCount,
                     pendingCount: pending.count,
-                    cachedCount: existingCount + successfulCount,
+                    cachedCount: thumbnailIDs.intersection(metadataIDs).count,
+                    thumbnailCachedCount: thumbnailIDs.count,
+                    metadataCachedCount: metadataIDs.intersection(eligibleIDs).count,
                     cachedBytes: existingBytes + successfulBytes,
                     eligibleCount: assets.count,
                     failures: failures
@@ -169,7 +206,19 @@ actor LibraryThumbnailCache {
                     lastProgressAt = now
                 }
                 if let asset = iterator.next() {
-                    group.addTask { try await Self.download(asset, endpoint, accessToken, directory) }
+                    let needsThumbnail = !thumbnailIDs.contains(asset.id)
+                    let needsMetadata = !metadataIDs.contains(asset.id)
+                    group.addTask {
+                        try await Self.cache(
+                            asset,
+                            needsThumbnail: needsThumbnail,
+                            needsMetadata: needsMetadata,
+                            endpoint: endpoint,
+                            accessToken: accessToken,
+                            directory: directory,
+                            assetDetails: detailSource
+                        )
+                    }
                 }
             }
         }
@@ -181,22 +230,35 @@ actor LibraryThumbnailCache {
         scope: MediaAccountScope
     ) async throws -> WarmProgress {
         let existing = try await store.snapshot(scope: scope)?.derivatives ?? []
-        return Self.cachedProgress(assets: assets, derivatives: existing)
+        let metadataIDs = assetDetails == nil
+            ? nil
+            : try await store.cachedAssetDetailIDs(scope: scope)
+        return Self.cachedProgress(
+            assets: assets,
+            derivatives: existing,
+            metadataIDs: metadataIDs
+        )
     }
 
     nonisolated static func cachedProgress(
         assets: [LibraryIndexAssetRecord],
-        derivatives: [LibraryIndexDerivativeRecord]
+        derivatives: [LibraryIndexDerivativeRecord],
+        metadataIDs: Set<String>? = nil
     ) -> WarmProgress {
         let assetKeys = Set(assets.map { "\($0.id)|\($0.updatedAt.ISO8601Format())" })
         let currentExisting = derivatives.filter {
             $0.derivative == .thumbnail
                 && assetKeys.contains("\($0.assetID)|\($0.sourceRevision)")
         }
+        let thumbnailIDs = Set(currentExisting.map(\.assetID))
+        let currentMetadataIDs = metadataIDs.map { $0.intersection(Set(assets.map(\.id))) }
+            ?? thumbnailIDs
         return .init(
             processedCount: 0,
-            pendingCount: assets.count - currentExisting.count,
-            cachedCount: currentExisting.count,
+            pendingCount: assets.count - thumbnailIDs.intersection(currentMetadataIDs).count,
+            cachedCount: thumbnailIDs.intersection(currentMetadataIDs).count,
+            thumbnailCachedCount: thumbnailIDs.count,
+            metadataCachedCount: currentMetadataIDs.count,
             cachedBytes: currentExisting.reduce(Int64(0)) { $0 + $1.byteCount },
             eligibleCount: assets.count,
             failures: []
@@ -226,6 +288,8 @@ actor LibraryThumbnailCache {
 
         var records: [LibraryIndexDerivativeRecord] = []
         records.reserveCapacity(assets.count)
+        var thumbnailIDs: Set<String> = []
+        var metadataIDs: Set<String> = []
         var processedCount = 0
         var cachedBytes: Int64 = 0
         var failures: [ThumbnailFailure] = []
@@ -234,6 +298,8 @@ actor LibraryThumbnailCache {
             processedCount: 0,
             pendingCount: assets.count,
             cachedCount: 0,
+            thumbnailCachedCount: 0,
+            metadataCachedCount: 0,
             cachedBytes: 0,
             eligibleCount: assets.count,
             failures: []
@@ -241,29 +307,46 @@ actor LibraryThumbnailCache {
         await progress?(currentProgress)
         lastProgressAt = Date()
 
-        try await withThrowingTaskGroup(of: DownloadResult.self) { group in
+        let detailSource = assetDetails
+        try await withThrowingTaskGroup(of: AssetCacheResult.self) { group in
             var iterator = assets.makeIterator()
             for _ in 0 ..< 2 {
                 if let asset = iterator.next() {
                     group.addTask {
-                        try await Self.download(asset, endpoint, accessToken, stagingDirectory)
+                        try await Self.cache(
+                            asset,
+                            needsThumbnail: true,
+                            needsMetadata: detailSource != nil,
+                            endpoint: endpoint,
+                            accessToken: accessToken,
+                            directory: stagingDirectory,
+                            assetDetails: detailSource
+                        )
                     }
                 }
             }
             while let result = try await group.next() {
                 try Task.checkCancellation()
-                switch result {
-                case let .success(record):
+                if let record = result.thumbnailRecord {
                     records.append(record)
+                    thumbnailIDs.insert(record.assetID)
                     cachedBytes += record.byteCount
-                case let .failure(failure):
-                    failures.append(failure)
                 }
+                if let detail = result.assetDetail {
+                    try await store.upsert(assetDetail: detail, scope: scope)
+                    metadataIDs.insert(detail.id)
+                }
+                failures.append(contentsOf: result.failures)
                 processedCount += 1
+                let pairedCount = detailSource == nil
+                    ? records.count
+                    : thumbnailIDs.intersection(metadataIDs).count
                 currentProgress = .init(
                     processedCount: processedCount,
                     pendingCount: assets.count,
-                    cachedCount: records.count,
+                    cachedCount: pairedCount,
+                    thumbnailCachedCount: records.count,
+                    metadataCachedCount: detailSource == nil ? records.count : metadataIDs.count,
                     cachedBytes: cachedBytes,
                     eligibleCount: assets.count,
                     failures: failures
@@ -275,15 +358,26 @@ actor LibraryThumbnailCache {
                 }
                 if let asset = iterator.next() {
                     group.addTask {
-                        try await Self.download(asset, endpoint, accessToken, stagingDirectory)
+                        try await Self.cache(
+                            asset,
+                            needsThumbnail: true,
+                            needsMetadata: detailSource != nil,
+                            endpoint: endpoint,
+                            accessToken: accessToken,
+                            directory: stagingDirectory,
+                            assetDetails: detailSource
+                        )
                     }
                 }
             }
         }
 
         try Task.checkCancellation()
-        guard records.count == assets.count else {
-            throw RebuildError.incomplete(cached: records.count, eligible: assets.count)
+        guard currentProgress.cachedCount == assets.count else {
+            throw RebuildError.incomplete(
+                cached: currentProgress.cachedCount,
+                eligible: assets.count
+            )
         }
         try await promoteRebuiltThumbnails(
             records,
@@ -315,6 +409,7 @@ actor LibraryThumbnailCache {
             try FileManager.default.removeItem(at: directory)
         }
         try await store.clearDerivatives(scope: scope, kinds: [.thumbnail])
+        try await store.clearAssetDetails(scope: scope)
     }
 
     func removeAccount(namespace: String) throws {
@@ -429,6 +524,111 @@ actor LibraryThumbnailCache {
     private nonisolated enum DownloadResult: Sendable {
         case success(LibraryIndexDerivativeRecord)
         case failure(ThumbnailFailure)
+    }
+
+    private nonisolated enum MetadataResult: Sendable {
+        case success(AssetDetail)
+        case failure(ThumbnailFailure)
+        case skipped
+    }
+
+    private nonisolated struct AssetCacheResult: Sendable {
+        let thumbnailRecord: LibraryIndexDerivativeRecord?
+        let assetDetail: AssetDetail?
+        let failures: [ThumbnailFailure]
+    }
+
+    private nonisolated static func cache(
+        _ asset: LibraryIndexAssetRecord,
+        needsThumbnail: Bool,
+        needsMetadata: Bool,
+        endpoint: URL,
+        accessToken: String,
+        directory: URL,
+        assetDetails: (any AssetDetailReading)?
+    ) async throws -> AssetCacheResult {
+        async let thumbnailResult = cacheThumbnail(
+            asset,
+            needed: needsThumbnail,
+            endpoint: endpoint,
+            accessToken: accessToken,
+            directory: directory
+        )
+        async let metadataResult = cacheMetadata(
+            asset,
+            needed: needsMetadata,
+            assetDetails: assetDetails
+        )
+        let (thumbnail, metadata) = try await (thumbnailResult, metadataResult)
+
+        var thumbnailRecord: LibraryIndexDerivativeRecord?
+        var assetDetail: AssetDetail?
+        var failures: [ThumbnailFailure] = []
+        if let thumbnail {
+            switch thumbnail {
+            case let .success(record):
+                thumbnailRecord = record
+            case let .failure(failure):
+                failures.append(failure)
+            }
+        }
+        switch metadata {
+        case let .success(detail):
+            assetDetail = detail
+        case let .failure(failure):
+            failures.append(failure)
+        case .skipped:
+            break
+        }
+        return .init(
+            thumbnailRecord: thumbnailRecord,
+            assetDetail: assetDetail,
+            failures: failures
+        )
+    }
+
+    private nonisolated static func cacheThumbnail(
+        _ asset: LibraryIndexAssetRecord,
+        needed: Bool,
+        endpoint: URL,
+        accessToken: String,
+        directory: URL
+    ) async throws -> DownloadResult? {
+        guard needed else { return nil }
+        do {
+            return try await download(asset, endpoint, accessToken, directory)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            return .failure(thumbnailFailure(
+                asset: asset,
+                requestURL: nil,
+                reason: "thumbnail-\(error.localizedDescription)"
+            ))
+        }
+    }
+
+    private nonisolated static func cacheMetadata(
+        _ asset: LibraryIndexAssetRecord,
+        needed: Bool,
+        assetDetails: (any AssetDetailReading)?
+    ) async throws -> MetadataResult {
+        guard needed, let assetDetails else { return .skipped }
+        do {
+            let detail = try await assetDetails.assetDetail(id: asset.id)
+            return .success(detail)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            logger.error(
+                "Asset metadata unavailable asset=\(asset.id.prefix(8), privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+            )
+            return .failure(thumbnailFailure(
+                asset: asset,
+                requestURL: nil,
+                reason: "metadata-\(error.localizedDescription)"
+            ))
+        }
     }
 
     private nonisolated static func download(

@@ -16,6 +16,7 @@ struct AssetViewerView: View {
     @State private var chromeVisible = true
     @State private var showsInfo = false
     @State private var detailStates: [String: AssetViewerDetailState] = [:]
+    @State private var refreshedDetailAssetIDs: Set<String> = []
     @State private var previewMetadataByAssetID: [String: AssetViewerPreviewMetadata] = [:]
     @State private var neighborLoadTask: Task<Void, Never>?
     @State private var infoContentHeight: CGFloat = 220
@@ -729,27 +730,34 @@ struct AssetViewerView: View {
     }
 
     private func loadAssetDetail(_ assetID: String) async {
-        if case .loaded? = detailStates[assetID] {
-            return
+        guard !refreshedDetailAssetIDs.contains(assetID) else { return }
+        let cachedDetail = await assetDetails.cachedAssetDetail(id: assetID)
+        guard !Task.isCancelled else { return }
+        if let cachedDetail {
+            detailStates[assetID] = .loaded(cachedDetail)
+        } else {
+            detailStates[assetID] = .loading
         }
-        detailStates[assetID] = .loading
         do {
             let detail = try await assetDetails.assetDetail(id: assetID)
             guard !Task.isCancelled else { return }
             detailStates[assetID] = .loaded(detail)
+            refreshedDetailAssetIDs.insert(assetID)
         } catch is CancellationError {
-            if case .loading? = detailStates[assetID] {
+            if cachedDetail == nil, case .loading? = detailStates[assetID] {
                 detailStates[assetID] = .idle
             }
             return
         } catch {
             guard !Task.isCancelled else {
-                if case .loading? = detailStates[assetID] {
+                if cachedDetail == nil, case .loading? = detailStates[assetID] {
                     detailStates[assetID] = .idle
                 }
                 return
             }
-            detailStates[assetID] = .failed(error.localizedDescription)
+            if cachedDetail == nil {
+                detailStates[assetID] = .failed(error.localizedDescription)
+            }
         }
     }
 
@@ -759,6 +767,7 @@ struct AssetViewerView: View {
 
     private func retryDetail(for assetID: String) {
         guard assetID == session.selectedAssetID else { return }
+        refreshedDetailAssetIDs.remove(assetID)
         detailStates[assetID] = .idle
         Task { await loadAssetDetail(assetID) }
     }

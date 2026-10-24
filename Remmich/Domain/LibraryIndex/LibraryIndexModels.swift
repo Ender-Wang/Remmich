@@ -243,6 +243,10 @@ nonisolated protocol LibraryIndexStoring: Sendable {
         scope: MediaAccountScope
     ) async throws
     func clearDerivatives(scope: MediaAccountScope, kinds: Set<MediaDerivative>) async throws
+    func cachedAssetDetail(id: String, scope: MediaAccountScope) async throws -> AssetDetail?
+    func cachedAssetDetailIDs(scope: MediaAccountScope) async throws -> Set<String>
+    func upsert(assetDetail: AssetDetail, scope: MediaAccountScope) async throws
+    func clearAssetDetails(scope: MediaAccountScope) async throws
     func storageReport(scope: MediaAccountScope) async throws -> LibraryIndexStorageReport
     func storedAccounts() async throws -> [StoredLibraryAccount]
     func removeAccount(namespace: String) async throws

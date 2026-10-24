@@ -2,7 +2,7 @@ import Foundation
 import SQLite3
 
 actor SQLiteLibraryIndexStore: LibraryIndexStoring {
-    static let currentSchemaVersion = 2
+    static let currentSchemaVersion = 3
 
     private let databaseURL: URL
     private var connection: SQLiteConnection?
@@ -274,6 +274,16 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
                 "DELETE FROM generations WHERE scope = ? AND generation <> ?",
                 [.text(scope.cacheNamespace), .int64(generation)]
             )
+            try database.execute(
+                """
+                DELETE FROM asset_details
+                WHERE scope = ? AND asset_id NOT IN (
+                    SELECT asset_id FROM assets WHERE scope = ? AND generation = ? AND tombstone = 0
+                )
+                """,
+                [.text(scope.cacheNamespace), .text(scope.cacheNamespace), .int64(generation)]
+            )
+            try pruneUnusedDetailStrings(scope: scope, database: database)
         }
         return .init(
             generation: generation,
@@ -424,6 +434,136 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
         )
     }
 
+    func cachedAssetDetail(id: String, scope: MediaAccountScope) async throws -> AssetDetail? {
+        let database = try preparedDatabase(scope: scope)
+        return try database.queryOne(
+            """
+            SELECT details.asset_id, details.captured_at, details.original_file_name,
+                   mime.value, details.width, details.height, details.description,
+                   camera_make.value, camera_model.value, lens.value,
+                   details.file_size_bytes, details.iso, details.focal_length,
+                   details.aperture, exposure.value, details.latitude, details.longitude,
+                   city.value, state.value, country.value
+            FROM asset_details AS details
+            LEFT JOIN asset_detail_strings AS mime ON mime.id = details.mime_type_id
+            LEFT JOIN asset_detail_strings AS camera_make ON camera_make.id = details.camera_make_id
+            LEFT JOIN asset_detail_strings AS camera_model ON camera_model.id = details.camera_model_id
+            LEFT JOIN asset_detail_strings AS lens ON lens.id = details.lens_model_id
+            LEFT JOIN asset_detail_strings AS exposure ON exposure.id = details.exposure_time_id
+            LEFT JOIN asset_detail_strings AS city ON city.id = details.city_id
+            LEFT JOIN asset_detail_strings AS state ON state.id = details.state_id
+            LEFT JOIN asset_detail_strings AS country ON country.id = details.country_id
+            WHERE details.scope = ? AND details.asset_id = ?
+            """,
+            [.text(scope.cacheNamespace), .text(id)]
+        ) { row in
+            AssetDetail(
+                id: row.text(0), capturedAt: row.date(1), originalFileName: row.text(2),
+                originalMimeType: row.optionalText(3), width: row.optionalInt(4),
+                height: row.optionalInt(5), description: row.optionalText(6),
+                cameraMake: row.optionalText(7), cameraModel: row.optionalText(8),
+                lensModel: row.optionalText(9), fileSizeBytes: row.optionalInt(10),
+                iso: row.optionalInt(11), focalLength: row.optionalDouble(12),
+                aperture: row.optionalDouble(13), exposureTime: row.optionalText(14),
+                latitude: row.optionalDouble(15), longitude: row.optionalDouble(16),
+                city: row.optionalText(17), state: row.optionalText(18),
+                country: row.optionalText(19)
+            )
+        }
+    }
+
+    func cachedAssetDetailIDs(scope: MediaAccountScope) async throws -> Set<String> {
+        let database = try preparedDatabase(scope: scope)
+        return try Set(database.query(
+            "SELECT asset_id FROM asset_details WHERE scope = ?",
+            [.text(scope.cacheNamespace)]
+        ) { row in
+            row.text(0)
+        })
+    }
+
+    func upsert(assetDetail detail: AssetDetail, scope: MediaAccountScope) async throws {
+        let database = try preparedDatabase(scope: scope)
+        try database.transaction {
+            let mimeTypeID = try intern(
+                detail.originalMimeType, kind: "mime", scope: scope, database: database
+            )
+            let cameraMakeID = try intern(
+                detail.cameraMake, kind: "camera-make", scope: scope, database: database
+            )
+            let cameraModelID = try intern(
+                detail.cameraModel, kind: "camera-model", scope: scope, database: database
+            )
+            let lensModelID = try intern(
+                detail.lensModel, kind: "lens-model", scope: scope, database: database
+            )
+            let exposureTimeID = try intern(
+                detail.exposureTime, kind: "exposure-time", scope: scope, database: database
+            )
+            let cityID = try intern(detail.city, kind: "city", scope: scope, database: database)
+            let stateID = try intern(detail.state, kind: "state", scope: scope, database: database)
+            let countryID = try intern(
+                detail.country, kind: "country", scope: scope, database: database
+            )
+            try database.execute(
+                """
+                INSERT INTO asset_details(
+                    scope, asset_id, captured_at, original_file_name, mime_type_id,
+                    width, height, description, camera_make_id, camera_model_id,
+                    lens_model_id, file_size_bytes, iso, focal_length, aperture,
+                    exposure_time_id, latitude, longitude, city_id, state_id, country_id,
+                    cached_at
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(scope, asset_id) DO UPDATE SET
+                    captured_at = excluded.captured_at,
+                    original_file_name = excluded.original_file_name,
+                    mime_type_id = excluded.mime_type_id,
+                    width = excluded.width,
+                    height = excluded.height,
+                    description = excluded.description,
+                    camera_make_id = excluded.camera_make_id,
+                    camera_model_id = excluded.camera_model_id,
+                    lens_model_id = excluded.lens_model_id,
+                    file_size_bytes = excluded.file_size_bytes,
+                    iso = excluded.iso,
+                    focal_length = excluded.focal_length,
+                    aperture = excluded.aperture,
+                    exposure_time_id = excluded.exposure_time_id,
+                    latitude = excluded.latitude,
+                    longitude = excluded.longitude,
+                    city_id = excluded.city_id,
+                    state_id = excluded.state_id,
+                    country_id = excluded.country_id,
+                    cached_at = excluded.cached_at
+                """,
+                [
+                    .text(scope.cacheNamespace), .text(detail.id), .date(detail.capturedAt),
+                    .text(detail.originalFileName), .optionalInt64(mimeTypeID),
+                    .optionalInt(detail.width), .optionalInt(detail.height),
+                    .optionalText(detail.description), .optionalInt64(cameraMakeID),
+                    .optionalInt64(cameraModelID), .optionalInt64(lensModelID),
+                    .optionalInt(detail.fileSizeBytes), .optionalInt(detail.iso),
+                    .optionalDouble(detail.focalLength), .optionalDouble(detail.aperture),
+                    .optionalInt64(exposureTimeID), .optionalDouble(detail.latitude),
+                    .optionalDouble(detail.longitude), .optionalInt64(cityID),
+                    .optionalInt64(stateID), .optionalInt64(countryID), .date(Date()),
+                ]
+            )
+            try pruneUnusedDetailStrings(scope: scope, database: database)
+        }
+    }
+
+    func clearAssetDetails(scope: MediaAccountScope) async throws {
+        let database = try preparedDatabase(scope: scope)
+        try database.transaction {
+            try database.execute(
+                "DELETE FROM asset_details WHERE scope = ?",
+                [.text(scope.cacheNamespace)]
+            )
+            try pruneUnusedDetailStrings(scope: scope, database: database)
+        }
+    }
+
     func replace(
         derivatives: [LibraryIndexDerivativeRecord],
         kind: MediaDerivative,
@@ -550,7 +690,10 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
         let database = try database()
         try migrate(database)
         try database.transaction {
-            for table in ["derivatives", "grouped_catalogs", "assets", "generations", "sync_state", "scopes"] {
+            for table in [
+                "asset_details", "asset_detail_strings", "derivatives", "grouped_catalogs",
+                "assets", "generations", "sync_state", "scopes",
+            ] {
                 try database.execute(
                     "DELETE FROM \(table) WHERE scope = ?",
                     [.text(namespace)]
@@ -713,6 +856,61 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
                 try database.execute("ALTER TABLE assets ADD COLUMN thumbhash TEXT")
                 try database.execute("PRAGMA user_version = 2")
             }
+            version = 2
+        }
+        if version < 3 {
+            try database.transaction {
+                try database.execute("""
+                CREATE TABLE IF NOT EXISTS asset_detail_strings(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    scope TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    value TEXT NOT NULL,
+                    UNIQUE(scope, kind, value),
+                    FOREIGN KEY(scope) REFERENCES scopes(scope) ON DELETE CASCADE
+                )
+                """)
+                try database.execute("""
+                CREATE TABLE IF NOT EXISTS asset_details(
+                    scope TEXT NOT NULL,
+                    asset_id TEXT NOT NULL,
+                    captured_at REAL NOT NULL,
+                    original_file_name TEXT NOT NULL,
+                    mime_type_id INTEGER,
+                    width INTEGER,
+                    height INTEGER,
+                    description TEXT,
+                    camera_make_id INTEGER,
+                    camera_model_id INTEGER,
+                    lens_model_id INTEGER,
+                    file_size_bytes INTEGER,
+                    iso INTEGER,
+                    focal_length REAL,
+                    aperture REAL,
+                    exposure_time_id INTEGER,
+                    latitude REAL,
+                    longitude REAL,
+                    city_id INTEGER,
+                    state_id INTEGER,
+                    country_id INTEGER,
+                    cached_at REAL NOT NULL,
+                    PRIMARY KEY(scope, asset_id),
+                    FOREIGN KEY(scope) REFERENCES scopes(scope) ON DELETE CASCADE,
+                    FOREIGN KEY(mime_type_id) REFERENCES asset_detail_strings(id),
+                    FOREIGN KEY(camera_make_id) REFERENCES asset_detail_strings(id),
+                    FOREIGN KEY(camera_model_id) REFERENCES asset_detail_strings(id),
+                    FOREIGN KEY(lens_model_id) REFERENCES asset_detail_strings(id),
+                    FOREIGN KEY(exposure_time_id) REFERENCES asset_detail_strings(id),
+                    FOREIGN KEY(city_id) REFERENCES asset_detail_strings(id),
+                    FOREIGN KEY(state_id) REFERENCES asset_detail_strings(id),
+                    FOREIGN KEY(country_id) REFERENCES asset_detail_strings(id)
+                )
+                """)
+                try database.execute(
+                    "CREATE INDEX IF NOT EXISTS asset_details_scope_cached ON asset_details(scope, cached_at)"
+                )
+                try database.execute("PRAGMA user_version = 3")
+            }
         }
     }
 
@@ -745,6 +943,47 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
         guard state == "building" else {
             throw LibraryIndexStoreError.invalidGeneration(generation)
         }
+    }
+
+    private func intern(
+        _ value: String?,
+        kind: String,
+        scope: MediaAccountScope,
+        database: SQLiteConnection
+    ) throws -> Int64? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty
+        else { return nil }
+        try database.execute(
+            "INSERT OR IGNORE INTO asset_detail_strings(scope, kind, value) VALUES(?, ?, ?)",
+            [.text(scope.cacheNamespace), .text(kind), .text(value)]
+        )
+        return try database.scalarInt64(
+            "SELECT id FROM asset_detail_strings WHERE scope = ? AND kind = ? AND value = ?",
+            [.text(scope.cacheNamespace), .text(kind), .text(value)]
+        )
+    }
+
+    private func pruneUnusedDetailStrings(
+        scope: MediaAccountScope,
+        database: SQLiteConnection
+    ) throws {
+        try database.execute(
+            """
+            DELETE FROM asset_detail_strings
+            WHERE scope = ? AND id NOT IN (
+                SELECT mime_type_id FROM asset_details WHERE scope = ?
+                UNION SELECT camera_make_id FROM asset_details WHERE scope = ?
+                UNION SELECT camera_model_id FROM asset_details WHERE scope = ?
+                UNION SELECT lens_model_id FROM asset_details WHERE scope = ?
+                UNION SELECT exposure_time_id FROM asset_details WHERE scope = ?
+                UNION SELECT city_id FROM asset_details WHERE scope = ?
+                UNION SELECT state_id FROM asset_details WHERE scope = ?
+                UNION SELECT country_id FROM asset_details WHERE scope = ?
+            )
+            """,
+            Array(repeating: .text(scope.cacheNamespace), count: 9)
+        )
     }
 
     private func readAssets(
@@ -1065,6 +1304,10 @@ private nonisolated struct SQLiteRow {
     func optionalDate(_ index: Int32) -> Date? {
         sqlite3_column_type(handle, index) == SQLITE_NULL ? nil : date(index)
     }
+
+    func optionalDouble(_ index: Int32) -> Double? {
+        sqlite3_column_type(handle, index) == SQLITE_NULL ? nil : double(index)
+    }
 }
 
 private nonisolated enum SQLiteValue {
@@ -1095,6 +1338,14 @@ private nonisolated enum SQLiteValue {
 
     static func optionalInt(_ value: Int?) -> Self {
         value.map(int) ?? .null
+    }
+
+    static func optionalInt64(_ value: Int64?) -> Self {
+        value.map(int64) ?? .null
+    }
+
+    static func optionalDouble(_ value: Double?) -> Self {
+        value.map(double) ?? .null
     }
 }
 

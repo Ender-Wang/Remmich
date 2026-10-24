@@ -257,11 +257,11 @@ struct AccountSettingsView: View {
             Text("This removes the local index and cached media for \(account.serverIdentity). It does not change the Immich server.")
         }
         .confirmationDialog(
-            "Rebuild Thumbnail Cache?",
+            "Rebuild Offline Cache?",
             isPresented: $showsThumbnailRebuildConfirmation,
             titleVisibility: .visible
         ) {
-            Button("Rebuild Thumbnail Cache", role: .destructive) {
+            Button("Rebuild Offline Cache", role: .destructive) {
                 libraryIndex.rebuildThumbnailCache()
             }
             Button("Cancel", role: .cancel) {}
@@ -269,16 +269,16 @@ struct AccountSettingsView: View {
             Text("Remmich keeps the current cache available while downloading and verifying fresh thumbnails, then replaces it only after the rebuild succeeds. It does not change the Immich server.")
         }
         .confirmationDialog(
-            "Clear Thumbnail Cache?",
+            "Clear Offline Cache?",
             isPresented: $showsThumbnailClearConfirmation,
             titleVisibility: .visible
         ) {
-            Button("Clear Thumbnails", role: .destructive) {
+            Button("Clear Offline Cache", role: .destructive) {
                 libraryIndex.clearThumbnails()
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This removes all locally cached timeline thumbnails and turns off Auto-warm Timeline Thumbnails. It does not change the Immich server or metadata index.")
+            Text("This removes cached timeline thumbnails and asset Info, and turns off automatic caching. It does not change the Immich server or the timeline index.")
         }
         .task { libraryIndex.refreshStoredAccounts() }
         .task(id: updatesLibraryIndexClock) {
@@ -544,7 +544,7 @@ struct AccountSettingsView: View {
                             reduceMotion ? nil : .smooth(duration: 0.22),
                             value: displayedThumbnailFractionCompleted
                         )
-                        .accessibilityLabel("Timeline thumbnail caching progress")
+                        .accessibilityLabel("Offline thumbnail and metadata caching progress")
                         .accessibilityValue(thumbnailWarmingProgressText)
                     VStack(alignment: .leading, spacing: 6) {
                         Text(thumbnailWarmingProgressText)
@@ -562,7 +562,7 @@ struct AccountSettingsView: View {
                     set: { libraryIndex.setThumbnailWarmingEnabled($0) }
                 )
             ) {
-                Text("Auto-cache Thumbnails")
+                Text("Auto-cache Thumbnails & Info")
                     .bold()
             }
             settingsTripleActionRow {
@@ -580,7 +580,7 @@ struct AccountSettingsView: View {
                     showsThumbnailClearConfirmation = true
                 }
             }
-            Text("The metadata index is account-scoped and remains available when thumbnail bytes are cleared.")
+            Text("The timeline index remains available when cached thumbnails and asset Info are cleared.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
             if !retainedAccounts.isEmpty {
@@ -1093,7 +1093,7 @@ struct AccountSettingsView: View {
             completed: displayedThumbnailCompletedCount,
             total: displayedThumbnailTotalCount
         )
-        return "\(percentage)% (\(displayedThumbnailCompletedCount.formatted())/\(displayedThumbnailTotalCount.formatted())) thumbnails cached"
+        return "\(percentage)% (\(displayedThumbnailCompletedCount.formatted())/\(displayedThumbnailTotalCount.formatted())) thumbnails with metadata cached"
     }
 
     private var displayedThumbnailCompletedCount: Int {
@@ -1134,19 +1134,22 @@ struct AccountSettingsView: View {
 
     private var thumbnailCacheInventory: String {
         let hasLiveInventory = libraryIndex.thumbnailWarmingEligibleCount > 0
-        let count = hasLiveInventory
-            ? libraryIndex.thumbnailWarmingCachedCount
+        let thumbnailCount = hasLiveInventory
+            ? libraryIndex.thumbnailWarmingThumbnailCount
             : libraryIndex.storageReport.derivativeCount
+        let metadataCount = hasLiveInventory
+            ? libraryIndex.thumbnailWarmingMetadataCount
+            : 0
         let bytes = hasLiveInventory
             ? libraryIndex.thumbnailWarmingCachedBytes
             : libraryIndex.storageReport.derivativeBytes
-        return "\(count.formatted()) cached · \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))"
+        return "\(thumbnailCount.formatted()) thumbnails · \(metadataCount.formatted()) metadata · \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))"
     }
 
     private var thumbnailCacheSizeEstimate: String? {
         let hasLiveInventory = libraryIndex.thumbnailWarmingEligibleCount > 0
         let count = hasLiveInventory
-            ? libraryIndex.thumbnailWarmingCachedCount
+            ? libraryIndex.thumbnailWarmingThumbnailCount
             : libraryIndex.storageReport.derivativeCount
         let bytes = hasLiveInventory
             ? libraryIndex.thumbnailWarmingCachedBytes

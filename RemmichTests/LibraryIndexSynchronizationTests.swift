@@ -360,6 +360,59 @@ struct LibraryIndexSynchronizationTests {
         #expect(await recorder.values == [result])
     }
 
+    @Test func thumbnailWarmingCompletesOnlyAfterMetadataIsCached() async throws {
+        let fixture = try IndexFixture()
+        defer { fixture.cleanup() }
+        let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        let asset = Self.record(id: "asset", bucket: "2026-10-01")
+        let generation = try await store.beginGeneration(scope: Self.scope)
+        try await store.upsert(assets: [asset], generation: generation, scope: Self.scope)
+        _ = try await store.acceptGeneration(
+            generation,
+            watermark: nil,
+            historicalCursor: nil,
+            expectedAssetCount: 1,
+            scope: Self.scope
+        )
+        try await store.upsert(
+            derivatives: [
+                .init(
+                    assetID: asset.id,
+                    derivative: .thumbnail,
+                    pixelSize: nil,
+                    sourceRevision: asset.updatedAt.ISO8601Format(),
+                    relativeFileKey: "thumbnail/asset.jpg",
+                    byteCount: 100,
+                    digest: "digest",
+                    isVerified: true,
+                    lastAccessedAt: .now,
+                    completedAt: .now
+                ),
+            ],
+            scope: Self.scope
+        )
+        let details = AssetDetailFixtureSource()
+        let cache = LibraryThumbnailCache(
+            store: store,
+            rootURL: fixture.cacheURL,
+            assetDetails: details
+        )
+
+        let result = try await cache.warm(
+            assets: [asset],
+            scope: Self.scope,
+            endpoint: #require(URL(string: "https://example.com/api")),
+            accessToken: "token"
+        )
+
+        #expect(result.cachedCount == 1)
+        #expect(result.thumbnailCachedCount == 1)
+        #expect(result.metadataCachedCount == 1)
+        #expect(result.processedCount == 1)
+        #expect(try await store.cachedAssetDetailIDs(scope: Self.scope) == [asset.id])
+        #expect(await details.requestedIDs == [asset.id])
+    }
+
     @Test func failedThumbnailRebuildKeepsExistingCache() async throws {
         let fixture = try IndexFixture()
         defer { fixture.cleanup() }
@@ -598,6 +651,36 @@ private actor ThumbnailWarmProgressRecorder {
 
     func append(_ progress: LibraryThumbnailCache.WarmProgress) {
         values.append(progress)
+    }
+}
+
+private actor AssetDetailFixtureSource: AssetDetailReading {
+    private(set) var requestedIDs: [String] = []
+
+    func assetDetail(id: String) -> AssetDetail {
+        requestedIDs.append(id)
+        return AssetDetail(
+            id: id,
+            capturedAt: Date(timeIntervalSince1970: 100),
+            originalFileName: "\(id).jpg",
+            originalMimeType: "image/jpeg",
+            width: 1200,
+            height: 1800,
+            description: nil,
+            cameraMake: "Nikon",
+            cameraModel: "NIKON Z f",
+            lensModel: "NIKKOR Z 40mm",
+            fileSizeBytes: 1_000_000,
+            iso: 100,
+            focalLength: 40,
+            aperture: 2,
+            exposureTime: "1/250",
+            latitude: nil,
+            longitude: nil,
+            city: nil,
+            state: nil,
+            country: nil
+        )
     }
 }
 

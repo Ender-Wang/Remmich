@@ -55,6 +55,8 @@ final class LibraryIndexController {
     )
     private(set) var thumbnailWarmingStatus: ThumbnailWarmingStatus = .off
     private(set) var thumbnailWarmingCachedCount = 0
+    private(set) var thumbnailWarmingThumbnailCount = 0
+    private(set) var thumbnailWarmingMetadataCount = 0
     private(set) var thumbnailWarmingCachedBytes: Int64 = 0
     private(set) var thumbnailWarmingEligibleCount = 0
     private(set) var thumbnailWarmingProcessedCount = 0
@@ -90,12 +92,13 @@ final class LibraryIndexController {
     init(
         source: any TimelineReading,
         store: SQLiteLibraryIndexStore = .init(),
-        media: MediaLibraryController? = nil
+        media: MediaLibraryController? = nil,
+        assetDetails: (any AssetDetailReading)? = nil
     ) {
         self.store = store
         self.media = media
         synchronizer = LibraryIndexSynchronizer(source: source, store: store)
-        thumbnailCache = LibraryThumbnailCache(store: store)
+        thumbnailCache = LibraryThumbnailCache(store: store, assetDetails: assetDetails)
         thumbnailWarmingStatus = thumbnailWarmingEnabled ? .waiting : .off
     }
 
@@ -143,10 +146,12 @@ final class LibraryIndexController {
         let failedAt = thumbnailWarmingFailedAt?.ISO8601Format() ?? "unknown"
         let endpoint = endpoint?.absoluteString ?? "unavailable"
         let heading = """
-        Remmich thumbnail cache failure
+        Remmich offline asset cache failure
         Failed at: \(failedAt)
         Endpoint: \(endpoint)
-        Progress: \(thumbnailWarmingCachedCount)/\(thumbnailWarmingEligibleCount) thumbnails
+        Progress: \(thumbnailWarmingCachedCount)/\(thumbnailWarmingEligibleCount) thumbnail and metadata pairs
+        Thumbnails: \(thumbnailWarmingThumbnailCount)
+        Metadata: \(thumbnailWarmingMetadataCount)
         Failure: \(message)
         """
         guard !thumbnailWarmingFailures.isEmpty else { return heading }
@@ -236,9 +241,9 @@ final class LibraryIndexController {
                 return nil
             }
             storageReport = restoredStorageReport
-            let cachedProgress = LibraryThumbnailCache.cachedProgress(
+            let cachedProgress = try await thumbnailCache.cachedProgress(
                 assets: snapshot.assets,
-                derivatives: snapshot.derivatives
+                scope: nextScope
             )
             applyThumbnailWarmingProgress(cachedProgress)
             if thumbnailWarmingEnabled {
@@ -359,6 +364,8 @@ final class LibraryIndexController {
             media?.clearRegisteredWarmedThumbnails()
             storageReport = await (try? store.storageReport(scope: scope)) ?? storageReport
             thumbnailWarmingCachedCount = 0
+            thumbnailWarmingThumbnailCount = 0
+            thumbnailWarmingMetadataCount = 0
             thumbnailWarmingCachedBytes = 0
             thumbnailWarmingEligibleCount = 0
             thumbnailWarmingProcessedCount = 0
@@ -396,6 +403,8 @@ final class LibraryIndexController {
                 playbackBytes: 0
             )
             thumbnailWarmingCachedCount = 0
+            thumbnailWarmingThumbnailCount = 0
+            thumbnailWarmingMetadataCount = 0
             thumbnailWarmingCachedBytes = 0
             thumbnailWarmingEligibleCount = 0
             thumbnailWarmingProcessedCount = 0
@@ -495,6 +504,8 @@ final class LibraryIndexController {
         lastUpdatedAt = nil
         indexFailedAt = nil
         thumbnailWarmingCachedCount = 0
+        thumbnailWarmingThumbnailCount = 0
+        thumbnailWarmingMetadataCount = 0
         thumbnailWarmingCachedBytes = 0
         thumbnailWarmingEligibleCount = 0
         thumbnailWarmingProcessedCount = 0
@@ -700,6 +711,8 @@ final class LibraryIndexController {
         let currentWarmingRunID = warmingRunID
         thumbnailWarmingStatus = .warming
         thumbnailWarmingCachedCount = 0
+        thumbnailWarmingThumbnailCount = 0
+        thumbnailWarmingMetadataCount = 0
         thumbnailWarmingCachedBytes = 0
         thumbnailWarmingEligibleCount = 0
         thumbnailWarmingProcessedCount = 0
@@ -726,7 +739,7 @@ final class LibraryIndexController {
                     return
                 }
                 Self.logger.info(
-                    "Thumbnail warming started eligible=\(snapshot.assets.count) workers=2"
+                    "Offline asset caching started eligible=\(snapshot.assets.count) workers=2"
                 )
                 let progress: @Sendable (LibraryThumbnailCache.WarmProgress) async -> Void = { [weak self] progress in
                     await self?.publishThumbnailWarmingProgress(
@@ -771,7 +784,7 @@ final class LibraryIndexController {
                 }
                 try await media?.registerWarmedThumbnails(cache.availableThumbnails(scope: scope))
                 Self.logger.info(
-                    "Thumbnail warming completed cached=\(finalProgress.cachedCount) eligible=\(finalProgress.eligibleCount) unavailable=\(unavailableCount) bytes=\(finalProgress.cachedBytes) elapsedMs=\(Self.elapsedMilliseconds(since: startedAt))"
+                    "Offline asset caching completed paired=\(finalProgress.cachedCount) thumbnails=\(finalProgress.thumbnailCachedCount) metadata=\(finalProgress.metadataCachedCount) eligible=\(finalProgress.eligibleCount) unavailable=\(unavailableCount) bytes=\(finalProgress.cachedBytes) elapsedMs=\(Self.elapsedMilliseconds(since: startedAt))"
                 )
             } catch {
                 if Task.isCancelled {
@@ -840,12 +853,14 @@ final class LibraryIndexController {
         }
         lastWarmingLoggedMilestone = milestone
         Self.logger.info(
-            "Thumbnail warming progress cached=\(progress.cachedCount) eligible=\(progress.eligibleCount) bytes=\(progress.cachedBytes) processed=\(progress.processedCount) pending=\(progress.pendingCount) percent=\(percentage)"
+            "Offline asset caching progress paired=\(progress.cachedCount) thumbnails=\(progress.thumbnailCachedCount) metadata=\(progress.metadataCachedCount) eligible=\(progress.eligibleCount) bytes=\(progress.cachedBytes) processed=\(progress.processedCount) pending=\(progress.pendingCount) percent=\(percentage)"
         )
     }
 
     private func applyThumbnailWarmingProgress(_ progress: LibraryThumbnailCache.WarmProgress) {
         thumbnailWarmingCachedCount = progress.cachedCount
+        thumbnailWarmingThumbnailCount = progress.thumbnailCachedCount
+        thumbnailWarmingMetadataCount = progress.metadataCachedCount
         thumbnailWarmingCachedBytes = progress.cachedBytes
         thumbnailWarmingEligibleCount = progress.eligibleCount
         thumbnailWarmingProcessedCount = progress.processedCount

@@ -57,7 +57,14 @@ nonisolated protocol CompleteTimelineCatalogReading: TimelineReading {
 }
 
 nonisolated protocol AssetDetailReading: Sendable {
+    func cachedAssetDetail(id: String) async -> AssetDetail?
     func assetDetail(id: String) async throws -> AssetDetail
+}
+
+extension AssetDetailReading {
+    nonisolated func cachedAssetDetail(id _: String) async -> AssetDetail? {
+        nil
+    }
 }
 
 nonisolated struct VideoPage: Sendable {

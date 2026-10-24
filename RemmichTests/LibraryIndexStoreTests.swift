@@ -246,6 +246,36 @@ struct LibraryIndexStoreTests {
         #expect(try await store.snapshot(scope: second)?.derivatives.count == 1)
     }
 
+    @Test func persistsRichAssetDetailPerAccount() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let scope = Self.scope(userID: "detail-owner")
+        let detail = AssetDetail(
+            id: "asset-detail", capturedAt: Date(timeIntervalSince1970: 100),
+            originalFileName: "DSC_0001.JPG", originalMimeType: "image/jpeg",
+            width: 8256, height: 5504, description: "A bird",
+            cameraMake: "Nikon", cameraModel: "NIKON Z f",
+            lensModel: "NIKKOR Z 180-600mm", fileSizeBytes: 18_300_000,
+            iso: 800, focalLength: 600, aperture: 6.3, exposureTime: "1/2000",
+            latitude: 31.2, longitude: 121.5, city: "Shanghai",
+            state: "Shanghai", country: "China"
+        )
+
+        let writer = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        try await writer.upsert(assetDetail: detail, scope: scope)
+        let reader = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        #expect(try await reader.cachedAssetDetail(id: detail.id, scope: scope) == detail)
+        #expect(try await reader.cachedAssetDetailIDs(scope: scope) == [detail.id])
+        #expect(try await reader.cachedAssetDetail(id: detail.id, scope: Self.scope(userID: "other")) == nil)
+
+        try await reader.clearAssetDetails(scope: scope)
+        #expect(try await reader.cachedAssetDetailIDs(scope: scope).isEmpty)
+        try await writer.upsert(assetDetail: detail, scope: scope)
+
+        try await reader.removeAccount(namespace: scope.cacheNamespace)
+        #expect(try await reader.cachedAssetDetail(id: detail.id, scope: scope) == nil)
+    }
+
     private static func scope(userID: String) -> MediaAccountScope {
         MediaAccountScope(session: .init(
             apiURL: URL(string: "https://example.com/api")!,
