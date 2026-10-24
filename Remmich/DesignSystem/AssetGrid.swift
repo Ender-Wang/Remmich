@@ -203,6 +203,7 @@ struct TimelineAssetGrid: View {
                                 transitionNamespace: transitionNamespace,
                                 assetSelected: assetSelected
                             )
+                            .aspectRatio(1, contentMode: .fit)
                         } else {
                             Color.clear
                                 .aspectRatio(1, contentMode: .fit)
@@ -257,6 +258,34 @@ nonisolated enum TimelineGridOrder {
         return rows.reversed().flatMap { row in
             row.map(Optional.some) + Array(repeating: nil, count: columns - row.count)
         }
+    }
+}
+
+nonisolated enum TimelineGridMetrics {
+    static func edgeInset(isPhone: Bool) -> CGFloat {
+        isPhone ? 12 : 20
+    }
+
+    static func horizontalInset(
+        naturalAspectProgress: CGFloat,
+        isPhone: Bool,
+        squareInset: CGFloat
+    ) -> CGFloat {
+        let progress = min(1, max(0, naturalAspectProgress))
+        return squareInset + (edgeInset(isPhone: isPhone) - squareInset) * progress
+    }
+
+    static func itemWidth(
+        rowWidth: CGFloat,
+        columns: Int,
+        spacing: CGFloat,
+        horizontalInset: CGFloat
+    ) -> CGFloat {
+        let columns = max(1, columns)
+        let availableWidth = rowWidth
+            - horizontalInset * 2
+            - CGFloat(columns - 1) * spacing
+        return max(1, availableWidth / CGFloat(columns))
     }
 }
 
@@ -462,6 +491,21 @@ struct TimelineDeterministicAssetRow: View {
     var priority: ImageRequest.Priority = .normal
 
     var body: some View {
+        let progress = min(1, max(0, naturalAspectProgress ?? (assetLayout == .naturalAspect ? 1 : 0)))
+        let horizontalInset = TimelineGridMetrics.horizontalInset(
+            naturalAspectProgress: progress,
+            isPhone: UIDevice.current.userInterfaceIdiom == .phone,
+            squareInset: spacing
+        )
+        let rowWidth = itemSide * CGFloat(assets.count)
+            + spacing * CGFloat(max(0, assets.count - 1))
+        let itemWidth = TimelineGridMetrics.itemWidth(
+            rowWidth: rowWidth,
+            columns: assets.count,
+            spacing: spacing,
+            horizontalInset: horizontalInset
+        )
+
         HStack(spacing: spacing) {
             ForEach(Array(assets.enumerated()), id: \.offset) { _, asset in
                 if let asset {
@@ -469,7 +513,7 @@ struct TimelineDeterministicAssetRow: View {
                         asset: asset,
                         media: media,
                         assetLayout: assetLayout,
-                        naturalAspectProgress: naturalAspectProgress,
+                        naturalAspectProgress: progress,
                         requestSide: requestSide,
                         visibilityChanged: visibilityChanged,
                         viewportChanged: viewportChanged,
@@ -477,7 +521,7 @@ struct TimelineDeterministicAssetRow: View {
                         assetSelected: assetSelected,
                         priority: priority
                     )
-                    .frame(width: itemSide, height: itemSide)
+                    .frame(width: itemWidth, height: itemSide)
                     .background {
                         GeometryReader { geometry in
                             Color.clear.preference(
@@ -492,11 +536,12 @@ struct TimelineDeterministicAssetRow: View {
                     }
                 } else {
                     Color.clear
-                        .frame(width: itemSide, height: itemSide)
+                        .frame(width: itemWidth, height: itemSide)
                         .accessibilityHidden(true)
                 }
             }
         }
+        .padding(.horizontal, horizontalInset)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
@@ -543,6 +588,7 @@ struct TimelineAssetThumbnail: View {
                     imageCornerRadius: DesignMetrics.compactCornerRadius * progress,
                     imageScale: TimelineThumbnailGeometry.imageScale(
                         aspectRatio: asset.aspectRatio,
+                        containerAspectRatio: proxy.size.width / max(1, proxy.size.height),
                         naturalAspectProgress: progress
                     ),
                     priority: priority,
@@ -629,7 +675,6 @@ struct TimelineAssetThumbnail: View {
         }
         .buttonStyle(.plain)
         .assetViewerTransitionSource(assetID: asset.id, namespace: transitionNamespace)
-        .aspectRatio(1, contentMode: .fit)
         .clipped()
         .contentShape(.rect)
         .accessibilityElement(children: .ignore)
@@ -734,11 +779,19 @@ nonisolated enum TimelineThumbnailGeometry {
 
     static func imageScale(
         aspectRatio: Double,
+        containerAspectRatio: CGFloat = 1,
         naturalAspectProgress: CGFloat
     ) -> CGFloat {
-        guard aspectRatio.isFinite, aspectRatio > 0 else { return 1 }
+        guard aspectRatio.isFinite,
+              aspectRatio > 0,
+              containerAspectRatio.isFinite,
+              containerAspectRatio > 0
+        else { return 1 }
         let ratio = CGFloat(aspectRatio)
-        let coverScale = max(ratio, 1 / ratio)
+        let coverScale = max(
+            ratio / containerAspectRatio,
+            containerAspectRatio / ratio
+        )
         let progress = min(1, max(0, naturalAspectProgress))
         return coverScale + (1 - coverScale) * progress
     }

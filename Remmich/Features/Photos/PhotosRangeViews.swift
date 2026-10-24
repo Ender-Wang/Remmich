@@ -1680,7 +1680,7 @@ private struct PhotosRangeCardGrid<Item: Identifiable, Content: View>: View wher
 
 nonisolated enum TimelineRangeGridLayout {
     static func edgeInset(isPhone: Bool) -> CGFloat {
-        isPhone ? 12 : 20
+        TimelineGridMetrics.edgeInset(isPhone: isPhone)
     }
 
     static func cardSide(

@@ -76,6 +76,47 @@ struct PhotosTimelineRegressionTests {
         #expect(PhotosView.naturalAspectProgress(magnification: 1.5, layout: .naturalAspect) == 0)
     }
 
+    @Test func naturalAspectGridAddsDateGroupInsetsWithoutChangingRowHeight() {
+        let rowWidth: CGFloat = 402
+        let columns = 5
+        let spacing: CGFloat = 2
+        let squareItemSide = (rowWidth - CGFloat(columns - 1) * spacing) / CGFloat(columns)
+
+        #expect(TimelineGridMetrics.horizontalInset(
+            naturalAspectProgress: 0,
+            isPhone: true,
+            squareInset: spacing
+        ) == 2)
+        #expect(TimelineGridMetrics.horizontalInset(
+            naturalAspectProgress: 0.5,
+            isPhone: true,
+            squareInset: spacing
+        ) == 7)
+        #expect(TimelineGridMetrics.horizontalInset(
+            naturalAspectProgress: 1,
+            isPhone: true,
+            squareInset: spacing
+        ) == 12)
+        #expect(TimelineGridMetrics.horizontalInset(
+            naturalAspectProgress: 1,
+            isPhone: false,
+            squareInset: spacing
+        ) == 20)
+        #expect(TimelineGridMetrics.itemWidth(
+            rowWidth: rowWidth,
+            columns: columns,
+            spacing: spacing,
+            horizontalInset: spacing
+        ) == 78)
+        #expect(TimelineGridMetrics.itemWidth(
+            rowWidth: rowWidth,
+            columns: columns,
+            spacing: spacing,
+            horizontalInset: 12
+        ) == 74)
+        #expect(squareItemSide == 78.8)
+    }
+
     @Test @MainActor func rotationVisualHandoffEligibilityTracksEachTimeline() {
         let state = TimelineRotationState()
 
