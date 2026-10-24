@@ -350,6 +350,7 @@ struct PhotosView: View {
     @State private var layoutRestoreTask: Task<Void, Never>?
     @State private var pendingViewportAnchor: TimelineViewportAnchor?
     @State private var layoutAnchorID: String?
+    @State private var pinchInteraction = PhotosRangePinchInteraction()
     @State private var compactChrome = false
     @State private var libraryRange: TimelineLibraryRange = .all
     @State private var initialAssetByRoute: [PhotosRangeRoute: String] = [:]
@@ -885,10 +886,10 @@ struct PhotosView: View {
                     .defaultScrollAnchor(.bottom)
                     .scrollPosition($timelinePosition)
                     .scrollEdgeEffectHidden(for: .bottom)
-                    .simultaneousGesture(MagnifyGesture().onEnded { value in
-                        guard let gesture = PhotosPinchGesture(magnification: value.magnification) else { return }
-                        pinchLibraryRange(gesture)
-                    })
+                    .photosRangePinchGesture(
+                        interaction: pinchInteraction,
+                        onPinch: pinchLibraryRange
+                    )
                     .accessibilityAction(named: layoutAccessibilityActionName) {
                         guard libraryRange == .all else { return }
                         let magnification = presentation.preferences.assetLayout == .square ? 0.6 : 1.5

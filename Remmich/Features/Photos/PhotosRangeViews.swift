@@ -86,7 +86,7 @@ nonisolated struct PhotosPinchGesture: Equatable {
 }
 
 @MainActor
-private final class PhotosRangePinchInteraction {
+final class PhotosRangePinchInteraction {
     private var isActive = false
     private var didHandle = false
     private var resetTask: Task<Void, Never>?
@@ -147,7 +147,7 @@ private struct PhotosRangePinchModifier: ViewModifier {
     }
 }
 
-private extension View {
+extension View {
     @ViewBuilder
     func photosRangePinchGesture(
         interaction: PhotosRangePinchInteraction?,
