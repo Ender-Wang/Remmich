@@ -1,4 +1,6 @@
+import AVFAudio
 import AVKit
+import Dispatch
 import OSLog
 import SwiftUI
 
@@ -130,13 +132,16 @@ struct LivePhotoPlaybackView: View {
     let motionAssetID: String
     let media: MediaLibraryController
     let isHeld: Bool
+    let playsWithSound: Bool
     let playbackEnded: () -> Void
+    let soundPlaybackFailed: () -> Void
 
     @State private var playbackState = LivePhotoPlaybackState()
     @State private var player: AVPlayer?
     @State private var preparedItem: AVPlayerItem?
     @State private var retryGeneration = 0
     @State private var playTask: Task<Void, Never>?
+    @State private var audioSession = LivePhotoAudioSessionController()
 
     var body: some View {
         ZStack {
@@ -152,6 +157,22 @@ struct LivePhotoPlaybackView: View {
         }
         .onChange(of: isHeld, initial: true) { _, held in
             handle(playbackState.setHeld(held))
+        }
+        .onChange(of: playsWithSound) { _, enabled in
+            player?.isMuted = true
+            guard playbackState.phase == .playing else {
+                if !enabled {
+                    audioSession.deactivate()
+                }
+                return
+            }
+            if enabled {
+                Task { @MainActor in
+                    await activateSoundIfPossible()
+                }
+            } else {
+                audioSession.deactivate()
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemDidPlayToEndTime)) { notification in
             guard notification.object as AnyObject? === preparedItem else { return }
@@ -215,6 +236,7 @@ struct LivePhotoPlaybackView: View {
 
             let preparedPlayer = AVPlayer(playerItem: item)
             preparedPlayer.actionAtItemEnd = .pause
+            preparedPlayer.isMuted = true
             preparedItem = item
             player = preparedPlayer
             retainedItem = true
@@ -272,6 +294,18 @@ struct LivePhotoPlaybackView: View {
             Self.logger.info(
                 "Live Photo playback started asset=\(motionAssetID.prefix(8), privacy: .private)"
             )
+            if playsWithSound {
+                await activateSoundIfPossible()
+            }
+            guard !Task.isCancelled,
+                  playbackState.phase == .playing,
+                  playbackState.isHeld,
+                  self.player === player,
+                  player.currentItem === preparedItem
+            else {
+                audioSession.deactivate()
+                return
+            }
             player.play()
         }
     }
@@ -282,6 +316,7 @@ struct LivePhotoPlaybackView: View {
         playTask = nil
         player?.pause()
         player?.seek(to: .zero)
+        audioSession.deactivate()
     }
 
     @MainActor
@@ -300,9 +335,103 @@ struct LivePhotoPlaybackView: View {
         player?.pause()
         player?.replaceCurrentItem(with: nil)
         player = nil
+        audioSession.deactivate()
         guard let preparedItem else { return }
         self.preparedItem = nil
         media.releasePlayerItem(preparedItem)
+    }
+
+    @MainActor
+    private func activateSoundIfPossible() async {
+        do {
+            try await audioSession.activate()
+            guard playbackState.phase == .playing,
+                  playbackState.isHeld,
+                  playsWithSound
+            else {
+                audioSession.deactivate()
+                return
+            }
+            player?.isMuted = false
+            Self.logger.info(
+                "Live Photo audio session activated asset=\(motionAssetID.prefix(8), privacy: .private)"
+            )
+        } catch {
+            player?.isMuted = true
+            Self.logger.error(
+                "Live Photo audio session activation failed error=\(error.localizedDescription, privacy: .public)"
+            )
+            soundPlaybackFailed()
+        }
+    }
+}
+
+private final nonisolated class LivePhotoAudioSessionController: @unchecked Sendable {
+    private struct Configuration {
+        let category: AVAudioSession.Category
+        let mode: AVAudioSession.Mode
+        let options: AVAudioSession.CategoryOptions
+    }
+
+    private static let queue = DispatchQueue(
+        label: "io.github.ender-wang.Remmich.live-photo-audio-session"
+    )
+
+    private var previousConfiguration: Configuration?
+    private var isActive = false
+
+    func activate() async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            Self.queue.async { [self] in
+                do {
+                    try activateOnQueue()
+                    continuation.resume()
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    func deactivate() {
+        Self.queue.async { [self] in
+            guard isActive || previousConfiguration != nil else { return }
+            restoreConfiguration(on: .sharedInstance())
+        }
+    }
+
+    private func activateOnQueue() throws {
+        guard !isActive else { return }
+        let session = AVAudioSession.sharedInstance()
+        previousConfiguration = Configuration(
+            category: session.category,
+            mode: session.mode,
+            options: session.categoryOptions
+        )
+
+        do {
+            try session.setCategory(.playback, mode: .moviePlayback)
+            try session.setActive(true)
+            isActive = true
+        } catch {
+            restoreConfiguration(on: session)
+            throw error
+        }
+    }
+
+    private func restoreConfiguration(on session: AVAudioSession) {
+        if isActive {
+            try? session.setActive(false, options: .notifyOthersOnDeactivation)
+        }
+        if let previousConfiguration {
+            try? session.setCategory(
+                previousConfiguration.category,
+                mode: previousConfiguration.mode,
+                options: previousConfiguration.options
+            )
+        }
+        previousConfiguration = nil
+        isActive = false
     }
 }
 

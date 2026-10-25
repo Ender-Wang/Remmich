@@ -602,16 +602,37 @@ final class RemmichUITests: XCTestCase {
         let indicator = app.descendants(matching: .any)["asset-viewer-live-photo-indicator"].firstMatch
         let motion = app.descendants(matching: .any)["asset-viewer-live-photo-player-asset-5"].firstMatch
         XCTAssertTrue(viewer.waitForExistence(timeout: 10))
+        let mediaCenter = viewer.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         XCTAssertTrue(indicator.waitForExistence(timeout: 10))
         XCTAssertEqual(indicator.label, "Live Photo")
+        XCTAssertEqual(indicator.value as? String, "Muted")
         XCTAssertTrue(motion.waitForExistence(timeout: 10))
         XCTAssertTrue(waitUntil(timeout: 10) { motion.value as? String == "Ready" })
 
-        viewer.press(forDuration: 0.6)
+        indicator.tap()
+        XCTAssertTrue(waitUntil(timeout: 2) { indicator.value as? String == "Sound on" })
+
+        mediaCenter.tap()
+        XCTAssertTrue(waitUntil(timeout: 2) { !indicator.isHittable })
+        mediaCenter.tap()
+        XCTAssertTrue(waitUntil(timeout: 2) { indicator.isHittable })
+        XCTAssertEqual(indicator.value as? String, "Sound on")
+
+        mediaCenter.press(forDuration: 0.6)
 
         XCTAssertTrue(waitUntil(timeout: 5) {
             (motion.value as? String)?.contains("played once") == true
         })
+
+        let livePhotoPage = app.descendants(matching: .any)["asset-viewer-page-asset-5"]
+        let photoPage = app.descendants(matching: .any)["asset-viewer-page-asset-6"]
+        livePhotoPage.swipeLeft()
+        XCTAssertTrue(waitUntil(timeout: 5) { photoPage.isHittable })
+        XCTAssertTrue(waitUntil(timeout: 2) { !indicator.exists })
+        photoPage.swipeRight()
+        XCTAssertTrue(waitUntil(timeout: 5) { livePhotoPage.isHittable })
+        XCTAssertTrue(waitUntil(timeout: 2) { indicator.exists && indicator.isHittable })
+        XCTAssertEqual(indicator.value as? String, "Sound on")
     }
 
     @MainActor
@@ -679,7 +700,7 @@ final class RemmichUITests: XCTestCase {
         attachViewerScreenshot("chrome-and-status-hidden")
         let hiddenStatusInk = statusBarInkPixels(in: XCUIScreen.main.screenshot())
         XCTAssertGreaterThan(visibleStatusInk, hiddenStatusInk + 100)
-        XCTAssertEqual(still.frame, initialFrame)
+        assertViewerFrame(still.frame, equals: initialFrame)
 
         still.tap()
         XCTAssertTrue(waitUntil(timeout: 3) { back.exists })
@@ -689,14 +710,14 @@ final class RemmichUITests: XCTestCase {
             statusBarInkPixels(in: XCUIScreen.main.screenshot()),
             hiddenStatusInk + 100
         )
-        XCTAssertEqual(still.frame, initialFrame)
+        assertViewerFrame(still.frame, equals: initialFrame)
 
         still.doubleTap()
         XCTAssertTrue(waitUntil(timeout: 3) { still.value as? String == "Zoomed" })
         Thread.sleep(forTimeInterval: 0.5)
         attachViewerScreenshot("zoomed-chrome-and-status-hidden")
         let zoomedHiddenStatusInk = statusBarInkPixels(in: XCUIScreen.main.screenshot())
-        XCTAssertEqual(still.frame, initialFrame)
+        assertViewerFrame(still.frame, equals: initialFrame)
 
         still.tap()
         XCTAssertTrue(waitUntil(timeout: 3) { back.exists })
@@ -707,7 +728,14 @@ final class RemmichUITests: XCTestCase {
             zoomedHiddenStatusInk + 100
         )
         XCTAssertEqual(still.value as? String, "Zoomed")
-        XCTAssertEqual(still.frame, initialFrame)
+        assertViewerFrame(still.frame, equals: initialFrame)
+    }
+
+    private func assertViewerFrame(_ actual: CGRect, equals expected: CGRect) {
+        XCTAssertEqual(actual.minX, expected.minX, accuracy: 0.5)
+        XCTAssertEqual(actual.minY, expected.minY, accuracy: 0.5)
+        XCTAssertEqual(actual.width, expected.width, accuracy: 0.5)
+        XCTAssertEqual(actual.height, expected.height, accuracy: 0.5)
     }
 
     @MainActor

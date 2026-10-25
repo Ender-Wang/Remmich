@@ -33,6 +33,7 @@ struct AssetViewerView: View {
     @State private var pagerSelectionTask: Task<Void, Never>?
     @State private var isDismissing = false
     @State private var livePhotoPlaybackAssetID: String?
+    @State private var livePhotoSoundEnabled = false
 
     private let controlHitSize: CGFloat = 44
     private let controlVisualSize: CGFloat = 44
@@ -188,6 +189,7 @@ struct AssetViewerView: View {
             pagerSelectionTask?.cancel()
             imageStatusDismissTask?.cancel()
             livePhotoPlaybackAssetID = nil
+            livePhotoSoundEnabled = false
             media.cancelViewerPrefetching()
             visibilityChanged(false)
         }
@@ -389,9 +391,13 @@ struct AssetViewerView: View {
                     motionAssetID: motionAssetID,
                     media: media,
                     isHeld: livePhotoPlaybackAssetID == asset.id,
+                    playsWithSound: livePhotoSoundEnabled,
                     playbackEnded: {
                         guard livePhotoPlaybackAssetID == asset.id else { return }
                         livePhotoPlaybackAssetID = nil
+                    },
+                    soundPlaybackFailed: {
+                        livePhotoSoundEnabled = false
                     }
                 )
                 .frame(width: mediaRect.width, height: mediaRect.height)
@@ -404,16 +410,13 @@ struct AssetViewerView: View {
                let metadata = renderedImageMetadataByAssetID[asset.id]
             {
                 GeometryReader { geometry in
-                    let imageFrame = renderedImageFrame(
-                        metadata: metadata,
-                        containerSize: geometry.size
-                    )
                     let statusPosition = renderedImageStatusPosition(
                         metadata: metadata,
+                        boundingRect: mediaRect,
                         containerSize: geometry.size
                     )
                     let revealEdge = min(
-                        renderedImageBottom(metadata: metadata, containerSize: geometry.size),
+                        renderedImageBottom(metadata: metadata, boundingRect: mediaRect),
                         statusPosition.y - 18
                     )
                     ZStack {
@@ -439,32 +442,12 @@ struct AssetViewerView: View {
                                     y: revealEdge + (geometry.size.height - revealEdge) / 2
                                 )
                         }
-
-                        if asset.livePhotoVideoID != nil {
-                            livePhotoIndicator(isPlaying: livePhotoPlaybackAssetID == asset.id)
-                                .position(
-                                    x: imageFrame.minX + 22,
-                                    y: imageFrame.maxY - 22
-                                )
-                        }
+                        .allowsHitTesting(false)
                     }
                     .frame(width: geometry.size.width, height: geometry.size.height)
                 }
-                .allowsHitTesting(false)
             }
         }
-    }
-
-    private func livePhotoIndicator(isPlaying: Bool) -> some View {
-        Image(systemName: "livephoto")
-            .font(.caption.weight(.semibold))
-            .symbolEffect(.pulse, isActive: isPlaying && !reduceMotion)
-            .frame(width: 32, height: 28)
-            .glassEffect(.regular, in: Capsule())
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Live Photo")
-            .accessibilityHint("Press and hold the photo to play once")
-            .accessibilityIdentifier("asset-viewer-live-photo-indicator")
     }
 
     private func renderedImageStatus(_ metadata: AssetViewerRenderedImageMetadata) -> some View {
@@ -482,9 +465,10 @@ struct AssetViewerView: View {
 
     private func renderedImageStatusPosition(
         metadata: AssetViewerRenderedImageMetadata,
+        boundingRect: CGRect,
         containerSize: CGSize
     ) -> CGPoint {
-        let imageBottom = renderedImageBottom(metadata: metadata, containerSize: containerSize)
+        let imageBottom = renderedImageBottom(metadata: metadata, boundingRect: boundingRect)
         return CGPoint(
             x: containerSize.width / 2,
             y: min(imageBottom + 24, containerSize.height - 52)
@@ -493,26 +477,26 @@ struct AssetViewerView: View {
 
     private func renderedImageBottom(
         metadata: AssetViewerRenderedImageMetadata,
-        containerSize: CGSize
+        boundingRect: CGRect
     ) -> CGFloat {
-        renderedImageFrame(metadata: metadata, containerSize: containerSize).maxY
+        renderedImageFrame(metadata: metadata, boundingRect: boundingRect).maxY
     }
 
     private func renderedImageFrame(
         metadata: AssetViewerRenderedImageMetadata,
-        containerSize: CGSize
+        boundingRect: CGRect
     ) -> CGRect {
         let imageWidth = CGFloat(metadata.pixelSize.width)
         let imageHeight = CGFloat(metadata.pixelSize.height)
         let scale = min(
-            containerSize.width / max(1, imageWidth),
-            containerSize.height / max(1, imageHeight)
+            boundingRect.width / max(1, imageWidth),
+            boundingRect.height / max(1, imageHeight)
         )
         let fittedWidth = imageWidth * scale
         let fittedHeight = imageHeight * scale
         return CGRect(
-            x: (containerSize.width - fittedWidth) / 2,
-            y: (containerSize.height - fittedHeight) / 2,
+            x: boundingRect.midX - fittedWidth / 2,
+            y: boundingRect.midY - fittedHeight / 2,
             width: fittedWidth,
             height: fittedHeight
         )
@@ -531,6 +515,18 @@ struct AssetViewerView: View {
                         )
 
                         Spacer()
+
+                        ZStack {
+                            if selectedAssetSupportsLivePhoto {
+                                livePhotoSoundButton
+                                    .transition(.opacity)
+                            }
+                        }
+                        .frame(width: controlHitSize, height: controlHitSize)
+                        .animation(
+                            reduceMotion ? nil : .easeInOut(duration: 0.2),
+                            value: selectedAssetSupportsLivePhoto
+                        )
                     }
 
                     let contextWidth = min(240, max(120, geometry.size.width - 200))
@@ -566,6 +562,40 @@ struct AssetViewerView: View {
                     .padding(.horizontal, 16)
             }
         }
+    }
+
+    private var selectedAssetSupportsLivePhoto: Bool {
+        session.selectedAsset?.livePhotoVideoID != nil
+    }
+
+    private var livePhotoSoundButton: some View {
+        Button {
+            livePhotoSoundEnabled.toggle()
+        } label: {
+            ZStack(alignment: .bottomLeading) {
+                Image(systemName: "livephoto")
+                    .font(.system(size: 22, weight: .semibold))
+                    .symbolEffect(
+                        .pulse,
+                        isActive: livePhotoPlaybackAssetID == session.selectedAssetID && !reduceMotion
+                    )
+                    .frame(width: controlHitSize, height: controlHitSize)
+
+                Image(systemName: livePhotoSoundEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill")
+                    .font(.system(size: 8, weight: .bold))
+                    .frame(width: 16, height: 16)
+                    .offset(x: 2, y: -2)
+                    .accessibilityHidden(true)
+            }
+            .frame(width: controlHitSize, height: controlHitSize)
+            .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular, in: Circle())
+        .accessibilityLabel("Live Photo")
+        .accessibilityValue(livePhotoSoundEnabled ? "Sound on" : "Muted")
+        .accessibilityHint("Toggles sound for this viewer session. Press and hold the photo to play once.")
+        .accessibilityIdentifier("asset-viewer-live-photo-indicator")
     }
 
     private var selectedAssetDetail: AssetDetail? {
