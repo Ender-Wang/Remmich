@@ -125,8 +125,24 @@ final class MediaLibraryController {
     ) -> ImageRequest? {
         #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("-ui-testing-signed-in") {
-                let data = PreviewMediaFixtures.data(for: descriptor.assetID)
-                var request = ImageRequest(id: "ui-fixture-\(descriptor.assetID)", data: { data })
+                let data = PreviewMediaFixtures.data(
+                    for: descriptor.assetID,
+                    derivative: descriptor.derivative
+                )
+                let delaysFullSize = descriptor.derivative == .fullSize
+                    && ProcessInfo.processInfo.arguments.contains(
+                        "-ui-testing-delay-full-size"
+                    )
+                let target = descriptor.targetPixels.map { "\($0.width)x\($0.height)" } ?? "source"
+                var request = ImageRequest(
+                    id: "ui-fixture-\(descriptor.assetID)-\(descriptor.derivative.rawValue)-\(target)",
+                    data: {
+                        if delaysFullSize {
+                            try await Task.sleep(for: .seconds(2))
+                        }
+                        return data
+                    }
+                )
                 request.priority = priority
                 return request
             }
@@ -223,6 +239,49 @@ final class MediaLibraryController {
             derivative: .preview,
             targetPixels: targetPixels
         )
+    }
+
+    nonisolated static func viewerFullSizeDescriptor(
+        for asset: TimelineAssetSummary,
+        targetPixels: MediaPixelSize
+    ) -> MediaRequestDescriptor {
+        MediaRequestDescriptor(
+            assetID: asset.id,
+            updatedAt: asset.thumbnailRevision,
+            derivative: .fullSize,
+            targetPixels: targetPixels
+        )
+    }
+
+    nonisolated static func viewerOriginalDescriptor(
+        for asset: TimelineAssetSummary
+    ) -> MediaRequestDescriptor {
+        MediaRequestDescriptor(
+            assetID: asset.id,
+            updatedAt: asset.thumbnailRevision,
+            derivative: .original,
+            targetPixels: nil
+        )
+    }
+
+    func removeViewerOriginalCache(for assets: [TimelineAssetSummary]) {
+        guard let pipeline else { return }
+        var removedCount = 0
+        for asset in assets {
+            guard let request = imageRequest(
+                for: Self.viewerOriginalDescriptor(for: asset)
+            ) else { continue }
+            pipeline.cache.removeCachedImage(
+                for: request,
+                caches: [.memory, .disk]
+            )
+            removedCount += 1
+        }
+        if removedCount > 0 {
+            Self.logger.info(
+                "Viewer original cache cleared assets=\(removedCount)"
+            )
+        }
     }
 
     func cachedViewerPreview(
@@ -492,6 +551,44 @@ final class MediaLibraryController {
         return AVPlayerItem(url: media.fileURL)
     }
 
+    func livePhotoPlayerItem(assetID: String) async throws -> AVPlayerItem {
+        #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("-ui-testing-signed-in") {
+                return try AVPlayerItem(url: PreviewMediaFixtures.videoFileURL())
+            }
+        #endif
+        guard let url = downloadURL(assetID: assetID, derivative: .videoPlayback),
+              let downloadService
+        else { throw MediaDownloadService.DownloadError.invalidResponse }
+        let media = try await downloadService.viewerSessionDownload(
+            cacheKey: "live-photo-\(assetID)",
+            from: url,
+            fallbackFilename: "\(assetID).mp4"
+        )
+        return AVPlayerItem(url: media.fileURL)
+    }
+
+    func discardViewerLivePhotoMotion(assetID: String) async {
+        guard let downloadService else { return }
+        await downloadService.removeViewerSessionDownload(
+            cacheKey: "live-photo-\(assetID)"
+        )
+    }
+
+    func removeViewerLivePhotoMotionCache() async {
+        guard let downloadService else { return }
+        await downloadService.removeViewerSessionDownloads()
+    }
+
+    func playerItemByteCount(_ item: AVPlayerItem) -> Int? {
+        guard let fileURL = (item.asset as? AVURLAsset)?.url,
+              fileURL.isFileURL,
+              let byteCount = try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+              byteCount > 0
+        else { return nil }
+        return byteCount
+    }
+
     func releasePlayerItem(_ item: AVPlayerItem) {
         guard let fileURL = (item.asset as? AVURLAsset)?.url,
               fileURL.isFileURL,
@@ -627,6 +724,7 @@ final class MediaLibraryController {
             configuration.urlCache = nil
             configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
             let loader = DataLoader(configuration: configuration)
+            loader.delegate = MediaRedirectAuthorizationDelegate()
             loader.prefersIncrementalDelivery = true
             return loader
         }
@@ -861,6 +959,67 @@ final nonisolated class LazyMediaDataLoader: DataLoading, @unchecked Sendable {
             didReceiveData: didReceiveData,
             completion: completion
         )
+    }
+}
+
+/// Immich can satisfy `size=fullsize` by redirecting web-compatible stills to
+/// the original endpoint. `URLSession` builds a fresh request for that redirect,
+/// so restore the bearer token only while the request remains on the same
+/// server origin. This keeps ordinary stills on the same Preview -> Full path
+/// as Live Photos without allowing a credential to cross hosts.
+final nonisolated class MediaRedirectAuthorizationDelegate: NSObject,
+    URLSessionTaskDelegate,
+    @unchecked Sendable
+{
+    func urlSession(
+        _: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection _: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(Self.redirectRequest(
+            originalRequest: task.originalRequest,
+            proposedRequest: request
+        ))
+    }
+
+    nonisolated static func redirectRequest(
+        originalRequest: URLRequest?,
+        proposedRequest: URLRequest
+    ) -> URLRequest {
+        guard let originalRequest,
+              let originalURL = originalRequest.url,
+              let redirectedURL = proposedRequest.url,
+              sameOrigin(originalURL, redirectedURL),
+              let authorization = originalRequest.value(
+                  forHTTPHeaderField: "Authorization"
+              )
+        else { return proposedRequest }
+
+        var authenticatedRequest = proposedRequest
+        authenticatedRequest.setValue(
+            authorization,
+            forHTTPHeaderField: "Authorization"
+        )
+        return authenticatedRequest
+    }
+
+    private nonisolated static func sameOrigin(_ lhs: URL, _ rhs: URL) -> Bool {
+        lhs.scheme?.lowercased() == rhs.scheme?.lowercased()
+            && lhs.host?.lowercased() == rhs.host?.lowercased()
+            && effectivePort(for: lhs) == effectivePort(for: rhs)
+    }
+
+    private nonisolated static func effectivePort(for url: URL) -> Int? {
+        if let port = url.port {
+            return port
+        }
+        switch url.scheme?.lowercased() {
+        case "http": return 80
+        case "https": return 443
+        default: return nil
+        }
     }
 }
 

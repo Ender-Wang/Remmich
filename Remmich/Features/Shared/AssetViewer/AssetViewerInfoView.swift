@@ -7,10 +7,18 @@ enum AssetViewerDetailState: Equatable {
     case failed(String)
 }
 
+enum AssetViewerFullResolutionState: Equatable {
+    case available
+    case loading
+    case failed(String)
+    case loaded
+}
+
 nonisolated enum AssetViewerRenderedImageSource: Equatable, Sendable {
     case thumbnail
     case preview
-    case full
+    case fullSize
+    case original
 
     var title: String {
         switch self {
@@ -18,37 +26,80 @@ nonisolated enum AssetViewerRenderedImageSource: Equatable, Sendable {
             "Thumbnail"
         case .preview:
             "Preview"
-        case .full:
+        case .fullSize:
             "Full"
+        case .original:
+            "Original"
         }
     }
 }
 
 nonisolated struct AssetViewerRenderedImageMetadata: Equatable, Sendable {
+    static let loadingDisplayText = "Loading details…"
+
     let source: AssetViewerRenderedImageSource
     let pixelSize: MediaPixelSize
     let fileSizeBytes: Int?
+    let motionFileSizeBytes: Int?
+
+    init(
+        source: AssetViewerRenderedImageSource,
+        pixelSize: MediaPixelSize,
+        fileSizeBytes: Int?,
+        motionFileSizeBytes: Int? = nil
+    ) {
+        self.source = source
+        self.pixelSize = pixelSize
+        self.fileSizeBytes = fileSizeBytes
+        self.motionFileSizeBytes = motionFileSizeBytes
+    }
 
     var displayText: String {
         let width = pixelSize.width.formatted()
         let height = pixelSize.height.formatted()
         var components = [source.title, "\(width) × \(height) px"]
         if let fileSizeBytes, fileSizeBytes > 0 {
-            components.append(ByteCountFormatter.string(
-                fromByteCount: Int64(fileSizeBytes),
+            var totalBytes = fileSizeBytes
+            var includesMotion = false
+            if source == .original,
+               let motionFileSizeBytes,
+               motionFileSizeBytes > 0
+            {
+                totalBytes += motionFileSizeBytes
+                includesMotion = true
+            }
+            var byteDescription = ByteCountFormatter.string(
+                fromByteCount: Int64(totalBytes),
                 countStyle: .file
-            ))
+            )
+            if includesMotion {
+                byteDescription += " incl. motion"
+            }
+            components.append(byteDescription)
         }
         return components.joined(separator: " · ")
+    }
+
+    func includingMotion(byteCount: Int?) -> Self {
+        .init(
+            source: source,
+            pixelSize: pixelSize,
+            fileSizeBytes: fileSizeBytes,
+            motionFileSizeBytes: byteCount
+        )
     }
 }
 
 struct AssetViewerInfoView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     let state: AssetViewerDetailState
     let renderedImageMetadata: AssetViewerRenderedImageMetadata?
+    let fullResolutionState: AssetViewerFullResolutionState?
     let anchorsContentToBottom: Bool
     let contentHeightChanged: (CGFloat) -> Void
     let retry: () -> Void
+    let loadFullResolution: () -> Void
 
     var body: some View {
         GeometryReader { geometry in
@@ -124,16 +175,21 @@ struct AssetViewerInfoView: View {
 
                 HStack(spacing: 12) {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(detail.originalFileName)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        if let renderedImageMetadata {
-                            Text(renderedImageMetadata.displayText)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
+                        HStack(spacing: 8) {
+                            Text(detail.originalFileName)
                                 .lineLimit(1)
-                                .minimumScaleFactor(0.8)
-                                .accessibilityIdentifier("asset-viewer-rendered-metadata")
+                                .truncationMode(.middle)
+                                .layoutPriority(1)
+                            if let fullResolutionState {
+                                fullResolutionButton(for: fullResolutionState)
+                            }
+                        }
+                        renderedImageMetadataRow
+                        if case let .failed(message)? = fullResolutionState {
+                            Text(message)
+                                .font(.caption2)
+                                .foregroundStyle(.red)
+                                .accessibilityIdentifier("asset-viewer-full-resolution-error")
                         }
                     }
                     Spacer(minLength: 8)
@@ -201,6 +257,84 @@ struct AssetViewerInfoView: View {
             .clipShape(.rect(cornerRadius: DesignMetrics.defaultCornerRadius))
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("asset-viewer-metadata-card")
+        }
+    }
+
+    private var renderedImageMetadataRow: some View {
+        let displayText = renderedImageMetadata?.displayText
+            ?? AssetViewerRenderedImageMetadata.loadingDisplayText
+        return ZStack(alignment: .leading) {
+            Text(displayText)
+                .id(displayText)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .transition(.opacity)
+                .accessibilityLabel(
+                    renderedImageMetadata == nil
+                        ? "Image details loading"
+                        : displayText
+                )
+                .accessibilityIdentifier("asset-viewer-rendered-metadata")
+        }
+        .animation(
+            reduceMotion ? nil : .easeInOut(duration: 0.18),
+            value: displayText
+        )
+    }
+
+    private func fullResolutionButton(
+        for state: AssetViewerFullResolutionState
+    ) -> some View {
+        Button(action: loadFullResolution) {
+            HStack(spacing: 4) {
+                if state == .loading {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .accessibilityHidden(true)
+                }
+                Text(fullResolutionButtonTitle(for: state))
+                    .font(.subheadline.weight(.semibold))
+            }
+        }
+        .buttonStyle(.glass)
+        .buttonBorderShape(.capsule)
+        .controlSize(.small)
+        .foregroundStyle(
+            state == .loaded ? Color(uiColor: .tertiaryLabel) : Color.primary
+        )
+        .frame(minHeight: 44)
+        .contentShape(.rect)
+        .fixedSize(horizontal: true, vertical: false)
+        .disabled(state == .loading || state == .loaded)
+        .accessibilityLabel(fullResolutionAccessibilityLabel(for: state))
+        .accessibilityIdentifier("asset-viewer-load-original")
+    }
+
+    private func fullResolutionButtonTitle(
+        for state: AssetViewerFullResolutionState
+    ) -> String {
+        switch state {
+        case .loading:
+            "Loading…"
+        case .loaded:
+            "Original Loaded"
+        case .available, .failed:
+            "Load Original"
+        }
+    }
+
+    private func fullResolutionAccessibilityLabel(
+        for state: AssetViewerFullResolutionState
+    ) -> String {
+        switch state {
+        case .failed:
+            "Retry loading original"
+        case .loaded:
+            "Original loaded"
+        case .available, .loading:
+            "Load original"
         }
     }
 

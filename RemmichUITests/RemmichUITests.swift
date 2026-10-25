@@ -537,10 +537,55 @@ final class RemmichUITests: XCTestCase {
     }
 
     @MainActor
-    func testAssetViewerInfoShowsCurrentRenderedResolution() {
+    func testAssetViewerInfoLoadsOriginalAndUpdatesRenderedMetadata() {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
         app.launchArguments = ["-ui-testing-signed-in"]
+        app.launch()
+
+        let asset = app.descendants(matching: .any)["asset-asset-5"].firstMatch
+        XCTAssertTrue(asset.waitForExistence(timeout: 10))
+        asset.tap()
+
+        let info = app.buttons["asset-viewer-info"]
+        XCTAssertTrue(info.waitForExistence(timeout: 10))
+        info.tap()
+
+        let renderedMetadata = app.staticTexts["asset-viewer-rendered-metadata"]
+        XCTAssertTrue(
+            renderedMetadata.waitForExistence(timeout: 5),
+            "The stable rendered-metadata row should exist before its final value arrives"
+        )
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            renderedMetadata.label.contains("Full")
+                && renderedMetadata.label.contains("600 × 1,200 px")
+                && renderedMetadata.label.components(separatedBy: " · ").count == 3
+                && !renderedMetadata.label.contains("motion")
+        })
+
+        let loadOriginal = app.buttons["asset-viewer-load-original"]
+        XCTAssertTrue(loadOriginal.waitForExistence(timeout: 5))
+        loadOriginal.tap()
+
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            renderedMetadata.label.contains("Original")
+                && renderedMetadata.label.contains("800 × 1,600 px")
+                && renderedMetadata.label.components(separatedBy: " · ").count == 3
+                && renderedMetadata.label.contains("incl. motion")
+        })
+        XCTAssertTrue(loadOriginal.exists)
+        XCTAssertFalse(loadOriginal.isEnabled)
+        XCTAssertEqual(loadOriginal.label, "Original loaded")
+    }
+
+    @MainActor
+    func testOrdinaryStillViewerUpgradesThumbnailToFullWithoutPreview() {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-ui-testing-signed-in",
+            "-ui-testing-delay-full-size",
+        ]
         app.launch()
 
         let asset = app.descendants(matching: .any)["asset-asset-1"].firstMatch
@@ -553,11 +598,19 @@ final class RemmichUITests: XCTestCase {
 
         let renderedMetadata = app.staticTexts["asset-viewer-rendered-metadata"]
         XCTAssertTrue(renderedMetadata.waitForExistence(timeout: 10))
+        var sawPreviewBeforeFull = false
         XCTAssertTrue(waitUntil(timeout: 10) {
-            renderedMetadata.label.contains("Preview")
-                && renderedMetadata.label.contains("px")
+            let label = renderedMetadata.label
+            sawPreviewBeforeFull = sawPreviewBeforeFull || label.contains("Preview")
+            return label.contains("Full")
+                && renderedMetadata.label.contains("600 × 1,200 px")
                 && renderedMetadata.label.components(separatedBy: " · ").count == 3
+                && !renderedMetadata.label.contains("motion")
         })
+        XCTAssertFalse(
+            sawPreviewBeforeFull,
+            "A directly opened selected still should upgrade Thumbnail to Full without inserting Preview"
+        )
     }
 
     @MainActor

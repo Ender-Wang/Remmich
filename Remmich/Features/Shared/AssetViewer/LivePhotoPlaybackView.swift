@@ -135,6 +135,7 @@ struct LivePhotoPlaybackView: View {
     let playsWithSound: Bool
     let playbackEnded: () -> Void
     let soundPlaybackFailed: () -> Void
+    let motionFileSizeChanged: (Int?) -> Void
 
     @State private var playbackState = LivePhotoPlaybackState()
     @State private var player: AVPlayer?
@@ -218,13 +219,7 @@ struct LivePhotoPlaybackView: View {
         )
 
         do {
-            let item = try await media.playerItem(assetID: motionAssetID)
-            var retainedItem = false
-            defer {
-                if !retainedItem {
-                    media.releasePlayerItem(item)
-                }
-            }
+            let item = try await media.livePhotoPlayerItem(assetID: motionAssetID)
             guard !Task.isCancelled else { throw CancellationError() }
             guard try await item.asset.load(.isPlayable) else {
                 throw LivePhotoPlaybackError.unplayable
@@ -239,7 +234,7 @@ struct LivePhotoPlaybackView: View {
             preparedPlayer.isMuted = true
             preparedItem = item
             player = preparedPlayer
-            retainedItem = true
+            motionFileSizeChanged(media.playerItemByteCount(item))
             Self.logger.info(
                 "Live Photo motion ready asset=\(motionAssetID.prefix(8), privacy: .private) elapsedMs=\(Int(Date().timeIntervalSince(startedAt) * 1000))"
             )
@@ -248,6 +243,7 @@ struct LivePhotoPlaybackView: View {
             return
         } catch {
             guard !Task.isCancelled else { return }
+            await media.discardViewerLivePhotoMotion(assetID: motionAssetID)
             Self.logger.error(
                 "Live Photo motion preparation failed asset=\(motionAssetID.prefix(8), privacy: .private) error=\(error.localizedDescription, privacy: .public)"
             )
@@ -336,9 +332,10 @@ struct LivePhotoPlaybackView: View {
         player?.replaceCurrentItem(with: nil)
         player = nil
         audioSession.deactivate()
-        guard let preparedItem else { return }
-        self.preparedItem = nil
-        media.releasePlayerItem(preparedItem)
+        motionFileSizeChanged(nil)
+        preparedItem = nil
+        // The paired-motion file is owned by the viewer session so paging back
+        // can prepare a new player item without another Immich request.
     }
 
     @MainActor

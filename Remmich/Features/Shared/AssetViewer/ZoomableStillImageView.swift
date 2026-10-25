@@ -1,17 +1,26 @@
 import Nuke
+import OSLog
 import SwiftUI
 import UIKit
 
 struct ZoomableStillImageView: View {
+    private nonisolated static let logger = Logger(
+        subsystem: "io.github.ender-wang.Remmich",
+        category: "AssetViewerImage"
+    )
+
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let asset: TimelineAssetSummary
     let media: MediaLibraryController
+    let isSelected: Bool
     let targetPixels: MediaPixelSize
     let fitRect: CGRect
     let animatesFitChanges: Bool
     let reportsRenderedImageMetadata: Bool
+    let fullResolutionRequestID: Int?
     let renderedImageMetadataChanged: (AssetViewerRenderedImageMetadata) -> Void
+    let fullResolutionLoadFailed: (String?) -> Void
     let zoomChanged: (Bool) -> Void
     let livePhotoPressChanged: (Bool) -> Void
     let toggleChrome: () -> Void
@@ -20,29 +29,34 @@ struct ZoomableStillImageView: View {
     @State private var failed = false
     @State private var loadedTargetPixels: MediaPixelSize?
     @State private var loadedFileSizeBytes: Int?
-    @State private var isShowingThumbnailFallback = false
     @State private var renderedSource: AssetViewerRenderedImageSource?
     @State private var isZoomed = false
 
     init(
         asset: TimelineAssetSummary,
         media: MediaLibraryController,
+        isSelected: Bool,
         targetPixels: MediaPixelSize,
         fitRect: CGRect,
         animatesFitChanges: Bool,
         reportsRenderedImageMetadata: Bool,
+        fullResolutionRequestID: Int?,
         renderedImageMetadataChanged: @escaping (AssetViewerRenderedImageMetadata) -> Void,
+        fullResolutionLoadFailed: @escaping (String?) -> Void,
         zoomChanged: @escaping (Bool) -> Void,
         livePhotoPressChanged: @escaping (Bool) -> Void,
         toggleChrome: @escaping () -> Void
     ) {
         self.asset = asset
         self.media = media
+        self.isSelected = isSelected
         self.targetPixels = targetPixels
         self.fitRect = fitRect
         self.animatesFitChanges = animatesFitChanges
         self.reportsRenderedImageMetadata = reportsRenderedImageMetadata
+        self.fullResolutionRequestID = fullResolutionRequestID
         self.renderedImageMetadataChanged = renderedImageMetadataChanged
+        self.fullResolutionLoadFailed = fullResolutionLoadFailed
         self.zoomChanged = zoomChanged
         self.livePhotoPressChanged = livePhotoPressChanged
         self.toggleChrome = toggleChrome
@@ -78,7 +92,7 @@ struct ZoomableStillImageView: View {
             }
         }
         .task(id: loadID) {
-            await loadPreview()
+            await loadDisplayImage()
         }
         .onDisappear {
             isZoomed = false
@@ -89,13 +103,55 @@ struct ZoomableStillImageView: View {
     }
 
     private var loadID: String {
-        "\(asset.id)|\(targetPixels.width)x\(targetPixels.height)|\(reportsRenderedImageMetadata)"
+        "\(asset.id)|\(targetPixels.width)x\(targetPixels.height)|\(isSelected)|\(reportsRenderedImageMetadata)|\(fullResolutionRequestID ?? 0)"
     }
 
-    private func loadPreview() async {
-        guard let pipeline = media.pipeline else { return }
+    private func loadDisplayImage() async {
+        guard let pipeline = media.pipeline else {
+            if fullResolutionRequestID != nil {
+                fullResolutionLoadFailed("Unable to load original.")
+            }
+            return
+        }
         if reportsRenderedImageMetadata, let image, let renderedSource {
             publishRenderedMetadata(for: image, source: renderedSource)
+        }
+        if fullResolutionRequestID != nil, renderedSource == .original {
+            if reportsRenderedImageMetadata,
+               let image,
+               let request = media.imageRequest(
+                   for: MediaLibraryController.viewerOriginalDescriptor(for: asset)
+               )
+            {
+                await reportMetadata(
+                    for: image,
+                    source: .original,
+                    pipeline: pipeline,
+                    request: request
+                )
+            }
+            return
+        }
+        if renderedSource == .fullSize {
+            if isSelected,
+               reportsRenderedImageMetadata,
+               let image,
+               let request = media.imageRequest(
+                   for: MediaLibraryController.viewerFullSizeDescriptor(
+                       for: asset,
+                       targetPixels: targetPixels
+                   )
+               )
+            {
+                await reportMetadata(
+                    for: image,
+                    source: .fullSize,
+                    pipeline: pipeline,
+                    request: request
+                )
+            }
+            await loadFullResolutionIfRequested(with: pipeline)
+            return
         }
         if image == nil,
            let fallbackRequest = media.viewerThumbnailFallbackRequest(
@@ -107,7 +163,6 @@ struct ZoomableStillImageView: View {
                 let fallback = try await pipeline.imageTask(with: fallbackRequest).response
                 guard !Task.isCancelled else { return }
                 image = fallback.image
-                isShowingThumbnailFallback = true
                 renderedSource = .thumbnail
                 loadedFileSizeBytes = media.viewerThumbnailFallbackByteCount(for: asset)
                 failed = false
@@ -118,30 +173,49 @@ struct ZoomableStillImageView: View {
                 guard !Task.isCancelled else { return }
             }
         }
-        guard let request = media.imageRequest(
-            for: MediaLibraryController.viewerPreviewDescriptor(
-                for: asset,
-                targetPixels: targetPixels
-            )
-        ) else {
-            failed = image == nil
-            return
+        if isSelected {
+            let loadedFullSize = await loadFullSizeIfSelected(with: pipeline)
+            guard !Task.isCancelled else { return }
+            if !loadedFullSize {
+                Self.logger.notice(
+                    "Viewer Full unavailable; falling back to Preview asset=\(asset.id.prefix(8), privacy: .private)"
+                )
+                await loadPreviewIfNeeded(with: pipeline)
+            }
+        } else {
+            await loadPreviewIfNeeded(with: pipeline)
         }
-        if loadedTargetPixels == targetPixels {
+        guard !Task.isCancelled else { return }
+        failed = image == nil
+        await loadFullResolutionIfRequested(with: pipeline)
+    }
+
+    private func loadPreviewIfNeeded(with pipeline: ImagePipeline) async {
+        guard renderedSource != .fullSize,
+              renderedSource != .original,
+              let request = media.imageRequest(
+                  for: MediaLibraryController.viewerPreviewDescriptor(
+                      for: asset,
+                      targetPixels: targetPixels
+                  )
+              )
+        else { return }
+        if loadedTargetPixels == targetPixels, renderedSource == .preview {
             if reportsRenderedImageMetadata, let image {
-                await reportMetadata(for: image, pipeline: pipeline, request: request)
+                await reportMetadata(
+                    for: image,
+                    source: .preview,
+                    pipeline: pipeline,
+                    request: request
+                )
             }
             return
-        }
-        if failed {
-            failed = false
         }
         do {
             let response = try await pipeline.imageTask(with: request).response
             guard !Task.isCancelled else { return }
             image = response.image
             await Task.yield()
-            isShowingThumbnailFallback = false
             renderedSource = .preview
             loadedTargetPixels = targetPixels
             loadedFileSizeBytes = nil
@@ -151,14 +225,90 @@ struct ZoomableStillImageView: View {
                 loadedFileSizeBytes = Int(expectedLength)
             }
             if reportsRenderedImageMetadata {
-                await reportMetadata(for: response.image, pipeline: pipeline, request: request)
+                await reportMetadata(
+                    for: response.image,
+                    source: .preview,
+                    pipeline: pipeline,
+                    request: request
+                )
             }
         } catch {
-            guard !Task.isCancelled else { return }
-            if image == nil {
-                failed = true
-            }
+            return
         }
+    }
+
+    @discardableResult
+    private func loadFullSizeIfSelected(with pipeline: ImagePipeline) async -> Bool {
+        guard isSelected,
+              renderedSource != .original,
+              let request = media.imageRequest(
+                  for: MediaLibraryController.viewerFullSizeDescriptor(
+                      for: asset,
+                      targetPixels: targetPixels
+                  )
+              )
+        else { return renderedSource == .original }
+        if loadedTargetPixels == targetPixels, renderedSource == .fullSize {
+            if reportsRenderedImageMetadata, let image {
+                await reportMetadata(
+                    for: image,
+                    source: .fullSize,
+                    pipeline: pipeline,
+                    request: request
+                )
+            }
+            return true
+        }
+        Self.logger.info(
+            "Viewer Full request started asset=\(asset.id.prefix(8), privacy: .private)"
+        )
+        do {
+            let response = try await pipeline.imageTask(with: request).response
+            guard !Task.isCancelled else { return false }
+            image = response.image
+            await Task.yield()
+            renderedSource = .fullSize
+            loadedTargetPixels = targetPixels
+            loadedFileSizeBytes = nil
+            if let expectedLength = response.urlResponse?.expectedContentLength,
+               expectedLength > 0
+            {
+                loadedFileSizeBytes = Int(expectedLength)
+            }
+            if reportsRenderedImageMetadata {
+                await reportMetadata(
+                    for: response.image,
+                    source: .fullSize,
+                    pipeline: pipeline,
+                    request: request
+                )
+            }
+            let resolvedTier = Self.resolvedMediaTier(from: response.urlResponse?.url)
+            let statusCode = (response.urlResponse as? HTTPURLResponse)?.statusCode ?? -1
+            let dimensions = response.image.cgImage.map { "\($0.width)x\($0.height)" } ?? "unknown"
+            Self.logger.info(
+                "Viewer Full request ready asset=\(asset.id.prefix(8), privacy: .private) resolved=\(resolvedTier, privacy: .public) status=\(statusCode) decodedPixels=\(dimensions, privacy: .public)"
+            )
+            return true
+        } catch {
+            guard !Task.isCancelled else { return false }
+            Self.logger.error(
+                "Viewer Full request failed asset=\(asset.id.prefix(8), privacy: .private) error=\(error.localizedDescription, privacy: .public)"
+            )
+            return false
+        }
+    }
+
+    private nonisolated static func resolvedMediaTier(from url: URL?) -> String {
+        guard let url else { return "unknown" }
+        if url.path.hasSuffix("/original") {
+            return "original"
+        }
+        let size = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?
+            .first(where: { $0.name == "size" })?
+            .value
+        return size ?? "unknown"
     }
 
     private func zoomableImage(_ image: UIImage) -> some View {
@@ -168,7 +318,7 @@ struct ZoomableStillImageView: View {
             fitRect: fitRect,
             reduceMotion: reduceMotion,
             animatesFitChanges: animatesFitChanges,
-            crossfadesImageChanges: isShowingThumbnailFallback && !reduceMotion,
+            crossfadesImageChanges: !reduceMotion,
             zoomChanged: { value in
                 isZoomed = value
                 zoomChanged(value)
@@ -181,6 +331,7 @@ struct ZoomableStillImageView: View {
 
     private func reportMetadata(
         for image: UIImage,
+        source: AssetViewerRenderedImageSource,
         pipeline: ImagePipeline,
         request: ImageRequest
     ) async {
@@ -193,16 +344,16 @@ struct ZoomableStillImageView: View {
             )
         }
         guard !Task.isCancelled else { return }
-        publishMetadata(pixelSize: pixelSize, fileSizeBytes: loadedFileSizeBytes)
+        publishMetadata(source: source, pixelSize: pixelSize, fileSizeBytes: loadedFileSizeBytes)
 
         guard loadedFileSizeBytes == nil,
-              let byteCount = await cachedPreviewByteCount(pipeline: pipeline, request: request),
+              let byteCount = await cachedEncodedByteCount(pipeline: pipeline, request: request),
               byteCount > 0,
               !Task.isCancelled,
               reportsRenderedImageMetadata
         else { return }
         loadedFileSizeBytes = byteCount
-        publishMetadata(pixelSize: pixelSize, fileSizeBytes: byteCount)
+        publishMetadata(source: source, pixelSize: pixelSize, fileSizeBytes: byteCount)
     }
 
     private func publishRenderedMetadata(
@@ -224,17 +375,59 @@ struct ZoomableStillImageView: View {
         ))
     }
 
-    private func publishMetadata(pixelSize: MediaPixelSize, fileSizeBytes: Int?) {
+    private func publishMetadata(
+        source: AssetViewerRenderedImageSource,
+        pixelSize: MediaPixelSize,
+        fileSizeBytes: Int?
+    ) {
         if reportsRenderedImageMetadata {
             renderedImageMetadataChanged(.init(
-                source: .preview,
+                source: source,
                 pixelSize: pixelSize,
                 fileSizeBytes: fileSizeBytes
             ))
         }
     }
 
-    private func cachedPreviewByteCount(
+    private func loadFullResolutionIfRequested(with pipeline: ImagePipeline) async {
+        guard fullResolutionRequestID != nil,
+              renderedSource != .original
+        else { return }
+        guard let request = media.imageRequest(
+            for: MediaLibraryController.viewerOriginalDescriptor(for: asset)
+        ) else {
+            fullResolutionLoadFailed("Unable to load original.")
+            return
+        }
+
+        fullResolutionLoadFailed(nil)
+        do {
+            let response = try await pipeline.imageTask(with: request).response
+            guard !Task.isCancelled else { return }
+            image = response.image
+            renderedSource = .original
+            loadedFileSizeBytes = nil
+            if let expectedLength = response.urlResponse?.expectedContentLength,
+               expectedLength > 0
+            {
+                loadedFileSizeBytes = Int(expectedLength)
+            }
+            if reportsRenderedImageMetadata {
+                await reportMetadata(
+                    for: response.image,
+                    source: .original,
+                    pipeline: pipeline,
+                    request: request
+                )
+            }
+            fullResolutionLoadFailed(nil)
+        } catch {
+            guard !Task.isCancelled else { return }
+            fullResolutionLoadFailed("Unable to load original.")
+        }
+    }
+
+    private func cachedEncodedByteCount(
         pipeline: ImagePipeline,
         request: ImageRequest
     ) async -> Int? {

@@ -7,12 +7,28 @@ enum PreviewMediaFixtures {
     private static var images: [String: Data] = [:]
     private static var videoURL: URL?
 
-    static func data(for id: String) -> Data {
-        if let data = images[id] {
+    static func data(
+        for id: String,
+        derivative: MediaDerivative = .thumbnail
+    ) -> Data {
+        let cacheKey = "\(id)|\(derivative.rawValue)"
+        if let data = images[cacheKey] {
             return data
         }
         let index = Int(id.split(separator: "-").last ?? "0") ?? 0
-        let size = index.isMultiple(of: 2) ? CGSize(width: 400, height: 200) : CGSize(width: 200, height: 400)
+        let shortEdge: CGFloat = switch derivative {
+        case .thumbnail:
+            200
+        case .preview, .videoPlayback:
+            300
+        case .fullSize:
+            600
+        case .original:
+            800
+        }
+        let size = index.isMultiple(of: 2)
+            ? CGSize(width: shortEdge * 2, height: shortEdge)
+            : CGSize(width: shortEdge, height: shortEdge * 2)
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
         let data = UIGraphicsImageRenderer(size: size, format: format).pngData { context in
@@ -23,7 +39,7 @@ enum PreviewMediaFixtures {
             UIColor.black.setStroke()
             context.cgContext.stroke(CGRect(x: size.width / 2 - 30, y: size.height / 2 - 30, width: 60, height: 60))
         }
-        images[id] = data
+        images[cacheKey] = data
         return data
     }
 

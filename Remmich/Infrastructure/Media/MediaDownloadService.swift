@@ -9,6 +9,12 @@ nonisolated struct MediaDownloadTransport: Sendable {
 }
 
 actor MediaDownloadService {
+    private struct ViewerSessionDownloadTask {
+        let id: UUID
+        let generation: Int
+        let task: Task<DownloadedMedia, Error>
+    }
+
     enum DownloadError: LocalizedError {
         case invalidResponse
 
@@ -21,6 +27,9 @@ actor MediaDownloadService {
     private let transport: MediaDownloadTransport
     private let fileManager: FileManager
     private let directory: URL
+    private var viewerSessionDownloads: [String: DownloadedMedia] = [:]
+    private var viewerSessionDownloadTasks: [String: ViewerSessionDownloadTask] = [:]
+    private var viewerSessionGeneration = 0
 
     init(
         token: String,
@@ -69,7 +78,91 @@ actor MediaDownloadService {
         }
     }
 
+    func viewerSessionDownload(
+        cacheKey: String,
+        from url: URL,
+        fallbackFilename: String
+    ) async throws -> DownloadedMedia {
+        if let cached = viewerSessionDownloads[cacheKey],
+           fileManager.fileExists(atPath: cached.fileURL.path)
+        {
+            return cached
+        }
+        viewerSessionDownloads.removeValue(forKey: cacheKey)
+
+        let generation = viewerSessionGeneration
+        let requestID: UUID
+        let task: Task<DownloadedMedia, Error>
+        if let current = viewerSessionDownloadTasks[cacheKey],
+           current.generation == generation
+        {
+            requestID = current.id
+            task = current.task
+        } else {
+            requestID = UUID()
+            task = Task {
+                try await self.download(from: url, fallbackFilename: fallbackFilename)
+            }
+            viewerSessionDownloadTasks[cacheKey] = ViewerSessionDownloadTask(
+                id: requestID,
+                generation: generation,
+                task: task
+            )
+        }
+
+        let downloaded: DownloadedMedia
+        do {
+            downloaded = try await task.value
+        } catch {
+            if viewerSessionDownloadTasks[cacheKey]?.id == requestID {
+                viewerSessionDownloadTasks.removeValue(forKey: cacheKey)
+            }
+            throw error
+        }
+
+        guard generation == viewerSessionGeneration else {
+            removeTemporaryDownload(at: downloaded.fileURL)
+            throw CancellationError()
+        }
+        if viewerSessionDownloadTasks[cacheKey]?.id == requestID {
+            viewerSessionDownloadTasks.removeValue(forKey: cacheKey)
+            viewerSessionDownloads[cacheKey] = downloaded
+            return downloaded
+        }
+        if let cached = viewerSessionDownloads[cacheKey],
+           cached.fileURL == downloaded.fileURL
+        {
+            return cached
+        }
+
+        removeTemporaryDownload(at: downloaded.fileURL)
+        throw CancellationError()
+    }
+
+    func removeViewerSessionDownload(cacheKey: String) {
+        viewerSessionDownloadTasks.removeValue(forKey: cacheKey)?.task.cancel()
+        guard let downloaded = viewerSessionDownloads.removeValue(forKey: cacheKey) else { return }
+        removeTemporaryDownload(at: downloaded.fileURL)
+    }
+
+    func removeViewerSessionDownloads() {
+        viewerSessionGeneration += 1
+        let tasks = viewerSessionDownloadTasks.values.map(\.task)
+        viewerSessionDownloadTasks.removeAll()
+        tasks.forEach { $0.cancel() }
+        let fileURLs = viewerSessionDownloads.values.map(\.fileURL)
+        viewerSessionDownloads.removeAll()
+        for fileURL in fileURLs {
+            removeTemporaryDownload(at: fileURL)
+        }
+    }
+
     func removeTemporaryDownloads() {
+        viewerSessionGeneration += 1
+        let tasks = viewerSessionDownloadTasks.values.map(\.task)
+        viewerSessionDownloadTasks.removeAll()
+        tasks.forEach { $0.cancel() }
+        viewerSessionDownloads.removeAll()
         try? fileManager.removeItem(at: directory)
     }
 

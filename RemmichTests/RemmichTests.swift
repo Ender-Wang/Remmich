@@ -1041,7 +1041,7 @@ struct RemmichTests {
         #expect(descriptor.cacheKey(in: .init(session: first)) != preview.cacheKey(in: .init(session: first)))
     }
 
-    @Test func viewerPreviewUsesOneSizedIdentityForPrefetchAndDisplay() {
+    @Test func viewerPreviewUsesOneSizedIdentityForNeighborPrefetch() {
         let asset = Self.timelineAsset(id: "viewer-asset")
         let targetPixels = MediaPixelSize(width: 1206, height: 2622)
         let prefetch = MediaLibraryController.viewerPreviewDescriptor(
@@ -1058,6 +1058,97 @@ struct RemmichTests {
         #expect(display.targetPixels == targetPixels)
     }
 
+    @Test @MainActor func selectedViewerUsesTheSizedFullSizeThumbnailDerivative() throws {
+        let media = MediaLibraryController()
+        media.configure(session: .fixture, activeEndpoint: AccountSession.fixture.apiURL)
+        let asset = Self.timelineAsset(id: "viewer-fullsize-asset")
+        let targetPixels = MediaPixelSize(width: 1206, height: 2622)
+        let descriptor = MediaLibraryController.viewerFullSizeDescriptor(
+            for: asset,
+            targetPixels: targetPixels
+        )
+        let request = try #require(media.imageRequest(for: descriptor))
+
+        #expect(descriptor.assetID == asset.id)
+        #expect(descriptor.derivative == .fullSize)
+        #expect(descriptor.targetPixels == targetPixels)
+        #expect(request.url?.path == "/api/assets/viewer-fullsize-asset/thumbnail")
+        #expect(request.url?.query == "size=fullsize")
+    }
+
+    @Test func fullSizeRedirectKeepsAuthorizationOnTheImmichOrigin() throws {
+        var original = try URLRequest(url: url(
+            "https://photos.example.com/api/assets/asset-1/thumbnail?size=fullsize"
+        ))
+        original.setValue("Bearer secret", forHTTPHeaderField: "Authorization")
+        let proposed = try URLRequest(url: url(
+            "https://photos.example.com/api/assets/asset-1/original"
+        ))
+
+        let redirected = MediaRedirectAuthorizationDelegate.redirectRequest(
+            originalRequest: original,
+            proposedRequest: proposed
+        )
+
+        #expect(redirected.value(forHTTPHeaderField: "Authorization") == "Bearer secret")
+    }
+
+    @Test func fullSizeRedirectNeverLeaksAuthorizationToAnotherOrigin() throws {
+        var original = try URLRequest(url: url(
+            "https://photos.example.com/api/assets/asset-1/thumbnail?size=fullsize"
+        ))
+        original.setValue("Bearer secret", forHTTPHeaderField: "Authorization")
+        let proposed = try URLRequest(url: url(
+            "https://cdn.example.com/api/assets/asset-1/original"
+        ))
+
+        let redirected = MediaRedirectAuthorizationDelegate.redirectRequest(
+            originalRequest: original,
+            proposedRequest: proposed
+        )
+
+        #expect(redirected.value(forHTTPHeaderField: "Authorization") == nil)
+    }
+
+    @Test @MainActor func viewerOriginalUsesTheOriginalDownloadEndpoint() throws {
+        let media = MediaLibraryController()
+        media.configure(session: .fixture, activeEndpoint: AccountSession.fixture.apiURL)
+        let asset = Self.timelineAsset(id: "viewer-full-asset")
+        let descriptor = MediaLibraryController.viewerOriginalDescriptor(for: asset)
+        let request = try #require(media.imageRequest(for: descriptor))
+
+        #expect(descriptor.assetID == asset.id)
+        #expect(descriptor.derivative == .original)
+        #expect(descriptor.targetPixels == nil)
+        #expect(request.url?.path == "/api/assets/viewer-full-asset/original")
+        #expect(request.url?.query == nil)
+    }
+
+    @Test @MainActor func viewerOriginalCacheIsRemovedAtSessionEnd() throws {
+        let media = MediaLibraryController()
+        media.configure(session: .fixture, activeEndpoint: AccountSession.fixture.apiURL)
+        let asset = Self.timelineAsset(id: "viewer-full-cache-asset")
+        let descriptor = MediaLibraryController.viewerOriginalDescriptor(for: asset)
+        let request = try #require(media.imageRequest(for: descriptor))
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 12, height: 18)).image { context in
+            UIColor.systemBlue.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 12, height: 18))
+        }
+        let pipeline = try #require(media.pipeline)
+        pipeline.cache.storeCachedImage(
+            ImageContainer(image: image),
+            for: request,
+            caches: [.memory, .disk]
+        )
+        #expect(pipeline.cache.containsCachedImage(for: request, caches: [.memory]))
+        #expect(pipeline.cache.containsCachedImage(for: request, caches: [.disk]))
+
+        media.removeViewerOriginalCache(for: [asset])
+
+        #expect(!pipeline.cache.containsCachedImage(for: request, caches: [.memory]))
+        #expect(!pipeline.cache.containsCachedImage(for: request, caches: [.disk]))
+    }
+
     @Test func viewerRenderedImageMetadataNamesItsActualSource() {
         let thumbnail = AssetViewerRenderedImageMetadata(
             source: .thumbnail,
@@ -1067,20 +1158,38 @@ struct RemmichTests {
         let preview = AssetViewerRenderedImageMetadata(
             source: .preview,
             pixelSize: .init(width: 1206, height: 1809),
-            fileSizeBytes: nil
+            fileSizeBytes: nil,
+            motionFileSizeBytes: 1_600_000
         )
-        let full = AssetViewerRenderedImageMetadata(
-            source: .full,
+        let fullSize = AssetViewerRenderedImageMetadata(
+            source: .fullSize,
+            pixelSize: .init(width: 1206, height: 1809),
+            fileSizeBytes: 1_200_000,
+            motionFileSizeBytes: 1_600_000
+        )
+        let original = AssetViewerRenderedImageMetadata(
+            source: .original,
             pixelSize: .init(width: 4032, height: 3024),
-            fileSizeBytes: 12_400_000
+            fileSizeBytes: 12_400_000,
+            motionFileSizeBytes: 1_600_000
         )
 
         #expect(thumbnail.displayText.contains("Thumbnail"))
         #expect(thumbnail.displayText.contains("720 × 1,080 px"))
         #expect(!thumbnail.displayText.contains("cached"))
         #expect(preview.displayText == "Preview · 1,206 × 1,809 px")
-        #expect(full.displayText.contains("Full · 4,032 × 3,024 px"))
-        #expect(full.displayText.components(separatedBy: " · ").count == 3)
+        #expect(fullSize.displayText.contains("Full · 1,206 × 1,809 px"))
+        #expect(!fullSize.displayText.contains("motion"))
+        #expect(original.displayText.contains("Original · 4,032 × 3,024 px"))
+        #expect(original.displayText.components(separatedBy: " · ").count == 3)
+        #expect(original.displayText.contains("incl. motion"))
+    }
+
+    @Test func viewerRenderedImageMetadataHasAStableLoadingPresentation() {
+        #expect(
+            AssetViewerRenderedImageMetadata.loadingDisplayText
+                == "Loading details…"
+        )
     }
 
     @Test func viewerMediaGeometryStartsAtTheFullViewportAndReservesSpaceOnlyForInfo() {
@@ -1562,6 +1671,56 @@ struct RemmichTests {
         await service.removeTemporaryDownloads()
     }
 
+    @Test func mediaDownloadReusesViewerSessionFileUntilCleanup() async throws {
+        let recorder = RequestRecorder()
+        let responseURL = try url("https://photos.example.com/api/assets/id/video/playback")
+        let transport = MediaDownloadTransport { request in
+            await recorder.record(request)
+            try await Task.sleep(for: .milliseconds(50))
+            let source = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+            try Data("live-photo-motion".utf8).write(to: source)
+            let response = try #require(HTTPURLResponse(
+                url: responseURL,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "video/mp4"]
+            ))
+            return (source, response)
+        }
+        let service = MediaDownloadService(
+            token: "secret",
+            namespace: UUID().uuidString,
+            transport: transport
+        )
+
+        async let firstRequest = service.viewerSessionDownload(
+            cacheKey: "live-photo-motion",
+            from: responseURL,
+            fallbackFilename: "motion.mp4"
+        )
+        async let secondRequest = service.viewerSessionDownload(
+            cacheKey: "live-photo-motion",
+            from: responseURL,
+            fallbackFilename: "motion.mp4"
+        )
+        let (first, second) = try await (firstRequest, secondRequest)
+
+        #expect(first.fileURL == second.fileURL)
+        #expect(await recorder.requestCount == 1)
+
+        await service.removeViewerSessionDownloads()
+        #expect(!FileManager.default.fileExists(atPath: first.fileURL.path))
+
+        let third = try await service.viewerSessionDownload(
+            cacheKey: "live-photo-motion",
+            from: responseURL,
+            fallbackFilename: "motion.mp4"
+        )
+        #expect(third.fileURL != first.fileURL)
+        #expect(await recorder.requestCount == 2)
+        await service.removeTemporaryDownloads()
+    }
+
     @Test func multiThousandItemMediaIdentityBaseline() {
         let scope = MediaAccountScope(session: .fixture)
         let keys = (0 ..< 5000).map { index in
@@ -1695,9 +1854,11 @@ private actor EndpointRecorder {
 
 private actor RequestRecorder {
     private(set) var authorization: String?
+    private(set) var requestCount = 0
 
     func record(_ request: URLRequest) {
         authorization = request.value(forHTTPHeaderField: "Authorization")
+        requestCount += 1
     }
 }
 

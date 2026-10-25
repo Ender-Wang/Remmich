@@ -19,6 +19,9 @@ struct AssetViewerView: View {
     @State private var cachedDetailMissAssetIDs: Set<String> = []
     @State private var refreshedDetailAssetIDs: Set<String> = []
     @State private var renderedImageMetadataByAssetID: [String: AssetViewerRenderedImageMetadata] = [:]
+    @State private var fullResolutionRequestIDs: [String: Int] = [:]
+    @State private var fullResolutionLoadErrors: [String: String] = [:]
+    @State private var livePhotoMotionByteCounts: [String: Int] = [:]
     @State private var neighborLoadTask: Task<Void, Never>?
     @State private var infoContentHeight: CGFloat = 220
     @State private var infoDragTranslation: CGFloat = 0
@@ -163,12 +166,20 @@ struct AssetViewerView: View {
         }
         .onAppear { visibilityChanged(true) }
         .onDisappear {
+            let requestedFullSizeAssets = session.assets.filter {
+                fullResolutionRequestIDs[$0.id] != nil
+            }
             neighborLoadTask?.cancel()
             pagerSelectionTask?.cancel()
             livePhotoPlaybackAssetID = nil
             livePhotoSoundEnabled = false
             media.cancelViewerPrefetching()
             visibilityChanged(false)
+            Task { @MainActor in
+                await Task.yield()
+                media.removeViewerOriginalCache(for: requestedFullSizeAssets)
+                await media.removeViewerLivePhotoMotionCache()
+            }
         }
     }
 
@@ -247,10 +258,12 @@ struct AssetViewerView: View {
                 ZStack(alignment: .leading) {
                     AssetViewerInfoView(
                         state: detailState(for: asset.id),
-                        renderedImageMetadata: renderedImageMetadataByAssetID[asset.id],
+                        renderedImageMetadata: renderedImageMetadataForInfo(for: asset),
+                        fullResolutionState: fullResolutionState(for: asset),
                         anchorsContentToBottom: true,
                         contentHeightChanged: { updateInfoContentHeight($0, for: asset.id) },
-                        retry: { retryDetail(for: asset.id) }
+                        retry: { retryDetail(for: asset.id) },
+                        loadFullResolution: { requestFullResolution(for: asset.id) }
                     )
                     .frame(width: targetInfoWidth)
                 }
@@ -288,10 +301,12 @@ struct AssetViewerView: View {
                 ZStack(alignment: .top) {
                     AssetViewerInfoView(
                         state: detailState(for: asset.id),
-                        renderedImageMetadata: renderedImageMetadataByAssetID[asset.id],
+                        renderedImageMetadata: renderedImageMetadataForInfo(for: asset),
+                        fullResolutionState: fullResolutionState(for: asset),
                         anchorsContentToBottom: false,
                         contentHeightChanged: { updateInfoContentHeight($0, for: asset.id) },
-                        retry: { retryDetail(for: asset.id) }
+                        retry: { retryDetail(for: asset.id) },
+                        loadFullResolution: { requestFullResolution(for: asset.id) }
                     )
                     .frame(height: targetInfoHeight)
                 }
@@ -330,8 +345,19 @@ struct AssetViewerView: View {
                     width: Int(max(1, requestSize.width * displayScale)),
                     height: Int(max(1, requestSize.height * displayScale))
                 ),
+                fullResolutionRequestID: fullResolutionRequestIDs[asset.id],
                 renderedImageMetadataChanged: { metadata in
                     renderedImageMetadataByAssetID[asset.id] = metadata
+                    if metadata.source == .original {
+                        fullResolutionLoadErrors.removeValue(forKey: asset.id)
+                    }
+                },
+                fullResolutionLoadFailed: { message in
+                    if let message {
+                        fullResolutionLoadErrors[asset.id] = message
+                    } else {
+                        fullResolutionLoadErrors.removeValue(forKey: asset.id)
+                    }
                 },
                 resumePosition: { session.playbackPosition(for: asset.id) },
                 savePosition: { session.setPlaybackPosition($0, for: asset.id) },
@@ -373,6 +399,13 @@ struct AssetViewerView: View {
                     },
                     soundPlaybackFailed: {
                         livePhotoSoundEnabled = false
+                    },
+                    motionFileSizeChanged: { byteCount in
+                        if let byteCount {
+                            livePhotoMotionByteCounts[asset.id] = byteCount
+                        } else {
+                            livePhotoMotionByteCounts.removeValue(forKey: asset.id)
+                        }
                     }
                 )
                 .frame(width: mediaRect.width, height: mediaRect.height)
@@ -794,6 +827,37 @@ struct AssetViewerView: View {
         }
     }
 
+    private func fullResolutionState(
+        for asset: TimelineAssetSummary
+    ) -> AssetViewerFullResolutionState? {
+        guard asset.mediaKind != .video else { return nil }
+        if renderedImageMetadataByAssetID[asset.id]?.source == .original {
+            return .loaded
+        }
+        if let error = fullResolutionLoadErrors[asset.id] {
+            return .failed(error)
+        }
+        if fullResolutionRequestIDs[asset.id] != nil {
+            return .loading
+        }
+        return .available
+    }
+
+    private func renderedImageMetadataForInfo(
+        for asset: TimelineAssetSummary
+    ) -> AssetViewerRenderedImageMetadata? {
+        guard let metadata = renderedImageMetadataByAssetID[asset.id] else { return nil }
+        guard metadata.source == .original,
+              asset.livePhotoVideoID != nil
+        else { return metadata }
+        return metadata.includingMotion(byteCount: livePhotoMotionByteCounts[asset.id])
+    }
+
+    private func requestFullResolution(for assetID: String) {
+        fullResolutionLoadErrors.removeValue(forKey: assetID)
+        fullResolutionRequestIDs[assetID, default: 0] += 1
+    }
+
     private func mediaTapped() {
         if showsInfo {
             setInfoVisible(false)
@@ -988,7 +1052,9 @@ private struct AssetViewerFitPage: View {
     let pageSize: CGSize
     let animatesFitChanges: Bool
     let targetPixels: MediaPixelSize
+    let fullResolutionRequestID: Int?
     let renderedImageMetadataChanged: (AssetViewerRenderedImageMetadata) -> Void
+    let fullResolutionLoadFailed: (String?) -> Void
     let resumePosition: () -> Double
     let savePosition: (Double) -> Void
     let zoomChanged: (Bool) -> Void
@@ -1013,11 +1079,14 @@ private struct AssetViewerFitPage: View {
                 ZoomableStillImageView(
                     asset: asset,
                     media: media,
+                    isSelected: isSelected,
                     targetPixels: targetPixels,
                     fitRect: mediaRect,
                     animatesFitChanges: animatesFitChanges,
                     reportsRenderedImageMetadata: isSelected,
+                    fullResolutionRequestID: fullResolutionRequestID,
                     renderedImageMetadataChanged: renderedImageMetadataChanged,
+                    fullResolutionLoadFailed: fullResolutionLoadFailed,
                     zoomChanged: zoomChanged,
                     livePhotoPressChanged: livePhotoPressChanged,
                     toggleChrome: toggleChrome
