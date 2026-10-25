@@ -7,6 +7,7 @@
 
 import Foundation
 import Nuke
+import SwiftUI
 import Testing
 import UIKit
 @testable import Remmich
@@ -1219,6 +1220,64 @@ struct RemmichTests {
         #expect(AssetViewerMediaGeometry.animatesFitChanges(infoDragTranslation: 0))
         #expect(!AssetViewerMediaGeometry.animatesFitChanges(infoDragTranslation: -72))
         #expect(!AssetViewerMediaGeometry.animatesFitChanges(infoDragTranslation: 72))
+    }
+
+    @Test func viewerDismissalGeometryTracksTheFingerAndShrinksFromItsTouchPoint() {
+        let viewport = CGSize(width: 402, height: 874)
+        let start = CGPoint(x: 100.5, y: 437)
+
+        #expect(AssetViewerDismissalGeometry.progress(
+            translationHeight: 0,
+            viewportHeight: viewport.height
+        ) == 0)
+        #expect(AssetViewerDismissalGeometry.scale(
+            translationHeight: 180,
+            viewportHeight: viewport.height
+        ) < 1)
+        #expect(AssetViewerDismissalGeometry.scale(
+            translationHeight: 1000,
+            viewportHeight: viewport.height
+        ) == 0.82)
+
+        let anchor = AssetViewerDismissalGeometry.anchor(
+            startLocation: start,
+            viewportSize: viewport
+        )
+        #expect(abs(anchor.x - 0.25) < 0.000_001)
+        #expect(abs(anchor.y - 0.5) < 0.000_001)
+        #expect(!AssetViewerDismissalGeometry.shouldComplete(
+            translationHeight: 12,
+            predictedEndTranslationHeight: 40
+        ))
+        #expect(AssetViewerDismissalGeometry.shouldComplete(
+            translationHeight: 20,
+            predictedEndTranslationHeight: 20
+        ))
+        #expect(AssetViewerDismissalGeometry.shouldComplete(
+            translationHeight: 16,
+            predictedEndTranslationHeight: 80
+        ))
+    }
+
+    @Test func viewerDismissalLandingKeepsTheDraggedAssetAtTheTimelineCell() {
+        let viewport = CGSize(width: 402, height: 874)
+        let image = CGRect(x: 0, y: 336, width: 402, height: 201)
+        let target = CGRect(x: 210, y: 660, width: 90, height: 90)
+        let anchor = UnitPoint(x: 0.25, y: 0.5)
+        let landing = AssetViewerDismissalGeometry.landingTransform(
+            imageRect: image,
+            targetRect: target,
+            viewportSize: viewport,
+            anchor: anchor
+        )
+        let pivot = CGPoint(x: anchor.x * viewport.width, y: anchor.y * viewport.height)
+        let landedCenter = CGPoint(
+            x: pivot.x + landing.scale * (image.midX - pivot.x) + landing.translation.width,
+            y: pivot.y + landing.scale * (image.midY - pivot.y) + landing.translation.height
+        )
+        #expect(abs(landedCenter.x - target.midX) < 0.001)
+        #expect(abs(landedCenter.y - target.midY) < 0.001)
+        #expect(abs(image.width * landing.scale - target.width) < 0.001)
     }
 
     @Test func viewerRenderedPixelsStayCenteredForWidthAndHeightBoundAssets() {

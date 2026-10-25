@@ -17,6 +17,7 @@ struct ZoomableStillImageView: View {
     let targetPixels: MediaPixelSize
     let fitRect: CGRect
     let animatesFitChanges: Bool
+    let showsBackground: Bool
     let reportsRenderedImageMetadata: Bool
     let fullResolutionRequestID: Int?
     let renderedImageMetadataChanged: (AssetViewerRenderedImageMetadata) -> Void
@@ -39,6 +40,7 @@ struct ZoomableStillImageView: View {
         targetPixels: MediaPixelSize,
         fitRect: CGRect,
         animatesFitChanges: Bool,
+        showsBackground: Bool,
         reportsRenderedImageMetadata: Bool,
         fullResolutionRequestID: Int?,
         renderedImageMetadataChanged: @escaping (AssetViewerRenderedImageMetadata) -> Void,
@@ -53,6 +55,7 @@ struct ZoomableStillImageView: View {
         self.targetPixels = targetPixels
         self.fitRect = fitRect
         self.animatesFitChanges = animatesFitChanges
+        self.showsBackground = showsBackground
         self.reportsRenderedImageMetadata = reportsRenderedImageMetadata
         self.fullResolutionRequestID = fullResolutionRequestID
         self.renderedImageMetadataChanged = renderedImageMetadataChanged
@@ -73,6 +76,7 @@ struct ZoomableStillImageView: View {
     var body: some View {
         ZStack {
             Color(uiColor: .systemBackground)
+                .opacity(showsBackground ? 1 : 0)
 
             if let image {
                 zoomableImage(image)
@@ -318,6 +322,7 @@ struct ZoomableStillImageView: View {
             fitRect: fitRect,
             reduceMotion: reduceMotion,
             animatesFitChanges: animatesFitChanges,
+            showsBackground: showsBackground,
             crossfadesImageChanges: !reduceMotion,
             zoomChanged: { value in
                 isZoomed = value
@@ -455,6 +460,7 @@ private struct ZoomableImageScrollView: UIViewRepresentable {
     let fitRect: CGRect
     let reduceMotion: Bool
     let animatesFitChanges: Bool
+    let showsBackground: Bool
     let crossfadesImageChanges: Bool
     let zoomChanged: (Bool) -> Void
     let supportsLivePhotoPlayback: Bool
@@ -471,7 +477,9 @@ private struct ZoomableImageScrollView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> ViewerZoomScrollView {
         let scrollView = ViewerZoomScrollView()
-        scrollView.backgroundColor = .systemBackground
+        scrollView.backgroundColor = .clear
+        context.coordinator.canvas.backgroundColor = .clear
+        context.coordinator.canvas.imageView.backgroundColor = .clear
         scrollView.delegate = context.coordinator
         scrollView.minimumZoomScale = 1
         scrollView.maximumZoomScale = 5
@@ -487,9 +495,7 @@ private struct ZoomableImageScrollView: UIViewRepresentable {
         let canvas = context.coordinator.canvas
         let imageView = canvas.imageView
         imageView.contentMode = .scaleAspectFit
-        imageView.backgroundColor = .systemBackground
         imageView.isUserInteractionEnabled = true
-        canvas.backgroundColor = .systemBackground
         scrollView.addSubview(canvas)
         scrollView.zoomTarget = canvas
 

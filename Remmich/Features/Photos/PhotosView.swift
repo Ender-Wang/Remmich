@@ -355,6 +355,8 @@ struct PhotosView: View {
     @State private var layoutMorphProgress: CGFloat?
     @State private var layoutMorphResetTask: Task<Void, Never>?
     @State private var compactChrome = false
+    @State private var viewerOwnsTimelineChrome = false
+    @State private var viewerChromeReleaseTask: Task<Void, Never>?
     @State private var libraryRange: TimelineLibraryRange = .all
     @State private var initialAssetByRoute: [PhotosRangeRoute: String] = [:]
     @State private var viewerRoute: AssetViewerRoute?
@@ -427,8 +429,14 @@ struct PhotosView: View {
                 media: media,
                 assetDetails: assetDetails,
                 namespace: viewerNamespace,
-                close: { viewerRoute = nil },
-                visibilityChanged: viewerVisibilityChanged
+                close: closeViewer,
+                visibilityChanged: viewerVisibilityChanged,
+                dismissalTarget: { assetID in
+                    viewerDismissalTargetFrame(
+                        for: assetID,
+                        aspectRatio: route.selectedAsset.aspectRatio
+                    )
+                }
             )
         }
         .toolbarBackground(navigationPath.isEmpty ? .hidden : .visible, for: .navigationBar)
@@ -565,6 +573,11 @@ struct PhotosView: View {
             latestJumpTask?.cancel()
             latestJumpTask = nil
             store.completeJump()
+        }
+        .onChange(of: memoryBackdropVisible) { _, visible in
+            Self.logger.info(
+                "Memory backdrop visible=\(visible) content=\(contentName, privacy: .public) viewer=\(viewerRoute != nil) compact=\(compactChrome)"
+            )
         }
         .accessibilityIdentifier(rootAccessibilityID)
         .overlay(alignment: .bottomTrailing) {
@@ -740,11 +753,11 @@ struct PhotosView: View {
             viewportChanged: updateViewport,
             transitionNamespace: viewerNamespace,
             assetSelected: { asset, assets in
-                viewerRoute = AssetViewerRoute(
+                presentViewer(AssetViewerRoute(
                     selectedAsset: asset,
                     initialAssets: assets,
                     origin: .scoped(route: route, contentName: contentName)
-                )
+                ))
             }
         )
         .navigationTitle(route.navigationTitle)
@@ -1124,13 +1137,13 @@ struct PhotosView: View {
                 requestSide: requestSide,
                 visibilityChanged: updateVisibility,
                 viewportChanged: updateViewport,
-                transitionNamespace: viewerNamespace,
+                transitionNamespace: nil,
                 assetSelected: { asset in
-                    viewerRoute = AssetViewerRoute(
+                    presentViewer(AssetViewerRoute(
                         selectedAsset: asset,
                         initialAssets: [asset],
                         origin: .timeline(bucketID: row.bucketID, contentName: contentName)
-                    )
+                    ))
                 },
                 frameCoordinateSpaceName: timelineFrameCoordinateSpaceName,
                 priority: timelinePriority(for: row, layout: layout)
@@ -1388,6 +1401,53 @@ struct PhotosView: View {
         "timeline-frames-\(contentName)"
     }
 
+    private func presentViewer(_ route: AssetViewerRoute) {
+        viewerChromeReleaseTask?.cancel()
+        viewerChromeReleaseTask = nil
+        viewerOwnsTimelineChrome = true
+        viewportRuntime.chromeTracker.scrollingEnded()
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { viewerRoute = route }
+    }
+
+    private func closeViewer() {
+        viewerRoute = nil
+        viewerChromeReleaseTask?.cancel()
+        viewerChromeReleaseTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled, viewerRoute == nil else { return }
+            viewportRuntime.chromeTracker.scrollingEnded()
+            viewerOwnsTimelineChrome = false
+            viewerChromeReleaseTask = nil
+        }
+    }
+
+    private func viewerDismissalTargetFrame(
+        for assetID: String,
+        aspectRatio: Double
+    ) -> AssetViewerDismissalTarget? {
+        guard showsMainTimeline,
+              let frame = viewportRuntime.latestFrameSnapshot?.visibleFrames[assetID],
+              let scrollView = viewportRuntime.scrollView
+        else { return nil }
+        let imageRect = TimelineThumbnailGeometry.renderedImageRect(
+            in: frame.size,
+            aspectRatio: aspectRatio,
+            naturalAspectProgress: presentation.preferences.assetLayout == .naturalAspect ? 1 : 0
+        )
+        let origin = scrollView.convert(scrollView.bounds.origin, to: nil)
+        let frameInWindow = imageRect.offsetBy(
+            dx: frame.minX + origin.x,
+            dy: frame.minY + origin.y
+        )
+        return AssetViewerDismissalTarget(
+            imageFrame: frameInWindow,
+            cornerRadius: presentation.preferences.assetLayout == .naturalAspect
+                ? DesignMetrics.compactCornerRadius : 0
+        )
+    }
+
     private func updateAssetFrameSnapshot(
         _ frames: [String: CGRect],
         layout: TimelineDeterministicLayout,
@@ -1637,6 +1697,10 @@ struct PhotosView: View {
     }
 
     private func updateChrome(old: PhotosChromeGeometry, new: PhotosChromeGeometry) {
+        guard !viewerOwnsTimelineChrome else {
+            viewportRuntime.chromeTracker.scrollingEnded()
+            return
+        }
         let programmaticJump = store.jumpTarget != nil
             || latestJumpTask != nil
             || viewportRuntime.rotationTransaction != nil

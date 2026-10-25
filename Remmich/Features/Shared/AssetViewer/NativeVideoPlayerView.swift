@@ -8,6 +8,7 @@ struct NativeVideoPlayerView: View {
     let media: MediaLibraryController
     let targetPixels: MediaPixelSize
     let isSelected: Bool
+    let showsPlaybackChrome: Bool
     let resumePosition: () -> Double
     let savePosition: (Double) -> Void
 
@@ -32,16 +33,19 @@ struct NativeVideoPlayerView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             if let player, isSelected {
-                NativePlayerController(player: player)
-                    .accessibilityIdentifier("asset-viewer-video-player-\(asset.id)")
-            } else if loading, isSelected {
+                NativePlayerController(
+                    player: player,
+                    showsPlaybackControls: showsPlaybackChrome
+                )
+                .accessibilityIdentifier("asset-viewer-video-player-\(asset.id)")
+            } else if loading, isSelected, showsPlaybackChrome {
                 ProgressView("Preparing Video")
                     .tint(.white)
                     .foregroundStyle(.white)
                     .padding(.horizontal, 18)
                     .frame(height: 48)
                     .background(.regularMaterial, in: Capsule())
-            } else if let failureMessage, isSelected {
+            } else if let failureMessage, isSelected, showsPlaybackChrome {
                 VStack(spacing: 10) {
                     Text(failureMessage)
                         .font(.footnote)
@@ -128,15 +132,17 @@ struct NativeVideoPlayerView: View {
 
 private struct NativePlayerController: UIViewControllerRepresentable {
     let player: AVPlayer
+    let showsPlaybackControls: Bool
 
     func makeUIViewController(context _: Context) -> AVPlayerViewController {
         let controller = AVPlayerViewController()
         controller.player = player
-        controller.showsPlaybackControls = true
+        controller.showsPlaybackControls = showsPlaybackControls
         controller.videoGravity = .resizeAspect
         controller.entersFullScreenWhenPlaybackBegins = false
         controller.exitsFullScreenWhenPlaybackEnds = false
         controller.updatesNowPlayingInfoCenter = false
+        controller.view.backgroundColor = showsPlaybackControls ? .systemBackground : .clear
         controller.view.accessibilityIdentifier = "asset-viewer-native-video-player"
         return controller
     }
@@ -145,6 +151,8 @@ private struct NativePlayerController: UIViewControllerRepresentable {
         if controller.player !== player {
             controller.player = player
         }
+        controller.showsPlaybackControls = showsPlaybackControls
+        controller.view.backgroundColor = showsPlaybackControls ? .systemBackground : .clear
     }
 
     static func dismantleUIViewController(_ controller: AVPlayerViewController, coordinator _: Void) {

@@ -484,18 +484,17 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
             let tabBar = controller.tabBar
             let currentAlpha = CGFloat(tabBar.layer.presentation()?.opacity ?? Float(tabBar.alpha))
             tabBar.layer.removeAllAnimations()
+            // Keep the tab bar in layout while the full-screen viewer is up.
+            // Removing it changes the timeline safe area during drag dismissal.
+            tabBar.isHidden = false
             tabBar.alpha = currentAlpha
+            tabBar.isUserInteractionEnabled = !hidden
+            tabBar.accessibilityElementsHidden = hidden
 
             guard animated, !UIAccessibility.isReduceMotionEnabled else {
-                tabBar.isHidden = hidden
-                tabBar.alpha = 1
-                controller.view.setNeedsLayout()
+                tabBar.alpha = hidden ? 0 : 1
                 return
             }
-
-            tabBar.isHidden = false
-            controller.view.setNeedsLayout()
-            controller.view.layoutIfNeeded()
 
             UIView.animate(
                 withDuration: 0.28,
@@ -507,9 +506,7 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
                 guard finished, let self, let controller,
                       tabBarShouldBeHidden == hidden
                 else { return }
-                controller.tabBar.isHidden = hidden
-                controller.tabBar.alpha = 1
-                controller.view.setNeedsLayout()
+                controller.tabBar.alpha = hidden ? 0 : 1
             }
         }
 

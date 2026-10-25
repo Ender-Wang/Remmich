@@ -1,5 +1,10 @@
 import SwiftUI
 
+struct AssetViewerDismissalTarget {
+    let imageFrame: CGRect
+    let cornerRadius: CGFloat
+}
+
 struct AssetViewerView: View {
     @Environment(\.displayScale) private var displayScale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -10,6 +15,7 @@ struct AssetViewerView: View {
     let namespace: Namespace.ID
     let close: () -> Void
     let visibilityChanged: (Bool) -> Void
+    let dismissalTarget: (String) -> AssetViewerDismissalTarget?
 
     @State private var session: AssetViewerSession
     @State private var zoomedAssetID: String?
@@ -30,7 +36,17 @@ struct AssetViewerView: View {
     @State private var pagerWindowCenterID: String
     @State private var pagerPhase: ScrollPhase = .idle
     @State private var pagerSelectionTask: Task<Void, Never>?
+    @State private var openingIsActive = true
+    @State private var openingProgress: CGFloat = 0
+    @State private var openingTask: Task<Void, Never>?
     @State private var isDismissing = false
+    @State private var dismissalDragTranslation = CGSize.zero
+    @State private var dismissalDragStartLocation = CGPoint.zero
+    @State private var dismissalLandingScale: CGFloat?
+    @State private var dismissalLandingTranslation: CGSize?
+    @State private var dismissalLandingCornerRadius: CGFloat = 0
+    @State private var isLandingDismissal = false
+    @State private var dismissalLandingTask: Task<Void, Never>?
     @State private var livePhotoPlaybackAssetID: String?
     @State private var livePhotoSoundEnabled = false
 
@@ -47,7 +63,8 @@ struct AssetViewerView: View {
         assetDetails: any AssetDetailReading,
         namespace: Namespace.ID,
         close: @escaping () -> Void,
-        visibilityChanged: @escaping (Bool) -> Void
+        visibilityChanged: @escaping (Bool) -> Void,
+        dismissalTarget: @escaping (String) -> AssetViewerDismissalTarget? = { _ in nil }
     ) {
         self.route = route
         self.media = media
@@ -55,6 +72,7 @@ struct AssetViewerView: View {
         self.namespace = namespace
         self.close = close
         self.visibilityChanged = visibilityChanged
+        self.dismissalTarget = dismissalTarget
         _session = State(initialValue: AssetViewerSession(
             route: route,
             bucketIDs: store.bucketSummaries.map(\.id),
@@ -88,6 +106,17 @@ struct AssetViewerView: View {
                     width: max(1, fullGeometry.size.width - safeInsets.leading - safeInsets.trailing),
                     height: max(1, fullGeometry.size.height - safeInsets.top - safeInsets.bottom)
                 )
+                let dismissalScale = AssetViewerDismissalGeometry.scale(
+                    translationHeight: dismissalDragTranslation.height,
+                    viewportHeight: fullGeometry.size.height
+                )
+                let activeDismissalScale = dismissalLandingScale ?? dismissalScale
+                let activeDismissalTranslation = dismissalLandingTranslation
+                    ?? dismissalDragTranslation
+                let dismissalAnchor = AssetViewerDismissalGeometry.anchor(
+                    startLocation: dismissalDragStartLocation,
+                    viewportSize: fullGeometry.size
+                )
                 let shownInfoBottomInset = controlHitSize + infoGap
                 let viewerRect = AssetViewerMediaGeometry.mediaRect(
                     viewportSize: fullGeometry.size,
@@ -101,28 +130,94 @@ struct AssetViewerView: View {
                     topChromeHeight: topChromeHeight,
                     shownInfoBottomInset: shownInfoBottomInset
                 )
+                let selectedMediaRect = selectedMediaRect(
+                    in: viewerRect,
+                    infoProgress: infoProgress,
+                    isLandscape: fullGeometry.size.width > fullGeometry.size.height
+                )
+                let dismissalImageRect = selectedRenderedImageRect(in: selectedMediaRect)
+                let openingTarget = openingIsActive
+                    ? dismissalTarget(route.selectedAsset.id) : nil
+                let openingTransform = openingTarget.map { target in
+                    AssetViewerDismissalGeometry.landingTransform(
+                        imageRect: dismissalImageRect,
+                        targetRect: target.imageFrame.offsetBy(
+                            dx: -fullFrame.minX,
+                            dy: -fullFrame.minY
+                        ),
+                        viewportSize: fullGeometry.size,
+                        anchor: .center
+                    )
+                }
+                let isOpening = openingTransform != nil && !isDismissing
+                let openingRemainder = isOpening ? 1 - openingProgress : 0
+                let isolatesDismissalAsset = isOpening
+                    || isDismissalInteractionActive || isDismissing
+                let dismissalMaskRect = isolatesDismissalAsset
+                    ? dismissalImageRect : fullRect
+                let openingScale = 1 + ((openingTransform?.scale ?? 1) - 1) * openingRemainder
+                let openingTranslation = CGSize(
+                    width: (openingTransform?.translation.width ?? 0) * openingRemainder,
+                    height: (openingTransform?.translation.height ?? 0) * openingRemainder
+                )
+                let openingCornerRadius = (openingTarget?.cornerRadius ?? 0)
+                    / max(openingTransform?.scale ?? 1, 0.04) * openingRemainder
+                let isDraggingOrLanding = isDismissalInteractionActive || isLandingDismissal
                 ZStack {
                     Color(uiColor: .systemBackground)
+                        .opacity(isOpening ? openingProgress : (isolatesDismissalAsset ? 0 : 1))
                     viewerContent(
                         pageSize: fullGeometry.size,
                         viewerRect: viewerRect,
                         requestSize: fullGeometry.size,
                         isLandscape: fullGeometry.size.width > fullGeometry.size.height,
-                        infoProgress: infoProgress
+                        infoProgress: infoProgress,
+                        showsMediaBackground: !isolatesDismissalAsset
                     )
-                    chrome(infoProgress: infoProgress)
-                        .frame(width: safeRect.width, height: safeRect.height)
-                        .position(x: safeRect.midX, y: safeRect.midY)
-                        .zIndex(1)
-                        .opacity(chromeVisible ? 1 : infoProgress)
-                        .allowsHitTesting(chromeVisible || showsInfo)
-                        .accessibilityHidden(!chromeVisible && !showsInfo)
+                    .mask {
+                        RoundedRectangle(
+                            cornerRadius: isOpening
+                                ? openingCornerRadius : dismissalLandingCornerRadius,
+                            style: .continuous
+                        )
+                        .frame(
+                            width: dismissalMaskRect.width,
+                            height: dismissalMaskRect.height
+                        )
+                        .position(
+                            x: dismissalMaskRect.midX,
+                            y: dismissalMaskRect.midY
+                        )
+                    }
+                    .scaleEffect(
+                        isDraggingOrLanding && !reduceMotion
+                            ? activeDismissalScale : openingScale,
+                        anchor: isOpening ? .center : dismissalAnchor
+                    )
+                    .offset(
+                        isDraggingOrLanding && !reduceMotion
+                            ? activeDismissalTranslation : openingTranslation
+                    )
+                    chrome(
+                        infoProgress: infoProgress,
+                        viewportSize: fullGeometry.size,
+                        viewportOrigin: fullFrame.origin,
+                        mediaRect: selectedMediaRect
+                    )
+                    .frame(width: safeRect.width, height: safeRect.height)
+                    .position(x: safeRect.midX, y: safeRect.midY)
+                    .zIndex(1)
+                    .opacity(isOpening
+                        ? openingProgress * (chromeVisible ? 1 : infoProgress)
+                        : (isolatesDismissalAsset ? 0 : (chromeVisible ? 1 : infoProgress)))
+                    .allowsHitTesting(!isolatesDismissalAsset && (chromeVisible || showsInfo))
+                    .accessibilityHidden(isolatesDismissalAsset || (!chromeVisible && !showsInfo))
                 }
                 .simultaneousGesture(
                     verticalViewerGesture(
                         viewportSize: fullRect.size,
-                        contentSize: viewerRect.size,
-                        topInset: viewerRect.minY
+                        viewportOrigin: fullFrame.origin,
+                        mediaRect: selectedMediaRect
                     )
                 )
                 .task(id: previewTargetPixels) {
@@ -133,10 +228,11 @@ struct AssetViewerView: View {
             .ignoresSafeArea(.container, edges: .all)
         }
         .foregroundStyle(.primary)
-        .statusBarHidden(!chromeVisible && !showsInfo)
+        .statusBarHidden(isDismissalInteractionActive || isDismissing || (!chromeVisible && !showsInfo))
+        .presentationBackground(.clear)
+        .interactiveDismissDisabled(true)
         .toolbar(.hidden, for: .navigationBar)
         .navigationBarBackButtonHidden(true)
-        .navigationTransition(.zoom(sourceID: route.selectedAsset.id, in: namespace))
         .task {
             await session.start()
             updateViewerPrefetch()
@@ -163,8 +259,13 @@ struct AssetViewerView: View {
                 pagerWindowCenterID = newAssetID
             }
         }
-        .onAppear { visibilityChanged(true) }
+        .onAppear {
+            visibilityChanged(true)
+            beginOpeningAnimation()
+        }
         .onDisappear {
+            openingTask?.cancel()
+            dismissalLandingTask?.cancel()
             let requestedFullSizeAssets = session.assets.filter {
                 fullResolutionRequestIDs[$0.id] != nil
             }
@@ -187,7 +288,8 @@ struct AssetViewerView: View {
         viewerRect: CGRect,
         requestSize: CGSize,
         isLandscape: Bool,
-        infoProgress: CGFloat
+        infoProgress: CGFloat,
+        showsMediaBackground: Bool
     ) -> some View {
         ScrollView(.horizontal) {
             LazyHStack(spacing: 0) {
@@ -198,7 +300,8 @@ struct AssetViewerView: View {
                         viewerRect: viewerRect,
                         requestSize: requestSize,
                         isLandscape: isLandscape,
-                        infoProgress: infoProgress
+                        infoProgress: infoProgress,
+                        showsMediaBackground: showsMediaBackground
                     )
                     .frame(width: pageSize.width, height: pageSize.height)
                     .clipped()
@@ -210,7 +313,10 @@ struct AssetViewerView: View {
         .scrollIndicators(.hidden)
         .scrollTargetBehavior(.paging)
         .scrollPosition(id: $pagerPosition)
-        .scrollDisabled(zoomedAssetID == session.selectedAssetID)
+        .scrollDisabled(
+            zoomedAssetID == session.selectedAssetID
+                || isDismissalInteractionActive || openingIsActive
+        )
         .onChange(of: pagerPosition) { _, assetID in
             schedulePagerSelectionSync(assetID)
         }
@@ -231,7 +337,8 @@ struct AssetViewerView: View {
         viewerRect: CGRect,
         requestSize: CGSize,
         isLandscape: Bool,
-        infoProgress: CGFloat
+        infoProgress: CGFloat,
+        showsMediaBackground: Bool
     ) -> some View {
         let animatesFitChanges = AssetViewerMediaGeometry.animatesFitChanges(
             infoDragTranslation: infoDragTranslation
@@ -250,7 +357,8 @@ struct AssetViewerView: View {
                     asset: asset,
                     requestSize: requestSize,
                     mediaRect: mediaRect,
-                    animatesFitChanges: animatesFitChanges
+                    animatesFitChanges: animatesFitChanges,
+                    showsBackground: showsMediaBackground
                 )
                 .frame(width: pageSize.width, height: pageSize.height)
 
@@ -269,6 +377,7 @@ struct AssetViewerView: View {
                 .frame(width: infoWidth, height: viewerRect.height, alignment: .leading)
                 .clipped()
                 .position(x: viewerRect.maxX - infoWidth / 2, y: viewerRect.midY)
+                .opacity(showsMediaBackground ? 1 : 0)
                 .accessibilityHidden(
                     infoProgress < 0.5 || asset.id != session.selectedAssetID
                 )
@@ -294,7 +403,8 @@ struct AssetViewerView: View {
                     asset: asset,
                     requestSize: requestSize,
                     mediaRect: mediaRect,
-                    animatesFitChanges: animatesFitChanges
+                    animatesFitChanges: animatesFitChanges,
+                    showsBackground: showsMediaBackground
                 )
                 .frame(width: pageSize.width, height: pageSize.height)
 
@@ -316,6 +426,7 @@ struct AssetViewerView: View {
                     x: viewerRect.midX,
                     y: mediaRect.maxY + gap + infoHeight / 2
                 )
+                .opacity(showsMediaBackground ? 1 : 0)
                 .accessibilityHidden(
                     infoProgress < 0.5 || asset.id != session.selectedAssetID
                 )
@@ -330,7 +441,8 @@ struct AssetViewerView: View {
         asset: TimelineAssetSummary,
         requestSize: CGSize,
         mediaRect: CGRect,
-        animatesFitChanges: Bool
+        animatesFitChanges: Bool,
+        showsBackground: Bool
     ) -> some View {
         ZStack {
             AssetViewerFitPage(
@@ -341,6 +453,7 @@ struct AssetViewerView: View {
                 mediaRect: mediaRect,
                 pageSize: requestSize,
                 animatesFitChanges: animatesFitChanges,
+                showsBackground: showsBackground,
                 targetPixels: .init(
                     width: Int(max(1, requestSize.width * displayScale)),
                     height: Int(max(1, requestSize.height * displayScale))
@@ -451,7 +564,48 @@ struct AssetViewerView: View {
         )
     }
 
-    private func chrome(infoProgress: CGFloat) -> some View {
+    private func selectedMediaRect(
+        in viewerRect: CGRect,
+        infoProgress: CGFloat,
+        isLandscape: Bool
+    ) -> CGRect {
+        if isLandscape {
+            return CGRect(
+                x: viewerRect.minX,
+                y: viewerRect.minY,
+                width: viewerRect.width - viewerRect.width / 2 * infoProgress,
+                height: viewerRect.height
+            )
+        }
+        let maxInfoHeight = max(0, viewerRect.height - 220 - infoGap)
+        let infoHeight = min(maxInfoHeight, infoContentHeight(for: session.selectedAssetID))
+            * infoProgress
+        let gap = infoGap * infoProgress
+        return CGRect(
+            x: viewerRect.minX,
+            y: viewerRect.minY,
+            width: viewerRect.width,
+            height: max(220, viewerRect.height - infoHeight - gap)
+        )
+    }
+
+    private func selectedRenderedImageRect(in mediaRect: CGRect) -> CGRect {
+        guard let asset = session.selectedAsset else { return mediaRect }
+        let pixelSize = renderedImageMetadataByAssetID[asset.id].map {
+            CGSize(width: CGFloat($0.pixelSize.width), height: CGFloat($0.pixelSize.height))
+        } ?? CGSize(width: max(0.01, CGFloat(asset.aspectRatio)), height: 1)
+        return AssetViewerMediaGeometry.renderedPixelRect(
+            pixelSize: pixelSize,
+            in: mediaRect
+        )
+    }
+
+    private func chrome(
+        infoProgress: CGFloat,
+        viewportSize: CGSize,
+        viewportOrigin: CGPoint,
+        mediaRect: CGRect
+    ) -> some View {
         VStack(spacing: 0) {
             GeometryReader { geometry in
                 ZStack {
@@ -460,7 +614,13 @@ struct AssetViewerView: View {
                             systemImage: "chevron.backward",
                             label: "Back",
                             identifier: "asset-viewer-back",
-                            action: beginDismissal
+                            action: {
+                                completeDragDismissal(
+                                    viewportSize: viewportSize,
+                                    viewportOrigin: viewportOrigin,
+                                    mediaRect: mediaRect
+                                )
+                            }
                         )
 
                         Spacer()
@@ -651,29 +811,78 @@ struct AssetViewerView: View {
 
     private func verticalViewerGesture(
         viewportSize: CGSize,
-        contentSize: CGSize,
-        topInset: CGFloat
+        viewportOrigin: CGPoint,
+        mediaRect: CGRect
     ) -> some Gesture {
-        DragGesture(minimumDistance: 8)
+        DragGesture(minimumDistance: 16)
             .onChanged { value in
-                guard !reduceMotion,
+                guard !openingIsActive,
+                      !isDismissing,
                       zoomedAssetID == nil,
                       abs(value.translation.height) > abs(value.translation.width) * 1.2
                 else { return }
+                let drivesDismissal = value.translation.height > 0
+                    && (!showsInfo || isOutsideViewerContent(
+                        value.startLocation,
+                        viewportSize: viewportSize,
+                        contentSize: mediaRect.size,
+                        topInset: mediaRect.minY
+                    ))
                 var transaction = Transaction()
                 transaction.disablesAnimations = true
+                if drivesDismissal {
+                    guard !reduceMotion else { return }
+                    withTransaction(transaction) {
+                        dismissalDragStartLocation = value.startLocation
+                        dismissalDragTranslation = CGSize(
+                            width: value.translation.width,
+                            height: max(0, value.translation.height)
+                        )
+                        infoDragTranslation = 0
+                    }
+                    return
+                }
                 withTransaction(transaction) {
+                    dismissalDragTranslation = .zero
                     infoDragTranslation = showsInfo
                         ? max(0, value.translation.height)
                         : min(0, value.translation.height)
                 }
             }
             .onEnded { value in
+                guard !openingIsActive, !isDismissing else { return }
                 guard zoomedAssetID == nil else {
+                    cancelDismissalInteraction()
                     settleInfoGesture(visible: showsInfo)
                     return
                 }
                 let isVertical = abs(value.translation.height) > abs(value.translation.width) * 1.2
+                let drivesDismissal = isVertical
+                    && value.translation.height > 0
+                    && (!showsInfo || isOutsideViewerContent(
+                        value.startLocation,
+                        viewportSize: viewportSize,
+                        contentSize: mediaRect.size,
+                        topInset: mediaRect.minY
+                    ))
+                if drivesDismissal {
+                    infoDragTranslation = 0
+                    if AssetViewerDismissalGeometry.shouldComplete(
+                        translationHeight: value.translation.height,
+                        predictedEndTranslationHeight: value.predictedEndTranslation.height
+                    ) {
+                        completeDragDismissal(
+                            viewportSize: viewportSize,
+                            viewportOrigin: viewportOrigin,
+                            mediaRect: mediaRect
+                        )
+                    } else {
+                        cancelDismissalInteraction()
+                    }
+                    return
+                }
+
+                cancelDismissalInteraction()
                 let crossesThreshold = abs(value.translation.height) >= 36
                 guard isVertical, crossesThreshold else {
                     settleInfoGesture(visible: showsInfo)
@@ -682,27 +891,91 @@ struct AssetViewerView: View {
 
                 if value.translation.height < 0 {
                     settleInfoGesture(visible: true)
-                } else if !showsInfo || isOutsideViewerContent(
-                    value.startLocation,
-                    viewportSize: viewportSize,
-                    contentSize: contentSize,
-                    topInset: topInset
-                ) {
-                    infoDragTranslation = 0
-                    beginDismissal()
                 } else {
                     settleInfoGesture(visible: false)
                 }
             }
     }
 
-    private func beginDismissal() {
+    private func beginOpeningAnimation() {
+        guard dismissalTarget(route.selectedAsset.id) != nil else {
+            openingIsActive = false
+            return
+        }
+        guard !reduceMotion else {
+            openingProgress = 1
+            openingIsActive = false
+            return
+        }
+        openingTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(16))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.28)) {
+                openingProgress = 1
+            }
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled else { return }
+            openingIsActive = false
+        }
+    }
+
+    private func completeDragDismissal(
+        viewportSize: CGSize,
+        viewportOrigin: CGPoint,
+        mediaRect: CGRect
+    ) {
         guard !isDismissing else { return }
         isDismissing = true
-        visibilityChanged(false)
-        Task { @MainActor in
-            await Task.yield()
-            close()
+        guard !reduceMotion, let asset = session.selectedAsset else {
+            closeWithoutAnimation()
+            return
+        }
+        let destination = dismissalTarget(asset.id)
+        let target = destination?.imageFrame.offsetBy(
+            dx: -viewportOrigin.x,
+            dy: -viewportOrigin.y
+        ) ?? CGRect(
+            x: viewportSize.width / 2 - 40,
+            y: viewportSize.height - 120,
+            width: 80,
+            height: 80
+        )
+        let imageRect = selectedRenderedImageRect(in: mediaRect)
+        let anchor = AssetViewerDismissalGeometry.anchor(
+            startLocation: dismissalDragStartLocation,
+            viewportSize: viewportSize
+        )
+        let landing = AssetViewerDismissalGeometry.landingTransform(
+            imageRect: imageRect,
+            targetRect: target,
+            viewportSize: viewportSize,
+            anchor: anchor
+        )
+        isLandingDismissal = true
+        withAnimation(.easeOut(duration: 0.28)) {
+            dismissalLandingScale = landing.scale
+            dismissalLandingTranslation = landing.translation
+            dismissalLandingCornerRadius = (destination?.cornerRadius ?? 0)
+                / max(landing.scale, 0.04)
+        }
+        dismissalLandingTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(280))
+            guard !Task.isCancelled else { return }
+            closeWithoutAnimation()
+        }
+    }
+
+    private func closeWithoutAnimation() {
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { close() }
+    }
+
+    private func cancelDismissalInteraction() {
+        guard isDismissalInteractionActive else { return }
+        withAnimation(reduceMotion ? nil : .spring(duration: 0.32, bounce: 0.1)) {
+            dismissalDragTranslation = .zero
+            dismissalDragStartLocation = .zero
         }
     }
 
@@ -722,6 +995,10 @@ struct AssetViewerView: View {
             ? 1 - max(0, infoDragTranslation) / revealDistance
             : max(0, -infoDragTranslation) / revealDistance
         return min(1, max(0, progress))
+    }
+
+    private var isDismissalInteractionActive: Bool {
+        dismissalDragTranslation.height > 0
     }
 
     private func resolvedSafeAreaInsets(
@@ -1039,6 +1316,66 @@ nonisolated enum AssetViewerMediaGeometry {
     }
 }
 
+nonisolated enum AssetViewerDismissalGeometry {
+    private static let maximumScaleReduction: CGFloat = 0.18
+
+    static func progress(translationHeight: CGFloat, viewportHeight: CGFloat) -> CGFloat {
+        let travel = max(160, min(320, viewportHeight * 0.35))
+        return min(1, max(0, translationHeight) / travel)
+    }
+
+    static func scale(translationHeight: CGFloat, viewportHeight: CGFloat) -> CGFloat {
+        1 - maximumScaleReduction * progress(
+            translationHeight: translationHeight,
+            viewportHeight: viewportHeight
+        )
+    }
+
+    static func anchor(startLocation: CGPoint, viewportSize: CGSize) -> UnitPoint {
+        guard viewportSize.width > 0,
+              viewportSize.height > 0,
+              startLocation != .zero
+        else { return .center }
+        return UnitPoint(
+            x: min(1, max(0, startLocation.x / viewportSize.width)),
+            y: min(1, max(0, startLocation.y / viewportSize.height))
+        )
+    }
+
+    static func landingTransform(
+        imageRect: CGRect,
+        targetRect: CGRect,
+        viewportSize: CGSize,
+        anchor: UnitPoint
+    ) -> (scale: CGFloat, translation: CGSize) {
+        guard imageRect.width > 0, imageRect.height > 0,
+              targetRect.width > 0, targetRect.height > 0
+        else { return (1, .zero) }
+        let scale = min(1, max(0.04, min(
+            targetRect.width / imageRect.width,
+            targetRect.height / imageRect.height
+        )))
+        let pivot = CGPoint(
+            x: anchor.x * viewportSize.width,
+            y: anchor.y * viewportSize.height
+        )
+        return (
+            scale,
+            CGSize(
+                width: targetRect.midX - pivot.x - scale * (imageRect.midX - pivot.x),
+                height: targetRect.midY - pivot.y - scale * (imageRect.midY - pivot.y)
+            )
+        )
+    }
+
+    static func shouldComplete(
+        translationHeight: CGFloat,
+        predictedEndTranslationHeight: CGFloat
+    ) -> Bool {
+        translationHeight >= 18 || predictedEndTranslationHeight >= 60
+    }
+}
+
 private struct AssetDetailLoadRequest: Hashable {
     let assetID: String
     let includesNeighbors: Bool
@@ -1056,6 +1393,7 @@ private struct AssetViewerFitPage: View {
     let mediaRect: CGRect
     let pageSize: CGSize
     let animatesFitChanges: Bool
+    let showsBackground: Bool
     let targetPixels: MediaPixelSize
     let fullResolutionRequestID: Int?
     let renderedImageMetadataChanged: (AssetViewerRenderedImageMetadata) -> Void
@@ -1069,12 +1407,14 @@ private struct AssetViewerFitPage: View {
     var body: some View {
         ZStack {
             Color(uiColor: .systemBackground)
+                .opacity(showsBackground ? 1 : 0)
             if asset.mediaKind == .video {
                 NativeVideoPlayerView(
                     asset: asset,
                     media: media,
                     targetPixels: targetPixels,
                     isSelected: isSelected,
+                    showsPlaybackChrome: showsBackground,
                     resumePosition: resumePosition,
                     savePosition: savePosition
                 )
@@ -1088,6 +1428,7 @@ private struct AssetViewerFitPage: View {
                     targetPixels: targetPixels,
                     fitRect: mediaRect,
                     animatesFitChanges: animatesFitChanges,
+                    showsBackground: showsBackground,
                     reportsRenderedImageMetadata: isSelected,
                     fullResolutionRequestID: fullResolutionRequestID,
                     renderedImageMetadataChanged: renderedImageMetadataChanged,

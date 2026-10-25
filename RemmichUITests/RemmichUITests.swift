@@ -450,6 +450,35 @@ final class RemmichUITests: XCTestCase {
     }
 
     @MainActor
+    func testAssetViewerDragDismissesWithChromeShownAndHidden() {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = ["-ui-testing-signed-in"]
+        app.launch()
+
+        let asset = app.descendants(matching: .any)["asset-asset-1"].firstMatch
+        XCTAssertTrue(asset.waitForExistence(timeout: 10))
+        asset.tap()
+
+        var still = app.descendants(matching: .any)["asset-viewer-still-asset-1"]
+        XCTAssertTrue(still.waitForExistence(timeout: 10))
+        let start = still.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.42))
+        let shortEnd = still.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.46))
+        start.press(forDuration: 0.1, thenDragTo: shortEnd)
+        XCTAssertTrue(waitUntil(timeout: 10) { !still.exists && asset.isHittable })
+
+        asset.tap()
+        still = app.descendants(matching: .any)["asset-viewer-still-asset-1"]
+        XCTAssertTrue(still.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["asset-viewer-back"].waitForExistence(timeout: 5))
+        still.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(waitUntil(timeout: 3) { !app.buttons["asset-viewer-back"].isHittable })
+
+        still.swipeDown()
+        XCTAssertTrue(waitUntil(timeout: 10) { !still.exists && asset.isHittable })
+    }
+
+    @MainActor
     func testAssetViewerRespectsSafeAreasAndRevealsInfo() {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
@@ -742,9 +771,14 @@ final class RemmichUITests: XCTestCase {
         XCTAssertGreaterThanOrEqual(initialFrame.height, app.frame.height - 2)
 
         still.doubleTap()
-        XCTAssertTrue(waitUntil(timeout: 3) {
-            still.value as? String == "Zoomed" && !back.isHittable
-        })
+        XCTAssertTrue(
+            waitUntil(timeout: 3) { still.value as? String == "Zoomed" },
+            "The UIKit still surface did not enter zoom after a double tap"
+        )
+        XCTAssertTrue(
+            waitUntil(timeout: 3) { !back.isHittable },
+            "The viewer did not hide chrome after the still surface entered zoom"
+        )
         XCTAssertEqual(still.frame.width, initialFrame.width, accuracy: 1)
         XCTAssertEqual(still.frame.height, initialFrame.height, accuracy: 1)
 
