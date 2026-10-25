@@ -581,6 +581,47 @@ final class RemmichUITests: XCTestCase {
     }
 
     @MainActor
+    func testAssetViewerZoomKeepsCanvasStableThroughChromeChanges() {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = ["-ui-testing-signed-in"]
+        app.launch()
+
+        let asset = app.descendants(matching: .any)["asset-asset-1"].firstMatch
+        XCTAssertTrue(asset.waitForExistence(timeout: 10))
+        asset.tap()
+
+        let still = app.descendants(matching: .any)["asset-viewer-still-asset-1"]
+        let back = app.buttons["asset-viewer-back"]
+        XCTAssertTrue(still.waitForExistence(timeout: 10))
+        let initialFrame = still.frame
+        XCTAssertGreaterThanOrEqual(initialFrame.height, app.frame.height - 2)
+
+        still.doubleTap()
+        XCTAssertTrue(waitUntil(timeout: 3) {
+            still.value as? String == "Zoomed" && !back.isHittable
+        })
+        XCTAssertEqual(still.frame.width, initialFrame.width, accuracy: 1)
+        XCTAssertEqual(still.frame.height, initialFrame.height, accuracy: 1)
+
+        still.tap()
+        XCTAssertTrue(waitUntil(timeout: 3) { back.exists })
+        XCTAssertEqual(still.value as? String, "Zoomed")
+        XCTAssertEqual(still.frame.height, initialFrame.height, accuracy: 1)
+
+        still.tap()
+        XCTAssertTrue(waitUntil(timeout: 3) { !back.isHittable })
+        still.doubleTap()
+        XCTAssertTrue(waitUntil(timeout: 3) { still.value as? String == "Fit" })
+        XCTAssertEqual(still.frame.height, initialFrame.height, accuracy: 1)
+
+        still.tap()
+        XCTAssertTrue(waitUntil(timeout: 3) { back.exists })
+        back.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(app.descendants(matching: .any)["photos-root"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor
     func testVideoViewerUsesNativePlayerAndRestoresTimeline() {
         let app = XCUIApplication()
         app.launchArguments = ["-ui-testing-signed-in"]

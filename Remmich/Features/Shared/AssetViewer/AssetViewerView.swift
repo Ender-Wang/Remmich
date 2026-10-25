@@ -116,18 +116,11 @@ struct AssetViewerView: View {
                     ),
                     height: max(1, fullGeometry.size.height - topInset - bottomInset)
                 )
-                let viewerInsets = EdgeInsets(
-                    top: viewerRect.minY,
-                    leading: viewerRect.minX,
-                    bottom: max(0, fullGeometry.size.height - viewerRect.maxY),
-                    trailing: max(0, fullGeometry.size.width - viewerRect.maxX)
-                )
-
                 ZStack {
                     Color(uiColor: .systemBackground)
                     viewerContent(
-                        contentSize: viewerRect.size,
-                        contentInsets: viewerInsets,
+                        pageSize: fullGeometry.size,
+                        viewerRect: viewerRect,
                         requestSize: fullGeometry.size,
                         isLandscape: fullGeometry.size.width > fullGeometry.size.height,
                         infoProgress: infoProgress
@@ -135,6 +128,7 @@ struct AssetViewerView: View {
                     chrome(infoProgress: infoProgress)
                         .frame(width: safeRect.width, height: safeRect.height)
                         .position(x: safeRect.midX, y: safeRect.midY)
+                        .zIndex(1)
                         .opacity(chromeVisible ? 1 : infoProgress)
                         .allowsHitTesting(chromeVisible || showsInfo)
                         .accessibilityHidden(!chromeVisible && !showsInfo)
@@ -190,8 +184,8 @@ struct AssetViewerView: View {
     }
 
     private func viewerContent(
-        contentSize: CGSize,
-        contentInsets: EdgeInsets,
+        pageSize: CGSize,
+        viewerRect: CGRect,
         requestSize: CGSize,
         isLandscape: Bool,
         infoProgress: CGFloat
@@ -201,14 +195,14 @@ struct AssetViewerView: View {
                 ForEach(pagerWindowAssets) { asset in
                     viewerPage(
                         asset: asset,
-                        size: contentSize,
+                        pageSize: pageSize,
+                        viewerRect: viewerRect,
                         requestSize: requestSize,
                         isLandscape: isLandscape,
                         infoProgress: infoProgress
                     )
-                    .frame(width: contentSize.width, height: contentSize.height)
+                    .frame(width: pageSize.width, height: pageSize.height)
                     .clipped()
-                    .padding(contentInsets)
                     .id(asset.id)
                 }
             }
@@ -234,18 +228,29 @@ struct AssetViewerView: View {
     @ViewBuilder
     private func viewerPage(
         asset: TimelineAssetSummary,
-        size: CGSize,
+        pageSize: CGSize,
+        viewerRect: CGRect,
         requestSize: CGSize,
         isLandscape: Bool,
         infoProgress: CGFloat
     ) -> some View {
         if isLandscape {
-            let targetInfoWidth = size.width / 2
+            let targetInfoWidth = viewerRect.width / 2
             let infoWidth = targetInfoWidth * infoProgress
-            let mediaWidth = size.width - infoWidth
-            HStack(spacing: 0) {
-                mediaPage(asset: asset, requestSize: requestSize)
-                    .frame(width: mediaWidth, height: size.height)
+            let mediaRect = CGRect(
+                x: viewerRect.minX,
+                y: viewerRect.minY,
+                width: viewerRect.width - infoWidth,
+                height: viewerRect.height
+            )
+            ZStack {
+                mediaPage(
+                    asset: asset,
+                    requestSize: requestSize,
+                    mediaRect: mediaRect,
+                    animatesFitChanges: !showsInfo && infoProgress == 0
+                )
+                .frame(width: pageSize.width, height: pageSize.height)
 
                 ZStack(alignment: .leading) {
                     AssetViewerInfoView(
@@ -257,24 +262,36 @@ struct AssetViewerView: View {
                     )
                     .frame(width: targetInfoWidth)
                 }
-                .frame(width: infoWidth, height: size.height, alignment: .leading)
+                .frame(width: infoWidth, height: viewerRect.height, alignment: .leading)
                 .clipped()
+                .position(x: viewerRect.maxX - infoWidth / 2, y: viewerRect.midY)
                 .accessibilityHidden(
                     infoProgress < 0.5 || asset.id != session.selectedAssetID
                 )
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(width: pageSize.width, height: pageSize.height)
             .animation(infoAnimation, value: showsInfo)
             .accessibilityIdentifier(infoProgress > 0.5 ? "asset-viewer-landscape-split" : "asset-viewer-landscape")
         } else {
-            let maxInfoHeight = max(0, size.height - 220 - infoGap)
+            let maxInfoHeight = max(0, viewerRect.height - 220 - infoGap)
             let targetInfoHeight = min(maxInfoHeight, infoContentHeight)
             let infoHeight = targetInfoHeight * infoProgress
             let gap = infoGap * infoProgress
-            let mediaHeight = max(220, size.height - infoHeight - gap)
-            VStack(spacing: gap) {
-                mediaPage(asset: asset, requestSize: requestSize)
-                    .frame(height: mediaHeight)
+            let mediaHeight = max(220, viewerRect.height - infoHeight - gap)
+            let mediaRect = CGRect(
+                x: viewerRect.minX,
+                y: viewerRect.minY,
+                width: viewerRect.width,
+                height: mediaHeight
+            )
+            ZStack {
+                mediaPage(
+                    asset: asset,
+                    requestSize: requestSize,
+                    mediaRect: mediaRect,
+                    animatesFitChanges: !showsInfo && infoProgress == 0
+                )
+                .frame(width: pageSize.width, height: pageSize.height)
 
                 ZStack(alignment: .top) {
                     AssetViewerInfoView(
@@ -286,13 +303,17 @@ struct AssetViewerView: View {
                     )
                     .frame(height: targetInfoHeight)
                 }
-                .frame(height: infoHeight, alignment: .top)
+                .frame(width: viewerRect.width, height: infoHeight, alignment: .top)
                 .clipped()
+                .position(
+                    x: viewerRect.midX,
+                    y: mediaRect.maxY + gap + infoHeight / 2
+                )
                 .accessibilityHidden(
                     infoProgress < 0.5 || asset.id != session.selectedAssetID
                 )
             }
-            .frame(maxHeight: .infinity, alignment: .top)
+            .frame(width: pageSize.width, height: pageSize.height)
             .animation(infoAnimation, value: showsInfo)
             .animation(infoAnimation, value: infoContentHeight)
         }
@@ -300,7 +321,9 @@ struct AssetViewerView: View {
 
     private func mediaPage(
         asset: TimelineAssetSummary,
-        requestSize: CGSize
+        requestSize: CGSize,
+        mediaRect: CGRect,
+        animatesFitChanges: Bool
     ) -> some View {
         ZStack {
             AssetViewerFitPage(
@@ -308,6 +331,9 @@ struct AssetViewerView: View {
                 media: media,
                 isSelected: asset.id == session.selectedAssetID,
                 dismissesInfo: showsInfo,
+                mediaRect: mediaRect,
+                pageSize: requestSize,
+                animatesFitChanges: animatesFitChanges,
                 targetPixels: .init(
                     width: Int(max(1, requestSize.width * displayScale)),
                     height: Int(max(1, requestSize.height * displayScale))
@@ -324,6 +350,11 @@ struct AssetViewerView: View {
                 zoomChanged: { isZoomed in
                     guard asset.id == session.selectedAssetID else { return }
                     zoomedAssetID = isZoomed ? asset.id : nil
+                    guard isZoomed, chromeVisible, !showsInfo else { return }
+                    hideRenderedImageStatus()
+                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) {
+                        chromeVisible = false
+                    }
                 },
                 toggleChrome: mediaTapped
             )
@@ -923,6 +954,9 @@ private struct AssetViewerFitPage: View {
     let media: MediaLibraryController
     let isSelected: Bool
     let dismissesInfo: Bool
+    let mediaRect: CGRect
+    let pageSize: CGSize
+    let animatesFitChanges: Bool
     let targetPixels: MediaPixelSize
     let previewMetadataChanged: (AssetViewerPreviewMetadata) -> Void
     let renderedImageMetadataChanged: (AssetViewerRenderedImageMetadata) -> Void
@@ -943,11 +977,15 @@ private struct AssetViewerFitPage: View {
                     resumePosition: resumePosition,
                     savePosition: savePosition
                 )
+                .frame(width: mediaRect.width, height: mediaRect.height)
+                .position(x: mediaRect.midX, y: mediaRect.midY)
             } else {
                 ZoomableStillImageView(
                     asset: asset,
                     media: media,
                     targetPixels: targetPixels,
+                    fitRect: mediaRect,
+                    animatesFitChanges: animatesFitChanges,
                     reportsPreviewMetadata: isSelected && dismissesInfo,
                     reportsRenderedImageMetadata: isSelected,
                     previewMetadataChanged: previewMetadataChanged,
@@ -955,14 +993,18 @@ private struct AssetViewerFitPage: View {
                     zoomChanged: zoomChanged,
                     toggleChrome: toggleChrome
                 )
+                .frame(width: pageSize.width, height: pageSize.height)
             }
             if dismissesInfo {
                 Color.clear
                     .contentShape(.rect)
+                    .frame(width: mediaRect.width, height: mediaRect.height)
+                    .position(x: mediaRect.midX, y: mediaRect.midY)
                     .onTapGesture(perform: toggleChrome)
                     .accessibilityHidden(true)
             }
         }
+        .frame(width: pageSize.width, height: pageSize.height)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(asset.mediaKind == .video ? "Video" : "Photo")
         .accessibilityIdentifier("asset-viewer-page-\(asset.id)")

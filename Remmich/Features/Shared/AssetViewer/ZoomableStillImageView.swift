@@ -8,6 +8,8 @@ struct ZoomableStillImageView: View {
     let asset: TimelineAssetSummary
     let media: MediaLibraryController
     let targetPixels: MediaPixelSize
+    let fitRect: CGRect
+    let animatesFitChanges: Bool
     let reportsPreviewMetadata: Bool
     let reportsRenderedImageMetadata: Bool
     let previewMetadataChanged: (AssetViewerPreviewMetadata) -> Void
@@ -21,11 +23,14 @@ struct ZoomableStillImageView: View {
     @State private var loadedFileSizeBytes: Int?
     @State private var isShowingThumbnailFallback = false
     @State private var renderedSource: AssetViewerRenderedImageSource?
+    @State private var isZoomed = false
 
     init(
         asset: TimelineAssetSummary,
         media: MediaLibraryController,
         targetPixels: MediaPixelSize,
+        fitRect: CGRect,
+        animatesFitChanges: Bool,
         reportsPreviewMetadata: Bool,
         reportsRenderedImageMetadata: Bool,
         previewMetadataChanged: @escaping (AssetViewerPreviewMetadata) -> Void,
@@ -36,6 +41,8 @@ struct ZoomableStillImageView: View {
         self.asset = asset
         self.media = media
         self.targetPixels = targetPixels
+        self.fitRect = fitRect
+        self.animatesFitChanges = animatesFitChanges
         self.reportsPreviewMetadata = reportsPreviewMetadata
         self.reportsRenderedImageMetadata = reportsRenderedImageMetadata
         self.previewMetadataChanged = previewMetadataChanged
@@ -76,7 +83,11 @@ struct ZoomableStillImageView: View {
         .task(id: loadID) {
             await loadPreview()
         }
-        .onDisappear { zoomChanged(false) }
+        .onDisappear {
+            isZoomed = false
+            zoomChanged(false)
+        }
+        .accessibilityValue(isZoomed ? "Zoomed" : "Fit")
         .accessibilityIdentifier("asset-viewer-still-\(asset.id)")
     }
 
@@ -157,8 +168,14 @@ struct ZoomableStillImageView: View {
         ZoomableImageScrollView(
             image: image,
             assetID: asset.id,
+            fitRect: fitRect,
+            reduceMotion: reduceMotion,
+            animatesFitChanges: animatesFitChanges,
             crossfadesImageChanges: isShowingThumbnailFallback && !reduceMotion,
-            zoomChanged: zoomChanged,
+            zoomChanged: { value in
+                isZoomed = value
+                zoomChanged(value)
+            },
             toggleChrome: toggleChrome
         )
     }
@@ -246,6 +263,9 @@ struct ZoomableStillImageView: View {
 private struct ZoomableImageScrollView: UIViewRepresentable {
     let image: UIImage
     let assetID: String
+    let fitRect: CGRect
+    let reduceMotion: Bool
+    let animatesFitChanges: Bool
     let crossfadesImageChanges: Bool
     let zoomChanged: (Bool) -> Void
     let toggleChrome: () -> Void
@@ -266,14 +286,17 @@ private struct ZoomableImageScrollView: UIViewRepresentable {
         scrollView.decelerationRate = .fast
         scrollView.contentInsetAdjustmentBehavior = .never
         scrollView.accessibilityLabel = "Zoomable photo"
+        scrollView.accessibilityValue = "Fit"
         scrollView.accessibilityIdentifier = "asset-viewer-zoom-\(assetID)"
 
-        let imageView = context.coordinator.imageView
+        let canvas = context.coordinator.canvas
+        let imageView = canvas.imageView
         imageView.contentMode = .scaleAspectFit
         imageView.backgroundColor = .systemBackground
         imageView.isUserInteractionEnabled = true
-        scrollView.addSubview(imageView)
-        scrollView.zoomTarget = imageView
+        canvas.backgroundColor = .systemBackground
+        scrollView.addSubview(canvas)
+        scrollView.zoomTarget = canvas
 
         let doubleTap = UITapGestureRecognizer(
             target: context.coordinator,
@@ -288,6 +311,9 @@ private struct ZoomableImageScrollView: UIViewRepresentable {
         singleTap.require(toFail: doubleTap)
         scrollView.addGestureRecognizer(singleTap)
         context.coordinator.scrollView = scrollView
+        scrollView.viewportDidResize = { [weak coordinator = context.coordinator] in
+            coordinator?.viewportDidResize()
+        }
         scrollView.accessibilityCustomActions = context.coordinator.accessibilityActions
         return scrollView
     }
@@ -300,28 +326,41 @@ private struct ZoomableImageScrollView: UIViewRepresentable {
             context.coordinator.isResettingZoom = true
             scrollView.setZoomScale(1, animated: false)
             context.coordinator.isResettingZoom = false
+            context.coordinator.isZoomTransitionActive = false
+            context.coordinator.lastReportedZoomed = false
+            scrollView.accessibilityValue = "Fit"
         }
-        if context.coordinator.imageView.image !== image {
-            if crossfadesImageChanges, context.coordinator.imageView.image != nil {
+        context.coordinator.updateFitRect(
+            fitRect,
+            animated: animatesFitChanges && !reduceMotion
+        )
+        let imageView = context.coordinator.canvas.imageView
+        if imageView.image !== image {
+            if crossfadesImageChanges, imageView.image != nil {
                 UIView.transition(
-                    with: context.coordinator.imageView,
+                    with: imageView,
                     duration: 0.18,
                     options: [.transitionCrossDissolve, .beginFromCurrentState, .allowAnimatedContent]
                 ) {
-                    context.coordinator.imageView.image = image
+                    imageView.image = image
                 }
             } else {
-                context.coordinator.imageView.image = image
+                imageView.image = image
             }
         }
         scrollView.setNeedsLayout()
     }
 
     final class Coordinator: NSObject, UIScrollViewDelegate {
-        let imageView = UIImageView()
-        weak var scrollView: UIScrollView?
+        let canvas = ViewerZoomCanvasView()
+        weak var scrollView: ViewerZoomScrollView?
         var assetID: String?
         var isResettingZoom = false
+        var isZoomTransitionActive = false
+        var lastReportedZoomed = false
+        private var requestedFitRect = CGRect.zero
+        private var didApplyInitialFitRect = false
+        private var shouldAnimateFitChange = false
         var zoomChanged: (Bool) -> Void
         var toggleChrome: () -> Void
 
@@ -342,26 +381,62 @@ private struct ZoomableImageScrollView: UIViewRepresentable {
         }
 
         func viewForZooming(in _: UIScrollView) -> UIView? {
-            imageView
+            canvas
+        }
+
+        func scrollViewWillBeginZooming(_: UIScrollView, with _: UIView?) {
+            guard !isResettingZoom else { return }
+            isZoomTransitionActive = true
+            reportZoom(true)
         }
 
         func scrollViewDidZoom(_ scrollView: UIScrollView) {
-            centerImage(in: scrollView)
             guard !isResettingZoom else { return }
-            zoomChanged(scrollView.zoomScale > scrollView.minimumZoomScale + 0.01)
+            if scrollView.zoomScale > scrollView.minimumZoomScale + 0.01 {
+                reportZoom(true)
+            }
+        }
+
+        func scrollViewDidEndZooming(_ scrollView: UIScrollView, with _: UIView?, atScale _: CGFloat) {
+            guard !isResettingZoom else { return }
+            isZoomTransitionActive = false
+            let remainsZoomed = scrollView.zoomScale > scrollView.minimumZoomScale + 0.01
+            reportZoom(remainsZoomed)
+            if !remainsZoomed {
+                applyRequestedFitRect()
+            }
+        }
+
+        func updateFitRect(_ rect: CGRect, animated: Bool) {
+            requestedFitRect = rect
+            shouldAnimateFitChange = animated
+            guard let scrollView,
+                  !isZoomTransitionActive,
+                  scrollView.zoomScale <= scrollView.minimumZoomScale + 0.01
+            else { return }
+            applyRequestedFitRect()
+        }
+
+        func viewportDidResize() {
+            isZoomTransitionActive = false
+            reportZoom(false)
+            applyRequestedFitRect()
         }
 
         @objc func handleDoubleTap(_ recognizer: UITapGestureRecognizer) {
             guard let scrollView else { return }
             if scrollView.zoomScale > scrollView.minimumZoomScale + 0.01 {
+                isZoomTransitionActive = true
                 scrollView.setZoomScale(scrollView.minimumZoomScale, animated: true)
                 return
             }
 
+            isZoomTransitionActive = true
             let targetScale = min(2.5, scrollView.maximumZoomScale)
-            let point = recognizer.location(in: imageView)
+            let point = recognizer.location(in: canvas)
             let width = scrollView.bounds.width / targetScale
             let height = scrollView.bounds.height / targetScale
+            reportZoom(true)
             scrollView.zoom(
                 to: CGRect(
                     x: point.x - width / 2,
@@ -374,65 +449,100 @@ private struct ZoomableImageScrollView: UIViewRepresentable {
         }
 
         @objc func handleSingleTap(_: UITapGestureRecognizer) {
-            guard let scrollView,
-                  scrollView.zoomScale <= scrollView.minimumZoomScale + 0.01
-            else { return }
             toggleChrome()
         }
 
         @objc private func zoomIn() -> Bool {
             guard let scrollView else { return false }
+            isZoomTransitionActive = true
             scrollView.setZoomScale(min(scrollView.zoomScale * 1.5, scrollView.maximumZoomScale), animated: true)
             return true
         }
 
         @objc private func zoomOut() -> Bool {
             guard let scrollView else { return false }
+            isZoomTransitionActive = true
             scrollView.setZoomScale(max(scrollView.zoomScale / 1.5, scrollView.minimumZoomScale), animated: true)
             return true
         }
 
         @objc private func resetZoom() -> Bool {
             guard let scrollView else { return false }
+            isZoomTransitionActive = true
             scrollView.setZoomScale(scrollView.minimumZoomScale, animated: true)
             return true
         }
 
-        private func centerImage(in scrollView: UIScrollView) {
-            let horizontal = max(0, (scrollView.bounds.width - imageView.frame.width) / 2)
-            let vertical = max(0, (scrollView.bounds.height - imageView.frame.height) / 2)
-            imageView.center = CGPoint(
-                x: scrollView.contentSize.width / 2 + horizontal,
-                y: scrollView.contentSize.height / 2 + vertical
-            )
+        private func reportZoom(_ zoomed: Bool) {
+            guard zoomed != lastReportedZoomed else { return }
+            lastReportedZoomed = zoomed
+            scrollView?.accessibilityValue = zoomed ? "Zoomed" : "Fit"
+            zoomChanged(zoomed)
         }
+
+        private func applyRequestedFitRect() {
+            guard canvas.fitRect != requestedFitRect else { return }
+            canvas.layoutIfNeeded()
+            canvas.fitRect = requestedFitRect
+            if didApplyInitialFitRect, shouldAnimateFitChange {
+                UIView.animate(
+                    withDuration: 0.28,
+                    delay: 0,
+                    options: [.beginFromCurrentState, .allowUserInteraction]
+                ) {
+                    self.canvas.layoutIfNeeded()
+                }
+            } else {
+                canvas.layoutIfNeeded()
+            }
+            didApplyInitialFitRect = true
+        }
+    }
+}
+
+private final class ViewerZoomCanvasView: UIView {
+    let imageView = UIImageView()
+    var fitRect = CGRect.zero {
+        didSet { setNeedsLayout() }
+    }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        addSubview(imageView)
+    }
+
+    @available(*, unavailable)
+    required init?(coder _: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        imageView.frame = fitRect
     }
 }
 
 private final class ViewerZoomScrollView: UIScrollView {
     weak var zoomTarget: UIView?
+    var viewportDidResize: (() -> Void)?
+    private var lastViewportSize = CGSize.zero
 
     override func layoutSubviews() {
-        let normalizedCenter = contentSize.width > 0 && contentSize.height > 0
-            ? CGPoint(
-                x: (contentOffset.x + bounds.width / 2) / contentSize.width,
-                y: (contentOffset.y + bounds.height / 2) / contentSize.height
-            )
-            : CGPoint(x: 0.5, y: 0.5)
-        let previousSize = zoomTarget?.bounds.size
-
         super.layoutSubviews()
-
-        guard let zoomTarget, bounds.width > 0, bounds.height > 0 else { return }
-        if previousSize != bounds.size {
-            zoomTarget.frame = bounds
-            contentSize = zoomTarget.frame.size
-            if zoomScale > minimumZoomScale + 0.01 {
-                contentOffset = CGPoint(
-                    x: normalizedCenter.x * contentSize.width - bounds.width / 2,
-                    y: normalizedCenter.y * contentSize.height - bounds.height / 2
-                )
-            }
+        guard let zoomTarget,
+              bounds.width > 0,
+              bounds.height > 0,
+              lastViewportSize != bounds.size
+        else { return }
+        lastViewportSize = bounds.size
+        let wasZoomed = zoomScale > minimumZoomScale + 0.01
+        if wasZoomed {
+            setZoomScale(minimumZoomScale, animated: false)
+        }
+        zoomTarget.frame = CGRect(origin: .zero, size: bounds.size)
+        contentSize = bounds.size
+        if wasZoomed {
+            viewportDidResize?()
         }
     }
 }
