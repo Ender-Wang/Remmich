@@ -1212,7 +1212,7 @@ struct RemmichTests {
         )
 
         #expect(standard == CGRect(origin: .zero, size: viewportSize))
-        #expect(info == CGRect(x: 0, y: 122, width: 402, height: 650))
+        #expect(info == CGRect(x: 0, y: 122, width: 402, height: 662))
     }
 
     @Test func viewerInfoFitAnimationIsDisabledOnlyDuringDirectManipulation() {

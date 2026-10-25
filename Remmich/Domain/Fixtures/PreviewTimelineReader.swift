@@ -128,6 +128,7 @@ actor PreviewTimelineReader: TimelineReading, VideoReading, AssetDetailReading {
             ?? videoValues.first { $0.id == id }
         let isVideo = timelineAsset?.mediaKind == .video
         let capturedAt = timelineAsset?.capturedAt ?? .now
+        let hasSparseMetadata = id == "asset-2"
         return AssetDetail(
             id: id,
             capturedAt: capturedAt,
@@ -135,20 +136,20 @@ actor PreviewTimelineReader: TimelineReading, VideoReading, AssetDetailReading {
             originalMimeType: isVideo ? "video/mp4" : "image/jpeg",
             width: isVideo ? 3840 : 6048,
             height: isVideo ? 2160 : 4024,
-            description: "A preview asset from the Remmich timeline.",
-            cameraMake: "NIKON",
-            cameraModel: "Z f",
-            lensModel: "NIKKOR Z 24-70mm f/2.8 VR S",
+            description: hasSparseMetadata ? nil : "A preview asset from the Remmich timeline.",
+            cameraMake: hasSparseMetadata ? nil : "NIKON",
+            cameraModel: hasSparseMetadata ? nil : "Z f",
+            lensModel: hasSparseMetadata ? nil : "NIKKOR Z 24-70mm f/2.8 VR S",
             fileSizeBytes: isVideo ? 84_200_000 : 12_400_000,
-            iso: 400,
-            focalLength: 50,
-            aperture: 2.8,
-            exposureTime: "1/500",
-            latitude: 31.2304,
-            longitude: 121.4737,
-            city: "Shanghai",
-            state: "Shanghai",
-            country: "China"
+            iso: hasSparseMetadata ? nil : 400,
+            focalLength: hasSparseMetadata ? nil : 50,
+            aperture: hasSparseMetadata ? nil : 2.8,
+            exposureTime: hasSparseMetadata ? nil : "1/500",
+            latitude: hasSparseMetadata ? nil : 31.2304,
+            longitude: hasSparseMetadata ? nil : 121.4737,
+            city: hasSparseMetadata ? nil : "Shanghai",
+            state: hasSparseMetadata ? nil : "Shanghai",
+            country: hasSparseMetadata ? nil : "China"
         )
     }
 

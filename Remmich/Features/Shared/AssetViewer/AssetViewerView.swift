@@ -23,7 +23,7 @@ struct AssetViewerView: View {
     @State private var fullResolutionLoadErrors: [String: String] = [:]
     @State private var livePhotoMotionByteCounts: [String: Int] = [:]
     @State private var neighborLoadTask: Task<Void, Never>?
-    @State private var infoContentHeight: CGFloat = 220
+    @State private var infoContentHeightsByAssetID: [String: CGFloat] = [:]
     @State private var infoDragTranslation: CGFloat = 0
     @State private var viewerPreviewTargetPixels: MediaPixelSize?
     @State private var pagerPosition: String?
@@ -37,7 +37,6 @@ struct AssetViewerView: View {
     private let controlHitSize: CGFloat = 44
     private let controlVisualSize: CGFloat = 44
     private let topChromeHeight: CGFloat = 60
-    private let bottomActionsHeight: CGFloat = 56
     private let infoGap: CGFloat = 12
     private let pagerWindowRadius = 3
 
@@ -89,7 +88,7 @@ struct AssetViewerView: View {
                     width: max(1, fullGeometry.size.width - safeInsets.leading - safeInsets.trailing),
                     height: max(1, fullGeometry.size.height - safeInsets.top - safeInsets.bottom)
                 )
-                let shownInfoBottomInset = bottomActionsHeight + infoGap
+                let shownInfoBottomInset = controlHitSize + infoGap
                 let viewerRect = AssetViewerMediaGeometry.mediaRect(
                     viewportSize: fullGeometry.size,
                     safeAreaInsets: UIEdgeInsets(
@@ -279,7 +278,8 @@ struct AssetViewerView: View {
             .accessibilityIdentifier(infoProgress > 0.5 ? "asset-viewer-landscape-split" : "asset-viewer-landscape")
         } else {
             let maxInfoHeight = max(0, viewerRect.height - 220 - infoGap)
-            let targetInfoHeight = min(maxInfoHeight, infoContentHeight)
+            let selectedInfoContentHeight = infoContentHeight(for: session.selectedAssetID)
+            let targetInfoHeight = min(maxInfoHeight, selectedInfoContentHeight)
             let infoHeight = targetInfoHeight * infoProgress
             let gap = infoGap * infoProgress
             let mediaHeight = max(220, viewerRect.height - infoHeight - gap)
@@ -322,7 +322,7 @@ struct AssetViewerView: View {
             }
             .frame(width: pageSize.width, height: pageSize.height)
             .animation(infoAnimation, value: showsInfo)
-            .animation(infoAnimation, value: infoContentHeight)
+            .animation(infoAnimation, value: targetInfoHeight)
         }
     }
 
@@ -814,10 +814,15 @@ struct AssetViewerView: View {
     }
 
     private func updateInfoContentHeight(_ height: CGFloat, for assetID: String) {
-        guard assetID == session.selectedAssetID else { return }
         let measuredHeight = ceil(height)
-        guard measuredHeight > 0, abs(measuredHeight - infoContentHeight) >= 1 else { return }
-        infoContentHeight = measuredHeight
+        guard measuredHeight > 0,
+              abs(measuredHeight - (infoContentHeightsByAssetID[assetID] ?? 0)) >= 1
+        else { return }
+        infoContentHeightsByAssetID[assetID] = measuredHeight
+    }
+
+    private func infoContentHeight(for assetID: String) -> CGFloat {
+        infoContentHeightsByAssetID[assetID] ?? 220
     }
 
     private func toggleChrome() {

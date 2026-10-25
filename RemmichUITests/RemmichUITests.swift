@@ -537,6 +537,39 @@ final class RemmichUITests: XCTestCase {
     }
 
     @MainActor
+    func testAssetViewerInfoFitsEachAssetAboveBottomActions() {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = ["-ui-testing-signed-in"]
+        app.launch()
+
+        let firstPage = app.descendants(matching: .any)["asset-viewer-page-asset-1"]
+        let secondPage = app.descendants(matching: .any)["asset-viewer-page-asset-2"]
+        XCTAssertTrue(app.descendants(matching: .any)["asset-asset-1"].firstMatch
+            .waitForExistence(timeout: 10))
+        app.descendants(matching: .any)["asset-asset-1"].firstMatch.tap()
+        XCTAssertTrue(firstPage.waitForExistence(timeout: 10))
+
+        let info = app.buttons["asset-viewer-info"]
+        XCTAssertTrue(info.waitForExistence(timeout: 5))
+        info.tap()
+
+        let metadataCard = app.descendants(matching: .any)["asset-viewer-metadata-card"].firstMatch
+        XCTAssertTrue(metadataCard.waitForExistence(timeout: 10))
+        let firstHeight = metadataCard.frame.height
+
+        firstPage.swipeLeft()
+        XCTAssertTrue(waitUntil(timeout: 5) { secondPage.isHittable })
+        XCTAssertTrue(waitUntil(timeout: 5) {
+            metadataCard.frame.height < firstHeight - 80
+        }, "Sparse asset metadata should produce a shorter content-fitted info panel")
+
+        let gapAboveActions = info.frame.minY - metadataCard.frame.maxY
+        XCTAssertGreaterThanOrEqual(gapAboveActions, 20)
+        XCTAssertLessThanOrEqual(gapAboveActions, 28)
+    }
+
+    @MainActor
     func testAssetViewerInfoLoadsOriginalAndUpdatesRenderedMetadata() {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
