@@ -148,6 +148,7 @@ struct AssetViewerView: View {
             .ignoresSafeArea(.container, edges: .all)
         }
         .foregroundStyle(.primary)
+        .statusBarHidden(!chromeVisible && !showsInfo)
         .toolbar(.hidden, for: .navigationBar)
         .navigationBarBackButtonHidden(true)
         .navigationTransition(.zoom(sourceID: route.selectedAsset.id, in: namespace))

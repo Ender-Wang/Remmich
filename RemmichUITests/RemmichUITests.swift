@@ -622,6 +622,94 @@ final class RemmichUITests: XCTestCase {
     }
 
     @MainActor
+    func testAssetViewerStatusBarFollowsChromeWithoutResizingStill() {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = ["-ui-testing-signed-in"]
+        app.launch()
+
+        let asset = app.descendants(matching: .any)["asset-asset-1"].firstMatch
+        XCTAssertTrue(asset.waitForExistence(timeout: 10))
+        asset.tap()
+
+        let still = app.descendants(matching: .any)["asset-viewer-still-asset-1"]
+        let back = app.buttons["asset-viewer-back"]
+        XCTAssertTrue(still.waitForExistence(timeout: 10))
+        let initialFrame = still.frame
+        let visibleStatusInk = statusBarInkPixels(in: XCUIScreen.main.screenshot())
+        attachViewerScreenshot("chrome-and-status-visible-initial")
+
+        still.tap()
+        XCTAssertTrue(waitUntil(timeout: 3) { !back.isHittable })
+        Thread.sleep(forTimeInterval: 0.5)
+        attachViewerScreenshot("chrome-and-status-hidden")
+        let hiddenStatusInk = statusBarInkPixels(in: XCUIScreen.main.screenshot())
+        XCTAssertGreaterThan(visibleStatusInk, hiddenStatusInk + 100)
+        XCTAssertEqual(still.frame, initialFrame)
+
+        still.tap()
+        XCTAssertTrue(waitUntil(timeout: 3) { back.exists })
+        Thread.sleep(forTimeInterval: 0.5)
+        attachViewerScreenshot("chrome-and-status-visible")
+        XCTAssertGreaterThan(
+            statusBarInkPixels(in: XCUIScreen.main.screenshot()),
+            hiddenStatusInk + 100
+        )
+        XCTAssertEqual(still.frame, initialFrame)
+
+        still.doubleTap()
+        XCTAssertTrue(waitUntil(timeout: 3) { still.value as? String == "Zoomed" })
+        Thread.sleep(forTimeInterval: 0.5)
+        attachViewerScreenshot("zoomed-chrome-and-status-hidden")
+        let zoomedHiddenStatusInk = statusBarInkPixels(in: XCUIScreen.main.screenshot())
+        XCTAssertEqual(still.frame, initialFrame)
+
+        still.tap()
+        XCTAssertTrue(waitUntil(timeout: 3) { back.exists })
+        Thread.sleep(forTimeInterval: 0.5)
+        attachViewerScreenshot("zoomed-chrome-and-status-visible")
+        XCTAssertGreaterThan(
+            statusBarInkPixels(in: XCUIScreen.main.screenshot()),
+            zoomedHiddenStatusInk + 100
+        )
+        XCTAssertEqual(still.value as? String, "Zoomed")
+        XCTAssertEqual(still.frame, initialFrame)
+    }
+
+    @MainActor
+    private func statusBarInkPixels(in screenshot: XCUIScreenshot) -> Int {
+        guard let image = screenshot.image.cgImage else { return 0 }
+        let width = Int(CGFloat(image.width) * 0.3)
+        let height = Int(CGFloat(image.height) * 0.055)
+        guard let crop = image.cropping(to: CGRect(x: 0, y: 0, width: width, height: height))
+        else { return 0 }
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        pixels.withUnsafeMutableBytes { buffer in
+            let context = CGContext(
+                data: buffer.baseAddress,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: width * 4,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            )
+            context?.draw(crop, in: CGRect(x: 0, y: 0, width: width, height: height))
+        }
+        return stride(from: 0, to: pixels.count, by: 4).reduce(0) { count, index in
+            count + (pixels[index] < 80 && pixels[index + 1] < 80 && pixels[index + 2] < 80 ? 1 : 0)
+        }
+    }
+
+    @MainActor
+    private func attachViewerScreenshot(_ name: String) {
+        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    @MainActor
     func testVideoViewerUsesNativePlayerAndRestoresTimeline() {
         let app = XCUIApplication()
         app.launchArguments = ["-ui-testing-signed-in"]
