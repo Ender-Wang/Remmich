@@ -1583,7 +1583,6 @@ private struct PhotosRangeCardGrid<Item: Identifiable, Content: View>: View wher
 
     private struct LayoutKey: Equatable {
         let viewport: CGSize
-        let navigationTop: CGFloat
     }
 
     var body: some View {
@@ -1600,7 +1599,6 @@ private struct PhotosRangeCardGrid<Item: Identifiable, Content: View>: View wher
                 spacing: edgeInset,
                 hasBottomNavigation: isPhone
             )
-            let navigationTop = globalFrame.maxY - bottomContentInset + edgeInset
             let keys = items.map { String(describing: $0.id) }
             let mosaicLayout = TimelineRangeMosaicLayout.resolved(
                 viewportSize: geometry.size
@@ -1655,10 +1653,10 @@ private struct PhotosRangeCardGrid<Item: Identifiable, Content: View>: View wher
                     guard !Task.isCancelled, !userHasScrolled else { return }
                     didSettleInitialViewport = true
                 }
-                .task(id: LayoutKey(viewport: geometry.size, navigationTop: navigationTop)) {
+                .task(id: LayoutKey(viewport: geometry.size)) {
                     guard didPositionInitially else { return }
-                    // Rotation changes the viewport and the native tab bar in separate
-                    // layout passes. Let the last pass settle before restoring the row.
+                    // Re-anchor after a viewport change, but not after a late tab-bar
+                    // measurement update while a user is tapping a card.
                     try? await Task.sleep(for: .milliseconds(80))
                     guard !Task.isCancelled,
                           !didSettleInitialViewport || !userHasScrolled,

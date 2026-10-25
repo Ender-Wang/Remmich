@@ -302,6 +302,15 @@ struct PhotosTimelineRegressionTests {
         #expect(tracker.isCompact == true)
     }
 
+    @Test @MainActor func latestBoundaryJitterDoesNotBlockScrollingTowardOlderAssets() {
+        var tracker = PhotosChromeTracker()
+
+        #expect(tracker.update(offsetDelta: 2, bottomGap: 10, userScrolling: true, programmaticJump: false) == nil)
+        #expect(tracker.update(offsetDelta: -24, bottomGap: 36, userScrolling: true, programmaticJump: false) == nil)
+        #expect(tracker.update(offsetDelta: -24, bottomGap: 60, userScrolling: true, programmaticJump: false) == true)
+        #expect(tracker.isCompact)
+    }
+
     @Test @MainActor func programmaticPhotosJumpCannotCompactTheBar() {
         var tracker = PhotosChromeTracker()
         #expect(tracker.update(offsetDelta: -100, bottomGap: 400, userScrolling: true, programmaticJump: true) == nil)

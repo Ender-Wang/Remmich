@@ -214,6 +214,7 @@ struct PhotosChromeTracker {
     private(set) var isCompact = false
     private var travel: CGFloat = 0
     private var reachedLatestDuringCurrentScroll = false
+    private var leftLatestDuringCurrentScroll = false
 
     mutating func update(
         offsetDelta: CGFloat,
@@ -226,12 +227,15 @@ struct PhotosChromeTracker {
         }
         if bottomGap <= 24 {
             travel = 0
-            if userScrolling, offsetDelta >= 0 {
+            if userScrolling, offsetDelta >= 0, leftLatestDuringCurrentScroll {
                 reachedLatestDuringCurrentScroll = true
             }
             guard isCompact else { return nil }
             isCompact = false
             return false
+        }
+        if userScrolling {
+            leftLatestDuringCurrentScroll = true
         }
         guard !reachedLatestDuringCurrentScroll, userScrolling, !programmaticJump, abs(offsetDelta) >= 1 else {
             travel = 0
@@ -252,6 +256,7 @@ struct PhotosChromeTracker {
     mutating func scrollingEnded() {
         travel = 0
         reachedLatestDuringCurrentScroll = false
+        leftLatestDuringCurrentScroll = false
     }
 }
 
