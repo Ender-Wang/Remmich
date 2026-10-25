@@ -237,7 +237,7 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
         private var installedTabs: [NativeTabDestination]?
         private var isUpdatingTabs = false
         private var didResolveLibrary = false
-        private var tabBarShouldBeHidden = false
+        private var tabBarInteractionBlockedByViewer = false
         private var didResolveVideos = false
         private var contentActivationGeneration = 0
         private var contentActivationTask: Task<Void, Never>?
@@ -425,9 +425,9 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
             }
 
             guard let controller else { return }
-            if tabBarShouldBeHidden != next.isViewerPresented {
-                tabBarShouldBeHidden = next.isViewerPresented
-                setTabBarHidden(next.isViewerPresented, in: controller, animated: animated)
+            if tabBarInteractionBlockedByViewer != next.isViewerPresented {
+                tabBarInteractionBlockedByViewer = next.isViewerPresented
+                setTabBarInteractionBlocked(next.isViewerPresented, in: controller)
             }
             isUpdatingTabs = true
             defer { isUpdatingTabs = false }
@@ -476,38 +476,17 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
             )
         }
 
-        private func setTabBarHidden(
-            _ hidden: Bool,
-            in controller: UITabBarController,
-            animated: Bool
+        private func setTabBarInteractionBlocked(
+            _ blocked: Bool,
+            in controller: UITabBarController
         ) {
             let tabBar = controller.tabBar
-            let currentAlpha = CGFloat(tabBar.layer.presentation()?.opacity ?? Float(tabBar.alpha))
-            tabBar.layer.removeAllAnimations()
-            // Keep the tab bar in layout while the full-screen viewer is up.
-            // Removing it changes the timeline safe area during drag dismissal.
+            // The full-screen viewer covers the timeline and its tab bar. Keep both
+            // drawn underneath so dismissal does not reveal a newly fading-in bar.
             tabBar.isHidden = false
-            tabBar.alpha = currentAlpha
-            tabBar.isUserInteractionEnabled = !hidden
-            tabBar.accessibilityElementsHidden = hidden
-
-            guard animated, !UIAccessibility.isReduceMotionEnabled else {
-                tabBar.alpha = hidden ? 0 : 1
-                return
-            }
-
-            UIView.animate(
-                withDuration: 0.28,
-                delay: 0,
-                options: [.beginFromCurrentState, .curveEaseInOut, .allowUserInteraction]
-            ) {
-                tabBar.alpha = hidden ? 0 : 1
-            } completion: { [weak self, weak controller] finished in
-                guard finished, let self, let controller,
-                      tabBarShouldBeHidden == hidden
-                else { return }
-                controller.tabBar.alpha = hidden ? 0 : 1
-            }
+            tabBar.alpha = 1
+            tabBar.isUserInteractionEnabled = !blocked
+            tabBar.accessibilityElementsHidden = blocked
         }
 
         func tabBarController(_: UITabBarController, didSelectTab selectedTab: UITab, previousTab: UITab?) {
