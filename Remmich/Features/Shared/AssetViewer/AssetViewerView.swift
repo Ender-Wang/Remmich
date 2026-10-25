@@ -15,6 +15,7 @@ struct AssetViewerView: View {
     let namespace: Namespace.ID
     let close: () -> Void
     let visibilityChanged: (Bool) -> Void
+    let returningLivePhotoBadgeChanged: (String?) -> Void
     let dismissalTarget: (String) -> AssetViewerDismissalTarget?
 
     @State private var session: AssetViewerSession
@@ -66,6 +67,7 @@ struct AssetViewerView: View {
         namespace: Namespace.ID,
         close: @escaping () -> Void,
         visibilityChanged: @escaping (Bool) -> Void,
+        returningLivePhotoBadgeChanged: @escaping (String?) -> Void = { _ in },
         dismissalTarget: @escaping (String) -> AssetViewerDismissalTarget? = { _ in nil }
     ) {
         self.route = route
@@ -74,6 +76,7 @@ struct AssetViewerView: View {
         self.namespace = namespace
         self.close = close
         self.visibilityChanged = visibilityChanged
+        self.returningLivePhotoBadgeChanged = returningLivePhotoBadgeChanged
         self.dismissalTarget = dismissalTarget
         _session = State(initialValue: AssetViewerSession(
             route: route,
@@ -837,6 +840,11 @@ struct AssetViewerView: View {
                 transaction.disablesAnimations = true
                 if drivesDismissal {
                     guard !reduceMotion else { return }
+                    if dismissalDragTranslation.height == 0,
+                       session.selectedAsset?.livePhotoVideoID != nil
+                    {
+                        returningLivePhotoBadgeChanged(session.selectedAssetID)
+                    }
                     withTransaction(transaction) {
                         if dismissalViewerRect == nil {
                             dismissalViewerRect = viewerRect
@@ -854,6 +862,7 @@ struct AssetViewerView: View {
                     }
                     return
                 }
+                let wasDismissing = isDismissalInteractionActive
                 withTransaction(transaction) {
                     dismissalDragTranslation = .zero
                     dismissalViewerRect = nil
@@ -861,6 +870,9 @@ struct AssetViewerView: View {
                     infoDragTranslation = showsInfo
                         ? max(0, value.translation.height)
                         : min(0, value.translation.height)
+                }
+                if wasDismissing {
+                    returningLivePhotoBadgeChanged(nil)
                 }
             }
             .onEnded { value in
@@ -996,6 +1008,7 @@ struct AssetViewerView: View {
             dismissalBackdropOpacity = 1
         }
         dismissalViewerRect = nil
+        returningLivePhotoBadgeChanged(nil)
     }
 
     private func isOutsideViewerContent(

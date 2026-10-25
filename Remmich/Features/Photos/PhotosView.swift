@@ -357,6 +357,7 @@ struct PhotosView: View {
     @State private var compactChrome = false
     @State private var viewerOwnsTimelineChrome = false
     @State private var viewerChromeReleaseTask: Task<Void, Never>?
+    @State private var hiddenLivePhotoBadgeAssetID: String?
     @State private var libraryRange: TimelineLibraryRange = .all
     @State private var initialAssetByRoute: [PhotosRangeRoute: String] = [:]
     @State private var viewerRoute: AssetViewerRoute?
@@ -430,7 +431,13 @@ struct PhotosView: View {
                 assetDetails: assetDetails,
                 namespace: viewerNamespace,
                 close: closeViewer,
-                visibilityChanged: viewerVisibilityChanged,
+                visibilityChanged: { visible in
+                    viewerVisibilityChanged(visible)
+                    if !visible {
+                        revealReturningLivePhotoBadge()
+                    }
+                },
+                returningLivePhotoBadgeChanged: setReturningLivePhotoBadge,
                 dismissalTarget: { assetID in
                     viewerDismissalTargetFrame(
                         for: assetID,
@@ -1146,7 +1153,8 @@ struct PhotosView: View {
                     ))
                 },
                 frameCoordinateSpaceName: timelineFrameCoordinateSpaceName,
-                priority: timelinePriority(for: row, layout: layout)
+                priority: timelinePriority(for: row, layout: layout),
+                hiddenLivePhotoBadgeAssetID: hiddenLivePhotoBadgeAssetID
             )
             .frame(height: row.height, alignment: .top)
         case let .placeholder(section):
@@ -1402,6 +1410,7 @@ struct PhotosView: View {
     }
 
     private func presentViewer(_ route: AssetViewerRoute) {
+        hiddenLivePhotoBadgeAssetID = nil
         viewerChromeReleaseTask?.cancel()
         viewerChromeReleaseTask = nil
         viewerOwnsTimelineChrome = true
@@ -1420,6 +1429,32 @@ struct PhotosView: View {
             viewportRuntime.chromeTracker.scrollingEnded()
             viewerOwnsTimelineChrome = false
             viewerChromeReleaseTask = nil
+        }
+    }
+
+    private func setReturningLivePhotoBadge(_ assetID: String?) {
+        guard hiddenLivePhotoBadgeAssetID != assetID else { return }
+        if let assetID {
+            var transaction = Transaction(animation: nil)
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                hiddenLivePhotoBadgeAssetID = assetID
+            }
+        } else {
+            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.24)) {
+                hiddenLivePhotoBadgeAssetID = nil
+            }
+        }
+    }
+
+    private func revealReturningLivePhotoBadge() {
+        guard hiddenLivePhotoBadgeAssetID != nil else { return }
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(16))
+            guard !Task.isCancelled, viewerRoute == nil else { return }
+            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.24)) {
+                hiddenLivePhotoBadgeAssetID = nil
+            }
         }
     }
 
