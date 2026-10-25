@@ -3,6 +3,7 @@ import SwiftUI
 struct AssetViewerDismissalTarget {
     let imageFrame: CGRect
     let cornerRadius: CGFloat
+    let fillsFrame: Bool
 }
 
 struct AssetViewerView: View {
@@ -16,6 +17,7 @@ struct AssetViewerView: View {
     let close: () -> Void
     let visibilityChanged: (Bool) -> Void
     let returningLivePhotoBadgeChanged: (String?) -> Void
+    let returningTimelineThumbnailChanged: (String?) -> Void
     let dismissalTarget: (String) -> AssetViewerDismissalTarget?
 
     @State private var session: AssetViewerSession
@@ -48,8 +50,12 @@ struct AssetViewerView: View {
     @State private var dismissalLandingScale: CGFloat?
     @State private var dismissalLandingTranslation: CGSize?
     @State private var dismissalLandingCornerRadius: CGFloat = 0
+    @State private var dismissalCropTargetSize: CGSize?
+    @State private var dismissalCropProgress: CGFloat = 0
+    @State private var dismissalAssetOpacity: Double = 1
     @State private var isLandingDismissal = false
     @State private var dismissalLandingTask: Task<Void, Never>?
+    @State private var dismissalThumbnailRevealTask: Task<Void, Never>?
     @State private var livePhotoPlaybackAssetID: String?
     @State private var livePhotoSoundEnabled = false
 
@@ -68,6 +74,7 @@ struct AssetViewerView: View {
         close: @escaping () -> Void,
         visibilityChanged: @escaping (Bool) -> Void,
         returningLivePhotoBadgeChanged: @escaping (String?) -> Void = { _ in },
+        returningTimelineThumbnailChanged: @escaping (String?) -> Void = { _ in },
         dismissalTarget: @escaping (String) -> AssetViewerDismissalTarget? = { _ in nil }
     ) {
         self.route = route
@@ -77,6 +84,7 @@ struct AssetViewerView: View {
         self.close = close
         self.visibilityChanged = visibilityChanged
         self.returningLivePhotoBadgeChanged = returningLivePhotoBadgeChanged
+        self.returningTimelineThumbnailChanged = returningTimelineThumbnailChanged
         self.dismissalTarget = dismissalTarget
         _session = State(initialValue: AssetViewerSession(
             route: route,
@@ -152,15 +160,25 @@ struct AssetViewerView: View {
                             dy: -fullFrame.minY
                         ),
                         viewportSize: fullGeometry.size,
-                        anchor: .center
+                        anchor: .center,
+                        fillsTarget: target.fillsFrame
                     )
                 }
                 let isOpening = openingTransform != nil && !isDismissing
                 let openingRemainder = isOpening ? 1 - openingProgress : 0
+                let openingClipTarget = isOpening && openingTarget?.fillsFrame == true
+                    ? openingTarget?.imageFrame.offsetBy(
+                        dx: -fullFrame.minX,
+                        dy: -fullFrame.minY
+                    ) : nil
                 let isolatesDismissalAsset = isOpening
                     || isDismissalInteractionActive || isDismissing
                 let dismissalMaskRect = isolatesDismissalAsset
-                    ? dismissalImageRect : fullRect
+                    ? AssetViewerDismissalGeometry.croppedImageRect(
+                        dismissalImageRect,
+                        targetSize: isDismissing ? dismissalCropTargetSize : nil,
+                        progress: dismissalCropProgress
+                    ) : fullRect
                 let openingScale = 1 + ((openingTransform?.scale ?? 1) - 1) * openingRemainder
                 let openingTranslation = CGSize(
                     width: (openingTransform?.translation.width ?? 0) * openingRemainder,
@@ -194,6 +212,7 @@ struct AssetViewerView: View {
                             x: dismissalMaskRect.midX,
                             y: dismissalMaskRect.midY
                         )
+                        .animation(.easeOut(duration: 0.14), value: dismissalCropProgress)
                     }
                     .scaleEffect(
                         isDraggingOrLanding && !reduceMotion
@@ -204,6 +223,11 @@ struct AssetViewerView: View {
                         isDraggingOrLanding && !reduceMotion
                             ? activeDismissalTranslation : openingTranslation
                     )
+                    .clipShape(AssetViewerTransitionClipShape(
+                        target: openingClipTarget ?? fullRect,
+                        progress: openingClipTarget == nil ? 0 : openingRemainder
+                    ))
+                    .opacity(dismissalAssetOpacity)
                     chrome(
                         infoProgress: infoProgress,
                         viewportSize: fullGeometry.size,
@@ -273,6 +297,7 @@ struct AssetViewerView: View {
         .onDisappear {
             openingTask?.cancel()
             dismissalLandingTask?.cancel()
+            dismissalThumbnailRevealTask?.cancel()
             let requestedFullSizeAssets = session.assets.filter {
                 fullResolutionRequestIDs[$0.id] != nil
             }
@@ -282,6 +307,7 @@ struct AssetViewerView: View {
             livePhotoSoundEnabled = false
             media.cancelViewerPrefetching()
             visibilityChanged(false)
+            returningTimelineThumbnailChanged(nil)
             Task { @MainActor in
                 await Task.yield()
                 media.removeViewerOriginalCache(for: requestedFullSizeAssets)
@@ -840,10 +866,12 @@ struct AssetViewerView: View {
                 transaction.disablesAnimations = true
                 if drivesDismissal {
                     guard !reduceMotion else { return }
-                    if dismissalDragTranslation.height == 0,
-                       session.selectedAsset?.livePhotoVideoID != nil
-                    {
-                        returningLivePhotoBadgeChanged(session.selectedAssetID)
+                    if dismissalDragTranslation.height == 0 {
+                        dismissalThumbnailRevealTask?.cancel()
+                        returningTimelineThumbnailChanged(session.selectedAssetID)
+                        if session.selectedAsset?.livePhotoVideoID != nil {
+                            returningLivePhotoBadgeChanged(session.selectedAssetID)
+                        }
                     }
                     withTransaction(transaction) {
                         if dismissalViewerRect == nil {
@@ -873,6 +901,7 @@ struct AssetViewerView: View {
                 }
                 if wasDismissing {
                     returningLivePhotoBadgeChanged(nil)
+                    returningTimelineThumbnailChanged(nil)
                 }
             }
             .onEnded { value in
@@ -975,8 +1004,16 @@ struct AssetViewerView: View {
             imageRect: imageRect,
             targetRect: target,
             viewportSize: viewportSize,
-            anchor: anchor
+            anchor: anchor,
+            fillsTarget: destination?.fillsFrame == true
         )
+        if destination?.fillsFrame == true {
+            dismissalCropTargetSize = AssetViewerDismissalGeometry.sourceCropSize(
+                imageRect: imageRect,
+                targetRect: target,
+                landingScale: landing.scale
+            )
+        }
         withAnimation(.easeOut(duration: 0.28)) {
             dismissalLandingScale = landing.scale
             dismissalLandingTranslation = landing.translation
@@ -984,11 +1021,24 @@ struct AssetViewerView: View {
             dismissalLandingCornerRadius = (destination?.cornerRadius ?? 0)
                 / max(landing.scale, 0.04)
         }
+        if destination?.fillsFrame == true {
+            dismissalCropProgress = 1
+        }
         withAnimation(.easeInOut(duration: 0.45)) {
             isLandingDismissal = true
         }
         dismissalLandingTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(500))
+            if destination?.fillsFrame == true {
+                try? await Task.sleep(for: .milliseconds(300))
+                guard !Task.isCancelled else { return }
+                returningTimelineThumbnailChanged(nil)
+                withAnimation(.easeInOut(duration: 0.12)) {
+                    dismissalAssetOpacity = 0
+                }
+                try? await Task.sleep(for: .milliseconds(200))
+            } else {
+                try? await Task.sleep(for: .milliseconds(500))
+            }
             guard !Task.isCancelled else { return }
             closeWithoutAnimation()
         }
@@ -1009,6 +1059,13 @@ struct AssetViewerView: View {
         }
         dismissalViewerRect = nil
         returningLivePhotoBadgeChanged(nil)
+        dismissalThumbnailRevealTask?.cancel()
+        dismissalThumbnailRevealTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(320))
+            guard !Task.isCancelled, !isDismissing else { return }
+            returningTimelineThumbnailChanged(nil)
+            dismissalThumbnailRevealTask = nil
+        }
     }
 
     private func isOutsideViewerContent(
@@ -1391,15 +1448,17 @@ nonisolated enum AssetViewerDismissalGeometry {
         imageRect: CGRect,
         targetRect: CGRect,
         viewportSize: CGSize,
-        anchor: UnitPoint
+        anchor: UnitPoint,
+        fillsTarget: Bool = false
     ) -> (scale: CGFloat, translation: CGSize) {
         guard imageRect.width > 0, imageRect.height > 0,
               targetRect.width > 0, targetRect.height > 0
         else { return (1, .zero) }
-        let scale = min(1, max(0.04, min(
-            targetRect.width / imageRect.width,
-            targetRect.height / imageRect.height
-        )))
+        let widthScale = targetRect.width / imageRect.width
+        let heightScale = targetRect.height / imageRect.height
+        let scale = min(1, max(0.04, fillsTarget
+                ? max(widthScale, heightScale)
+                : min(widthScale, heightScale)))
         let pivot = CGPoint(
             x: anchor.x * viewportSize.width,
             y: anchor.y * viewportSize.height
@@ -1413,11 +1472,63 @@ nonisolated enum AssetViewerDismissalGeometry {
         )
     }
 
+    static func sourceCropSize(
+        imageRect: CGRect,
+        targetRect: CGRect,
+        landingScale: CGFloat
+    ) -> CGSize {
+        guard landingScale.isFinite, landingScale > 0,
+              imageRect.width > 0, imageRect.height > 0,
+              targetRect.width > 0, targetRect.height > 0
+        else { return imageRect.size }
+        return CGSize(
+            width: min(imageRect.width, targetRect.width / landingScale),
+            height: min(imageRect.height, targetRect.height / landingScale)
+        )
+    }
+
+    static func croppedImageRect(
+        _ imageRect: CGRect,
+        targetSize: CGSize?,
+        progress: CGFloat
+    ) -> CGRect {
+        guard let targetSize else { return imageRect }
+        let amount = min(1, max(0, progress))
+        let width = imageRect.width + (targetSize.width - imageRect.width) * amount
+        let height = imageRect.height + (targetSize.height - imageRect.height) * amount
+        return CGRect(
+            x: imageRect.midX - width / 2,
+            y: imageRect.midY - height / 2,
+            width: width,
+            height: height
+        )
+    }
+
     static func shouldComplete(
         translationHeight: CGFloat,
         predictedEndTranslationHeight: CGFloat
     ) -> Bool {
         translationHeight >= 18 || predictedEndTranslationHeight >= 60
+    }
+}
+
+nonisolated struct AssetViewerTransitionClipShape: Shape {
+    let target: CGRect
+    var progress: CGFloat
+
+    var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func path(in bounds: CGRect) -> Path {
+        let amount = min(1, max(0, progress))
+        return Path(CGRect(
+            x: bounds.minX + (target.minX - bounds.minX) * amount,
+            y: bounds.minY + (target.minY - bounds.minY) * amount,
+            width: bounds.width + (target.width - bounds.width) * amount,
+            height: bounds.height + (target.height - bounds.height) * amount
+        ))
     }
 }
 

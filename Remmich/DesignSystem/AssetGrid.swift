@@ -493,6 +493,7 @@ struct TimelineDeterministicAssetRow: View {
     let frameCoordinateSpaceName: String
     var priority: ImageRequest.Priority = .normal
     var hiddenLivePhotoBadgeAssetID: String?
+    var hiddenReturningThumbnailAssetID: String?
 
     var body: some View {
         let progress = min(1, max(0, naturalAspectProgress ?? (assetLayout == .naturalAspect ? 1 : 0)))
@@ -525,7 +526,8 @@ struct TimelineDeterministicAssetRow: View {
                         transitionNamespace: transitionNamespace,
                         assetSelected: assetSelected,
                         priority: priority,
-                        hiddenLivePhotoBadgeAssetID: hiddenLivePhotoBadgeAssetID
+                        hiddenLivePhotoBadgeAssetID: hiddenLivePhotoBadgeAssetID,
+                        hiddenReturningThumbnailAssetID: hiddenReturningThumbnailAssetID
                     )
                     .frame(width: itemWidth, height: itemSide)
                     .background {
@@ -565,6 +567,7 @@ struct TimelineAssetThumbnail: View {
     let assetSelected: (TimelineAssetSummary) -> Void
     var priority: ImageRequest.Priority = .normal
     var hiddenLivePhotoBadgeAssetID: String?
+    var hiddenReturningThumbnailAssetID: String?
 
     private var resolvedNaturalAspectProgress: CGFloat {
         naturalAspectProgress
@@ -680,6 +683,7 @@ struct TimelineAssetThumbnail: View {
                     viewportChanged(asset, visible)
                 }
             }
+            .opacity(hiddenReturningThumbnailAssetID == asset.id ? 0 : 1)
         }
         .buttonStyle(.plain)
         .assetViewerTransitionSource(assetID: asset.id, namespace: transitionNamespace)

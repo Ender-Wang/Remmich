@@ -363,6 +363,7 @@ struct PhotosView: View {
     @State private var viewerOwnsTimelineChrome = false
     @State private var viewerChromeReleaseTask: Task<Void, Never>?
     @State private var hiddenLivePhotoBadgeAssetID: String?
+    @State private var hiddenReturningThumbnailAssetID: String?
     @State private var libraryRange: TimelineLibraryRange = .all
     @State private var initialAssetByRoute: [PhotosRangeRoute: String] = [:]
     @State private var viewerRoute: AssetViewerRoute?
@@ -439,10 +440,12 @@ struct PhotosView: View {
                 visibilityChanged: { visible in
                     viewerVisibilityChanged(visible)
                     if !visible {
+                        hiddenReturningThumbnailAssetID = nil
                         revealReturningLivePhotoBadge()
                     }
                 },
                 returningLivePhotoBadgeChanged: setReturningLivePhotoBadge,
+                returningTimelineThumbnailChanged: setReturningTimelineThumbnail,
                 dismissalTarget: { assetID in
                     viewerDismissalTargetFrame(
                         for: assetID,
@@ -1159,7 +1162,8 @@ struct PhotosView: View {
                 },
                 frameCoordinateSpaceName: timelineFrameCoordinateSpaceName,
                 priority: timelinePriority(for: row, layout: layout),
-                hiddenLivePhotoBadgeAssetID: hiddenLivePhotoBadgeAssetID
+                hiddenLivePhotoBadgeAssetID: hiddenLivePhotoBadgeAssetID,
+                hiddenReturningThumbnailAssetID: hiddenReturningThumbnailAssetID
             )
             .frame(height: row.height, alignment: .top)
         case let .placeholder(section):
@@ -1416,6 +1420,7 @@ struct PhotosView: View {
 
     private func presentViewer(_ route: AssetViewerRoute) {
         hiddenLivePhotoBadgeAssetID = nil
+        hiddenReturningThumbnailAssetID = nil
         viewerChromeReleaseTask?.cancel()
         viewerChromeReleaseTask = nil
         viewerOwnsTimelineChrome = true
@@ -1452,6 +1457,15 @@ struct PhotosView: View {
         }
     }
 
+    private func setReturningTimelineThumbnail(_ assetID: String?) {
+        guard hiddenReturningThumbnailAssetID != assetID else { return }
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            hiddenReturningThumbnailAssetID = assetID
+        }
+    }
+
     private func revealReturningLivePhotoBadge() {
         guard hiddenLivePhotoBadgeAssetID != nil else { return }
         Task { @MainActor in
@@ -1484,7 +1498,8 @@ struct PhotosView: View {
         return AssetViewerDismissalTarget(
             imageFrame: frameInWindow,
             cornerRadius: presentation.preferences.assetLayout == .naturalAspect
-                ? DesignMetrics.compactCornerRadius : 0
+                ? DesignMetrics.compactCornerRadius : 0,
+            fillsFrame: presentation.preferences.assetLayout == .square
         )
     }
 

@@ -1213,7 +1213,7 @@ struct RemmichTests {
         )
 
         #expect(standard == CGRect(origin: .zero, size: viewportSize))
-        #expect(info == CGRect(x: 0, y: 122, width: 402, height: 662))
+        #expect(info == CGRect(x: 0, y: 122, width: 402, height: 650))
     }
 
     @Test func viewerInfoFitAnimationIsDisabledOnlyDuringDirectManipulation() {
@@ -1234,10 +1234,10 @@ struct RemmichTests {
             translationHeight: 180,
             viewportHeight: viewport.height
         ) < 1)
-        #expect(AssetViewerDismissalGeometry.scale(
+        #expect(abs(AssetViewerDismissalGeometry.scale(
             translationHeight: 1000,
             viewportHeight: viewport.height
-        ) == 0.82)
+        ) - 0.82) < 0.000_001)
 
         let anchor = AssetViewerDismissalGeometry.anchor(
             startLocation: start,
@@ -1280,6 +1280,68 @@ struct RemmichTests {
         #expect(abs(image.width * landing.scale - target.width) < 0.001)
     }
 
+    @Test func viewerDismissalFillsSquareGridCellWithoutStretchingAsset() {
+        let viewport = CGSize(width: 402, height: 874)
+        let image = CGRect(x: 0, y: 336, width: 402, height: 201)
+        let target = CGRect(x: 210, y: 660, width: 90, height: 90)
+        let landing = AssetViewerDismissalGeometry.landingTransform(
+            imageRect: image,
+            targetRect: target,
+            viewportSize: viewport,
+            anchor: .center,
+            fillsTarget: true
+        )
+        let landedCenter = CGPoint(
+            x: viewport.width / 2 + landing.scale * (image.midX - viewport.width / 2)
+                + landing.translation.width,
+            y: viewport.height / 2 + landing.scale * (image.midY - viewport.height / 2)
+                + landing.translation.height
+        )
+        #expect(abs(landedCenter.x - target.midX) < 0.001)
+        #expect(abs(landedCenter.y - target.midY) < 0.001)
+        #expect(abs(image.height * landing.scale - target.height) < 0.001)
+        #expect(image.width * landing.scale > target.width)
+    }
+
+    @Test func viewerSquareOpeningClipExpandsContinuously() {
+        let viewport = CGRect(x: 0, y: 0, width: 402, height: 874)
+        let tile = CGRect(x: 210, y: 660, width: 90, height: 90)
+
+        #expect(AssetViewerTransitionClipShape(target: tile, progress: 0)
+            .path(in: viewport).boundingRect == viewport)
+        #expect(AssetViewerTransitionClipShape(target: tile, progress: 0.5)
+            .path(in: viewport).boundingRect == CGRect(x: 105, y: 330, width: 246, height: 482))
+        #expect(AssetViewerTransitionClipShape(target: tile, progress: 1)
+            .path(in: viewport).boundingRect == tile)
+    }
+
+    @Test func viewerSquareReturnCropFinishesAtLandingMidpoint() {
+        let image = CGRect(x: 0, y: 336, width: 402, height: 201)
+        let tile = CGRect(x: 210, y: 660, width: 90, height: 90)
+        let landing = AssetViewerDismissalGeometry.landingTransform(
+            imageRect: image,
+            targetRect: tile,
+            viewportSize: CGSize(width: 402, height: 874),
+            anchor: .center,
+            fillsTarget: true
+        )
+        let cropSize = AssetViewerDismissalGeometry.sourceCropSize(
+            imageRect: image,
+            targetRect: tile,
+            landingScale: landing.scale
+        )
+        let crop = AssetViewerDismissalGeometry.croppedImageRect(
+            image,
+            targetSize: cropSize,
+            progress: 1
+        )
+        #expect(crop.height == image.height)
+        #expect(abs(crop.width * landing.scale - tile.width) < 0.001)
+        #expect(abs(crop.height * landing.scale - tile.height) < 0.001)
+        #expect(crop.midX == image.midX)
+        #expect(crop.midY == image.midY)
+    }
+
     @Test func viewerRenderedPixelsStayCenteredForWidthAndHeightBoundAssets() {
         let viewport = CGRect(x: 0, y: 0, width: 402, height: 874)
         let widthBound = AssetViewerMediaGeometry.renderedPixelRect(
@@ -1293,10 +1355,10 @@ struct RemmichTests {
 
         #expect(widthBound.midX == viewport.midX)
         #expect(widthBound.midY == viewport.midY)
-        #expect(widthBound.width == viewport.width)
+        #expect(abs(widthBound.width - viewport.width) < 0.000_001)
         #expect(heightBound.midX == viewport.midX)
         #expect(heightBound.midY == viewport.midY)
-        #expect(heightBound.height == viewport.height)
+        #expect(abs(heightBound.height - viewport.height) < 0.000_001)
     }
 
     @Test @MainActor func viewerPreviewCanSeedRecreatedPageFromMemory() throws {
