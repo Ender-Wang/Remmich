@@ -588,6 +588,33 @@ final class RemmichUITests: XCTestCase {
     }
 
     @MainActor
+    func testLivePhotoViewerPreparesAndPlaysFromHold() {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = ["-ui-testing-signed-in"]
+        app.launch()
+
+        let asset = app.descendants(matching: .any)["asset-asset-5"].firstMatch
+        XCTAssertTrue(asset.waitForExistence(timeout: 10))
+        asset.tap()
+
+        let viewer = app.descendants(matching: .any)["asset-viewer-still-asset-5"]
+        let indicator = app.descendants(matching: .any)["asset-viewer-live-photo-indicator"].firstMatch
+        let motion = app.descendants(matching: .any)["asset-viewer-live-photo-player-asset-5"].firstMatch
+        XCTAssertTrue(viewer.waitForExistence(timeout: 10))
+        XCTAssertTrue(indicator.waitForExistence(timeout: 10))
+        XCTAssertEqual(indicator.label, "Live Photo")
+        XCTAssertTrue(motion.waitForExistence(timeout: 10))
+        XCTAssertTrue(waitUntil(timeout: 10) { motion.value as? String == "Ready" })
+
+        viewer.press(forDuration: 0.6)
+
+        XCTAssertTrue(waitUntil(timeout: 5) {
+            (motion.value as? String)?.contains("played once") == true
+        })
+    }
+
+    @MainActor
     func testAssetViewerZoomKeepsCanvasStableThroughChromeChanges() {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()

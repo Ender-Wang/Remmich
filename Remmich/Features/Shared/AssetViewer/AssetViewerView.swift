@@ -32,6 +32,7 @@ struct AssetViewerView: View {
     @State private var pagerPhase: ScrollPhase = .idle
     @State private var pagerSelectionTask: Task<Void, Never>?
     @State private var isDismissing = false
+    @State private var livePhotoPlaybackAssetID: String?
 
     private let controlHitSize: CGFloat = 44
     private let controlVisualSize: CGFloat = 44
@@ -170,6 +171,7 @@ struct AssetViewerView: View {
         }
         .onChange(of: session.selectedAssetID) { _, newAssetID in
             zoomedAssetID = nil
+            livePhotoPlaybackAssetID = nil
             hideRenderedImageStatus()
             updateViewerPrefetch()
             if pagerPosition != newAssetID {
@@ -185,6 +187,7 @@ struct AssetViewerView: View {
             neighborLoadTask?.cancel()
             pagerSelectionTask?.cancel()
             imageStatusDismissTask?.cancel()
+            livePhotoPlaybackAssetID = nil
             media.cancelViewerPrefetching()
             visibilityChanged(false)
         }
@@ -363,14 +366,48 @@ struct AssetViewerView: View {
                         chromeVisible = false
                     }
                 },
+                livePhotoPressChanged: { isPressing in
+                    guard asset.id == session.selectedAssetID,
+                          asset.livePhotoVideoID != nil,
+                          zoomedAssetID == nil
+                    else {
+                        if livePhotoPlaybackAssetID == asset.id {
+                            livePhotoPlaybackAssetID = nil
+                        }
+                        return
+                    }
+                    livePhotoPlaybackAssetID = isPressing ? asset.id : nil
+                },
                 toggleChrome: mediaTapped
             )
+
+            if let motionAssetID = asset.livePhotoVideoID,
+               asset.id == session.selectedAssetID
+            {
+                LivePhotoPlaybackView(
+                    assetID: asset.id,
+                    motionAssetID: motionAssetID,
+                    media: media,
+                    isHeld: livePhotoPlaybackAssetID == asset.id,
+                    playbackEnded: {
+                        guard livePhotoPlaybackAssetID == asset.id else { return }
+                        livePhotoPlaybackAssetID = nil
+                    }
+                )
+                .frame(width: mediaRect.width, height: mediaRect.height)
+                .position(x: mediaRect.midX, y: mediaRect.midY)
+                .allowsHitTesting(false)
+            }
 
             if asset.mediaKind != .video,
                asset.id == session.selectedAssetID,
                let metadata = renderedImageMetadataByAssetID[asset.id]
             {
                 GeometryReader { geometry in
+                    let imageFrame = renderedImageFrame(
+                        metadata: metadata,
+                        containerSize: geometry.size
+                    )
                     let statusPosition = renderedImageStatusPosition(
                         metadata: metadata,
                         containerSize: geometry.size
@@ -380,31 +417,54 @@ struct AssetViewerView: View {
                         statusPosition.y - 18
                     )
                     ZStack {
-                        if !chromeVisible,
-                           !showsInfo,
-                           visibleImageStatusAssetID == asset.id
-                        {
-                            renderedImageStatus(metadata)
-                                .position(statusPosition)
-                                .transition(.offset(y: -44))
+                        ZStack {
+                            if !chromeVisible,
+                               !showsInfo,
+                               visibleImageStatusAssetID == asset.id
+                            {
+                                renderedImageStatus(metadata)
+                                    .position(statusPosition)
+                                    .transition(.offset(y: -44))
+                            }
+                        }
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        .mask {
+                            Rectangle()
+                                .frame(
+                                    width: geometry.size.width,
+                                    height: max(0, geometry.size.height - revealEdge)
+                                )
+                                .position(
+                                    x: geometry.size.width / 2,
+                                    y: revealEdge + (geometry.size.height - revealEdge) / 2
+                                )
+                        }
+
+                        if asset.livePhotoVideoID != nil {
+                            livePhotoIndicator(isPlaying: livePhotoPlaybackAssetID == asset.id)
+                                .position(
+                                    x: imageFrame.minX + 22,
+                                    y: imageFrame.maxY - 22
+                                )
                         }
                     }
                     .frame(width: geometry.size.width, height: geometry.size.height)
-                    .mask {
-                        Rectangle()
-                            .frame(
-                                width: geometry.size.width,
-                                height: max(0, geometry.size.height - revealEdge)
-                            )
-                            .position(
-                                x: geometry.size.width / 2,
-                                y: revealEdge + (geometry.size.height - revealEdge) / 2
-                            )
-                    }
                 }
                 .allowsHitTesting(false)
             }
         }
+    }
+
+    private func livePhotoIndicator(isPlaying: Bool) -> some View {
+        Image(systemName: "livephoto")
+            .font(.caption.weight(.semibold))
+            .symbolEffect(.pulse, isActive: isPlaying && !reduceMotion)
+            .frame(width: 32, height: 28)
+            .glassEffect(.regular, in: Capsule())
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Live Photo")
+            .accessibilityHint("Press and hold the photo to play once")
+            .accessibilityIdentifier("asset-viewer-live-photo-indicator")
     }
 
     private func renderedImageStatus(_ metadata: AssetViewerRenderedImageMetadata) -> some View {
@@ -435,14 +495,27 @@ struct AssetViewerView: View {
         metadata: AssetViewerRenderedImageMetadata,
         containerSize: CGSize
     ) -> CGFloat {
+        renderedImageFrame(metadata: metadata, containerSize: containerSize).maxY
+    }
+
+    private func renderedImageFrame(
+        metadata: AssetViewerRenderedImageMetadata,
+        containerSize: CGSize
+    ) -> CGRect {
         let imageWidth = CGFloat(metadata.pixelSize.width)
         let imageHeight = CGFloat(metadata.pixelSize.height)
         let scale = min(
             containerSize.width / max(1, imageWidth),
             containerSize.height / max(1, imageHeight)
         )
+        let fittedWidth = imageWidth * scale
         let fittedHeight = imageHeight * scale
-        return (containerSize.height + fittedHeight) / 2
+        return CGRect(
+            x: (containerSize.width - fittedWidth) / 2,
+            y: (containerSize.height - fittedHeight) / 2,
+            width: fittedWidth,
+            height: fittedHeight
+        )
     }
 
     private func chrome(infoProgress: CGFloat) -> some View {
@@ -978,6 +1051,7 @@ private struct AssetViewerFitPage: View {
     let resumePosition: () -> Double
     let savePosition: (Double) -> Void
     let zoomChanged: (Bool) -> Void
+    let livePhotoPressChanged: (Bool) -> Void
     let toggleChrome: () -> Void
 
     var body: some View {
@@ -1006,6 +1080,7 @@ private struct AssetViewerFitPage: View {
                     previewMetadataChanged: previewMetadataChanged,
                     renderedImageMetadataChanged: renderedImageMetadataChanged,
                     zoomChanged: zoomChanged,
+                    livePhotoPressChanged: livePhotoPressChanged,
                     toggleChrome: toggleChrome
                 )
                 .frame(width: pageSize.width, height: pageSize.height)

@@ -15,6 +15,7 @@ struct ZoomableStillImageView: View {
     let previewMetadataChanged: (AssetViewerPreviewMetadata) -> Void
     let renderedImageMetadataChanged: (AssetViewerRenderedImageMetadata) -> Void
     let zoomChanged: (Bool) -> Void
+    let livePhotoPressChanged: (Bool) -> Void
     let toggleChrome: () -> Void
 
     @State private var image: UIImage?
@@ -36,6 +37,7 @@ struct ZoomableStillImageView: View {
         previewMetadataChanged: @escaping (AssetViewerPreviewMetadata) -> Void,
         renderedImageMetadataChanged: @escaping (AssetViewerRenderedImageMetadata) -> Void,
         zoomChanged: @escaping (Bool) -> Void,
+        livePhotoPressChanged: @escaping (Bool) -> Void,
         toggleChrome: @escaping () -> Void
     ) {
         self.asset = asset
@@ -48,6 +50,7 @@ struct ZoomableStillImageView: View {
         self.previewMetadataChanged = previewMetadataChanged
         self.renderedImageMetadataChanged = renderedImageMetadataChanged
         self.zoomChanged = zoomChanged
+        self.livePhotoPressChanged = livePhotoPressChanged
         self.toggleChrome = toggleChrome
 
         let cachedPreview = media.cachedViewerPreview(
@@ -176,6 +179,8 @@ struct ZoomableStillImageView: View {
                 isZoomed = value
                 zoomChanged(value)
             },
+            supportsLivePhotoPlayback: asset.livePhotoVideoID != nil,
+            livePhotoPressChanged: livePhotoPressChanged,
             toggleChrome: toggleChrome
         )
     }
@@ -268,10 +273,16 @@ private struct ZoomableImageScrollView: UIViewRepresentable {
     let animatesFitChanges: Bool
     let crossfadesImageChanges: Bool
     let zoomChanged: (Bool) -> Void
+    let supportsLivePhotoPlayback: Bool
+    let livePhotoPressChanged: (Bool) -> Void
     let toggleChrome: () -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(zoomChanged: zoomChanged, toggleChrome: toggleChrome)
+        Coordinator(
+            zoomChanged: zoomChanged,
+            livePhotoPressChanged: livePhotoPressChanged,
+            toggleChrome: toggleChrome
+        )
     }
 
     func makeUIView(context: Context) -> ViewerZoomScrollView {
@@ -304,11 +315,23 @@ private struct ZoomableImageScrollView: UIViewRepresentable {
         )
         doubleTap.numberOfTapsRequired = 2
         scrollView.addGestureRecognizer(doubleTap)
+        let livePhotoPress = UILongPressGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleLivePhotoPress(_:))
+        )
+        livePhotoPress.minimumPressDuration = 0.12
+        livePhotoPress.allowableMovement = 18
+        livePhotoPress.cancelsTouchesInView = false
+        livePhotoPress.isEnabled = supportsLivePhotoPlayback
+        livePhotoPress.delegate = context.coordinator
+        scrollView.addGestureRecognizer(livePhotoPress)
+        context.coordinator.livePhotoPressRecognizer = livePhotoPress
         let singleTap = UITapGestureRecognizer(
             target: context.coordinator,
             action: #selector(Coordinator.handleSingleTap(_:))
         )
         singleTap.require(toFail: doubleTap)
+        singleTap.require(toFail: livePhotoPress)
         scrollView.addGestureRecognizer(singleTap)
         context.coordinator.scrollView = scrollView
         scrollView.viewportDidResize = { [weak coordinator = context.coordinator] in
@@ -320,8 +343,16 @@ private struct ZoomableImageScrollView: UIViewRepresentable {
 
     func updateUIView(_ scrollView: ViewerZoomScrollView, context: Context) {
         context.coordinator.zoomChanged = zoomChanged
+        context.coordinator.livePhotoPressChanged = livePhotoPressChanged
         context.coordinator.toggleChrome = toggleChrome
+        if context.coordinator.livePhotoPressRecognizer?.isEnabled == true,
+           !supportsLivePhotoPlayback
+        {
+            context.coordinator.cancelLivePhotoPress()
+        }
+        context.coordinator.livePhotoPressRecognizer?.isEnabled = supportsLivePhotoPlayback
         if context.coordinator.assetID != assetID {
+            context.coordinator.cancelLivePhotoPress()
             context.coordinator.assetID = assetID
             context.coordinator.isResettingZoom = true
             scrollView.setZoomScale(1, animated: false)
@@ -351,24 +382,35 @@ private struct ZoomableImageScrollView: UIViewRepresentable {
         scrollView.setNeedsLayout()
     }
 
-    final class Coordinator: NSObject, UIScrollViewDelegate {
+    static func dismantleUIView(_ scrollView: ViewerZoomScrollView, coordinator: Coordinator) {
+        coordinator.cancelLivePhotoPress()
+        scrollView.delegate = nil
+        scrollView.viewportDidResize = nil
+    }
+
+    final class Coordinator: NSObject, UIScrollViewDelegate, UIGestureRecognizerDelegate {
         let canvas = ViewerZoomCanvasView()
         weak var scrollView: ViewerZoomScrollView?
+        weak var livePhotoPressRecognizer: UILongPressGestureRecognizer?
         var assetID: String?
         var isResettingZoom = false
         var isZoomTransitionActive = false
         var lastReportedZoomed = false
+        private var isLivePhotoPressActive = false
         private var requestedFitRect = CGRect.zero
         private var didApplyInitialFitRect = false
         private var shouldAnimateFitChange = false
         var zoomChanged: (Bool) -> Void
+        var livePhotoPressChanged: (Bool) -> Void
         var toggleChrome: () -> Void
 
         init(
             zoomChanged: @escaping (Bool) -> Void,
+            livePhotoPressChanged: @escaping (Bool) -> Void,
             toggleChrome: @escaping () -> Void
         ) {
             self.zoomChanged = zoomChanged
+            self.livePhotoPressChanged = livePhotoPressChanged
             self.toggleChrome = toggleChrome
         }
 
@@ -450,6 +492,34 @@ private struct ZoomableImageScrollView: UIViewRepresentable {
 
         @objc func handleSingleTap(_: UITapGestureRecognizer) {
             toggleChrome()
+        }
+
+        @objc func handleLivePhotoPress(_ recognizer: UILongPressGestureRecognizer) {
+            switch recognizer.state {
+            case .began:
+                guard !isLivePhotoPressActive else { return }
+                isLivePhotoPressActive = true
+                livePhotoPressChanged(true)
+            case .ended, .cancelled, .failed:
+                cancelLivePhotoPress()
+            default:
+                break
+            }
+        }
+
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            guard gestureRecognizer === livePhotoPressRecognizer,
+                  let scrollView
+            else { return true }
+            return !isZoomTransitionActive
+                && !scrollView.isDragging
+                && scrollView.zoomScale <= scrollView.minimumZoomScale + 0.01
+        }
+
+        func cancelLivePhotoPress() {
+            guard isLivePhotoPressActive else { return }
+            isLivePhotoPressActive = false
+            livePhotoPressChanged(false)
         }
 
         @objc private func zoomIn() -> Bool {
