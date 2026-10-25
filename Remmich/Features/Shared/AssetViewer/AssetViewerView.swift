@@ -42,6 +42,8 @@ struct AssetViewerView: View {
     @State private var isDismissing = false
     @State private var dismissalDragTranslation = CGSize.zero
     @State private var dismissalDragStartLocation = CGPoint.zero
+    @State private var dismissalViewerRect: CGRect?
+    @State private var dismissalBackdropOpacity: CGFloat = 1
     @State private var dismissalLandingScale: CGFloat?
     @State private var dismissalLandingTranslation: CGSize?
     @State private var dismissalLandingCornerRadius: CGFloat = 0
@@ -118,7 +120,7 @@ struct AssetViewerView: View {
                     viewportSize: fullGeometry.size
                 )
                 let shownInfoBottomInset = controlHitSize + infoGap
-                let viewerRect = AssetViewerMediaGeometry.mediaRect(
+                let fittedViewerRect = AssetViewerMediaGeometry.mediaRect(
                     viewportSize: fullGeometry.size,
                     safeAreaInsets: UIEdgeInsets(
                         top: safeInsets.top,
@@ -130,6 +132,7 @@ struct AssetViewerView: View {
                     topChromeHeight: topChromeHeight,
                     shownInfoBottomInset: shownInfoBottomInset
                 )
+                let viewerRect = dismissalViewerRect ?? fittedViewerRect
                 let selectedMediaRect = selectedMediaRect(
                     in: viewerRect,
                     infoProgress: infoProgress,
@@ -165,7 +168,7 @@ struct AssetViewerView: View {
                 let isDraggingOrLanding = isDismissalInteractionActive || isLandingDismissal
                 ZStack {
                     Color(uiColor: .systemBackground)
-                        .opacity(isOpening ? openingProgress : (isolatesDismissalAsset ? 0 : 1))
+                        .opacity(isOpening ? openingProgress : dismissalBackdropOpacity)
                     viewerContent(
                         pageSize: fullGeometry.size,
                         viewerRect: viewerRect,
@@ -217,6 +220,7 @@ struct AssetViewerView: View {
                     verticalViewerGesture(
                         viewportSize: fullRect.size,
                         viewportOrigin: fullFrame.origin,
+                        viewerRect: viewerRect,
                         mediaRect: selectedMediaRect
                     )
                 )
@@ -228,7 +232,7 @@ struct AssetViewerView: View {
             .ignoresSafeArea(.container, edges: .all)
         }
         .foregroundStyle(.primary)
-        .statusBarHidden(isDismissalInteractionActive || isDismissing || (!chromeVisible && !showsInfo))
+        .statusBarHidden(shouldHideStatusBar)
         .presentationBackground(.clear)
         .interactiveDismissDisabled(true)
         .toolbar(.hidden, for: .navigationBar)
@@ -812,6 +816,7 @@ struct AssetViewerView: View {
     private func verticalViewerGesture(
         viewportSize: CGSize,
         viewportOrigin: CGPoint,
+        viewerRect: CGRect,
         mediaRect: CGRect
     ) -> some Gesture {
         DragGesture(minimumDistance: 16)
@@ -833,10 +838,17 @@ struct AssetViewerView: View {
                 if drivesDismissal {
                     guard !reduceMotion else { return }
                     withTransaction(transaction) {
+                        if dismissalViewerRect == nil {
+                            dismissalViewerRect = viewerRect
+                        }
                         dismissalDragStartLocation = value.startLocation
                         dismissalDragTranslation = CGSize(
                             width: value.translation.width,
                             height: max(0, value.translation.height)
+                        )
+                        dismissalBackdropOpacity = AssetViewerDismissalGeometry.backgroundOpacity(
+                            translationHeight: value.translation.height,
+                            viewportHeight: viewportSize.height
                         )
                         infoDragTranslation = 0
                     }
@@ -844,6 +856,8 @@ struct AssetViewerView: View {
                 }
                 withTransaction(transaction) {
                     dismissalDragTranslation = .zero
+                    dismissalViewerRect = nil
+                    dismissalBackdropOpacity = 1
                     infoDragTranslation = showsInfo
                         ? max(0, value.translation.height)
                         : min(0, value.translation.height)
@@ -951,15 +965,18 @@ struct AssetViewerView: View {
             viewportSize: viewportSize,
             anchor: anchor
         )
-        isLandingDismissal = true
         withAnimation(.easeOut(duration: 0.28)) {
             dismissalLandingScale = landing.scale
             dismissalLandingTranslation = landing.translation
+            dismissalBackdropOpacity = 0
             dismissalLandingCornerRadius = (destination?.cornerRadius ?? 0)
                 / max(landing.scale, 0.04)
         }
+        withAnimation(.easeInOut(duration: 0.45)) {
+            isLandingDismissal = true
+        }
         dismissalLandingTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(280))
+            try? await Task.sleep(for: .milliseconds(500))
             guard !Task.isCancelled else { return }
             closeWithoutAnimation()
         }
@@ -976,7 +993,9 @@ struct AssetViewerView: View {
         withAnimation(reduceMotion ? nil : .spring(duration: 0.32, bounce: 0.1)) {
             dismissalDragTranslation = .zero
             dismissalDragStartLocation = .zero
+            dismissalBackdropOpacity = 1
         }
+        dismissalViewerRect = nil
     }
 
     private func isOutsideViewerContent(
@@ -999,6 +1018,11 @@ struct AssetViewerView: View {
 
     private var isDismissalInteractionActive: Bool {
         dismissalDragTranslation.height > 0
+    }
+
+    private var shouldHideStatusBar: Bool {
+        !isLandingDismissal
+            && (isDismissalInteractionActive || isDismissing || (!chromeVisible && !showsInfo))
     }
 
     private func resolvedSafeAreaInsets(
@@ -1318,6 +1342,14 @@ nonisolated enum AssetViewerMediaGeometry {
 
 nonisolated enum AssetViewerDismissalGeometry {
     private static let maximumScaleReduction: CGFloat = 0.18
+
+    static func backgroundOpacity(
+        translationHeight: CGFloat,
+        viewportHeight: CGFloat
+    ) -> CGFloat {
+        let revealDistance = max(160, min(320, viewportHeight * 0.35))
+        return 1 - min(1, max(0, (translationHeight - 16) / revealDistance))
+    }
 
     static func progress(translationHeight: CGFloat, viewportHeight: CGFloat) -> CGFloat {
         let travel = max(160, min(320, viewportHeight * 0.35))
