@@ -612,17 +612,28 @@ final class RemmichUITests: XCTestCase {
         indicator.tap()
         XCTAssertTrue(waitUntil(timeout: 2) { indicator.value as? String == "Sound on" })
 
+        let info = app.buttons["asset-viewer-info"]
+        XCTAssertTrue(info.isHittable)
+        info.tap()
+        XCTAssertTrue(waitUntil(timeout: 3) { info.value as? String == "Shown" })
+        XCTAssertTrue(app.descendants(matching: .any)["asset-viewer-info-panel"]
+            .waitForExistence(timeout: 3))
+
+        let visibleMedia = viewer.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25))
+        visibleMedia.press(forDuration: 0.6)
+
+        XCTAssertTrue(waitUntil(timeout: 5) {
+            (motion.value as? String)?.contains("played once") == true
+        })
+
+        visibleMedia.tap()
+        XCTAssertTrue(waitUntil(timeout: 3) { info.value as? String == "Hidden" })
+
         mediaCenter.tap()
         XCTAssertTrue(waitUntil(timeout: 2) { !indicator.isHittable })
         mediaCenter.tap()
         XCTAssertTrue(waitUntil(timeout: 2) { indicator.isHittable })
         XCTAssertEqual(indicator.value as? String, "Sound on")
-
-        mediaCenter.press(forDuration: 0.6)
-
-        XCTAssertTrue(waitUntil(timeout: 5) {
-            (motion.value as? String)?.contains("played once") == true
-        })
 
         let livePhotoPage = app.descendants(matching: .any)["asset-viewer-page-asset-5"]
         let photoPage = app.descendants(matching: .any)["asset-viewer-page-asset-6"]
@@ -674,6 +685,40 @@ final class RemmichUITests: XCTestCase {
         XCTAssertTrue(waitUntil(timeout: 3) { back.exists })
         back.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         XCTAssertTrue(app.descendants(matching: .any)["photos-root"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor
+    func testAssetViewerKeepsRenderedPixelsStableThroughChromeChanges() {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = ["-ui-testing-signed-in"]
+        app.launch()
+
+        let asset = app.descendants(matching: .any)["asset-asset-2"].firstMatch
+        XCTAssertTrue(asset.waitForExistence(timeout: 10))
+        asset.tap()
+
+        let still = app.descendants(matching: .any)["asset-viewer-still-asset-2"]
+        let renderedPixels = app.descendants(matching: .any)["asset-viewer-rendered-pixels-asset-2"]
+            .firstMatch
+        let back = app.buttons["asset-viewer-back"]
+        XCTAssertTrue(still.waitForExistence(timeout: 10))
+        XCTAssertTrue(renderedPixels.waitForExistence(timeout: 10))
+        let initialPixelsFrame = renderedPixels.frame
+        XCTAssertEqual(initialPixelsFrame.midX, app.frame.midX, accuracy: 1)
+        XCTAssertEqual(initialPixelsFrame.midY, app.frame.midY, accuracy: 1)
+
+        still.tap()
+        XCTAssertTrue(waitUntil(timeout: 3) { !back.isHittable })
+        XCTAssertTrue(waitUntil(timeout: 3) {
+            self.framesMatch(renderedPixels.frame, initialPixelsFrame)
+        })
+
+        still.tap()
+        XCTAssertTrue(waitUntil(timeout: 3) { back.isHittable })
+        XCTAssertTrue(waitUntil(timeout: 3) {
+            self.framesMatch(renderedPixels.frame, initialPixelsFrame)
+        })
     }
 
     @MainActor
@@ -736,6 +781,13 @@ final class RemmichUITests: XCTestCase {
         XCTAssertEqual(actual.minY, expected.minY, accuracy: 0.5)
         XCTAssertEqual(actual.width, expected.width, accuracy: 0.5)
         XCTAssertEqual(actual.height, expected.height, accuracy: 0.5)
+    }
+
+    private func framesMatch(_ lhs: CGRect, _ rhs: CGRect, accuracy: CGFloat = 0.5) -> Bool {
+        abs(lhs.minX - rhs.minX) <= accuracy
+            && abs(lhs.minY - rhs.minY) <= accuracy
+            && abs(lhs.width - rhs.width) <= accuracy
+            && abs(lhs.height - rhs.height) <= accuracy
     }
 
     @MainActor

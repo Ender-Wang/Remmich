@@ -39,15 +39,8 @@ struct AssetViewerView: View {
     private let controlVisualSize: CGFloat = 44
     private let topChromeHeight: CGFloat = 60
     private let bottomActionsHeight: CGFloat = 56
-    private let filmstripHeight: CGFloat = 52
-    private let filmstripActionsGap: CGFloat = 16
-    private let mediaFilmstripGap: CGFloat = 12
     private let infoGap: CGFloat = 12
     private let pagerWindowRadius = 3
-
-    private var bottomChromeHeight: CGFloat {
-        mediaFilmstripGap + filmstripHeight + filmstripActionsGap + controlHitSize
-    }
 
     init(
         route: AssetViewerRoute,
@@ -97,27 +90,18 @@ struct AssetViewerView: View {
                     width: max(1, fullGeometry.size.width - safeInsets.leading - safeInsets.trailing),
                     height: max(1, fullGeometry.size.height - safeInsets.top - safeInsets.bottom)
                 )
-                let layoutProgress = chromeVisible ? 1 : infoProgress
-                let topInset = chromeVisible
-                    ? safeInsets.top + topChromeHeight
-                    : (safeInsets.top + topChromeHeight) * infoProgress
                 let shownInfoBottomInset = bottomActionsHeight + infoGap
-                let bottomInset = chromeVisible
-                    ? safeInsets.bottom + interpolated(
-                        from: bottomChromeHeight,
-                        to: shownInfoBottomInset,
-                        progress: infoProgress
-                    )
-                    : (safeInsets.bottom + shownInfoBottomInset) * infoProgress
-                let viewerRect = CGRect(
-                    x: safeInsets.leading * layoutProgress,
-                    y: topInset,
-                    width: max(
-                        1,
-                        fullGeometry.size.width
-                            - (safeInsets.leading + safeInsets.trailing) * layoutProgress
+                let viewerRect = AssetViewerMediaGeometry.mediaRect(
+                    viewportSize: fullGeometry.size,
+                    safeAreaInsets: UIEdgeInsets(
+                        top: safeInsets.top,
+                        left: safeInsets.leading,
+                        bottom: safeInsets.bottom,
+                        right: safeInsets.trailing
                     ),
-                    height: max(1, fullGeometry.size.height - topInset - bottomInset)
+                    infoProgress: infoProgress,
+                    topChromeHeight: topChromeHeight,
+                    shownInfoBottomInset: shownInfoBottomInset
                 )
                 ZStack {
                     Color(uiColor: .systemBackground)
@@ -246,6 +230,9 @@ struct AssetViewerView: View {
         isLandscape: Bool,
         infoProgress: CGFloat
     ) -> some View {
+        let animatesFitChanges = AssetViewerMediaGeometry.animatesFitChanges(
+            infoDragTranslation: infoDragTranslation
+        )
         if isLandscape {
             let targetInfoWidth = viewerRect.width / 2
             let infoWidth = targetInfoWidth * infoProgress
@@ -260,7 +247,7 @@ struct AssetViewerView: View {
                     asset: asset,
                     requestSize: requestSize,
                     mediaRect: mediaRect,
-                    animatesFitChanges: !showsInfo && infoProgress == 0
+                    animatesFitChanges: animatesFitChanges
                 )
                 .frame(width: pageSize.width, height: pageSize.height)
 
@@ -301,7 +288,7 @@ struct AssetViewerView: View {
                     asset: asset,
                     requestSize: requestSize,
                     mediaRect: mediaRect,
-                    animatesFitChanges: !showsInfo && infoProgress == 0
+                    animatesFitChanges: animatesFitChanges
                 )
                 .frame(width: pageSize.width, height: pageSize.height)
 
@@ -415,8 +402,12 @@ struct AssetViewerView: View {
                         boundingRect: mediaRect,
                         containerSize: geometry.size
                     )
+                    let renderedFrame = renderedImageFrame(
+                        metadata: metadata,
+                        boundingRect: mediaRect
+                    )
                     let revealEdge = min(
-                        renderedImageBottom(metadata: metadata, boundingRect: mediaRect),
+                        renderedFrame.maxY,
                         statusPosition.y - 18
                     )
                     ZStack {
@@ -443,6 +434,18 @@ struct AssetViewerView: View {
                                 )
                         }
                         .allowsHitTesting(false)
+
+                        #if DEBUG
+                            if ProcessInfo.processInfo.arguments.contains("-ui-testing-signed-in") {
+                                Color.clear
+                                    .frame(width: renderedFrame.width, height: renderedFrame.height)
+                                    .position(x: renderedFrame.midX, y: renderedFrame.midY)
+                                    .accessibilityElement(children: .ignore)
+                                    .accessibilityLabel("Rendered image pixels")
+                                    .accessibilityIdentifier("asset-viewer-rendered-pixels-\(asset.id)")
+                                    .allowsHitTesting(false)
+                            }
+                        #endif
                     }
                     .frame(width: geometry.size.width, height: geometry.size.height)
                 }
@@ -486,19 +489,12 @@ struct AssetViewerView: View {
         metadata: AssetViewerRenderedImageMetadata,
         boundingRect: CGRect
     ) -> CGRect {
-        let imageWidth = CGFloat(metadata.pixelSize.width)
-        let imageHeight = CGFloat(metadata.pixelSize.height)
-        let scale = min(
-            boundingRect.width / max(1, imageWidth),
-            boundingRect.height / max(1, imageHeight)
-        )
-        let fittedWidth = imageWidth * scale
-        let fittedHeight = imageHeight * scale
-        return CGRect(
-            x: boundingRect.midX - fittedWidth / 2,
-            y: boundingRect.midY - fittedHeight / 2,
-            width: fittedWidth,
-            height: fittedHeight
+        AssetViewerMediaGeometry.renderedPixelRect(
+            pixelSize: CGSize(
+                width: CGFloat(metadata.pixelSize.width),
+                height: CGFloat(metadata.pixelSize.height)
+            ),
+            in: boundingRect
         )
     }
 
@@ -775,10 +771,6 @@ struct AssetViewerView: View {
         return min(1, max(0, progress))
     }
 
-    private func interpolated(from start: CGFloat, to end: CGFloat, progress: CGFloat) -> CGFloat {
-        start + (end - start) * progress
-    }
-
     private func resolvedSafeAreaInsets(
         safeGeometry: GeometryProxy,
         safeFrame: CGRect,
@@ -878,7 +870,7 @@ struct AssetViewerView: View {
     private func toggleChrome() {
         guard !showsInfo else { return }
         let revealsStatus = chromeVisible
-        withAnimation(mediaFrameAnimation) {
+        withAnimation(chromeAnimation) {
             chromeVisible.toggle()
         }
         if revealsStatus {
@@ -920,7 +912,7 @@ struct AssetViewerView: View {
         reduceMotion ? nil : .spring(duration: 0.38, bounce: 0.08)
     }
 
-    private var mediaFrameAnimation: Animation? {
+    private var chromeAnimation: Animation? {
         reduceMotion ? nil : .easeInOut(duration: 0.28)
     }
 
@@ -1058,6 +1050,56 @@ struct AssetViewerView: View {
     }
 }
 
+nonisolated enum AssetViewerMediaGeometry {
+    static func animatesFitChanges(infoDragTranslation: CGFloat) -> Bool {
+        infoDragTranslation == 0
+    }
+
+    static func mediaRect(
+        viewportSize: CGSize,
+        safeAreaInsets: UIEdgeInsets,
+        infoProgress: CGFloat,
+        topChromeHeight: CGFloat,
+        shownInfoBottomInset: CGFloat
+    ) -> CGRect {
+        let progress = min(1, max(0, infoProgress))
+        let leadingInset = safeAreaInsets.left * progress
+        let trailingInset = safeAreaInsets.right * progress
+        let topInset = (safeAreaInsets.top + topChromeHeight) * progress
+        let bottomInset = (safeAreaInsets.bottom + shownInfoBottomInset) * progress
+        return CGRect(
+            x: leadingInset,
+            y: topInset,
+            width: max(1, viewportSize.width - leadingInset - trailingInset),
+            height: max(1, viewportSize.height - topInset - bottomInset)
+        )
+    }
+
+    static func renderedPixelRect(pixelSize: CGSize, in boundingRect: CGRect) -> CGRect {
+        guard pixelSize.width.isFinite,
+              pixelSize.height.isFinite,
+              pixelSize.width > 0,
+              pixelSize.height > 0,
+              boundingRect.width > 0,
+              boundingRect.height > 0
+        else { return .zero }
+        let scale = min(
+            boundingRect.width / pixelSize.width,
+            boundingRect.height / pixelSize.height
+        )
+        let fittedSize = CGSize(
+            width: pixelSize.width * scale,
+            height: pixelSize.height * scale
+        )
+        return CGRect(
+            x: boundingRect.midX - fittedSize.width / 2,
+            y: boundingRect.midY - fittedSize.height / 2,
+            width: fittedSize.width,
+            height: fittedSize.height
+        )
+    }
+}
+
 private struct AssetDetailLoadRequest: Hashable {
     let assetID: String
     let includesNeighbors: Bool
@@ -1115,7 +1157,7 @@ private struct AssetViewerFitPage: View {
                 )
                 .frame(width: pageSize.width, height: pageSize.height)
             }
-            if dismissesInfo {
+            if dismissesInfo, asset.mediaKind == .video {
                 Color.clear
                     .contentShape(.rect)
                     .frame(width: mediaRect.width, height: mediaRect.height)

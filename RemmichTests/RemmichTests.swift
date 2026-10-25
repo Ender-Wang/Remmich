@@ -1091,6 +1091,54 @@ struct RemmichTests {
         #expect(preview.displayText == "Preview · 1,206 × 1,809 px")
     }
 
+    @Test func viewerMediaGeometryStartsAtTheFullViewportAndReservesSpaceOnlyForInfo() {
+        let viewportSize = CGSize(width: 402, height: 874)
+        let safeAreaInsets = UIEdgeInsets(top: 62, left: 0, bottom: 34, right: 0)
+
+        let standard = AssetViewerMediaGeometry.mediaRect(
+            viewportSize: viewportSize,
+            safeAreaInsets: safeAreaInsets,
+            infoProgress: 0,
+            topChromeHeight: 60,
+            shownInfoBottomInset: 68
+        )
+        let info = AssetViewerMediaGeometry.mediaRect(
+            viewportSize: viewportSize,
+            safeAreaInsets: safeAreaInsets,
+            infoProgress: 1,
+            topChromeHeight: 60,
+            shownInfoBottomInset: 68
+        )
+
+        #expect(standard == CGRect(origin: .zero, size: viewportSize))
+        #expect(info == CGRect(x: 0, y: 122, width: 402, height: 650))
+    }
+
+    @Test func viewerInfoFitAnimationIsDisabledOnlyDuringDirectManipulation() {
+        #expect(AssetViewerMediaGeometry.animatesFitChanges(infoDragTranslation: 0))
+        #expect(!AssetViewerMediaGeometry.animatesFitChanges(infoDragTranslation: -72))
+        #expect(!AssetViewerMediaGeometry.animatesFitChanges(infoDragTranslation: 72))
+    }
+
+    @Test func viewerRenderedPixelsStayCenteredForWidthAndHeightBoundAssets() {
+        let viewport = CGRect(x: 0, y: 0, width: 402, height: 874)
+        let widthBound = AssetViewerMediaGeometry.renderedPixelRect(
+            pixelSize: CGSize(width: 400, height: 200),
+            in: viewport
+        )
+        let heightBound = AssetViewerMediaGeometry.renderedPixelRect(
+            pixelSize: CGSize(width: 100, height: 400),
+            in: viewport
+        )
+
+        #expect(widthBound.midX == viewport.midX)
+        #expect(widthBound.midY == viewport.midY)
+        #expect(widthBound.width == viewport.width)
+        #expect(heightBound.midX == viewport.midX)
+        #expect(heightBound.midY == viewport.midY)
+        #expect(heightBound.height == viewport.height)
+    }
+
     @Test @MainActor func viewerPreviewCanSeedRecreatedPageFromMemory() throws {
         let media = MediaLibraryController()
         media.configure(session: .fixture, activeEndpoint: AccountSession.fixture.apiURL)
