@@ -102,6 +102,14 @@ struct PhotosTimelineRegressionTests {
             isPhone: false,
             squareInset: spacing
         ) == 20)
+        for progress in [CGFloat(0), 0.5, 1] {
+            #expect(TimelineGridMetrics.horizontalInset(
+                naturalAspectProgress: progress,
+                isPhone: true,
+                squareInset: spacing,
+                isDarkMode: true
+            ) == 0)
+        }
         #expect(TimelineGridMetrics.itemWidth(
             rowWidth: rowWidth,
             columns: columns,

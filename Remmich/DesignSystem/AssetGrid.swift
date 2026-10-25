@@ -269,8 +269,10 @@ nonisolated enum TimelineGridMetrics {
     static func horizontalInset(
         naturalAspectProgress: CGFloat,
         isPhone: Bool,
-        squareInset: CGFloat
+        squareInset: CGFloat,
+        isDarkMode: Bool = false
     ) -> CGFloat {
+        guard !isDarkMode else { return 0 }
         let progress = min(1, max(0, naturalAspectProgress))
         return squareInset + (edgeInset(isPhone: isPhone) - squareInset) * progress
     }
@@ -476,6 +478,7 @@ final class TimelineDeterministicLayoutCache {
 }
 
 struct TimelineDeterministicAssetRow: View {
+    @Environment(\.colorScheme) private var colorScheme
     let assets: [TimelineAssetSummary?]
     let media: MediaLibraryController
     let itemSide: CGFloat
@@ -496,7 +499,8 @@ struct TimelineDeterministicAssetRow: View {
         let horizontalInset = TimelineGridMetrics.horizontalInset(
             naturalAspectProgress: progress,
             isPhone: UIDevice.current.userInterfaceIdiom == .phone,
-            squareInset: spacing
+            squareInset: spacing,
+            isDarkMode: colorScheme == .dark
         )
         let rowWidth = itemSide * CGFloat(assets.count)
             + spacing * CGFloat(max(0, assets.count - 1))
