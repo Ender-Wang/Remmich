@@ -125,6 +125,61 @@ struct AssetViewerSessionTests {
         #expect(session.playbackPosition(for: selected.id) == 0)
     }
 
+    @Test func contextPresentationUsesCachedCaptureTimeAndNormalizesLocation() {
+        let summary = asset("photo", at: "2026-10-02T10:00:00Z")
+        let cached = detail(
+            "photo",
+            capturedAt: "2026-10-02T11:30:00Z",
+            city: "  Shanghai, China  ",
+            state: "Shanghai",
+            country: "China"
+        )
+
+        let presentation = AssetViewerContextPresentation(asset: summary, detail: cached)
+
+        #expect(presentation.assetID == "photo")
+        #expect(presentation.capturedAt == cached.capturedAt)
+        #expect(presentation.location == "Shanghai")
+    }
+
+    @Test func contextPresentationIgnoresRemoteChangesThatDoNotAffectTheHeader() {
+        let summary = asset("photo", at: "2026-10-02T10:00:00Z")
+        let cached = detail(
+            "photo",
+            capturedAt: "2026-10-02T10:00:00Z",
+            city: nil,
+            state: "  Zhejiang  ",
+            country: "China"
+        )
+        let refreshed = AssetDetail(
+            id: cached.id,
+            capturedAt: cached.capturedAt,
+            originalFileName: "renamed.jpg",
+            originalMimeType: "image/jpeg",
+            width: 6048,
+            height: 4024,
+            description: "Remote metadata changed.",
+            cameraMake: "NIKON",
+            cameraModel: "Z f",
+            lensModel: "NIKKOR Z 24-70mm f/2.8 VR S",
+            fileSizeBytes: 12_400_000,
+            iso: 400,
+            focalLength: 50,
+            aperture: 2.8,
+            exposureTime: "1/500",
+            latitude: 30.2741,
+            longitude: 120.1551,
+            city: nil,
+            state: "Zhejiang",
+            country: "China"
+        )
+
+        #expect(
+            AssetViewerContextPresentation(asset: summary, detail: cached)
+                == AssetViewerContextPresentation(asset: summary, detail: refreshed)
+        )
+    }
+
     private func asset(_ id: String, at timestamp: String) -> TimelineAssetSummary {
         let date = ISO8601DateFormatter().date(from: timestamp)!
         return TimelineAssetSummary(
@@ -143,6 +198,37 @@ struct AssetViewerSessionTests {
             projectionType: nil,
             thumbhash: nil,
             thumbnailRevision: date
+        )
+    }
+
+    private func detail(
+        _ id: String,
+        capturedAt timestamp: String,
+        city: String?,
+        state: String?,
+        country: String?
+    ) -> AssetDetail {
+        AssetDetail(
+            id: id,
+            capturedAt: ISO8601DateFormatter().date(from: timestamp)!,
+            originalFileName: "\(id).jpg",
+            originalMimeType: "image/jpeg",
+            width: 6048,
+            height: 4024,
+            description: nil,
+            cameraMake: nil,
+            cameraModel: nil,
+            lensModel: nil,
+            fileSizeBytes: 12_400_000,
+            iso: nil,
+            focalLength: nil,
+            aperture: nil,
+            exposureTime: nil,
+            latitude: nil,
+            longitude: nil,
+            city: city,
+            state: state,
+            country: country
         )
     }
 }

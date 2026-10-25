@@ -16,6 +16,7 @@ struct AssetViewerView: View {
     @State private var chromeVisible = true
     @State private var showsInfo = false
     @State private var detailStates: [String: AssetViewerDetailState] = [:]
+    @State private var cachedDetailMissAssetIDs: Set<String> = []
     @State private var refreshedDetailAssetIDs: Set<String> = []
     @State private var previewMetadataByAssetID: [String: AssetViewerPreviewMetadata] = [:]
     @State private var renderedImageMetadataByAssetID: [String: AssetViewerRenderedImageMetadata] = [:]
@@ -161,6 +162,11 @@ struct AssetViewerView: View {
             includesNeighbors: showsInfo
         )) {
             await loadSelectedAssetDetail()
+        }
+        .task(id: AssetDetailCacheWindowRequest(
+            assetIDs: pagerWindowAssets.map(\.id)
+        )) {
+            await preloadCachedAssetDetails(pagerWindowAssets.map(\.id))
         }
         .onChange(of: session.selectedAssetID) { _, newAssetID in
             zoomedAssetID = nil
@@ -454,13 +460,14 @@ struct AssetViewerView: View {
                         Spacer()
                     }
 
-                    if let selectedAsset = session.selectedAsset {
-                        assetContextHeader(for: selectedAsset)
-                            .frame(
-                                maxWidth: min(240, max(120, geometry.size.width - 200))
-                            )
-                            .accessibilityIdentifier("asset-viewer-context")
-                    }
+                    let contextWidth = min(240, max(120, geometry.size.width - 200))
+                    AssetViewerContextHeader(
+                        presentation: selectedAssetContextPresentation,
+                        height: controlVisualSize
+                    )
+                    .equatable()
+                    .frame(width: contextWidth)
+                    .accessibilityIdentifier("asset-viewer-context")
                 }
             }
             .frame(height: controlHitSize)
@@ -488,32 +495,6 @@ struct AssetViewerView: View {
         }
     }
 
-    private func assetContextHeader(for asset: TimelineAssetSummary) -> some View {
-        let location = selectedAssetLocation
-        let capturedAt = selectedAssetDetail?.capturedAt ?? asset.capturedAt
-        return VStack(spacing: 0) {
-            if let location {
-                Text(location)
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-            }
-
-            Text(TimelineCaptureDateFormatting.string(
-                from: capturedAt,
-                dateStyle: .medium,
-                timeStyle: .short
-            ))
-            .font(location == nil ? .subheadline.weight(.semibold) : .caption)
-            .foregroundStyle(location == nil ? .primary : .secondary)
-            .lineLimit(1)
-        }
-        .padding(.horizontal, 14)
-        .frame(height: controlVisualSize)
-        .glassEffect(.regular, in: Capsule())
-        .accessibilityElement(children: .combine)
-    }
-
     private var selectedAssetDetail: AssetDetail? {
         guard case let .loaded(detail)? = detailStates[session.selectedAssetID] else {
             return nil
@@ -521,19 +502,10 @@ struct AssetViewerView: View {
         return detail
     }
 
-    private var selectedAssetLocation: String? {
-        let location = [
-            selectedAssetDetail?.city,
-            selectedAssetDetail?.state,
-            selectedAssetDetail?.country,
-        ]
-        .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
-        .filter { !$0.isEmpty }
-        .first?
-        .split(separator: ",", maxSplits: 1)
-        .first?
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-        return location?.isEmpty == false ? location : nil
+    private var selectedAssetContextPresentation: AssetViewerContextPresentation? {
+        session.selectedAsset.map {
+            AssetViewerContextPresentation(asset: $0, detail: selectedAssetDetail)
+        }
     }
 
     private var bottomActions: some View {
@@ -754,8 +726,14 @@ struct AssetViewerView: View {
         pagerSelectionTask = Task { @MainActor in
             await Task.yield()
             guard !Task.isCancelled,
+                  pagerPhase == .idle, pagerPosition == assetID
+            else { return }
+            await preloadCachedAssetDetails([assetID])
+            guard !Task.isCancelled,
                   pagerPhase == .idle,
-                  pagerPosition == assetID, session.selectImmediately(assetID) else { return }
+                  pagerPosition == assetID,
+                  session.selectImmediately(assetID)
+            else { return }
             recenterPagerWindowIfNeeded(on: assetID)
             scheduleNeighborLoading(for: assetID)
         }
@@ -901,19 +879,51 @@ struct AssetViewerView: View {
         }
     }
 
+    private func preloadCachedAssetDetails(_ assetIDs: [String]) async {
+        for assetID in assetIDs {
+            guard !Task.isCancelled else { return }
+            guard detailStates[assetID] == nil,
+                  !cachedDetailMissAssetIDs.contains(assetID)
+            else { continue }
+
+            let cachedDetail = await assetDetails.cachedAssetDetail(id: assetID)
+            guard !Task.isCancelled else { return }
+            guard detailStates[assetID] == nil else { continue }
+            if let cachedDetail {
+                detailStates[assetID] = .loaded(cachedDetail)
+            } else {
+                cachedDetailMissAssetIDs.insert(assetID)
+            }
+        }
+    }
+
     private func loadAssetDetail(_ assetID: String) async {
         guard !refreshedDetailAssetIDs.contains(assetID) else { return }
-        let cachedDetail = await assetDetails.cachedAssetDetail(id: assetID)
-        guard !Task.isCancelled else { return }
-        if let cachedDetail {
-            detailStates[assetID] = .loaded(cachedDetail)
+        let cachedDetail: AssetDetail?
+        if case let .loaded(detail)? = detailStates[assetID] {
+            cachedDetail = detail
+        } else if cachedDetailMissAssetIDs.contains(assetID) {
+            cachedDetail = nil
         } else {
+            cachedDetail = await assetDetails.cachedAssetDetail(id: assetID)
+            guard !Task.isCancelled else { return }
+            if cachedDetail == nil {
+                cachedDetailMissAssetIDs.insert(assetID)
+            }
+        }
+        if let cachedDetail {
+            if detailStates[assetID] != .loaded(cachedDetail) {
+                detailStates[assetID] = .loaded(cachedDetail)
+            }
+        } else if detailStates[assetID] == nil {
             detailStates[assetID] = .loading
         }
         do {
             let detail = try await assetDetails.assetDetail(id: assetID)
             guard !Task.isCancelled else { return }
-            detailStates[assetID] = .loaded(detail)
+            if detailStates[assetID] != .loaded(detail) {
+                detailStates[assetID] = .loaded(detail)
+            }
             refreshedDetailAssetIDs.insert(assetID)
         } catch is CancellationError {
             if cachedDetail == nil, case .loading? = detailStates[assetID] {
@@ -948,6 +958,10 @@ struct AssetViewerView: View {
 private struct AssetDetailLoadRequest: Hashable {
     let assetID: String
     let includesNeighbors: Bool
+}
+
+private struct AssetDetailCacheWindowRequest: Hashable {
+    let assetIDs: [String]
 }
 
 private struct AssetViewerFitPage: View {

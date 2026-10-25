@@ -433,12 +433,19 @@ final class RemmichUITests: XCTestCase {
 
         let first = app.descendants(matching: .any)["asset-viewer-page-asset-1"]
         let second = app.descendants(matching: .any)["asset-viewer-page-asset-2"]
+        let context = app.descendants(matching: .any)["asset-viewer-context"]
         XCTAssertTrue(first.waitForExistence(timeout: 10))
+        XCTAssertTrue(context.waitForExistence(timeout: 5))
+        let contextFrame = context.frame
 
         first.swipeLeft()
         XCTAssertTrue(waitUntil(timeout: 5) { second.isHittable })
+        XCTAssertEqual(context.frame.width, contextFrame.width, accuracy: 1)
+        XCTAssertEqual(context.frame.height, contextFrame.height, accuracy: 1)
         second.swipeRight()
         XCTAssertTrue(waitUntil(timeout: 5) { first.isHittable })
+        XCTAssertEqual(context.frame.width, contextFrame.width, accuracy: 1)
+        XCTAssertEqual(context.frame.height, contextFrame.height, accuracy: 1)
         XCTAssertTrue(app.buttons["asset-viewer-back"].isHittable)
     }
 
