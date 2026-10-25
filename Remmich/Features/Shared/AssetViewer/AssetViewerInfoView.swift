@@ -7,28 +7,10 @@ enum AssetViewerDetailState: Equatable {
     case failed(String)
 }
 
-nonisolated struct AssetViewerPreviewMetadata: Equatable, Sendable {
-    let pixelSize: MediaPixelSize
-    let fileSizeBytes: Int?
-
-    var displayText: String {
-        let width = pixelSize.width.formatted()
-        let height = pixelSize.height.formatted()
-        var components = ["Preview", "\(width) × \(height) px"]
-        if let fileSizeBytes, fileSizeBytes > 0 {
-            let fileSize = ByteCountFormatter.string(
-                fromByteCount: Int64(fileSizeBytes),
-                countStyle: .file
-            )
-            components.append("\(fileSize) cached")
-        }
-        return components.joined(separator: " · ")
-    }
-}
-
 nonisolated enum AssetViewerRenderedImageSource: Equatable, Sendable {
     case thumbnail
     case preview
+    case full
 
     var title: String {
         switch self {
@@ -36,15 +18,8 @@ nonisolated enum AssetViewerRenderedImageSource: Equatable, Sendable {
             "Thumbnail"
         case .preview:
             "Preview"
-        }
-    }
-
-    var systemImage: String {
-        switch self {
-        case .thumbnail:
-            "photo.on.rectangle"
-        case .preview:
-            "photo"
+        case .full:
+            "Full"
         }
     }
 }
@@ -70,7 +45,7 @@ nonisolated struct AssetViewerRenderedImageMetadata: Equatable, Sendable {
 
 struct AssetViewerInfoView: View {
     let state: AssetViewerDetailState
-    let previewMetadata: AssetViewerPreviewMetadata?
+    let renderedImageMetadata: AssetViewerRenderedImageMetadata?
     let anchorsContentToBottom: Bool
     let contentHeightChanged: (CGFloat) -> Void
     let retry: () -> Void
@@ -152,13 +127,13 @@ struct AssetViewerInfoView: View {
                         Text(detail.originalFileName)
                             .lineLimit(1)
                             .truncationMode(.middle)
-                        if let previewMetadata {
-                            Text(previewMetadata.displayText)
+                        if let renderedImageMetadata {
+                            Text(renderedImageMetadata.displayText)
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                                 .minimumScaleFactor(0.8)
-                                .accessibilityIdentifier("asset-viewer-preview-metadata")
+                                .accessibilityIdentifier("asset-viewer-rendered-metadata")
                         }
                     }
                     Spacer(minLength: 8)

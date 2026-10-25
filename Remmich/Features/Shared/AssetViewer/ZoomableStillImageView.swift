@@ -10,9 +10,7 @@ struct ZoomableStillImageView: View {
     let targetPixels: MediaPixelSize
     let fitRect: CGRect
     let animatesFitChanges: Bool
-    let reportsPreviewMetadata: Bool
     let reportsRenderedImageMetadata: Bool
-    let previewMetadataChanged: (AssetViewerPreviewMetadata) -> Void
     let renderedImageMetadataChanged: (AssetViewerRenderedImageMetadata) -> Void
     let zoomChanged: (Bool) -> Void
     let livePhotoPressChanged: (Bool) -> Void
@@ -32,9 +30,7 @@ struct ZoomableStillImageView: View {
         targetPixels: MediaPixelSize,
         fitRect: CGRect,
         animatesFitChanges: Bool,
-        reportsPreviewMetadata: Bool,
         reportsRenderedImageMetadata: Bool,
-        previewMetadataChanged: @escaping (AssetViewerPreviewMetadata) -> Void,
         renderedImageMetadataChanged: @escaping (AssetViewerRenderedImageMetadata) -> Void,
         zoomChanged: @escaping (Bool) -> Void,
         livePhotoPressChanged: @escaping (Bool) -> Void,
@@ -45,9 +41,7 @@ struct ZoomableStillImageView: View {
         self.targetPixels = targetPixels
         self.fitRect = fitRect
         self.animatesFitChanges = animatesFitChanges
-        self.reportsPreviewMetadata = reportsPreviewMetadata
         self.reportsRenderedImageMetadata = reportsRenderedImageMetadata
-        self.previewMetadataChanged = previewMetadataChanged
         self.renderedImageMetadataChanged = renderedImageMetadataChanged
         self.zoomChanged = zoomChanged
         self.livePhotoPressChanged = livePhotoPressChanged
@@ -95,7 +89,7 @@ struct ZoomableStillImageView: View {
     }
 
     private var loadID: String {
-        "\(asset.id)|\(targetPixels.width)x\(targetPixels.height)|\(reportsPreviewMetadata)|\(reportsRenderedImageMetadata)"
+        "\(asset.id)|\(targetPixels.width)x\(targetPixels.height)|\(reportsRenderedImageMetadata)"
     }
 
     private func loadPreview() async {
@@ -134,7 +128,7 @@ struct ZoomableStillImageView: View {
             return
         }
         if loadedTargetPixels == targetPixels {
-            if reportsPreviewMetadata || reportsRenderedImageMetadata, let image {
+            if reportsRenderedImageMetadata, let image {
                 await reportMetadata(for: image, pipeline: pipeline, request: request)
             }
             return
@@ -156,7 +150,7 @@ struct ZoomableStillImageView: View {
             {
                 loadedFileSizeBytes = Int(expectedLength)
             }
-            if reportsPreviewMetadata || reportsRenderedImageMetadata {
+            if reportsRenderedImageMetadata {
                 await reportMetadata(for: response.image, pipeline: pipeline, request: request)
             }
         } catch {
@@ -205,7 +199,7 @@ struct ZoomableStillImageView: View {
               let byteCount = await cachedPreviewByteCount(pipeline: pipeline, request: request),
               byteCount > 0,
               !Task.isCancelled,
-              reportsPreviewMetadata || reportsRenderedImageMetadata
+              reportsRenderedImageMetadata
         else { return }
         loadedFileSizeBytes = byteCount
         publishMetadata(pixelSize: pixelSize, fileSizeBytes: byteCount)
@@ -231,9 +225,6 @@ struct ZoomableStillImageView: View {
     }
 
     private func publishMetadata(pixelSize: MediaPixelSize, fileSizeBytes: Int?) {
-        if reportsPreviewMetadata {
-            previewMetadataChanged(.init(pixelSize: pixelSize, fileSizeBytes: fileSizeBytes))
-        }
         if reportsRenderedImageMetadata {
             renderedImageMetadataChanged(.init(
                 source: .preview,

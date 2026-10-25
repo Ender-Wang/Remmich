@@ -537,7 +537,7 @@ final class RemmichUITests: XCTestCase {
     }
 
     @MainActor
-    func testAssetViewerInfoShowsPreviewDimensionsAndCachedSize() {
+    func testAssetViewerInfoShowsCurrentRenderedResolution() {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
         app.launchArguments = ["-ui-testing-signed-in"]
@@ -551,17 +551,17 @@ final class RemmichUITests: XCTestCase {
         XCTAssertTrue(info.waitForExistence(timeout: 10))
         info.tap()
 
-        let previewMetadata = app.staticTexts["asset-viewer-preview-metadata"]
-        XCTAssertTrue(previewMetadata.waitForExistence(timeout: 10))
-        XCTAssertTrue(previewMetadata.label.contains("Preview"))
-        XCTAssertTrue(previewMetadata.label.contains("px"))
+        let renderedMetadata = app.staticTexts["asset-viewer-rendered-metadata"]
+        XCTAssertTrue(renderedMetadata.waitForExistence(timeout: 10))
         XCTAssertTrue(waitUntil(timeout: 10) {
-            previewMetadata.label.contains("cached")
+            renderedMetadata.label.contains("Preview")
+                && renderedMetadata.label.contains("px")
+                && renderedMetadata.label.components(separatedBy: " · ").count == 3
         })
     }
 
     @MainActor
-    func testAssetViewerDisplayModeShowsRenderedImageQuality() {
+    func testAssetViewerDisplayModeDoesNotShowResolutionOverlay() {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
         app.launchArguments = ["-ui-testing-signed-in"]
@@ -576,14 +576,6 @@ final class RemmichUITests: XCTestCase {
         viewer.tap()
 
         let quality = app.staticTexts["asset-viewer-image-quality"]
-        XCTAssertTrue(quality.waitForExistence(timeout: 10))
-        XCTAssertTrue(quality.label.contains("Preview"))
-        XCTAssertTrue(quality.label.contains("px"))
-        XCTAssertTrue(waitUntil(timeout: 4) { !quality.exists })
-
-        viewer.tap()
-        XCTAssertTrue(app.buttons["asset-viewer-back"].waitForExistence(timeout: 2))
-        viewer.tap()
         XCTAssertFalse(quality.waitForExistence(timeout: 1))
     }
 
@@ -707,15 +699,17 @@ final class RemmichUITests: XCTestCase {
         let initialPixelsFrame = renderedPixels.frame
         XCTAssertEqual(initialPixelsFrame.midX, app.frame.midX, accuracy: 1)
         XCTAssertEqual(initialPixelsFrame.midY, app.frame.midY, accuracy: 1)
+        let mediaCenter = still.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
 
-        still.tap()
+        mediaCenter.tap()
         XCTAssertTrue(waitUntil(timeout: 3) { !back.isHittable })
         XCTAssertTrue(waitUntil(timeout: 3) {
             self.framesMatch(renderedPixels.frame, initialPixelsFrame)
         })
 
-        still.tap()
-        XCTAssertTrue(waitUntil(timeout: 3) { back.isHittable })
+        Thread.sleep(forTimeInterval: 0.4)
+        mediaCenter.tap()
+        XCTAssertTrue(waitUntil(timeout: 3) { back.exists })
         XCTAssertTrue(waitUntil(timeout: 3) {
             self.framesMatch(renderedPixels.frame, initialPixelsFrame)
         })

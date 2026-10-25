@@ -1058,21 +1058,6 @@ struct RemmichTests {
         #expect(display.targetPixels == targetPixels)
     }
 
-    @Test func viewerPreviewMetadataDescribesPixelsAndCachedBytes() {
-        let metadata = AssetViewerPreviewMetadata(
-            pixelSize: .init(width: 12, height: 18),
-            fileSizeBytes: 438_272
-        )
-        let dimensionsOnly = AssetViewerPreviewMetadata(
-            pixelSize: .init(width: 12, height: 18),
-            fileSizeBytes: nil
-        )
-
-        #expect(metadata.displayText.contains("12 × 18 px"))
-        #expect(metadata.displayText.contains("cached"))
-        #expect(dimensionsOnly.displayText == "Preview · 12 × 18 px")
-    }
-
     @Test func viewerRenderedImageMetadataNamesItsActualSource() {
         let thumbnail = AssetViewerRenderedImageMetadata(
             source: .thumbnail,
@@ -1084,11 +1069,18 @@ struct RemmichTests {
             pixelSize: .init(width: 1206, height: 1809),
             fileSizeBytes: nil
         )
+        let full = AssetViewerRenderedImageMetadata(
+            source: .full,
+            pixelSize: .init(width: 4032, height: 3024),
+            fileSizeBytes: 12_400_000
+        )
 
         #expect(thumbnail.displayText.contains("Thumbnail"))
         #expect(thumbnail.displayText.contains("720 × 1,080 px"))
         #expect(!thumbnail.displayText.contains("cached"))
         #expect(preview.displayText == "Preview · 1,206 × 1,809 px")
+        #expect(full.displayText.contains("Full · 4,032 × 3,024 px"))
+        #expect(full.displayText.components(separatedBy: " · ").count == 3)
     }
 
     @Test func viewerMediaGeometryStartsAtTheFullViewportAndReservesSpaceOnlyForInfo() {
