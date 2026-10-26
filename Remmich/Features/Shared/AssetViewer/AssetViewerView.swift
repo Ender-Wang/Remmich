@@ -411,6 +411,10 @@ struct AssetViewerView: View {
                 .clipped()
                 .position(x: viewerRect.maxX - infoWidth / 2, y: viewerRect.midY)
                 .opacity(showsMediaBackground ? 1 : 0)
+                .allowsHitTesting(
+                    infoProgress > 0.5 && showsMediaBackground
+                        && asset.id == session.selectedAssetID
+                )
                 .accessibilityHidden(
                     infoProgress < 0.5 || asset.id != session.selectedAssetID
                 )
@@ -460,6 +464,10 @@ struct AssetViewerView: View {
                     y: mediaRect.maxY + gap + infoHeight / 2
                 )
                 .opacity(showsMediaBackground ? 1 : 0)
+                .allowsHitTesting(
+                    infoProgress > 0.5 && showsMediaBackground
+                        && asset.id == session.selectedAssetID
+                )
                 .accessibilityHidden(
                     infoProgress < 0.5 || asset.id != session.selectedAssetID
                 )
@@ -855,13 +863,7 @@ struct AssetViewerView: View {
                       zoomedAssetID == nil,
                       abs(value.translation.height) > abs(value.translation.width) * 1.2
                 else { return }
-                let drivesDismissal = value.translation.height > 0
-                    && (!showsInfo || isOutsideViewerContent(
-                        value.startLocation,
-                        viewportSize: viewportSize,
-                        contentSize: mediaRect.size,
-                        topInset: mediaRect.minY
-                    ))
+                let drivesDismissal = value.translation.height > 0 && !showsInfo
                 var transaction = Transaction()
                 transaction.disablesAnimations = true
                 if drivesDismissal {
@@ -914,12 +916,7 @@ struct AssetViewerView: View {
                 let isVertical = abs(value.translation.height) > abs(value.translation.width) * 1.2
                 let drivesDismissal = isVertical
                     && value.translation.height > 0
-                    && (!showsInfo || isOutsideViewerContent(
-                        value.startLocation,
-                        viewportSize: viewportSize,
-                        contentSize: mediaRect.size,
-                        topInset: mediaRect.minY
-                    ))
+                    && !showsInfo
                 if drivesDismissal {
                     infoDragTranslation = 0
                     if AssetViewerDismissalGeometry.shouldComplete(
@@ -1066,15 +1063,6 @@ struct AssetViewerView: View {
             returningTimelineThumbnailChanged(nil)
             dismissalThumbnailRevealTask = nil
         }
-    }
-
-    private func isOutsideViewerContent(
-        _ location: CGPoint,
-        viewportSize _: CGSize,
-        contentSize: CGSize,
-        topInset: CGFloat
-    ) -> Bool {
-        location.y < topInset || location.y > topInset + contentSize.height
     }
 
     private var infoPresentationProgress: CGFloat {

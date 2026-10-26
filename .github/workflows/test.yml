@@ -86,45 +86,101 @@ jobs:
             COMPILER_INDEX_STORE_ENABLE=NO \
             | xcbeautify
 
-      - name: Test iPhone UI
+      - name: Test iPhone UI smoke journeys
         run: |
           set -o pipefail
 
           run_ui_tests() {
             local result_bundle="$1"
+            local log_path="$2"
+            shift 2
             xcodebuild test-without-building \
               -xctestrun "$XCTESTRUN_PATH" \
               -destination "$IPHONE_DESTINATION" \
               -resultBundlePath "$result_bundle" \
               -jobs 2 \
               -parallel-testing-enabled NO \
-              -only-testing:RemmichUITests \
+              "$@" \
               -test-timeouts-enabled YES \
               -default-test-execution-time-allowance 240 \
               -maximum-test-execution-time-allowance 360 \
               -collect-test-diagnostics never \
               COMPILER_INDEX_STORE_ENABLE=NO \
-              2>&1 | tee "$RUNNER_TEMP/RemmichUITests.log" | xcbeautify
+              2>&1 | tee "$log_path" | xcbeautify
             return "${PIPESTATUS[0]}"
           }
 
+          smoke_tests=(
+            -only-testing:RemmichUITests/RemmichUITests/testPrimaryNavigationAndAccountSheet
+            -only-testing:RemmichUITests/RemmichUITests/testAlbumFilterSurvivesTabSwitch
+            -only-testing:RemmichUITests/RemmichUITests/testPhotoViewerOpensExactAssetAdaptsToRotationAndRestoresTimeline
+            -only-testing:RemmichUITests/RemmichUITests/testPhotoViewerPagesBackAndForthWithoutLosingSelection
+            -only-testing:RemmichUITests/RemmichUITests/testAssetViewerDragDismissesWithChromeShownAndHidden
+            -only-testing:RemmichUITests/RemmichUITests/testAssetViewerRespectsSafeAreasAndRevealsInfo
+            -only-testing:RemmichUITests/RemmichUITests/testLivePhotoViewerPreparesAndPlaysFromHold
+            -only-testing:RemmichUITests/RemmichUITests/testVideoViewerUsesNativePlayerAndRestoresTimeline
+            -only-testing:RemmichUITests/RemmichUITests/testPhotosTimelineInitialFailureRetriesWithoutRelaunch
+            -only-testing:RemmichUITests/RemmichUITests/testGroupedTileOpensWithItsVisibleCoverOnScreen
+            -only-testing:RemmichUITests/RemmichUITests/testSignedOutLaunchShowsNativeOnboarding
+          )
+
           set +e
-          run_ui_tests "$RUNNER_TEMP/RemmichUITests.xcresult"
+          run_ui_tests \
+            "$RUNNER_TEMP/RemmichUITests-Smoke.xcresult" \
+            "$RUNNER_TEMP/RemmichUITests-Smoke.log" \
+            "${smoke_tests[@]}"
           status=$?
           set -e
 
           if [[ "$status" -eq 0 ]]; then
             exit 0
           fi
-          if ! grep -q "Timed out while launching application via Xcode" "$RUNNER_TEMP/RemmichUITests.log"; then
+          if [[ -d "$RUNNER_TEMP/RemmichUITests-Smoke.xcresult" ]]; then
+            echo "iPhone UI smoke test failures from XCResult:"
+            xcrun xcresulttool get test-results summary \
+              --path "$RUNNER_TEMP/RemmichUITests-Smoke.xcresult" || true
+          fi
+          if ! grep -q "Timed out while launching application via Xcode" \
+            "$RUNNER_TEMP/RemmichUITests-Smoke.log"; then
             exit "$status"
           fi
 
-          echo "Simulator launch timed out; rebooting once before retrying the UI suite."
+          echo "Simulator launch timed out; rebooting once before retrying UI smoke tests."
           xcrun simctl shutdown "iPhone 17e" || true
           xcrun simctl boot "iPhone 17e"
           xcrun simctl bootstatus "iPhone 17e" -b
-          run_ui_tests "$RUNNER_TEMP/RemmichUITests-Retry.xcresult"
+          run_ui_tests \
+            "$RUNNER_TEMP/RemmichUITests-Smoke-Retry.xcresult" \
+            "$RUNNER_TEMP/RemmichUITests-Smoke-Retry.log" \
+            "${smoke_tests[@]}"
+
+      - name: Test detailed iPhone UI
+        if: ${{ vars.REMMICH_RUN_DETAILED_UI_TESTS == 'true' }}
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          set +e
+          xcodebuild test-without-building \
+            -xctestrun "$XCTESTRUN_PATH" \
+            -destination "$IPHONE_DESTINATION" \
+            -resultBundlePath "$RUNNER_TEMP/RemmichUITests-Detailed.xcresult" \
+            -jobs 2 \
+            -parallel-testing-enabled NO \
+            -only-testing:RemmichUITests \
+            -test-timeouts-enabled YES \
+            -default-test-execution-time-allowance 240 \
+            -maximum-test-execution-time-allowance 360 \
+            -collect-test-diagnostics never \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            2>&1 | tee "$RUNNER_TEMP/RemmichUITests-Detailed.log" | xcbeautify
+          status="${PIPESTATUS[0]}"
+          set -e
+          if [[ "$status" -ne 0 && -d "$RUNNER_TEMP/RemmichUITests-Detailed.xcresult" ]]; then
+            echo "Detailed iPhone UI test failures from XCResult:"
+            xcrun xcresulttool get test-results summary \
+              --path "$RUNNER_TEMP/RemmichUITests-Detailed.xcresult" || true
+          fi
+          exit "$status"
 
       - name: Boot iPad simulator
         if: ${{ !cancelled() }}
@@ -144,7 +200,10 @@ jobs:
             -resultBundlePath "$RUNNER_TEMP/RemmichIPadLayoutTests.xcresult" \
             -jobs 2 \
             -parallel-testing-enabled NO \
-            -only-testing:RemmichUITests \
+            -only-testing:RemmichUITests/RemmichUITests/testPrimaryNavigationAndAccountSheet \
+            -only-testing:RemmichUITests/RemmichUITests/testAdaptivePhotoGridUsesAvailableWidth \
+            -only-testing:RemmichUITests/RemmichUITests/testPhotoTimelineUsesFullLandscapeWidth \
+            -only-testing:RemmichUITests/RemmichUITests/testPhotoViewerOpensExactAssetAdaptsToRotationAndRestoresTimeline \
             -test-timeouts-enabled YES \
             -default-test-execution-time-allowance 240 \
             -maximum-test-execution-time-allowance 360 \

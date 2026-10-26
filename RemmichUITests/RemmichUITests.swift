@@ -11,9 +11,21 @@ import XCTest
 final class RemmichUITests: XCTestCase {
     override func setUp() async throws {
         continueAfterFailure = false
-        await MainActor.run { XCUIDevice.shared.orientation = .portrait }
+        await MainActor.run {
+            let app = XCUIApplication()
+            if app.state == .runningForeground || app.state == .runningBackground {
+                app.terminate()
+            }
+            XCUIDevice.shared.orientation = .portrait
+        }
         addTeardownBlock {
-            await MainActor.run { XCUIDevice.shared.orientation = .portrait }
+            await MainActor.run {
+                let app = XCUIApplication()
+                if app.state == .runningForeground || app.state == .runningBackground {
+                    app.terminate()
+                }
+                XCUIDevice.shared.orientation = .portrait
+            }
         }
     }
 
@@ -535,6 +547,10 @@ final class RemmichUITests: XCTestCase {
         XCTAssertEqual(info.value as? String, "Shown")
 
         metadata.swipeDown()
+        XCTAssertTrue(
+            still.exists,
+            "Swiping the Info card down should collapse Info without dismissing the viewer"
+        )
         XCTAssertTrue(waitUntil(timeout: 10) {
             app.buttons["asset-viewer-info"].value as? String == "Hidden"
         })
@@ -765,12 +781,16 @@ final class RemmichUITests: XCTestCase {
         asset.tap()
 
         let still = app.descendants(matching: .any)["asset-viewer-still-asset-1"]
+        let renderedPixels = app.descendants(matching: .any)["asset-viewer-rendered-pixels-asset-1"]
         let back = app.buttons["asset-viewer-back"]
         XCTAssertTrue(still.waitForExistence(timeout: 10))
+        XCTAssertTrue(renderedPixels.waitForExistence(timeout: 10))
+        XCTAssertTrue(waitUntil(timeout: 5) { back.isHittable })
         let initialFrame = still.frame
+        let mediaCenter = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         XCTAssertGreaterThanOrEqual(initialFrame.height, app.frame.height - 2)
 
-        still.doubleTap()
+        mediaCenter.doubleTap()
         XCTAssertTrue(
             waitUntil(timeout: 3) { still.value as? String == "Zoomed" },
             "The UIKit still surface did not enter zoom after a double tap"
@@ -782,18 +802,18 @@ final class RemmichUITests: XCTestCase {
         XCTAssertEqual(still.frame.width, initialFrame.width, accuracy: 1)
         XCTAssertEqual(still.frame.height, initialFrame.height, accuracy: 1)
 
-        still.tap()
+        mediaCenter.tap()
         XCTAssertTrue(waitUntil(timeout: 3) { back.exists })
         XCTAssertEqual(still.value as? String, "Zoomed")
         XCTAssertEqual(still.frame.height, initialFrame.height, accuracy: 1)
 
-        still.tap()
+        mediaCenter.tap()
         XCTAssertTrue(waitUntil(timeout: 3) { !back.isHittable })
-        still.doubleTap()
+        mediaCenter.doubleTap()
         XCTAssertTrue(waitUntil(timeout: 3) { still.value as? String == "Fit" })
         XCTAssertEqual(still.frame.height, initialFrame.height, accuracy: 1)
 
-        still.tap()
+        mediaCenter.tap()
         XCTAssertTrue(waitUntil(timeout: 3) { back.exists })
         back.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         XCTAssertTrue(app.descendants(matching: .any)["photos-root"].waitForExistence(timeout: 5))
@@ -847,13 +867,17 @@ final class RemmichUITests: XCTestCase {
         asset.tap()
 
         let still = app.descendants(matching: .any)["asset-viewer-still-asset-1"]
+        let renderedPixels = app.descendants(matching: .any)["asset-viewer-rendered-pixels-asset-1"]
         let back = app.buttons["asset-viewer-back"]
         XCTAssertTrue(still.waitForExistence(timeout: 10))
+        XCTAssertTrue(renderedPixels.waitForExistence(timeout: 10))
+        XCTAssertTrue(waitUntil(timeout: 5) { back.isHittable })
         let initialFrame = still.frame
+        let mediaCenter = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         let visibleStatusInk = statusBarInkPixels(in: XCUIScreen.main.screenshot())
         attachViewerScreenshot("chrome-and-status-visible-initial")
 
-        still.tap()
+        mediaCenter.tap()
         XCTAssertTrue(waitUntil(timeout: 3) { !back.isHittable })
         Thread.sleep(forTimeInterval: 0.5)
         attachViewerScreenshot("chrome-and-status-hidden")
@@ -861,7 +885,7 @@ final class RemmichUITests: XCTestCase {
         XCTAssertGreaterThan(visibleStatusInk, hiddenStatusInk + 100)
         assertViewerFrame(still.frame, equals: initialFrame)
 
-        still.tap()
+        mediaCenter.tap()
         XCTAssertTrue(waitUntil(timeout: 3) { back.exists })
         Thread.sleep(forTimeInterval: 0.5)
         attachViewerScreenshot("chrome-and-status-visible")
@@ -871,14 +895,14 @@ final class RemmichUITests: XCTestCase {
         )
         assertViewerFrame(still.frame, equals: initialFrame)
 
-        still.doubleTap()
+        mediaCenter.doubleTap()
         XCTAssertTrue(waitUntil(timeout: 3) { still.value as? String == "Zoomed" })
         Thread.sleep(forTimeInterval: 0.5)
         attachViewerScreenshot("zoomed-chrome-and-status-hidden")
         let zoomedHiddenStatusInk = statusBarInkPixels(in: XCUIScreen.main.screenshot())
         assertViewerFrame(still.frame, equals: initialFrame)
 
-        still.tap()
+        mediaCenter.tap()
         XCTAssertTrue(waitUntil(timeout: 3) { back.exists })
         Thread.sleep(forTimeInterval: 0.5)
         attachViewerScreenshot("zoomed-chrome-and-status-visible")
