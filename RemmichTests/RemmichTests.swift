@@ -1259,24 +1259,35 @@ struct RemmichTests {
     @Test func viewerDownwardDragRoutesByItsStartingRegionWhenInfoIsShown() {
         let mediaRect = CGRect(x: 0, y: 122, width: 402, height: 360)
 
-        #expect(AssetViewerVerticalDragRouting.drivesViewerDismissal(
+        #expect(AssetViewerVerticalDragRouting.resolve(
+            lockedRoute: nil,
             translationHeight: 80,
             startLocation: CGPoint(x: 201, y: 300),
             mediaRect: mediaRect,
             showsInfo: true
-        ))
-        #expect(!AssetViewerVerticalDragRouting.drivesViewerDismissal(
+        ) == .viewerDismissal)
+        let panelRoute = AssetViewerVerticalDragRouting.resolve(
+            lockedRoute: nil,
             translationHeight: 80,
             startLocation: CGPoint(x: 201, y: 600),
             mediaRect: mediaRect,
             showsInfo: true
-        ))
-        #expect(!AssetViewerVerticalDragRouting.drivesViewerDismissal(
+        )
+        #expect(panelRoute == .infoPanel)
+        #expect(AssetViewerVerticalDragRouting.resolve(
+            lockedRoute: panelRoute,
+            translationHeight: 160,
+            startLocation: CGPoint(x: 201, y: 600),
+            mediaRect: CGRect(x: 0, y: 122, width: 402, height: 560),
+            showsInfo: true
+        ) == .infoPanel)
+        #expect(AssetViewerVerticalDragRouting.resolve(
+            lockedRoute: nil,
             translationHeight: -80,
             startLocation: CGPoint(x: 201, y: 300),
             mediaRect: mediaRect,
             showsInfo: true
-        ))
+        ) == .infoPanel)
     }
 
     @Test func viewerDismissalGeometryTracksTheFingerAndShrinksFromItsTouchPoint() {

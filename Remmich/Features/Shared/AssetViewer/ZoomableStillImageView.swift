@@ -569,7 +569,6 @@ private struct ZoomableImageScrollView: UIViewRepresentable {
                 imageView.image = image
             }
         }
-        scrollView.setNeedsLayout()
     }
 
     static func dismantleUIView(_ scrollView: ViewerZoomScrollView, coordinator: Coordinator) {

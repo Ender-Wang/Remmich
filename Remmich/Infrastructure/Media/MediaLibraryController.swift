@@ -301,6 +301,27 @@ final class MediaLibraryController {
         )
     }
 
+    func cachedViewerTransitionImage(
+        for asset: TimelineAssetSummary,
+        targetPixels: MediaPixelSize
+    ) -> UIImage? {
+        guard let pipeline else { return nil }
+        let descriptors = [
+            Self.viewerFullSizeDescriptor(for: asset, targetPixels: targetPixels),
+            Self.viewerPreviewDescriptor(for: asset, targetPixels: targetPixels),
+        ]
+        for descriptor in descriptors {
+            guard let request = imageRequest(for: descriptor),
+                  let container = pipeline.cache.cachedImage(
+                      for: request,
+                      caches: [.memory]
+                  )
+            else { continue }
+            return container.image
+        }
+        return nil
+    }
+
     func viewerThumbnailFallbackRequest(
         for asset: TimelineAssetSummary,
         targetPixels: MediaPixelSize

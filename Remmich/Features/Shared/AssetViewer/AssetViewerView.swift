@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct AssetViewerDismissalTarget {
     let imageFrame: CGRect
@@ -28,6 +29,7 @@ struct AssetViewerView: View {
     @State private var cachedDetailMissAssetIDs: Set<String> = []
     @State private var refreshedDetailAssetIDs: Set<String> = []
     @State private var renderedImageMetadataByAssetID: [String: AssetViewerRenderedImageMetadata] = [:]
+    @State private var verticalDragRoute: AssetViewerVerticalDragRoute?
     @State private var fullResolutionRequestIDs: [String: Int] = [:]
     @State private var fullResolutionLoadErrors: [String: String] = [:]
     @State private var livePhotoMotionByteCounts: [String: Int] = [:]
@@ -53,6 +55,8 @@ struct AssetViewerView: View {
     @State private var dismissalCropTargetSize: CGSize?
     @State private var dismissalCropProgress: CGFloat = 0
     @State private var dismissalAssetOpacity: Double = 1
+    @State private var nativeDismissalTransitionActive = false
+    @State private var nativeDismissalController = AssetViewerNativeDismissalController()
     @State private var isLandingDismissal = false
     @State private var dismissalLandingTask: Task<Void, Never>?
     @State private var dismissalThumbnailRevealTask: Task<Void, Never>?
@@ -187,9 +191,13 @@ struct AssetViewerView: View {
                 let openingCornerRadius = (openingTarget?.cornerRadius ?? 0)
                     / max(openingTransform?.scale ?? 1, 0.04) * openingRemainder
                 let isDraggingOrLanding = isDismissalInteractionActive || isLandingDismissal
+                let usesNativeDismissal = nativeDismissalTransitionActive && !isOpening
+                let viewerMaskRect = usesNativeDismissal ? fullRect : dismissalMaskRect
                 ZStack {
                     Color(uiColor: .systemBackground)
-                        .opacity(isOpening ? openingProgress : dismissalBackdropOpacity)
+                        .opacity(usesNativeDismissal
+                            ? 0
+                            : (isOpening ? openingProgress : dismissalBackdropOpacity))
                     viewerContent(
                         pageSize: fullGeometry.size,
                         viewerRect: viewerRect,
@@ -200,34 +208,44 @@ struct AssetViewerView: View {
                     )
                     .mask {
                         RoundedRectangle(
-                            cornerRadius: isOpening
-                                ? openingCornerRadius : dismissalLandingCornerRadius,
+                            cornerRadius: usesNativeDismissal
+                                ? 0
+                                : (isOpening
+                                    ? openingCornerRadius : dismissalLandingCornerRadius),
                             style: .continuous
                         )
                         .frame(
-                            width: dismissalMaskRect.width,
-                            height: dismissalMaskRect.height
+                            width: viewerMaskRect.width,
+                            height: viewerMaskRect.height
                         )
                         .position(
-                            x: dismissalMaskRect.midX,
-                            y: dismissalMaskRect.midY
+                            x: viewerMaskRect.midX,
+                            y: viewerMaskRect.midY
                         )
                         .animation(.easeOut(duration: 0.14), value: dismissalCropProgress)
                     }
                     .scaleEffect(
-                        isDraggingOrLanding && !reduceMotion
+                        !usesNativeDismissal && isDraggingOrLanding && !reduceMotion
                             ? activeDismissalScale : openingScale,
-                        anchor: isOpening ? .center : dismissalAnchor
+                        anchor: isOpening || usesNativeDismissal ? .center : dismissalAnchor
                     )
                     .offset(
-                        isDraggingOrLanding && !reduceMotion
+                        !usesNativeDismissal && isDraggingOrLanding && !reduceMotion
                             ? activeDismissalTranslation : openingTranslation
                     )
                     .clipShape(AssetViewerTransitionClipShape(
                         target: openingClipTarget ?? fullRect,
                         progress: openingClipTarget == nil ? 0 : openingRemainder
                     ))
-                    .opacity(dismissalAssetOpacity)
+                    .opacity(usesNativeDismissal ? 0 : dismissalAssetOpacity)
+
+                    AssetViewerNativeDismissalSurface(
+                        controller: nativeDismissalController
+                    )
+                    .frame(width: fullRect.width, height: fullRect.height)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+                    .zIndex(2)
                     chrome(
                         infoProgress: infoProgress,
                         viewportSize: fullGeometry.size,
@@ -280,6 +298,8 @@ struct AssetViewerView: View {
             await preloadCachedAssetDetails(pagerWindowAssets.map(\.id))
         }
         .onChange(of: session.selectedAssetID) { _, newAssetID in
+            nativeDismissalController.reset()
+            nativeDismissalTransitionActive = false
             zoomedAssetID = nil
             livePhotoPlaybackAssetID = nil
             updateViewerPrefetch()
@@ -298,6 +318,7 @@ struct AssetViewerView: View {
             openingTask?.cancel()
             dismissalLandingTask?.cancel()
             dismissalThumbnailRevealTask?.cancel()
+            nativeDismissalController.reset()
             let requestedFullSizeAssets = session.assets.filter {
                 fullResolutionRequestIDs[$0.id] != nil
             }
@@ -863,21 +884,63 @@ struct AssetViewerView: View {
                       zoomedAssetID == nil,
                       abs(value.translation.height) > abs(value.translation.width) * 1.2
                 else { return }
-                let drivesDismissal = AssetViewerVerticalDragRouting.drivesViewerDismissal(
+                let dragRoute = AssetViewerVerticalDragRouting.resolve(
+                    lockedRoute: verticalDragRoute,
                     translationHeight: value.translation.height,
                     startLocation: value.startLocation,
                     mediaRect: mediaRect,
                     showsInfo: showsInfo
                 )
+                if verticalDragRoute == nil {
+                    verticalDragRoute = dragRoute
+                }
                 var transaction = Transaction()
                 transaction.disablesAnimations = true
-                if drivesDismissal {
+                if dragRoute == .viewerDismissal, value.translation.height > 0 {
                     guard !reduceMotion else { return }
+                    if nativeDismissalController.isActive {
+                        updateNativeDismissal(
+                            translation: value.translation,
+                            viewportHeight: viewportSize.height
+                        )
+                        return
+                    }
                     if dismissalDragTranslation.height == 0 {
-                        dismissalThumbnailRevealTask?.cancel()
-                        returningTimelineThumbnailChanged(session.selectedAssetID)
-                        if session.selectedAsset?.livePhotoVideoID != nil {
-                            returningLivePhotoBadgeChanged(session.selectedAssetID)
+                        if let asset = session.selectedAsset,
+                           asset.mediaKind != .video,
+                           let transitionImage = media.cachedViewerTransitionImage(
+                               for: asset,
+                               targetPixels: MediaPixelSize(
+                                   width: Int(max(1, viewportSize.width * displayScale)),
+                                   height: Int(max(1, viewportSize.height * displayScale))
+                               )
+                           )
+                        {
+                            let imageRect = selectedRenderedImageRect(in: mediaRect)
+                            let anchor = AssetViewerDismissalGeometry.anchor(
+                                startLocation: value.startLocation,
+                                viewportSize: viewportSize
+                            )
+                            nativeDismissalController.begin(
+                                image: transitionImage,
+                                imageRect: imageRect,
+                                viewportSize: viewportSize,
+                                anchor: anchor
+                            )
+                            withTransaction(transaction) {
+                                nativeDismissalTransitionActive = true
+                                dismissalDragStartLocation = value.startLocation
+                                infoDragTranslation = 0
+                            }
+                            beginReturningTimelineTransition(for: asset)
+                            updateNativeDismissal(
+                                translation: value.translation,
+                                viewportHeight: viewportSize.height
+                            )
+                            return
+                        }
+                        if let asset = session.selectedAsset {
+                            beginReturningTimelineTransition(for: asset)
                         }
                     }
                     withTransaction(transaction) {
@@ -902,9 +965,11 @@ struct AssetViewerView: View {
                     dismissalDragTranslation = .zero
                     dismissalViewerRect = nil
                     dismissalBackdropOpacity = 1
-                    infoDragTranslation = showsInfo
-                        ? max(0, value.translation.height)
-                        : min(0, value.translation.height)
+                    infoDragTranslation = dragRoute == .infoPanel
+                        ? (showsInfo
+                            ? max(0, value.translation.height)
+                            : min(0, value.translation.height))
+                        : 0
                 }
                 if wasDismissing {
                     returningLivePhotoBadgeChanged(nil)
@@ -912,7 +977,18 @@ struct AssetViewerView: View {
                 }
             }
             .onEnded { value in
-                guard !openingIsActive, !isDismissing else { return }
+                guard !openingIsActive, !isDismissing else {
+                    verticalDragRoute = nil
+                    return
+                }
+                let dragRoute = AssetViewerVerticalDragRouting.resolve(
+                    lockedRoute: verticalDragRoute,
+                    translationHeight: value.translation.height,
+                    startLocation: value.startLocation,
+                    mediaRect: mediaRect,
+                    showsInfo: showsInfo
+                )
+                verticalDragRoute = nil
                 guard zoomedAssetID == nil else {
                     cancelDismissalInteraction()
                     settleInfoGesture(visible: showsInfo)
@@ -920,12 +996,8 @@ struct AssetViewerView: View {
                 }
                 let isVertical = abs(value.translation.height) > abs(value.translation.width) * 1.2
                 let drivesDismissal = isVertical
-                    && AssetViewerVerticalDragRouting.drivesViewerDismissal(
-                        translationHeight: value.translation.height,
-                        startLocation: value.startLocation,
-                        mediaRect: mediaRect,
-                        showsInfo: showsInfo
-                    )
+                    && dragRoute == .viewerDismissal
+                    && value.translation.height > 0
                 if drivesDismissal {
                     infoDragTranslation = 0
                     if AssetViewerDismissalGeometry.shouldComplete(
@@ -956,6 +1028,35 @@ struct AssetViewerView: View {
                     settleInfoGesture(visible: false)
                 }
             }
+    }
+
+    private func beginReturningTimelineTransition(for asset: TimelineAssetSummary) {
+        dismissalThumbnailRevealTask?.cancel()
+        returningTimelineThumbnailChanged(asset.id)
+        if asset.livePhotoVideoID != nil {
+            returningLivePhotoBadgeChanged(asset.id)
+        }
+    }
+
+    private func updateNativeDismissal(
+        translation: CGSize,
+        viewportHeight: CGFloat
+    ) {
+        let downwardTranslation = CGSize(
+            width: translation.width,
+            height: max(0, translation.height)
+        )
+        nativeDismissalController.update(
+            translation: downwardTranslation,
+            scale: AssetViewerDismissalGeometry.scale(
+                translationHeight: downwardTranslation.height,
+                viewportHeight: viewportHeight
+            ),
+            backdropOpacity: AssetViewerDismissalGeometry.backgroundOpacity(
+                translationHeight: downwardTranslation.height,
+                viewportHeight: viewportHeight
+            )
+        )
     }
 
     private func beginOpeningAnimation() {
@@ -1013,6 +1114,46 @@ struct AssetViewerView: View {
             anchor: anchor,
             fillsTarget: destination?.fillsFrame == true
         )
+        if nativeDismissalController.isActive {
+            let cropSize = destination?.fillsFrame == true
+                ? AssetViewerDismissalGeometry.sourceCropSize(
+                    imageRect: imageRect,
+                    targetRect: target,
+                    landingScale: landing.scale
+                )
+                : imageRect.size
+            let cropRect = CGRect(
+                x: imageRect.midX - cropSize.width / 2,
+                y: imageRect.midY - cropSize.height / 2,
+                width: cropSize.width,
+                height: cropSize.height
+            )
+            nativeDismissalController.complete(
+                translation: landing.translation,
+                scale: landing.scale,
+                maskRect: cropRect,
+                cornerRadius: (destination?.cornerRadius ?? 0)
+                    / max(landing.scale, 0.04),
+                duration: 0.28
+            )
+            withAnimation(.easeInOut(duration: 0.45)) {
+                isLandingDismissal = true
+            }
+            dismissalLandingTask = Task { @MainActor in
+                if destination?.fillsFrame == true {
+                    try? await Task.sleep(for: .milliseconds(300))
+                    guard !Task.isCancelled else { return }
+                    returningTimelineThumbnailChanged(nil)
+                    nativeDismissalController.fadeImageOut(duration: 0.12)
+                    try? await Task.sleep(for: .milliseconds(200))
+                } else {
+                    try? await Task.sleep(for: .milliseconds(500))
+                }
+                guard !Task.isCancelled else { return }
+                closeWithoutAnimation()
+            }
+            return
+        }
         if destination?.fillsFrame == true {
             dismissalCropTargetSize = AssetViewerDismissalGeometry.sourceCropSize(
                 imageRect: imageRect,
@@ -1058,6 +1199,29 @@ struct AssetViewerView: View {
 
     private func cancelDismissalInteraction() {
         guard isDismissalInteractionActive else { return }
+        if nativeDismissalController.isActive {
+            returningLivePhotoBadgeChanged(nil)
+            dismissalThumbnailRevealTask?.cancel()
+            nativeDismissalController.cancel(duration: 0.32) {
+                guard !isDismissing else { return }
+                returningTimelineThumbnailChanged(nil)
+                var transaction = Transaction(animation: nil)
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    nativeDismissalTransitionActive = false
+                    dismissalDragStartLocation = .zero
+                }
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(16))
+                    guard !nativeDismissalController.isActive,
+                          !nativeDismissalTransitionActive,
+                          !isDismissing
+                    else { return }
+                    nativeDismissalController.reset()
+                }
+            }
+            return
+        }
         withAnimation(reduceMotion ? nil : .spring(duration: 0.32, bounce: 0.1)) {
             dismissalDragTranslation = .zero
             dismissalDragStartLocation = .zero
@@ -1084,7 +1248,7 @@ struct AssetViewerView: View {
     }
 
     private var isDismissalInteractionActive: Bool {
-        dismissalDragTranslation.height > 0
+        nativeDismissalTransitionActive || dismissalDragTranslation.height > 0
     }
 
     private var shouldHideStatusBar: Bool {
@@ -1510,15 +1674,26 @@ nonisolated enum AssetViewerDismissalGeometry {
 }
 
 nonisolated enum AssetViewerVerticalDragRouting {
-    static func drivesViewerDismissal(
+    static func resolve(
+        lockedRoute: AssetViewerVerticalDragRoute?,
         translationHeight: CGFloat,
         startLocation: CGPoint,
         mediaRect: CGRect,
         showsInfo: Bool
-    ) -> Bool {
-        guard translationHeight > 0 else { return false }
+    ) -> AssetViewerVerticalDragRoute {
+        if let lockedRoute {
+            return lockedRoute
+        }
+        guard translationHeight > 0 else { return .infoPanel }
         return !showsInfo || mediaRect.contains(startLocation)
+            ? .viewerDismissal
+            : .infoPanel
     }
+}
+
+nonisolated enum AssetViewerVerticalDragRoute: Equatable {
+    case viewerDismissal
+    case infoPanel
 }
 
 nonisolated struct AssetViewerTransitionClipShape: Shape {
@@ -1538,6 +1713,255 @@ nonisolated struct AssetViewerTransitionClipShape: Shape {
             width: bounds.width + (target.width - bounds.width) * amount,
             height: bounds.height + (target.height - bounds.height) * amount
         ))
+    }
+}
+
+private struct AssetViewerNativeDismissalSurface: UIViewRepresentable {
+    let controller: AssetViewerNativeDismissalController
+
+    func makeCoordinator() -> AssetViewerNativeDismissalController {
+        controller
+    }
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.backgroundColor = .clear
+        view.isOpaque = false
+        view.isUserInteractionEnabled = false
+        context.coordinator.attach(to: view)
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.attach(to: uiView)
+    }
+
+    static func dismantleUIView(
+        _ uiView: UIView,
+        coordinator: AssetViewerNativeDismissalController
+    ) {
+        coordinator.detach(from: uiView)
+    }
+}
+
+@MainActor
+private final class AssetViewerNativeDismissalController: NSObject {
+    private weak var hostView: UIView?
+    private let backdropView = UIView()
+    private let contentView = UIView()
+    private let imageView = UIImageView()
+    private let maskLayer = CAShapeLayer()
+    private var animator: UIViewPropertyAnimator?
+
+    private(set) var isActive = false
+
+    func attach(to hostView: UIView) {
+        if self.hostView !== hostView {
+            detachFromCurrentHost()
+            self.hostView = hostView
+            hostView.isHidden = true
+
+            backdropView.backgroundColor = .systemBackground
+            backdropView.isUserInteractionEnabled = false
+            contentView.backgroundColor = .clear
+            contentView.isUserInteractionEnabled = false
+            imageView.contentMode = .scaleAspectFill
+            imageView.clipsToBounds = true
+            imageView.isUserInteractionEnabled = false
+            contentView.layer.mask = maskLayer
+            contentView.addSubview(imageView)
+            hostView.addSubview(backdropView)
+            hostView.addSubview(contentView)
+        }
+        guard !isActive else { return }
+        backdropView.frame = hostView.bounds
+        contentView.frame = hostView.bounds
+        maskLayer.frame = contentView.bounds
+    }
+
+    func detach(from hostView: UIView) {
+        guard self.hostView === hostView else { return }
+        reset()
+        detachFromCurrentHost()
+    }
+
+    func begin(
+        image: UIImage,
+        imageRect: CGRect,
+        viewportSize: CGSize,
+        anchor: UnitPoint
+    ) {
+        guard let hostView else { return }
+        stopAnimations()
+        let viewportBounds = CGRect(origin: .zero, size: viewportSize)
+        hostView.isHidden = false
+        backdropView.frame = viewportBounds
+        backdropView.alpha = 1
+        contentView.transform = .identity
+        contentView.bounds = viewportBounds
+        contentView.layer.anchorPoint = CGPoint(x: anchor.x, y: anchor.y)
+        contentView.layer.position = CGPoint(
+            x: viewportSize.width * anchor.x,
+            y: viewportSize.height * anchor.y
+        )
+        imageView.image = image
+        imageView.frame = imageRect
+        imageView.alpha = 1
+        maskLayer.frame = viewportBounds
+        setMaskPath(rect: imageRect, cornerRadius: 0)
+        isActive = true
+    }
+
+    func update(
+        translation: CGSize,
+        scale: CGFloat,
+        backdropOpacity: CGFloat
+    ) {
+        guard isActive else { return }
+        UIView.performWithoutAnimation {
+            contentView.transform = CGAffineTransform(
+                a: scale,
+                b: 0,
+                c: 0,
+                d: scale,
+                tx: translation.width,
+                ty: translation.height
+            )
+            backdropView.alpha = backdropOpacity
+        }
+    }
+
+    func complete(
+        translation: CGSize,
+        scale: CGFloat,
+        maskRect: CGRect,
+        cornerRadius: CGFloat,
+        duration: TimeInterval
+    ) {
+        guard isActive else { return }
+        stopAnimator()
+        animateMask(
+            to: maskRect,
+            cornerRadius: cornerRadius,
+            duration: min(0.14, duration)
+        )
+        let animator = UIViewPropertyAnimator(
+            duration: duration,
+            curve: .easeOut
+        ) {
+            self.contentView.transform = CGAffineTransform(
+                a: scale,
+                b: 0,
+                c: 0,
+                d: scale,
+                tx: translation.width,
+                ty: translation.height
+            )
+            self.backdropView.alpha = 0
+        }
+        self.animator = animator
+        animator.startAnimation()
+    }
+
+    func cancel(
+        duration: TimeInterval,
+        completion: @escaping @MainActor () -> Void
+    ) {
+        guard isActive else {
+            completion()
+            return
+        }
+        stopAnimator()
+        let animator = UIViewPropertyAnimator(
+            duration: duration,
+            dampingRatio: 0.9
+        ) {
+            self.contentView.transform = .identity
+            self.backdropView.alpha = 1
+        }
+        self.animator = animator
+        animator.addCompletion { [weak self] _ in
+            guard let self else { return }
+            self.animator = nil
+            isActive = false
+            completion()
+        }
+        animator.startAnimation()
+    }
+
+    func fadeImageOut(duration: TimeInterval) {
+        guard isActive else { return }
+        UIView.animate(
+            withDuration: duration,
+            delay: 0,
+            options: [.beginFromCurrentState, .curveEaseInOut]
+        ) {
+            self.imageView.alpha = 0
+        }
+    }
+
+    func reset() {
+        stopAnimations()
+        isActive = false
+        imageView.image = nil
+        imageView.alpha = 1
+        contentView.transform = .identity
+        contentView.layer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+        if let hostView {
+            contentView.frame = hostView.bounds
+            backdropView.frame = hostView.bounds
+        }
+        backdropView.alpha = 1
+        hostView?.isHidden = true
+    }
+
+    private func animateMask(
+        to rect: CGRect,
+        cornerRadius: CGFloat,
+        duration: TimeInterval
+    ) {
+        let finalPath = maskPath(rect: rect, cornerRadius: cornerRadius)
+        let animation = CABasicAnimation(keyPath: "path")
+        animation.fromValue = maskLayer.presentation()?.path ?? maskLayer.path
+        animation.toValue = finalPath
+        animation.duration = duration
+        animation.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        maskLayer.path = finalPath
+        CATransaction.commit()
+        maskLayer.add(animation, forKey: "dismissal-crop")
+    }
+
+    private func setMaskPath(rect: CGRect, cornerRadius: CGFloat) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        maskLayer.path = maskPath(rect: rect, cornerRadius: cornerRadius)
+        CATransaction.commit()
+    }
+
+    private func maskPath(rect: CGRect, cornerRadius: CGFloat) -> CGPath {
+        UIBezierPath(
+            roundedRect: rect,
+            cornerRadius: max(0.001, cornerRadius)
+        ).cgPath
+    }
+
+    private func stopAnimations() {
+        stopAnimator()
+        maskLayer.removeAllAnimations()
+        imageView.layer.removeAllAnimations()
+    }
+
+    private func stopAnimator() {
+        animator?.stopAnimation(true)
+        animator = nil
+    }
+
+    private func detachFromCurrentHost() {
+        backdropView.removeFromSuperview()
+        contentView.removeFromSuperview()
+        hostView = nil
     }
 }
 
