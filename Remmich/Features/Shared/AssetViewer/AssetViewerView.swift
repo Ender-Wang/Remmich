@@ -863,7 +863,12 @@ struct AssetViewerView: View {
                       zoomedAssetID == nil,
                       abs(value.translation.height) > abs(value.translation.width) * 1.2
                 else { return }
-                let drivesDismissal = value.translation.height > 0 && !showsInfo
+                let drivesDismissal = AssetViewerVerticalDragRouting.drivesViewerDismissal(
+                    translationHeight: value.translation.height,
+                    startLocation: value.startLocation,
+                    mediaRect: mediaRect,
+                    showsInfo: showsInfo
+                )
                 var transaction = Transaction()
                 transaction.disablesAnimations = true
                 if drivesDismissal {
@@ -915,8 +920,12 @@ struct AssetViewerView: View {
                 }
                 let isVertical = abs(value.translation.height) > abs(value.translation.width) * 1.2
                 let drivesDismissal = isVertical
-                    && value.translation.height > 0
-                    && !showsInfo
+                    && AssetViewerVerticalDragRouting.drivesViewerDismissal(
+                        translationHeight: value.translation.height,
+                        startLocation: value.startLocation,
+                        mediaRect: mediaRect,
+                        showsInfo: showsInfo
+                    )
                 if drivesDismissal {
                     infoDragTranslation = 0
                     if AssetViewerDismissalGeometry.shouldComplete(
@@ -1497,6 +1506,18 @@ nonisolated enum AssetViewerDismissalGeometry {
         predictedEndTranslationHeight: CGFloat
     ) -> Bool {
         translationHeight >= 18 || predictedEndTranslationHeight >= 60
+    }
+}
+
+nonisolated enum AssetViewerVerticalDragRouting {
+    static func drivesViewerDismissal(
+        translationHeight: CGFloat,
+        startLocation: CGPoint,
+        mediaRect: CGRect,
+        showsInfo: Bool
+    ) -> Bool {
+        guard translationHeight > 0 else { return false }
+        return !showsInfo || mediaRect.contains(startLocation)
     }
 }
 

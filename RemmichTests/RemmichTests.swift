@@ -1256,6 +1256,29 @@ struct RemmichTests {
         #expect(!AssetViewerMediaGeometry.animatesFitChanges(infoDragTranslation: 72))
     }
 
+    @Test func viewerDownwardDragRoutesByItsStartingRegionWhenInfoIsShown() {
+        let mediaRect = CGRect(x: 0, y: 122, width: 402, height: 360)
+
+        #expect(AssetViewerVerticalDragRouting.drivesViewerDismissal(
+            translationHeight: 80,
+            startLocation: CGPoint(x: 201, y: 300),
+            mediaRect: mediaRect,
+            showsInfo: true
+        ))
+        #expect(!AssetViewerVerticalDragRouting.drivesViewerDismissal(
+            translationHeight: 80,
+            startLocation: CGPoint(x: 201, y: 600),
+            mediaRect: mediaRect,
+            showsInfo: true
+        ))
+        #expect(!AssetViewerVerticalDragRouting.drivesViewerDismissal(
+            translationHeight: -80,
+            startLocation: CGPoint(x: 201, y: 300),
+            mediaRect: mediaRect,
+            showsInfo: true
+        ))
+    }
+
     @Test func viewerDismissalGeometryTracksTheFingerAndShrinksFromItsTouchPoint() {
         let viewport = CGSize(width: 402, height: 874)
         let start = CGPoint(x: 100.5, y: 437)
