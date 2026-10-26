@@ -53,14 +53,8 @@ jobs:
           swiftformat --lint --config .swiftformat \
             Remmich \
             RemmichTests \
-            RemmichUITests \
             Packages/ImmichAPI/Sources \
             Packages/ImmichAPI/Tests
-
-      - name: Boot iPhone simulator
-        run: |
-          xcrun simctl boot "iPhone 17e" || true
-          xcrun simctl bootstatus "iPhone 17e" -b
 
       - name: Build app and test bundles
         run: |

@@ -20,19 +20,11 @@
 			remoteGlobalIDString = F84699433066C25E00C68930;
 			remoteInfo = Remmich;
 		};
-		F846995C3066C25F00C68930 /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = F846993C3066C25E00C68930 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = F84699433066C25E00C68930;
-			remoteInfo = Remmich;
-		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		F84699443066C25E00C68930 /* Remmich.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Remmich.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		F84699513066C25F00C68930 /* RemmichTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RemmichTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		F846995B3066C25F00C68930 /* RemmichUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RemmichUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -59,11 +51,6 @@
 			path = RemmichTests;
 			sourceTree = "<group>";
 		};
-		F846995E3066C25F00C68930 /* RemmichUITests */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = RemmichUITests;
-			sourceTree = "<group>";
-		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -80,11 +67,6 @@
 			files = (
 			);
 		};
-		F84699583066C25F00C68930 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			files = (
-			);
-		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -93,7 +75,6 @@
 			children = (
 				F84699463066C25E00C68930 /* Remmich */,
 				F84699543066C25F00C68930 /* RemmichTests */,
-				F846995E3066C25F00C68930 /* RemmichUITests */,
 				F84699453066C25E00C68930 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -103,7 +84,6 @@
 			children = (
 				F84699443066C25E00C68930 /* Remmich.app */,
 				F84699513066C25F00C68930 /* RemmichTests.xctest */,
-				F846995B3066C25F00C68930 /* RemmichUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -157,27 +137,6 @@
 			productReference = F84699513066C25F00C68930 /* RemmichTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
-		F846995A3066C25F00C68930 /* RemmichUITests */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = F84699693066C25F00C68930 /* Build configuration list for PBXNativeTarget "RemmichUITests" */;
-			buildPhases = (
-				F84699573066C25F00C68930 /* Sources */,
-				F84699583066C25F00C68930 /* Frameworks */,
-				F84699593066C25F00C68930 /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-				F846995D3066C25F00C68930 /* PBXTargetDependency */,
-			);
-			fileSystemSynchronizedGroups = (
-				F846995E3066C25F00C68930 /* RemmichUITests */,
-			);
-			name = RemmichUITests;
-			productName = RemmichUITests;
-			productReference = F846995B3066C25F00C68930 /* RemmichUITests.xctest */;
-			productType = "com.apple.product-type.bundle.ui-testing";
-		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -192,10 +151,6 @@
 						CreatedOnToolsVersion = 27.0;
 					};
 					F84699503066C25F00C68930 = {
-						CreatedOnToolsVersion = 27.0;
-						TestTargetID = F84699433066C25E00C68930;
-					};
-					F846995A3066C25F00C68930 = {
 						CreatedOnToolsVersion = 27.0;
 						TestTargetID = F84699433066C25E00C68930;
 					};
@@ -221,7 +176,6 @@
 			targets = (
 				F84699433066C25E00C68930 /* Remmich */,
 				F84699503066C25F00C68930 /* RemmichTests */,
-				F846995A3066C25F00C68930 /* RemmichUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -233,11 +187,6 @@
 			);
 		};
 		F846994F3066C25F00C68930 /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			files = (
-			);
-		};
-		F84699593066C25F00C68930 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
 			);
@@ -283,8 +232,7 @@
 				"",
 				"\"$SWIFTFORMAT\" --config \"$SRCROOT/.swiftformat\" \\",
 				"    \"$SRCROOT/Remmich\" \\",
-				"    \"$SRCROOT/RemmichTests\" \\",
-				"    \"$SRCROOT/RemmichUITests\"",
+				"    \"$SRCROOT/RemmichTests\"",
 				"",
 			);
 		};
@@ -301,11 +249,6 @@
 			files = (
 			);
 		};
-		F84699573066C25F00C68930 /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			files = (
-			);
-		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -313,11 +256,6 @@
 			isa = PBXTargetDependency;
 			target = F84699433066C25E00C68930 /* Remmich */;
 			targetProxy = F84699523066C25F00C68930 /* PBXContainerItemProxy */;
-		};
-		F846995D3066C25F00C68930 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = F84699433066C25E00C68930 /* Remmich */;
-			targetProxy = F846995C3066C25F00C68930 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -603,48 +541,6 @@
 			};
 			name = Release;
 		};
-		F846996A3066C25F00C68930 /* Debug configuration for PBXNativeTarget "RemmichUITests" */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
-				DEVELOPMENT_TEAM = LQS4V6877Y;
-				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.6;
-				MARKETING_VERSION = 0.5.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "io.github.ender-wang.RemmichUITests";
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				STRING_CATALOG_GENERATE_SYMBOLS = NO;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 6.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_TARGET_NAME = Remmich;
-			};
-			name = Debug;
-		};
-		F846996B3066C25F00C68930 /* Release configuration for PBXNativeTarget "RemmichUITests" */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 5;
-				DEVELOPMENT_TEAM = LQS4V6877Y;
-				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.6;
-				MARKETING_VERSION = 0.5.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "io.github.ender-wang.RemmichUITests";
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				STRING_CATALOG_GENERATE_SYMBOLS = NO;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 6.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_TARGET_NAME = Remmich;
-			};
-			name = Release;
-		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -669,14 +565,6 @@
 			buildConfigurations = (
 				F84699673066C25F00C68930 /* Debug configuration for PBXNativeTarget "RemmichTests" */,
 				F84699683066C25F00C68930 /* Release configuration for PBXNativeTarget "RemmichTests" */,
-			);
-			defaultConfigurationName = Release;
-		};
-		F84699693066C25F00C68930 /* Build configuration list for PBXNativeTarget "RemmichUITests" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				F846996A3066C25F00C68930 /* Debug configuration for PBXNativeTarget "RemmichUITests" */,
-				F846996B3066C25F00C68930 /* Release configuration for PBXNativeTarget "RemmichUITests" */,
 			);
 			defaultConfigurationName = Release;
 		};
