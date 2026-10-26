@@ -309,7 +309,13 @@ struct AppShellView: View {
     }
 
     private func setViewerPresented(_ presented: Bool) {
-        viewerPresented = presented
+        if presented {
+            libraryIndex.setTimelinePublicationDeferred(true)
+            viewerPresented = true
+        } else {
+            viewerPresented = false
+            libraryIndex.setTimelinePublicationDeferred(false)
+        }
     }
 
     private func pinchGroupedRange(_ kind: PhotosGroupedTabKind, _ gesture: PhotosPinchGesture) {

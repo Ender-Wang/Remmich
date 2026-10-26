@@ -525,6 +525,32 @@ struct LibraryIndexSynchronizationTests {
         #expect(try abs(#require(controller.elapsed(at: .distantFuture)) - rebuildElapsed) < 0.01)
     }
 
+    @Test @MainActor func timelineBootstrapPublicationWaitsUntilViewerCloses() async throws {
+        let fixture = try IndexFixture()
+        defer { fixture.cleanup() }
+        let source = IndexSource(buckets: [
+            "2026-10-01": [Self.asset(id: "one", bucket: "2026-10-01")],
+        ])
+        let controller = LibraryIndexController(
+            source: source,
+            store: SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        )
+        var publishedGenerations: [Int64] = []
+        controller.acceptedBootstrapDidChange = { bootstrap in
+            publishedGenerations.append(bootstrap.photos.generation)
+        }
+
+        controller.setTimelinePublicationDeferred(true)
+        controller.start(session: .fixture, endpoint: AccountSession.fixture.apiURL)
+        try await Self.waitUntilUpToDate(controller)
+        try await Self.waitUntilTimelinePublicationIsDeferred(controller)
+
+        #expect(publishedGenerations.isEmpty)
+        controller.setTimelinePublicationDeferred(false)
+        #expect(publishedGenerations.count == 1)
+        #expect(!controller.hasDeferredTimelinePublication)
+    }
+
     @Test @MainActor func indexFailurePublishesCopyableDiagnosticsWithoutCredentials() async throws {
         let fixture = try IndexFixture()
         defer { fixture.cleanup() }
@@ -565,6 +591,19 @@ struct LibraryIndexSynchronizationTests {
             try await Task.sleep(for: .milliseconds(10))
         }
         Issue.record("Timed out waiting for the library index to fail")
+    }
+
+    @MainActor
+    private static func waitUntilTimelinePublicationIsDeferred(
+        _ controller: LibraryIndexController
+    ) async throws {
+        for _ in 0 ..< 500 {
+            if controller.hasDeferredTimelinePublication {
+                return
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        Issue.record("Timed out waiting for timeline publication to be deferred")
     }
 
     private static func asset(

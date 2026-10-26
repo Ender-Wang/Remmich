@@ -32,6 +32,12 @@ final class LibraryIndexController {
         case rebuild = "Rebuild"
     }
 
+    private struct DeferredBootstrapPublication {
+        let bootstrap: LibraryTimelineBootstrap
+        let scope: MediaAccountScope
+        let runID: UInt64
+    }
+
     private(set) var status: Status = .idle
     private(set) var indexedAssetCount = 0
     private(set) var indexedPhotoCount = 0
@@ -92,6 +98,8 @@ final class LibraryIndexController {
     private var warmingRunID: UInt64 = 0
     private var lastWarmingLoggedMilestone = -1
     private var lastPublishedBootstrapGeneration: Int64?
+    @ObservationIgnored private var timelinePublicationDeferred = false
+    @ObservationIgnored private var deferredBootstrapPublication: DeferredBootstrapPublication?
     private var indexOperation = IndexOperation.sync
 
     init(
@@ -114,6 +122,22 @@ final class LibraryIndexController {
     var fractionCompleted: Double {
         guard expectedAssetCount > 0 else { return 0 }
         return min(1, max(0, Double(indexedAssetCount) / Double(expectedAssetCount)))
+    }
+
+    var hasDeferredTimelinePublication: Bool {
+        deferredBootstrapPublication != nil
+    }
+
+    func setTimelinePublicationDeferred(_ deferred: Bool) {
+        guard timelinePublicationDeferred != deferred else { return }
+        timelinePublicationDeferred = deferred
+        guard !deferred, let publication = deferredBootstrapPublication else { return }
+        deferredBootstrapPublication = nil
+        guard publication.scope == scope, publication.runID == runID else {
+            Self.logger.info("Discarded deferred timeline publication reason=session-changed")
+            return
+        }
+        publishAcceptedBootstrap(publication.bootstrap, scope: publication.scope)
     }
 
     var elapsed: TimeInterval? {
@@ -301,6 +325,7 @@ final class LibraryIndexController {
         if scope != nextScope {
             scope = nextScope
             lastPublishedBootstrapGeneration = nil
+            deferredBootstrapPublication = nil
             indexedAssetCount = 0
             indexedPhotoCount = 0
             indexedVideoCount = 0
@@ -487,6 +512,7 @@ final class LibraryIndexController {
             bootstrapCatalogTask?.cancel()
             bootstrapCatalogTask = nil
         }
+        deferredBootstrapPublication = nil
         cancelThumbnailWarming(reason: "suspended")
         if status == .indexing {
             status = .idle
@@ -549,6 +575,8 @@ final class LibraryIndexController {
         thumbnailWarmingFailedAt = nil
         thumbnailWarmingStatus = thumbnailWarmingEnabled ? .waiting : .off
         lastPublishedBootstrapGeneration = nil
+        timelinePublicationDeferred = false
+        deferredBootstrapPublication = nil
     }
 
     private func completeGroupedCatalogs(
@@ -690,10 +718,11 @@ final class LibraryIndexController {
         runID expectedRunID: UInt64
     ) async {
         guard snapshot.generation != lastPublishedBootstrapGeneration,
+              snapshot.generation != deferredBootstrapPublication?.bootstrap.photos.generation,
               acceptedBootstrapDidChange != nil
         else { return }
 
-        let worker = Task.detached(priority: .userInitiated) {
+        let worker = Task.detached(priority: .utility) {
             LibraryTimelineBootstrapBuilder.buildInitial(from: snapshot)
         }
         let bootstrap = await withTaskCancellationHandler {
@@ -707,11 +736,31 @@ final class LibraryIndexController {
               snapshot.generation != lastPublishedBootstrapGeneration
         else { return }
 
-        lastPublishedBootstrapGeneration = snapshot.generation
+        if timelinePublicationDeferred {
+            deferredBootstrapPublication = .init(
+                bootstrap: bootstrap,
+                scope: expectedScope,
+                runID: expectedRunID
+            )
+            Self.logger.info(
+                "Accepted library bootstrap deferred generation=\(snapshot.generation) reason=viewer-presented"
+            )
+            return
+        }
+        publishAcceptedBootstrap(bootstrap, scope: expectedScope)
+    }
+
+    private func publishAcceptedBootstrap(
+        _ bootstrap: LibraryTimelineBootstrap,
+        scope expectedScope: MediaAccountScope
+    ) {
+        let generation = bootstrap.photos.generation
+        guard generation != lastPublishedBootstrapGeneration else { return }
+        lastPublishedBootstrapGeneration = generation
         acceptedBootstrapDidChange?(bootstrap)
         completeGroupedCatalogs(from: bootstrap, scope: expectedScope)
         Self.logger.info(
-            "Accepted library bootstrap republished generation=\(snapshot.generation) photos=\(bootstrap.photos.assetsByBucket.values.reduce(0) { $0 + $1.count }) videos=\(bootstrap.videos.assetsByBucket.values.reduce(0) { $0 + $1.count })"
+            "Accepted library bootstrap republished generation=\(generation) photos=\(bootstrap.photos.assetsByBucket.values.reduce(0) { $0 + $1.count }) videos=\(bootstrap.videos.assetsByBucket.values.reduce(0) { $0 + $1.count })"
         )
     }
 
