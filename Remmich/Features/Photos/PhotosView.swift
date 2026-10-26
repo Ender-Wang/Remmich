@@ -367,6 +367,17 @@ struct PhotosView: View {
     @State private var libraryRange: TimelineLibraryRange = .all
     @State private var initialAssetByRoute: [PhotosRangeRoute: String] = [:]
     @State private var viewerRoute: AssetViewerRoute?
+    @State private var memoryCardFrames: [String: CGRect] = [:]
+    @State private var memoryLaneFrame: CGRect?
+    @State private var memoryCoverAssetIDs: [String: String] = [:]
+    @State private var hiddenMemoryCardID: String?
+    @State private var loadingMemoryID: String?
+    @State private var memoryPresentationTask: Task<Void, Never>?
+    @State private var memoryViewerErrorMessage: String?
+    @State private var memoryViewerContentOpacity = 1.0
+    @State private var memoryViewerOpensFromSource = true
+    @State private var memoryViewerIsSwitching = false
+    @State private var memoryViewerDismissalRequest = 0
 
     init(
         store: PhotosTimelineStore,
@@ -429,30 +440,33 @@ struct PhotosView: View {
         }
         .navigationTitle(navigationTitle)
         .navigationBarTitleDisplayMode(.inline)
-        .fullScreenCover(item: $viewerRoute) { route in
-            AssetViewerView(
-                route: route,
-                store: store,
-                media: media,
-                assetDetails: assetDetails,
-                namespace: viewerNamespace,
-                close: closeViewer,
-                visibilityChanged: { visible in
-                    viewerVisibilityChanged(visible)
-                    if !visible {
-                        hiddenReturningThumbnailAssetID = nil
-                        revealReturningLivePhotoBadge()
+        .fullScreenCover(item: fullScreenViewerRoute) { route in
+            assetViewer(route: route, opensFromSource: true)
+        }
+        .overlay {
+            if let route = memoryOverlayRoute {
+                assetViewer(
+                    route: route,
+                    opensFromSource: memoryViewerOpensFromSource
+                )
+                .allowsHitTesting(memoryViewerContentOpacity > 0.01)
+                .zIndex(10)
+            }
+        }
+        .alert(
+            "Couldn’t Open Memory",
+            isPresented: Binding(
+                get: { memoryViewerErrorMessage != nil },
+                set: { presented in
+                    if !presented {
+                        memoryViewerErrorMessage = nil
                     }
-                },
-                returningLivePhotoBadgeChanged: setReturningLivePhotoBadge,
-                returningTimelineThumbnailChanged: setReturningTimelineThumbnail,
-                dismissalTarget: { assetID in
-                    viewerDismissalTargetFrame(
-                        for: assetID,
-                        aspectRatio: route.selectedAsset.aspectRatio
-                    )
                 }
             )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(memoryViewerErrorMessage ?? "The memory’s assets aren’t available.")
         }
         .toolbarBackground(navigationPath.isEmpty ? .hidden : .visible, for: .navigationBar)
         .toolbar {
@@ -540,6 +554,10 @@ struct PhotosView: View {
             }
         }
         .onChange(of: scrollToLatestRequest) {
+            if memoryOverlayRoute != nil {
+                memoryViewerDismissalRequest &+= 1
+                return
+            }
             guard libraryRange != .all || !navigationPath.isEmpty else { return }
             let request = scrollToLatestRequest
             var transaction = Transaction()
@@ -578,6 +596,9 @@ struct PhotosView: View {
             requestedLibraryRangeHandled()
         }
         .onDisappear {
+            if memoryOverlayRoute != nil {
+                closeViewer()
+            }
             rotationState?.setVisualHandoffEligible(false, for: tabDestination)
             viewportRuntime.viewportUpdateTask?.cancel()
             viewportRuntime.viewportUpdateTask = nil
@@ -585,6 +606,9 @@ struct PhotosView: View {
             contentRestoreTask?.cancel()
             pendingViewportAnchor = nil
             layoutMorphResetTask?.cancel()
+            memoryPresentationTask?.cancel()
+            memoryPresentationTask = nil
+            loadingMemoryID = nil
             latestJumpTask?.cancel()
             latestJumpTask = nil
             store.completeJump()
@@ -1013,21 +1037,39 @@ struct PhotosView: View {
                     .refreshable { await store.refresh() }
                     .overlay(alignment: .top) {
                         if memoryBackdropVisible {
-                            TimelineMemoryLane(memories: store.memories, media: media)
-                                .frame(height: 120)
-                                .padding(.bottom, 12)
-                                .background {
-                                    LinearGradient(
-                                        colors: [
-                                            Color(uiColor: .systemBackground).opacity(0.72),
-                                            Color(uiColor: .systemBackground).opacity(0),
-                                        ],
-                                        startPoint: .top,
-                                        endPoint: .bottom
-                                    )
+                            TimelineMemoryLane(
+                                memories: store.memories,
+                                media: media,
+                                selectedMemoryID: presentedMemoryID,
+                                frozenMemoryID: nil,
+                                hiddenMemoryID: nil,
+                                loadingMemoryID: loadingMemoryID,
+                                preferredAssetIDs: memoryCoverAssetIDs,
+                                select: presentMemory,
+                                laneFrameChanged: updateMemoryLaneFrame,
+                                frameChanged: updateMemoryCardFrame
+                            )
+                            .frame(height: 120)
+                            .padding(.bottom, 12)
+                            .background {
+                                Rectangle()
+                                    .fill(.ultraThinMaterial)
+                                    .mask {
+                                        LinearGradient(
+                                            stops: [
+                                                .init(color: .black, location: 0),
+                                                .init(color: .black.opacity(0.78), location: 0.48),
+                                                .init(color: .black.opacity(0.32), location: 0.78),
+                                                .init(color: .black.opacity(0.08), location: 0.94),
+                                                .init(color: .clear, location: 1),
+                                            ],
+                                            startPoint: .top,
+                                            endPoint: .bottom
+                                        )
+                                    }
                                     .ignoresSafeArea(.container, edges: .top)
-                                }
-                                .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
+                            }
+                            .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
                         }
                     }
                     .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: compactChrome)
@@ -1418,6 +1460,245 @@ struct PhotosView: View {
         "timeline-frames-\(contentName)"
     }
 
+    private var memoryOverlayRoute: AssetViewerRoute? {
+        guard let viewerRoute, case .memory = viewerRoute.origin else { return nil }
+        return viewerRoute
+    }
+
+    private var fullScreenViewerRoute: Binding<AssetViewerRoute?> {
+        Binding(
+            get: {
+                guard let route = viewerRoute else { return nil }
+                if case .memory = route.origin {
+                    return nil
+                }
+                return route
+            },
+            set: { route in
+                if let route {
+                    viewerRoute = route
+                } else if let viewerRoute, case .memory = viewerRoute.origin {
+                    return
+                } else {
+                    closeViewer()
+                }
+            }
+        )
+    }
+
+    private func assetViewer(
+        route: AssetViewerRoute,
+        opensFromSource: Bool
+    ) -> some View {
+        AssetViewerView(
+            route: route,
+            store: store,
+            media: media,
+            assetDetails: assetDetails,
+            tabBarTop: tabBarTop,
+            opensFromSource: opensFromSource,
+            memoryContentOpacity: memoryViewerContentOpacity,
+            memoryRowFrame: memoryLaneFrame,
+            dismissalRequest: memoryViewerDismissalRequest,
+            memoryBoundaryChanged: movePresentedMemory,
+            namespace: viewerNamespace,
+            close: closeViewer,
+            visibilityChanged: { visible in
+                if !visible,
+                   memoryViewerIsSwitching,
+                   case .memory = route.origin
+                {
+                    return
+                }
+                if case .memory = route.origin {
+                    // The embedded memory panel intentionally leaves the native navbar usable.
+                } else {
+                    viewerVisibilityChanged(visible)
+                }
+                if !visible {
+                    hiddenReturningThumbnailAssetID = nil
+                    hiddenMemoryCardID = nil
+                    revealReturningLivePhotoBadge()
+                }
+            },
+            returningLivePhotoBadgeChanged: { assetID in
+                guard case .memory = route.origin else {
+                    setReturningLivePhotoBadge(assetID)
+                    return
+                }
+            },
+            returningTimelineThumbnailChanged: { assetID in
+                setReturningViewerSource(assetID, route: route)
+            },
+            dismissalTarget: { assetID in
+                viewerDismissalTargetFrame(
+                    for: assetID,
+                    aspectRatio: route.selectedAsset.aspectRatio,
+                    route: route
+                )
+            }
+        )
+    }
+
+    private var presentedMemoryID: String? {
+        guard let viewerRoute, case let .memory(context) = viewerRoute.origin else {
+            return nil
+        }
+        return context.id
+    }
+
+    private func presentMemory(
+        _ memory: TimelineMemorySummary,
+        coverAssetID: String
+    ) {
+        let replacesPresentedMemory = presentedMemoryID != nil
+        guard loadingMemoryID == nil,
+              !memoryViewerIsSwitching,
+              viewerRoute == nil || replacesPresentedMemory,
+              presentedMemoryID != memory.id
+        else { return }
+        memoryPresentationTask?.cancel()
+        memoryCoverAssetIDs[memory.id] = coverAssetID
+
+        let cachedAssets = store.cachedMemoryAssets(for: memory)
+        if cachedAssets.count == Set(memory.assets.map(\.id)).count,
+           let route = memoryRoute(
+               for: memory,
+               coverAssetID: coverAssetID,
+               assets: cachedAssets
+           )
+        {
+            memoryCoverAssetIDs[memory.id] = route.selectedAsset.id
+            if replacesPresentedMemory {
+                memoryPresentationTask = Task { @MainActor in
+                    await replaceMemoryViewer(with: route)
+                    memoryPresentationTask = nil
+                }
+            } else {
+                memoryViewerContentOpacity = 1
+                memoryViewerOpensFromSource = true
+                presentViewer(route)
+            }
+            return
+        }
+
+        loadingMemoryID = memory.id
+        memoryPresentationTask = Task { @MainActor in
+            let assets = await store.memoryAssets(for: memory)
+            guard !Task.isCancelled else { return }
+            loadingMemoryID = nil
+            memoryPresentationTask = nil
+            guard let route = memoryRoute(
+                for: memory,
+                coverAssetID: coverAssetID,
+                assets: assets
+            )
+            else {
+                memoryViewerErrorMessage = "The photos in this memory aren’t available in the current library."
+                return
+            }
+            memoryCoverAssetIDs[memory.id] = route.selectedAsset.id
+            if replacesPresentedMemory {
+                await replaceMemoryViewer(with: route)
+            } else {
+                memoryViewerContentOpacity = 1
+                memoryViewerOpensFromSource = true
+                presentViewer(route)
+            }
+        }
+    }
+
+    private func movePresentedMemory(by offset: Int) -> Bool {
+        guard offset != 0,
+              let presentedMemoryID,
+              !memoryViewerIsSwitching,
+              loadingMemoryID == nil,
+              let selectedIndex = store.memories.firstIndex(where: { $0.id == presentedMemoryID })
+        else { return false }
+        let targetIndex = selectedIndex + offset.signum()
+        guard store.memories.indices.contains(targetIndex) else { return false }
+        let memory = store.memories[targetIndex]
+        guard let coverAssetID = memoryCoverAssetIDs[memory.id] ?? memory.assets.first?.id else { return false }
+        presentMemory(memory, coverAssetID: coverAssetID)
+        return true
+    }
+
+    private func memoryRoute(
+        for memory: TimelineMemorySummary,
+        coverAssetID: String,
+        assets: [TimelineAssetSummary]
+    ) -> AssetViewerRoute? {
+        guard let selectedAsset = assets.first(where: { $0.id == coverAssetID })
+            ?? assets.first
+        else { return nil }
+        return AssetViewerRoute(
+            selectedAsset: selectedAsset,
+            initialAssets: assets,
+            origin: .memory(AssetViewerMemoryContext(
+                id: memory.id,
+                memoryAt: memory.memoryAt,
+                sourceYear: memory.sourceYear
+            ))
+        )
+    }
+
+    private func replaceMemoryViewer(with route: AssetViewerRoute) async {
+        memoryViewerIsSwitching = true
+        defer { memoryViewerIsSwitching = false }
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) {
+            memoryViewerContentOpacity = 0
+        }
+        if !reduceMotion {
+            try? await Task.sleep(for: .milliseconds(170))
+            guard !Task.isCancelled else { return }
+        }
+
+        memoryViewerOpensFromSource = false
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            if case let .memory(context) = route.origin {
+                hiddenMemoryCardID = context.id
+            }
+            viewerRoute = route
+        }
+
+        await Task.yield()
+        withAnimation(reduceMotion ? nil : .easeIn(duration: 0.18)) {
+            memoryViewerContentOpacity = 1
+        }
+        if !reduceMotion {
+            try? await Task.sleep(for: .milliseconds(190))
+        }
+        guard !Task.isCancelled else { return }
+    }
+
+    private func updateMemoryCardFrame(_ frame: CGRect, for memoryID: String) {
+        guard frame.width > 0, frame.height > 0 else { return }
+        if let current = memoryCardFrames[memoryID],
+           abs(current.minX - frame.minX) < 0.5,
+           abs(current.minY - frame.minY) < 0.5,
+           abs(current.width - frame.width) < 0.5,
+           abs(current.height - frame.height) < 0.5
+        {
+            return
+        }
+        memoryCardFrames[memoryID] = frame
+    }
+
+    private func updateMemoryLaneFrame(_ frame: CGRect) {
+        guard frame.width > 0, frame.height > 0 else { return }
+        if let current = memoryLaneFrame,
+           abs(current.minX - frame.minX) < 0.5,
+           abs(current.minY - frame.minY) < 0.5,
+           abs(current.width - frame.width) < 0.5,
+           abs(current.height - frame.height) < 0.5
+        {
+            return
+        }
+        memoryLaneFrame = frame
+    }
+
     private func presentViewer(_ route: AssetViewerRoute) {
         hiddenLivePhotoBadgeAssetID = nil
         hiddenReturningThumbnailAssetID = nil
@@ -1427,11 +1708,25 @@ struct PhotosView: View {
         viewportRuntime.chromeTracker.scrollingEnded()
         var transaction = Transaction(animation: nil)
         transaction.disablesAnimations = true
-        withTransaction(transaction) { viewerRoute = route }
+        withTransaction(transaction) {
+            if case let .memory(context) = route.origin {
+                memoryViewerContentOpacity = 1
+                memoryViewerOpensFromSource = true
+                memoryViewerIsSwitching = false
+                hiddenMemoryCardID = context.id
+            } else {
+                hiddenMemoryCardID = nil
+            }
+            viewerRoute = route
+        }
     }
 
     private func closeViewer() {
         viewerRoute = nil
+        hiddenMemoryCardID = nil
+        memoryViewerContentOpacity = 1
+        memoryViewerOpensFromSource = true
+        memoryViewerIsSwitching = false
         viewerChromeReleaseTask?.cancel()
         viewerChromeReleaseTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(350))
@@ -1466,6 +1761,26 @@ struct PhotosView: View {
         }
     }
 
+    private func setReturningViewerSource(
+        _ assetID: String?,
+        route: AssetViewerRoute
+    ) {
+        guard case let .memory(context) = route.origin else {
+            setReturningTimelineThumbnail(assetID)
+            return
+        }
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            if let assetID {
+                memoryCoverAssetIDs[context.id] = assetID
+                hiddenMemoryCardID = context.id
+            } else {
+                hiddenMemoryCardID = nil
+            }
+        }
+    }
+
     private func revealReturningLivePhotoBadge() {
         guard hiddenLivePhotoBadgeAssetID != nil else { return }
         Task { @MainActor in
@@ -1479,8 +1794,18 @@ struct PhotosView: View {
 
     private func viewerDismissalTargetFrame(
         for assetID: String,
-        aspectRatio: Double
+        aspectRatio: Double,
+        route: AssetViewerRoute
     ) -> AssetViewerDismissalTarget? {
+        if case let .memory(context) = route.origin,
+           let frame = memoryCardFrames[context.id]
+        {
+            return AssetViewerDismissalTarget(
+                imageFrame: frame,
+                cornerRadius: DesignMetrics.defaultCornerRadius,
+                fillsFrame: true
+            )
+        }
         guard showsMainTimeline,
               let frame = viewportRuntime.latestFrameSnapshot?.visibleFrames[assetID],
               let scrollView = viewportRuntime.scrollView
@@ -1945,6 +2270,8 @@ private struct TimelineSectionView: View, Equatable {
 }
 
 private struct TimelineMemoryLane: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     private static let cardSpacing: CGFloat = 12
     private static let edgeInset = cardSpacing / 2
     private static let phoneFallbackCardWidth: CGFloat = 190
@@ -1952,6 +2279,14 @@ private struct TimelineMemoryLane: View {
 
     let memories: [TimelineMemorySummary]
     let media: MediaLibraryController
+    let selectedMemoryID: String?
+    let frozenMemoryID: String?
+    let hiddenMemoryID: String?
+    let loadingMemoryID: String?
+    let preferredAssetIDs: [String: String]
+    let select: (TimelineMemorySummary, String) -> Void
+    let laneFrameChanged: (CGRect) -> Void
+    let frameChanged: (CGRect, String) -> Void
 
     private var cardWidth: CGFloat {
         guard UIDevice.current.userInterfaceIdiom == .phone else {
@@ -1966,25 +2301,46 @@ private struct TimelineMemoryLane: View {
     }
 
     var body: some View {
-        ScrollView(.horizontal) {
-            LazyHStack(spacing: Self.cardSpacing) {
-                ForEach(Array(memories.enumerated()), id: \.element.id) { entry in
-                    TimelineMemoryCard(
-                        memory: entry.element,
-                        media: media,
-                        width: cardWidth,
-                        initialDelay: TimelineCoverAnimation.cycleDuration
-                            * Double(entry.offset)
-                            / Double(max(1, memories.count))
-                    )
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal) {
+                LazyHStack(spacing: Self.cardSpacing) {
+                    ForEach(Array(memories.enumerated()), id: \.element.id) { entry in
+                        TimelineMemoryCard(
+                            memory: entry.element,
+                            media: media,
+                            width: cardWidth,
+                            initialDelay: TimelineCoverAnimation.cycleDuration
+                                * Double(entry.offset)
+                                / Double(max(1, memories.count)),
+                            preferredAssetID: preferredAssetIDs[entry.element.id],
+                            isFrozen: frozenMemoryID == entry.element.id
+                                || loadingMemoryID == entry.element.id,
+                            isHidden: hiddenMemoryID == entry.element.id,
+                            isLoading: loadingMemoryID == entry.element.id,
+                            select: { assetID in select(entry.element, assetID) },
+                            frameChanged: { frame in frameChanged(frame, entry.element.id) }
+                        )
+                        .id(entry.element.id)
+                    }
+                }
+            }
+            .contentMargins(.horizontal, Self.edgeInset, for: .scrollContent)
+            .scrollIndicators(.hidden)
+            .onChange(of: selectedMemoryID) { _, memoryID in
+                guard let memoryID else { return }
+                withAnimation(reduceMotion ? nil : .smooth(duration: 0.32)) {
+                    proxy.scrollTo(memoryID, anchor: .center)
                 }
             }
         }
-        .contentMargins(.horizontal, Self.edgeInset, for: .scrollContent)
-        .scrollIndicators(.hidden)
         .frame(maxWidth: .infinity)
         .ignoresSafeArea(.container, edges: .horizontal)
         .accessibilityIdentifier("memory-lane")
+        .onGeometryChange(for: CGRect.self) { proxy in
+            proxy.frame(in: .global)
+        } action: { frame in
+            laneFrameChanged(frame)
+        }
     }
 }
 
@@ -2002,12 +2358,19 @@ private struct TimelineMemoryCard: View {
     let media: MediaLibraryController
     let width: CGFloat
     let initialDelay: Double
+    let preferredAssetID: String?
+    let isFrozen: Bool
+    let isHidden: Bool
+    let isLoading: Bool
+    let select: (String) -> Void
+    let frameChanged: (CGRect) -> Void
 
     @State private var currentIndex = 0
     @State private var incomingAsset: TimelineMemoryAssetSummary?
     @State private var coverScales: [String: Double] = [:]
     @State private var coverOpacities: [String: Double] = [:]
     @State private var isPresented = false
+    @State private var appliedPreferredAssetID: String?
 
     private var currentAsset: TimelineMemoryAssetSummary? {
         memory.assets.indices.contains(currentIndex) ? memory.assets[currentIndex] : memory.assets.first
@@ -2025,59 +2388,95 @@ private struct TimelineMemoryCard: View {
         memory.assets.map { "\($0.id):\($0.revision.timeIntervalSinceReferenceDate)" }.joined(separator: "|")
     }
 
+    private var relativeYearTitle: String {
+        let currentYear = Calendar.autoupdatingCurrent.component(.year, from: .now)
+        let years = max(1, currentYear - memory.sourceYear)
+        return years == 1 ? "1 year ago" : "\(years.formatted()) years ago"
+    }
+
+    private var dominantAsset: TimelineMemoryAssetSummary? {
+        renderedAssets.max { opacity(for: $0) < opacity(for: $1) }
+    }
+
     var body: some View {
-        ZStack(alignment: .bottomLeading) {
-            Color(uiColor: .systemBackground)
-            ForEach(renderedAssets) { asset in
-                ImmichThumbnail(
-                    descriptor: .init(
-                        assetID: asset.id,
-                        updatedAt: asset.revision,
-                        derivative: .thumbnail,
-                        targetPixels: .init(
-                            width: Int(width * displayScale),
-                            height: Int(120 * displayScale)
+        Button {
+            guard let assetID = dominantAsset?.id ?? currentAsset?.id else { return }
+            select(assetID)
+        } label: {
+            ZStack(alignment: .bottomLeading) {
+                Color(uiColor: .systemBackground)
+                ZStack(alignment: .bottomLeading) {
+                    ForEach(renderedAssets) { asset in
+                        ImmichThumbnail(
+                            descriptor: .init(
+                                assetID: asset.id,
+                                updatedAt: asset.revision,
+                                derivative: .thumbnail,
+                                targetPixels: .init(
+                                    width: Int(width * displayScale),
+                                    height: Int(120 * displayScale)
+                                )
+                            ),
+                            media: media,
+                            contentMode: .fill
                         )
-                    ),
-                    media: media,
-                    contentMode: .fill
-                )
-                .frame(width: width, height: 120)
-                .opacity(opacity(for: asset))
-                .scaleEffect(scale(for: asset), anchor: .center)
-                .clipped()
-                .allowsHitTesting(false)
-            }
-            LinearGradient(
-                colors: [.clear, .black.opacity(0.65)],
-                startPoint: .center,
-                endPoint: .bottom
-            )
-            VStack(alignment: .leading, spacing: 2) {
-                Text("On This Day")
-                    .font(.headline)
-                Text(memory.memoryAt.formatted(date: .abbreviated, time: .omitted))
-                    .font(.caption)
-                if memory.assets.count > 1 {
-                    Text("\(memory.assets.count.formatted()) items")
-                        .font(.caption2)
+                        .frame(width: width, height: 120)
+                        .opacity(opacity(for: asset))
+                        .scaleEffect(scale(for: asset), anchor: .center)
+                        .clipped()
+                        .allowsHitTesting(false)
+                    }
+                    LinearGradient(
+                        colors: [.clear, .black.opacity(0.65)],
+                        startPoint: .center,
+                        endPoint: .bottom
+                    )
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(relativeYearTitle)
+                            .font(.headline)
+                        Text(memory.memoryAt.formatted(date: .abbreviated, time: .omitted))
+                            .font(.caption)
+                        Text(TimelineMemoryCardPresentation.itemCountLabel(memory.assets.count))
+                            .font(.caption2)
+                    }
+                    .foregroundStyle(.white)
+                    .padding(12)
+                }
+                .opacity(isHidden ? 0 : 1)
+
+                if isLoading {
+                    ProgressView()
+                        .tint(.primary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(.regularMaterial)
+                        .accessibilityLabel("Opening memory")
                 }
             }
-            .foregroundStyle(.white)
-            .padding(12)
+            .frame(width: width, height: 120)
+            .clipShape(.rect(cornerRadius: DesignMetrics.defaultCornerRadius))
+            .contentShape(.rect(cornerRadius: DesignMetrics.defaultCornerRadius))
         }
-        .frame(width: width, height: 120)
-        .clipShape(.rect(cornerRadius: DesignMetrics.defaultCornerRadius))
+        .buttonStyle(.plain)
+        .disabled(isLoading)
         .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(relativeYearTitle), \(memory.memoryAt.formatted(date: .long, time: .omitted))")
+        .accessibilityHint("Opens this memory")
         .accessibilityIdentifier("memory-\(memory.id)")
         .accessibilityValue(coverAccessibilityValue)
+        .onGeometryChange(for: CGRect.self) { proxy in
+            proxy.frame(in: .global)
+        } action: { frame in
+            frameChanged(frame)
+        }
         .onAppear { isPresented = true }
         .onDisappear { isPresented = false }
-        .task(id: "\(isPresented):\(scenePhase):\(reduceMotion):\(slideshowID):\(initialDelay)") {
+        .task(id: "\(isPresented):\(scenePhase):\(reduceMotion):\(slideshowID):\(initialDelay):\(isFrozen):\(preferredAssetID ?? "none")") {
             guard isPresented, scenePhase == .active else { return }
             Self.logger.info(
                 "Memory slideshow evaluated id=\(memory.id, privacy: .public) assets=\(memory.assets.count) reduceMotion=\(reduceMotion)"
             )
+            installPreferredCoverIfNeeded()
+            guard !isFrozen else { return }
             await runSlideshow()
         }
     }
@@ -2167,6 +2566,28 @@ private struct TimelineMemoryCard: View {
             }
             timeBeforeFadeOut = TimelineCoverAnimation.initialHold
         }
+    }
+
+    private func installPreferredCoverIfNeeded() {
+        guard let preferredAssetID,
+              preferredAssetID != appliedPreferredAssetID,
+              let index = memory.assets.firstIndex(where: { $0.id == preferredAssetID })
+        else { return }
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            currentIndex = index
+            incomingAsset = nil
+            coverScales = [preferredAssetID: 1]
+            coverOpacities = [preferredAssetID: 1]
+            appliedPreferredAssetID = preferredAssetID
+        }
+    }
+}
+
+nonisolated enum TimelineMemoryCardPresentation {
+    static func itemCountLabel(_ count: Int) -> String {
+        count == 1 ? "1 item" : "\(count.formatted()) items"
     }
 }
 

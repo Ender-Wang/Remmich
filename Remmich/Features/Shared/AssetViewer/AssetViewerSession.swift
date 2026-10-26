@@ -4,6 +4,19 @@ import Observation
 nonisolated enum AssetViewerOrigin: Hashable, Sendable {
     case timeline(bucketID: TimelineBucketID, contentName: String)
     case scoped(route: PhotosRangeRoute, contentName: String)
+    case memory(AssetViewerMemoryContext)
+}
+
+nonisolated struct AssetViewerMemoryContext: Hashable, Sendable {
+    let id: String
+    let memoryAt: Date
+    let sourceYear: Int
+
+    var title: String {
+        let currentYear = Calendar.autoupdatingCurrent.component(.year, from: .now)
+        let years = max(1, currentYear - sourceYear)
+        return years == 1 ? "1 year ago" : "\(years.formatted()) years ago"
+    }
 }
 
 nonisolated struct AssetViewerRoute: Hashable, Identifiable, Sendable {
@@ -23,6 +36,8 @@ private extension AssetViewerOrigin {
             "timeline|\(contentName)|\(bucketID.rawValue)"
         case let .scoped(route, contentName):
             "scoped|\(contentName)|\(String(describing: route))"
+        case let .memory(context):
+            "memory|\(context.id)"
         }
     }
 }
@@ -37,7 +52,7 @@ final class AssetViewerSession {
     private(set) var unavailableMessage: String?
     var selectedAssetID: String
 
-    let origin: AssetViewerOrigin
+    private(set) var origin: AssetViewerOrigin
 
     private let bucketIDs: [TimelineBucketID]
     private let loadBucket: BucketLoader?
@@ -78,6 +93,20 @@ final class AssetViewerSession {
     func select(_ assetID: String) async {
         guard selectImmediately(assetID) else { return }
         await loadNeighborsIfNeeded()
+    }
+
+    func replaceMemoryRoute(_ route: AssetViewerRoute) {
+        guard case .memory = origin,
+              case .memory = route.origin
+        else { return }
+        origin = route.origin
+        assets = Self.orderedUnique(route.initialAssets + [route.selectedAsset])
+        selectedAssetID = route.selectedAsset.id
+        isLoadingNeighbor = false
+        unavailableMessage = nil
+        loadedBucketIDs.removeAll()
+        bucketByAssetID.removeAll()
+        playbackPositions.removeAll()
     }
 
     @discardableResult

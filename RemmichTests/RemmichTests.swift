@@ -1256,6 +1256,238 @@ struct RemmichTests {
         #expect(!AssetViewerMediaGeometry.animatesFitChanges(infoDragTranslation: 72))
     }
 
+    @Test func memoryViewerMatchesMemoryRowAndBottomNavigationSpacing() {
+        let phonePanel = AssetViewerMemoryGeometry.panelRect(
+            viewportSize: CGSize(width: 402, height: 874),
+            safeAreaInsets: UIEdgeInsets(top: 62, left: 0, bottom: 34, right: 0),
+            bottomNavigationTop: 790,
+            memoryRowBottom: 180,
+            isPad: false
+        )
+        let phone = AssetViewerMemoryGeometry.mediaRect(
+            viewportSize: CGSize(width: 402, height: 874),
+            safeAreaInsets: UIEdgeInsets(top: 62, left: 0, bottom: 34, right: 0),
+            bottomNavigationTop: 790,
+            memoryRowBottom: 180,
+            isPad: false
+        )
+        let pad = AssetViewerMemoryGeometry.mediaRect(
+            viewportSize: CGSize(width: 1366, height: 1024),
+            safeAreaInsets: UIEdgeInsets(top: 24, left: 0, bottom: 20, right: 0),
+            bottomNavigationTop: 940,
+            memoryRowBottom: 180,
+            isPad: true
+        )
+        let smallPhone = AssetViewerMemoryGeometry.mediaRect(
+            viewportSize: CGSize(width: 375, height: 667),
+            safeAreaInsets: UIEdgeInsets(top: 44, left: 0, bottom: 34, right: 0),
+            bottomNavigationTop: 583,
+            memoryRowBottom: 100,
+            isPad: false
+        )
+        let landscape = AssetViewerMemoryGeometry.mediaRect(
+            viewportSize: CGSize(width: 874, height: 402),
+            safeAreaInsets: UIEdgeInsets(top: 0, left: 59, bottom: 21, right: 59),
+            bottomNavigationTop: 338,
+            memoryRowBottom: 80,
+            isPad: false
+        )
+
+        #expect(phonePanel == CGRect(x: 16, y: 196, width: 370, height: 578))
+        #expect(phonePanel.minY - 180 == 16)
+        #expect(790 - phonePanel.maxY == 16)
+        #expect(phone == CGRect(x: 40, y: 276, width: 322, height: 474))
+        #expect(pad.width == 912)
+        #expect(pad.midX == 683)
+        #expect(pad.minY == 280)
+        #expect(smallPhone == CGRect(x: 40, y: 196, width: 295, height: 347))
+        #expect(landscape == CGRect(x: 99, y: 87, width: 676, height: 220))
+    }
+
+    @Test func memoryPanelOpeningInterpolatesFromCardToPanel() {
+        let card = CGRect(x: 6, y: 76, width: 189, height: 124)
+        let panel = CGRect(x: 16, y: 216, width: 370, height: 558)
+
+        let start = AssetViewerMemoryGeometry.openingTransform(
+            from: card,
+            to: panel,
+            progress: 0
+        )
+        let middle = AssetViewerMemoryGeometry.openingTransform(
+            from: card,
+            to: panel,
+            progress: 0.5
+        )
+        let end = AssetViewerMemoryGeometry.openingTransform(
+            from: card,
+            to: panel,
+            progress: 1
+        )
+
+        #expect(start.scale == CGSize(width: 189.0 / 370.0, height: 124.0 / 558.0))
+        #expect(start.translation == CGSize(width: -90.5, height: -318))
+        #expect(middle.scale == CGSize(
+            width: 1 + (189.0 / 370.0 - 1) * 0.5,
+            height: 1 + (124.0 / 558.0 - 1) * 0.5
+        ))
+        #expect(middle.translation == CGSize(width: -45.25, height: -159))
+        #expect(end.scale == CGSize(width: 1, height: 1))
+        #expect(end.translation == .zero)
+    }
+
+    @Test @MainActor func memorySessionReusesViewerWhenTheMemoryChanges() {
+        let firstAsset = Self.timelineAsset(id: "memory-a")
+        let secondAsset = Self.timelineAsset(id: "memory-b")
+        let firstRoute = AssetViewerRoute(
+            selectedAsset: firstAsset,
+            initialAssets: [firstAsset],
+            origin: .memory(.init(id: "first", memoryAt: .distantPast, sourceYear: 2024))
+        )
+        let secondRoute = AssetViewerRoute(
+            selectedAsset: secondAsset,
+            initialAssets: [secondAsset],
+            origin: .memory(.init(id: "second", memoryAt: .distantPast, sourceYear: 2023))
+        )
+        let session = AssetViewerSession(route: firstRoute)
+
+        session.setPlaybackPosition(4, for: firstAsset.id)
+        session.replaceMemoryRoute(secondRoute)
+
+        #expect(session.selectedAssetID == secondAsset.id)
+        #expect(session.assets.map(\.id) == [secondAsset.id])
+        #expect(session.origin == secondRoute.origin)
+        #expect(session.playbackPosition(for: firstAsset.id) == 0)
+    }
+
+    @Test func memoryViewerOutsideDismissalPreservesMemoryRowAndNavigationPassThrough() {
+        let regions = AssetViewerMemoryInteractionGeometry.dismissalRects(
+            viewportRect: CGRect(x: 0, y: 0, width: 402, height: 874),
+            panelRect: CGRect(x: 16, y: 196, width: 370, height: 578),
+            memoryRowFrame: CGRect(x: 16, y: 60, width: 180, height: 120),
+            bottomNavigationTop: 790
+        )
+
+        #expect(regions.contains { $0.contains(CGPoint(x: 201, y: 40)) })
+        #expect(regions.contains { $0.contains(CGPoint(x: 201, y: 188)) })
+        #expect(regions.contains { $0.contains(CGPoint(x: 8, y: 400)) })
+        #expect(regions.contains { $0.contains(CGPoint(x: 201, y: 782)) })
+        #expect(!regions.contains { $0.contains(CGPoint(x: 100, y: 120)) })
+        #expect(!regions.contains { $0.contains(CGPoint(x: 201, y: 400)) })
+        #expect(!regions.contains { $0.contains(CGPoint(x: 201, y: 820)) })
+    }
+
+    @Test func memoryAutoRotationUsesThreeSecondsAndRespectsAccessibility() {
+        let start = Date(timeIntervalSince1970: 100)
+        let halfway = AssetViewerMemoryAutoRotation.progress(
+            base: 0,
+            startedAt: start,
+            now: start.addingTimeInterval(1.5)
+        )
+
+        #expect(abs(halfway - 0.5) < 0.001)
+        #expect(AssetViewerMemoryAutoRotation.remaining(after: 1.25) == 1.75)
+        #expect(!AssetViewerMemoryAutoRotation.isEnabled(
+            assetCount: 1,
+            reduceMotion: false,
+            voiceOverEnabled: false
+        ))
+        #expect(!AssetViewerMemoryAutoRotation.isEnabled(
+            assetCount: 3,
+            reduceMotion: true,
+            voiceOverEnabled: false
+        ))
+        #expect(!AssetViewerMemoryAutoRotation.isEnabled(
+            assetCount: 3,
+            reduceMotion: false,
+            voiceOverEnabled: true
+        ))
+        #expect(AssetViewerMemoryAutoRotation.isEnabled(
+            assetCount: 3,
+            reduceMotion: false,
+            voiceOverEnabled: false
+        ))
+    }
+
+    @Test func memoryCardAlwaysShowsAnItemCount() {
+        #expect(TimelineMemoryCardPresentation.itemCountLabel(1) == "1 item")
+        #expect(TimelineMemoryCardPresentation.itemCountLabel(2) == "2 items")
+    }
+
+    @Test func memoryBoundarySwipeMovesOnlyPastTheFirstOrLastItem() {
+        #expect(AssetViewerMemoryBoundaryNavigation.offset(
+            selectedIndex: 2,
+            assetCount: 3,
+            translation: CGSize(width: -54, height: 8),
+            predictedEndTranslation: CGSize(width: -90, height: 12)
+        ) == 1)
+        #expect(AssetViewerMemoryBoundaryNavigation.offset(
+            selectedIndex: 0,
+            assetCount: 3,
+            translation: CGSize(width: 54, height: 8),
+            predictedEndTranslation: CGSize(width: 90, height: 12)
+        ) == -1)
+        #expect(AssetViewerMemoryBoundaryNavigation.offset(
+            selectedIndex: 1,
+            assetCount: 3,
+            translation: CGSize(width: -80, height: 4),
+            predictedEndTranslation: CGSize(width: -120, height: 6)
+        ) == nil)
+        #expect(AssetViewerMemoryBoundaryNavigation.offset(
+            selectedIndex: 2,
+            assetCount: 3,
+            translation: CGSize(width: -20, height: 4),
+            predictedEndTranslation: CGSize(width: -30, height: 6)
+        ) == nil)
+    }
+
+    @Test func memoryAssetResolutionPreservesServerOrderAndDeduplicatesIDs() {
+        let assets = [
+            Self.timelineAsset(id: "third"),
+            Self.timelineAsset(id: "first"),
+            Self.timelineAsset(id: "second"),
+        ]
+
+        let resolved = PhotosTimelineStore.orderedMemoryAssets(
+            assetIDs: ["first", "missing", "second", "first", "third"],
+            candidates: assets
+        )
+
+        #expect(resolved.map(\.id) == ["first", "second", "third"])
+    }
+
+    @Test @MainActor func memoryAssetResolutionUsesBootstrappedCatalogSynchronously() {
+        let bucketID = TimelineBucketID(rawValue: "2025-10-01")
+        let first = Self.timelineAsset(id: "first")
+        let second = Self.timelineAsset(id: "second")
+        let store = PhotosTimelineStore(reader: PreviewTimelineReader())
+        store.bootstrap(TimelineBootstrapSnapshot(
+            generation: 1,
+            summaries: [TimelineBucketSummary(id: bucketID, assetCount: 2)],
+            assetsByBucket: [bucketID: [first, second]],
+            groupedCatalogs: TimelineGroupedCatalogCache(),
+            isComplete: true
+        ))
+        let memory = TimelineMemorySummary(
+            id: "memory",
+            memoryAt: Date(timeIntervalSince1970: 1_761_433_200),
+            sourceYear: 2025,
+            assets: [
+                TimelineMemoryAssetSummary(
+                    id: second.id,
+                    revision: second.thumbnailRevision,
+                    mediaKind: second.mediaKind
+                ),
+                TimelineMemoryAssetSummary(
+                    id: first.id,
+                    revision: first.thumbnailRevision,
+                    mediaKind: first.mediaKind
+                ),
+            ]
+        )
+
+        #expect(store.cachedMemoryAssets(for: memory).map(\.id) == ["second", "first"])
+    }
+
     @Test func viewerDownwardDragRoutesByItsStartingRegionWhenInfoIsShown() {
         let mediaRect = CGRect(x: 0, y: 122, width: 402, height: 360)
 
@@ -1288,6 +1520,36 @@ struct RemmichTests {
             mediaRect: mediaRect,
             showsInfo: true
         ) == .infoPanel)
+    }
+
+    @Test func memoryViewerAcceptsUpwardAndDownwardDismissalDrags() {
+        let mediaRect = CGRect(x: 40, y: 276, width: 322, height: 474)
+        let start = CGPoint(x: 201, y: 500)
+
+        #expect(AssetViewerVerticalDragRouting.resolve(
+            lockedRoute: nil,
+            translationHeight: -80,
+            startLocation: start,
+            mediaRect: mediaRect,
+            showsInfo: false,
+            allowsUpwardDismissal: true
+        ) == .viewerDismissal)
+        #expect(AssetViewerVerticalDragRouting.resolve(
+            lockedRoute: nil,
+            translationHeight: 80,
+            startLocation: start,
+            mediaRect: mediaRect,
+            showsInfo: false,
+            allowsUpwardDismissal: true
+        ) == .viewerDismissal)
+        #expect(AssetViewerDismissalGeometry.dismissalDistance(
+            translationHeight: -80,
+            allowsUpward: true
+        ) == 80)
+        #expect(AssetViewerDismissalGeometry.dismissalDistance(
+            translationHeight: -80,
+            allowsUpward: false
+        ) == 0)
     }
 
     @Test func viewerDismissalGeometryTracksTheFingerAndShrinksFromItsTouchPoint() {

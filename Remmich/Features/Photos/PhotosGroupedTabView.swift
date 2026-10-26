@@ -80,6 +80,7 @@ struct PhotosGroupedTabView: View {
                     store: store,
                     media: media,
                     assetDetails: assetDetails,
+                    tabBarTop: tabBarTop,
                     namespace: viewerNamespace,
                     close: { self.viewerRoute = nil },
                     visibilityChanged: viewerVisibilityChanged

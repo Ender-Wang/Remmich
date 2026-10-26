@@ -223,6 +223,81 @@ final class PhotosTimelineStore {
         await task.value
     }
 
+    func memoryAssets(for memory: TimelineMemorySummary) async -> [TimelineAssetSummary] {
+        let requestedIDs = memory.assets.map(\.id)
+        var candidatesByID = residencyAssetsByID
+        var resolved = Self.orderedMemoryAssets(
+            assetIDs: requestedIDs,
+            assetsByID: candidatesByID
+        )
+        guard resolved.count < Set(requestedIDs).count else { return resolved }
+
+        let sourceDay = TimelineCaptureDay(capturedAt: memory.memoryAt)
+        let sourceBucketID = bucketSummaries.first { summary in
+            guard let date = summary.id.displayDate else { return false }
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+            let components = calendar.dateComponents([.year, .month], from: date)
+            return components.year == memory.sourceYear && components.month == sourceDay.month
+        }?.id ?? TimelineBucketID(
+            rawValue: String(format: "%04d-%02d-01", memory.sourceYear, sourceDay.month)
+        )
+        if sectionsByID[sourceBucketID] != nil {
+            await loadBucket(sourceBucketID)
+            candidatesByID = residencyAssetsByID
+            resolved = Self.orderedMemoryAssets(
+                assetIDs: requestedIDs,
+                assetsByID: candidatesByID
+            )
+        }
+        guard resolved.count < Set(requestedIDs).count else { return resolved }
+
+        do {
+            let sourceAssets = try await reader.assets(in: sourceBucketID, query: query)
+            guard !Task.isCancelled else { return resolved }
+            for asset in sourceAssets {
+                candidatesByID[asset.id] = asset
+            }
+            return Self.orderedMemoryAssets(
+                assetIDs: requestedIDs,
+                assetsByID: candidatesByID
+            )
+        } catch {
+            Self.logger.error(
+                "Memory assets failed memory=\(memory.id, privacy: .public) bucket=\(sourceBucketID.rawValue, privacy: .public) error=\(Self.errorSummary(error), privacy: .public)"
+            )
+            return resolved
+        }
+    }
+
+    func cachedMemoryAssets(for memory: TimelineMemorySummary) -> [TimelineAssetSummary] {
+        Self.orderedMemoryAssets(
+            assetIDs: memory.assets.map(\.id),
+            assetsByID: residencyAssetsByID
+        )
+    }
+
+    nonisolated static func orderedMemoryAssets(
+        assetIDs: [String],
+        candidates: [TimelineAssetSummary]
+    ) -> [TimelineAssetSummary] {
+        let assetsByID = candidates.reduce(into: [String: TimelineAssetSummary]()) {
+            $0[$1.id] = $1
+        }
+        return orderedMemoryAssets(assetIDs: assetIDs, assetsByID: assetsByID)
+    }
+
+    private nonisolated static func orderedMemoryAssets(
+        assetIDs: [String],
+        assetsByID: [String: TimelineAssetSummary]
+    ) -> [TimelineAssetSummary] {
+        var seen = Set<String>()
+        return assetIDs.compactMap { assetID in
+            guard seen.insert(assetID).inserted else { return nil }
+            return assetsByID[assetID]
+        }
+    }
+
     func retryBucket(_ bucketID: TimelineBucketID) async {
         await loadBucket(bucketID, force: true)
     }
@@ -758,7 +833,9 @@ final class PhotosTimelineStore {
 
     private func startMemoryLoad(generation requestGeneration: UInt64) {
         memoryTask?.cancel()
-        memoryLaneState = .loading
+        if memories.isEmpty {
+            memoryLaneState = .loading
+        }
         memoryTask = Task { [weak self] in
             guard let self else { return }
             do {
@@ -775,17 +852,32 @@ final class PhotosTimelineStore {
             } catch {
                 guard requestGeneration == generation else { return }
                 if Self.isRouteUnavailable(error) {
-                    memoryLaneState = .loading
-                    Self.logger.info(
-                        "Memory lane deferred until a route is available generation=\(requestGeneration)"
-                    )
+                    if memories.isEmpty {
+                        memoryLaneState = .loading
+                        Self.logger.info(
+                            "Memory lane deferred until a route is available generation=\(requestGeneration)"
+                        )
+                    } else {
+                        memoryLaneState = .loaded
+                        let retainedGroupCount = memories.count
+                        Self.logger.info(
+                            "Memory lane refresh deferred; retained accepted catalog generation=\(requestGeneration) groups=\(retainedGroupCount)"
+                        )
+                    }
                     return
                 }
-                memories = []
-                memoryLaneState = .hidden
-                Self.logger.notice(
-                    "Memory lane hidden after failure generation=\(requestGeneration) error=\(Self.errorSummary(error), privacy: .public)"
-                )
+                if memories.isEmpty {
+                    memoryLaneState = .hidden
+                    Self.logger.notice(
+                        "Memory lane hidden after failure generation=\(requestGeneration) error=\(Self.errorSummary(error), privacy: .public)"
+                    )
+                } else {
+                    memoryLaneState = .loaded
+                    let retainedGroupCount = memories.count
+                    Self.logger.notice(
+                        "Memory lane refresh failed; retained accepted catalog generation=\(requestGeneration) groups=\(retainedGroupCount) error=\(Self.errorSummary(error), privacy: .public)"
+                    )
+                }
             }
         }
     }

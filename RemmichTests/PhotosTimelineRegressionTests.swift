@@ -520,6 +520,37 @@ struct PhotosTimelineRegressionTests {
         #expect(store.memories.isEmpty)
     }
 
+    @Test @MainActor func acceptedMemoryLaneRemainsVisibleWhenRouteRefreshTimesOut() async {
+        let referenceDate = Self.date("2026-10-14T08:00:00Z")
+        let memory = Self.memory(
+            "accepted-memory",
+            presentedAt: "2026-10-14T12:00:00Z",
+            sourceYear: 2025,
+            assets: ["memory-asset"]
+        )
+        let bucket = Self.buckets(count: 1)[0]
+        let reader = MemoryRefreshFailureTimelineReader(
+            bucket: bucket,
+            assets: [Self.asset("memory-asset")],
+            memory: memory
+        )
+        let store = PhotosTimelineStore(reader: reader, now: { referenceDate })
+
+        await store.load()
+        await Self.eventually { store.memoryLaneState == .loaded }
+        #expect(store.memories.map(\.id) == ["accepted-memory"])
+
+        store.routeDidChange(isReachable: true)
+        await reader.waitUntilMemoryRefreshRequested()
+
+        #expect(store.memoryLaneState == .loaded)
+        #expect(store.memories.map(\.id) == ["accepted-memory"])
+
+        await reader.failMemoryRefresh()
+        await Self.eventually { store.memoryLaneState == .loaded }
+        #expect(store.memories.map(\.id) == ["accepted-memory"])
+    }
+
     @Test func memoryCatalogKeepsOnlyPriorYearsOnThisDayAndStacksEachYear() throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = try #require(TimeZone(secondsFromGMT: 0))
@@ -1311,5 +1342,54 @@ private actor InitialRouteUnavailableTimelineReader: TimelineReading {
             throw TimelineReadError.routeUnavailable
         }
         return []
+    }
+}
+
+private actor MemoryRefreshFailureTimelineReader: TimelineReading {
+    private let bucket: TimelineBucketSummary
+    private let assets: [TimelineAssetSummary]
+    private let memory: TimelineMemorySummary
+    private var memoryRequestCount = 0
+    private var memoryRefreshRequested = false
+    private var memoryRefreshContinuation: CheckedContinuation<Void, Never>?
+
+    init(
+        bucket: TimelineBucketSummary,
+        assets: [TimelineAssetSummary],
+        memory: TimelineMemorySummary
+    ) {
+        self.bucket = bucket
+        self.assets = assets
+        self.memory = memory
+    }
+
+    func bucketSummaries(query _: TimelineQuery) async throws -> [TimelineBucketSummary] {
+        [bucket]
+    }
+
+    func assets(
+        in _: TimelineBucketID,
+        query _: TimelineQuery
+    ) async throws -> [TimelineAssetSummary] {
+        assets
+    }
+
+    func memories() async throws -> [TimelineMemorySummary] {
+        memoryRequestCount += 1
+        guard memoryRequestCount > 1 else { return [memory] }
+        memoryRefreshRequested = true
+        await withCheckedContinuation { memoryRefreshContinuation = $0 }
+        throw TimelineReadError.routeUnavailable
+    }
+
+    func waitUntilMemoryRefreshRequested() async {
+        while !memoryRefreshRequested {
+            await Task.yield()
+        }
+    }
+
+    func failMemoryRefresh() {
+        memoryRefreshContinuation?.resume()
+        memoryRefreshContinuation = nil
     }
 }
