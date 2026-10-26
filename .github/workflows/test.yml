@@ -85,6 +85,15 @@ jobs:
             COMPILER_INDEX_STORE_ENABLE=NO \
             | xcbeautify
 
+      - name: Report app logic failures
+        if: ${{ failure() }}
+        run: |
+          result_path="$RUNNER_TEMP/RemmichUnitTests.xcresult"
+          if [[ -d "$result_path" ]]; then
+            xcrun xcresulttool get test-results summary \
+              --path "$result_path" --format json
+          fi
+
       - name: Shut down simulators
         if: ${{ always() }}
         run: xcrun simctl shutdown all || true

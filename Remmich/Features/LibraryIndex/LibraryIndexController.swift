@@ -656,10 +656,6 @@ final class LibraryIndexController {
                     "Library index maintenance finished removedGenerations=\(maintenance.removedGenerations) removedAssets=\(maintenance.removedAssetRows) removedGroups=\(maintenance.removedGroupRows) compacted=\(maintenance.didCompact) bytesBefore=\(maintenance.metadataBytesBefore) bytesAfter=\(maintenance.metadataBytesAfter)"
                 )
                 publish(result, force: true)
-                completedElapsed = Date().timeIntervalSince(runStartedAt)
-                status = .upToDate
-                indexFailedAt = nil
-                lastUpdatedAt = Date()
                 storageReport = try await store.storageReport(scope: scope)
                 storedAccounts = try await store.storedAccounts()
                 try? await thumbnailCache.reconcile(scope: scope)
@@ -679,9 +675,17 @@ final class LibraryIndexController {
                 if let thumbnails = try? await thumbnailCache.availableThumbnails(scope: scope) {
                     media?.registerWarmedThumbnails(thumbnails)
                 }
+                guard currentRunID == runID, !Task.isCancelled else { return }
                 if thumbnailWarmingEnabled {
                     warmThumbnails()
                 }
+                // Publish readiness only after the final asynchronous work so
+                // a new sync cannot be rejected by the previous run's task.
+                task = nil
+                completedElapsed = Date().timeIntervalSince(runStartedAt)
+                status = .upToDate
+                indexFailedAt = nil
+                lastUpdatedAt = Date()
                 let metadataBytes = storageReport.metadataBytes
                 Self.logger.info(
                     "Library index completed generation=\(result.generation) indexed=\(result.indexedAssetCount) expected=\(result.expectedAssetCount) elapsedMs=\(Self.elapsedMilliseconds(since: runStartedAt)) metadataBytes=\(metadataBytes)"

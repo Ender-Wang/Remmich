@@ -506,9 +506,16 @@ struct LibraryIndexSynchronizationTests {
             "2026-10-01": [Self.asset(id: "one", bucket: "2026-10-01")],
         ])
         let controller = LibraryIndexController(source: source, store: store)
+        var publicationStatuses: [LibraryIndexController.Status] = []
+        controller.acceptedBootstrapDidChange = { [weak controller] _ in
+            if let controller {
+                publicationStatuses.append(controller.status)
+            }
+        }
 
         controller.start(session: .fixture, endpoint: AccountSession.fixture.apiURL)
         try await Self.waitUntilUpToDate(controller)
+        #expect(publicationStatuses == [.indexing])
         let firstStartedAt = try #require(controller.startedAt)
         let firstElapsed = try #require(controller.elapsed)
         try await Task.sleep(for: .milliseconds(50))
@@ -516,6 +523,7 @@ struct LibraryIndexSynchronizationTests {
         #expect(try abs(#require(controller.elapsed(at: .distantFuture)) - firstElapsed) < 0.01)
 
         controller.fullSyncAndVerify()
+        #expect(controller.status == .indexing)
         let rebuildStartedAt = try #require(controller.startedAt)
         #expect(rebuildStartedAt > firstStartedAt)
         try await Self.waitUntilUpToDate(controller)

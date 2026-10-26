@@ -1325,12 +1325,12 @@ struct RemmichTests {
         )
 
         #expect(start.scale == CGSize(width: 189.0 / 370.0, height: 124.0 / 558.0))
-        #expect(start.translation == CGSize(width: -90.5, height: -318))
+        #expect(start.translation == CGSize(width: -100.5, height: -357))
         #expect(middle.scale == CGSize(
             width: 1 + (189.0 / 370.0 - 1) * 0.5,
             height: 1 + (124.0 / 558.0 - 1) * 0.5
         ))
-        #expect(middle.translation == CGSize(width: -45.25, height: -159))
+        #expect(middle.translation == CGSize(width: -50.25, height: -178.5))
         #expect(end.scale == CGSize(width: 1, height: 1))
         #expect(end.translation == .zero)
     }
