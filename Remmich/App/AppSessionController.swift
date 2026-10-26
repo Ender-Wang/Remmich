@@ -326,12 +326,8 @@ final class AppSessionController {
            let configuredRoute = profile.route(matching: currentEndpoint)
         {
             activeRoute = configuredRoute
-            routeStatus = .connected
-        } else if activeRoute == nil {
-            Task { @MainActor [weak self] in
-                await self?.reevaluateRoute(trigger: .profileSave)
-            }
         }
+        await reevaluateRoute(trigger: .profileSave)
         return .saved(profile: profile)
     }
 

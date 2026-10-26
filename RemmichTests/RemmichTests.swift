@@ -627,12 +627,17 @@ struct RemmichTests {
         #expect(result == .saved(profile: expected))
         #expect(controller.connectionProfile == expected)
         #expect(await profileStore.load() == expected)
-        #expect(await service.validateCallCount == 0)
-        #expect(await service.activatedEndpoints.isEmpty)
+        #expect(try controller.activeRoute == ActiveConnectionRoute(
+            kind: .local,
+            endpoint: #require(expected.localEndpoint)
+        ))
+        #expect(controller.routeStatus == .connected)
+        #expect(await service.validateCallCount == 1)
+        #expect(try await service.activatedEndpoints == [#require(expected.localEndpoint)])
     }
 
-    @Test @MainActor func profileSavePromotesMatchingDirectEndpointWithoutRevalidation() async {
-        let service = SequencedRouteService(validationResults: [])
+    @Test @MainActor func profileSaveRevalidatesMatchingDirectEndpointBeforePromotion() async {
+        let service = SequencedRouteService(validationResults: [.reachable])
         let profileStore = ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)")
         let controller = AppSessionController(
             service: service,
@@ -654,11 +659,12 @@ struct RemmichTests {
         #expect(result == .saved(profile: profile))
         #expect(controller.connectionProfile == profile)
         #expect(controller.activeRoute == ActiveConnectionRoute(kind: .local, endpoint: endpoint))
-        #expect(await service.validateCallCount == 0)
+        #expect(controller.routeStatus == .connected)
+        #expect(await service.validateCallCount == 1)
         #expect(await service.activatedEndpoints.isEmpty)
     }
 
-    @Test @MainActor func profileSavePersistsUnavailableExternalEndpointForLaterEvaluation() async throws {
+    @Test @MainActor func profileSavePersistsUnavailableExternalEndpointAndReportsFailure() async throws {
         let failure = RouteValidationResult.failed(
             message: "The endpoint is unavailable on this path.",
             kind: .endpointRejected
@@ -687,18 +693,46 @@ struct RemmichTests {
             kind: .direct,
             endpoint: AccountSession.fixture.apiURL
         ))
-        #expect(await service.validateCallCount == 0)
+        #expect(controller.routeStatus == .waitingForNetwork)
+        #expect(await service.validateCallCount == 1)
         #expect(await service.activatedEndpoints.isEmpty)
+    }
 
+    @Test @MainActor func profileSaveRevalidatesRetainedRouteBeforeRestoringConnectedStatus() async throws {
+        let session = AccountSession.fixture
+        let endpoint = session.apiURL
+        let profile = ConnectionProfile(externalEndpoints: [endpoint])
+        let service = RouteRestoreService(reachableEndpoints: [endpoint])
+        let profileStore = ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)")
+        try await profileStore.save(profile)
+        let controller = AppSessionController(
+            service: service,
+            sessionStore: MemorySessionStore(session: session),
+            profileStore: profileStore,
+            ssidProvider: StubSSIDProvider(ssid: nil),
+            networkMonitoringEnabled: false,
+            pathChangeDebounce: .zero
+        )
+        await controller.start()
+        #expect(controller.activeRoute == ActiveConnectionRoute(kind: .external, endpoint: endpoint))
+        #expect(controller.routeStatus == .connected)
+
+        await service.setReachableEndpoints([])
         await controller.handleNetworkPathChange(usesWiFi: true)
         await controller.handleNetworkPathChange(usesWiFi: false)
-
-        #expect(await service.validateCallCount == 1)
-        #expect(controller.activeRoute == ActiveConnectionRoute(
-            kind: .direct,
-            endpoint: AccountSession.fixture.apiURL
-        ))
+        #expect(controller.activeRoute == ActiveConnectionRoute(kind: .external, endpoint: endpoint))
         #expect(controller.routeStatus == .unavailable)
+
+        await service.setReachableEndpoints([endpoint])
+        await service.resetValidatedEndpoints()
+        let result = await controller.saveConnectionProfile(ConnectionProfileDraft(
+            externalAddresses: [endpoint.absoluteString]
+        ))
+
+        #expect(result == .saved(profile: profile))
+        #expect(controller.activeRoute == ActiveConnectionRoute(kind: .external, endpoint: endpoint))
+        #expect(controller.routeStatus == .connected)
+        #expect(await service.validatedEndpoints == [endpoint])
     }
 
     @Test @MainActor func savedSessionRestoresSignedInState() async {
