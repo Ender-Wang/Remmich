@@ -3,6 +3,182 @@ import OSLog
 import SwiftUI
 import UIKit
 
+private struct TimelineMemoryGradientBackdrop: UIViewRepresentable {
+    let visible: Bool
+    let extended: Bool
+    let reduceMotion: Bool
+    let diagnostics: TimelineMemoryMaterialDiagnostics
+
+    func makeUIView(context _: Context) -> TimelineMemoryGradientBackdropView {
+        let view = TimelineMemoryGradientBackdropView()
+        diagnostics.attach(view)
+        view.setVisible(visible, animated: false)
+        view.setExtended(extended, animated: false)
+        return view
+    }
+
+    func updateUIView(_ uiView: TimelineMemoryGradientBackdropView, context _: Context) {
+        diagnostics.attach(uiView)
+        uiView.setVisible(visible, animated: !reduceMotion)
+        uiView.setExtended(extended, animated: !reduceMotion)
+    }
+
+    static func dismantleUIView(
+        _ uiView: TimelineMemoryGradientBackdropView,
+        coordinator _: ()
+    ) {
+        uiView.logSnapshot(event: "dismantle")
+    }
+}
+
+@MainActor
+private final class TimelineMemoryMaterialDiagnostics {
+    private static let logger = Logger(subsystem: "io.github.ender-wang.Remmich", category: "SemanticZoom")
+    private weak var view: TimelineMemoryGradientBackdropView?
+
+    func attach(_ view: TimelineMemoryGradientBackdropView) {
+        guard self.view !== view else { return }
+        self.view = view
+        view.logSnapshot(event: "diagnostics-attach")
+    }
+
+    func capture(_ event: String, state: String) {
+        guard let view else {
+            Self.logger.info("Memory Material snapshot event=\(event, privacy: .public) host=missing state=\(state, privacy: .public)")
+            return
+        }
+        view.logSnapshot(event: event, state: state)
+    }
+}
+
+@MainActor
+private final class TimelineMemoryGradientBackdropView: UIView {
+    private static let logger = Logger(subsystem: "io.github.ender-wang.Remmich", category: "SemanticZoom")
+
+    private let effectView = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
+    private let gradientMask = CAGradientLayer()
+    private var visibilityAnimator: UIViewPropertyAnimator?
+    private var visible: Bool?
+    private var extended: Bool?
+    private var lastLoggedBounds = CGRect.null
+
+    private let extendedLocations: [NSNumber] = [0, 0.48, 0.78, 0.94, 1]
+    private let statusLocations: [NSNumber] = [0, 0.18, 0.30, 0.42, 0.52]
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+        isOpaque = false
+        isUserInteractionEnabled = false
+        effectView.isUserInteractionEnabled = false
+        addSubview(effectView)
+        gradientMask.colors = [
+            UIColor.black.cgColor,
+            UIColor.black.withAlphaComponent(0.78).cgColor,
+            UIColor.black.withAlphaComponent(0.32).cgColor,
+            UIColor.black.withAlphaComponent(0.08).cgColor,
+            UIColor.clear.cgColor,
+        ]
+        gradientMask.locations = extendedLocations
+        gradientMask.startPoint = CGPoint(x: 0.5, y: 0)
+        gradientMask.endPoint = CGPoint(x: 0.5, y: 1)
+        effectView.layer.mask = gradientMask
+        Self.logger.info("Memory Material host created")
+    }
+
+    @available(*, unavailable)
+    required init?(coder _: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        effectView.frame = bounds
+        gradientMask.frame = effectView.bounds
+        if bounds != lastLoggedBounds {
+            lastLoggedBounds = bounds
+            logSnapshot(event: "layout")
+        }
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        logSnapshot(event: "window-change")
+    }
+
+    func setVisible(_ visible: Bool, animated: Bool) {
+        guard self.visible != visible else { return }
+        self.visible = visible
+        visibilityAnimator?.stopAnimation(true)
+        visibilityAnimator = nil
+        Self.logger.info("Memory Material host visible=\(visible)")
+        guard animated else {
+            alpha = visible ? 1 : 0
+            return
+        }
+        let animator = UIViewPropertyAnimator(duration: 0.25, curve: .easeInOut) { [weak self] in
+            self?.alpha = visible ? 1 : 0
+        }
+        visibilityAnimator = animator
+        animator.addCompletion { [weak self, weak animator] _ in
+            guard let self, let animator, visibilityAnimator === animator else { return }
+            visibilityAnimator = nil
+            logSnapshot(event: "visibility-animation-complete")
+        }
+        animator.startAnimation()
+        logSnapshot(event: "visibility-animation-start")
+    }
+
+    func setExtended(_ extended: Bool, animated: Bool) {
+        guard self.extended != extended else { return }
+        self.extended = extended
+
+        let targetLocations = extended ? extendedLocations : statusLocations
+        gradientMask.removeAnimation(forKey: "memory-gradient-coverage")
+        let sourceLocations = gradientMask.presentation()?.locations ?? gradientMask.locations
+        gradientMask.locations = targetLocations
+
+        guard animated, let sourceLocations else {
+            logSnapshot(event: "coverage-change")
+            return
+        }
+
+        let animation = CABasicAnimation(keyPath: "locations")
+        animation.fromValue = sourceLocations
+        animation.toValue = targetLocations
+        animation.duration = 0.25
+        animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        gradientMask.add(animation, forKey: "memory-gradient-coverage")
+        logSnapshot(event: "coverage-animation-start")
+    }
+
+    func logSnapshot(event: String, state: String = "") {
+        let identity = String(describing: ObjectIdentifier(self))
+        let windowAttached = window != nil
+        let boundsValue = String(describing: bounds)
+        let hostAlpha = alpha
+        let hostHidden = isHidden
+        let hostModelOpacity = layer.opacity
+        let hostPresentationOpacity = layer.presentation()?.opacity ?? -1
+        let effectPresent = effectView.effect != nil
+        let effectWindowAttached = effectView.window != nil
+        let effectAlpha = effectView.alpha
+        let effectHidden = effectView.isHidden
+        let effectModelOpacity = effectView.layer.opacity
+        let effectPresentationOpacity = effectView.layer.presentation()?.opacity ?? -1
+        let maskModelOpacity = gradientMask.opacity
+        let maskPresentationOpacity = gradientMask.presentation()?.opacity ?? -1
+        let maskFrame = String(describing: gradientMask.frame)
+        let animatorState = visibilityAnimator.map { String(describing: $0.state) } ?? "none"
+        let requestedVisible = visible.map(String.init) ?? "unset"
+        let requestedExtended = extended.map(String.init) ?? "unset"
+        let maskLocations = String(describing: gradientMask.presentation()?.locations ?? gradientMask.locations ?? [])
+        Self.logger.info(
+            "Memory Material snapshot event=\(event, privacy: .public) id=\(identity, privacy: .public) requestedVisible=\(requestedVisible, privacy: .public) requestedExtended=\(requestedExtended, privacy: .public) window=\(windowAttached) bounds=\(boundsValue, privacy: .public) hostAlpha=\(hostAlpha) hostHidden=\(hostHidden) hostModelOpacity=\(hostModelOpacity) hostPresentationOpacity=\(hostPresentationOpacity) effect=\(effectPresent) effectWindow=\(effectWindowAttached) effectAlpha=\(effectAlpha) effectHidden=\(effectHidden) effectModelOpacity=\(effectModelOpacity) effectPresentationOpacity=\(effectPresentationOpacity) maskModelOpacity=\(maskModelOpacity) maskPresentationOpacity=\(maskPresentationOpacity) maskFrame=\(maskFrame, privacy: .public) maskLocations=\(maskLocations, privacy: .public) animator=\(animatorState, privacy: .public) state=\(state, privacy: .public)"
+        )
+    }
+}
+
 nonisolated enum TimelineViewportAnchor: Equatable {
     case latest
     case asset(id: String, viewportCenterOffset: CGFloat)
@@ -287,6 +463,7 @@ struct PhotosView: View {
     @State private var semanticCatalog: TimelineSemanticCatalog?
     @State private var semanticCatalogRevision: UInt64 = 0
     @State private var semanticRuntime = TimelineSemanticRuntime()
+    @State private var memoryMaterialDiagnostics = TimelineMemoryMaterialDiagnostics()
     @State private var semanticLatestRequest = 0
     @State private var semanticLatestTask: Task<Void, Never>?
 
@@ -471,7 +648,7 @@ struct PhotosView: View {
             requestedLibraryRangeHandled()
         }
         .onChange(of: libraryRange, initial: true) { _, range in
-            setSemanticMemoryScaleVisible(range == .all)
+            setSemanticMemoryScaleVisible(range == .all, reason: "library-range-\(String(describing: range))")
         }
         .onDisappear {
             semanticLatestTask?.cancel()
@@ -488,9 +665,11 @@ struct PhotosView: View {
             store.completeJump()
         }
         .onChange(of: memoryBackdropVisible) { _, visible in
+            let diagnosticState = memoryBackdropDiagnosticState
             Self.logger.info(
-                "Memory backdrop visible=\(visible) content=\(contentName, privacy: .public) viewer=\(viewerRoute != nil) compact=\(compactChrome)"
+                "Memory backdrop visible=\(visible) state=\(diagnosticState, privacy: .public)"
             )
+            memoryMaterialDiagnostics.capture("swiftui-backdrop-visible-change", state: diagnosticState)
         }
         .accessibilityIdentifier(rootAccessibilityID)
         .overlay(alignment: .bottomTrailing) {
@@ -668,19 +847,18 @@ struct PhotosView: View {
                         }
                     )
                 } else {
-                    ProgressView("Preparing timeline…")
+                    LoadingStateView()
                 }
             }
             .overlay {
                 if semanticCatalog?.assets.isEmpty == true {
-                    if store.hasUnloadedSemanticBuckets {
-                        if case .failed = store.semanticHistoryState {
-                            Button("Retry loading timeline") { Task { await store.loadOlderSemanticPage() } }
-                        } else {
-                            ProgressView("Loading earlier periods…")
-                        }
-                    } else {
+                    switch store.semanticHistoryState {
+                    case .empty:
                         Text("No displayable assets in these periods.").foregroundStyle(.secondary)
+                    case .failed:
+                        Button("Retry loading timeline") { Task { await store.loadOlderSemanticPage() } }
+                    case .idle, .loading, .loaded:
+                        LoadingStateView()
                     }
                 }
             }
@@ -708,19 +886,16 @@ struct PhotosView: View {
 
     private func semanticMemoryLane(topInset: CGFloat) -> some View {
         ZStack(alignment: .top) {
-            Rectangle().fill(.ultraThinMaterial)
-                .mask {
-                    LinearGradient(stops: [
-                        .init(color: .black, location: 0), .init(color: .black.opacity(0.78), location: 0.48),
-                        .init(color: .black.opacity(0.32), location: 0.78), .init(color: .black.opacity(0.08), location: 0.94),
-                        .init(color: .clear, location: 1),
-                    ], startPoint: .top, endPoint: .bottom)
-                }
-                .frame(height: topInset + 132)
-                .ignoresSafeArea(.container, edges: .top)
-                .opacity(memoryBackdropVisible ? 1 : 0)
+            TimelineMemoryGradientBackdrop(
+                visible: memoryMaterialVisible,
+                extended: memoryLaneVisible,
+                reduceMotion: reduceMotion,
+                diagnostics: memoryMaterialDiagnostics
+            )
+            .frame(height: topInset + 132)
+            .ignoresSafeArea(.container, edges: .top)
 
-            if memoryBackdropVisible {
+            if memoryLaneVisible {
                 TimelineMemoryLane(
                     memories: store.memories, media: media, selectedMemoryID: presentedMemoryID,
                     frozenMemoryID: nil, hiddenMemoryID: nil, loadingMemoryID: loadingMemoryID,
@@ -735,12 +910,17 @@ struct PhotosView: View {
         }
         .frame(height: topInset + 132, alignment: .top)
         .frame(maxWidth: .infinity, alignment: .top)
-        .allowsHitTesting(memoryBackdropVisible)
-        .accessibilityHidden(!memoryBackdropVisible)
-        .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: memoryBackdropVisible)
+        .allowsHitTesting(memoryLaneVisible)
+        .accessibilityHidden(!memoryLaneVisible)
+        .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: memoryLaneVisible)
     }
 
     private func semanticScaleChanged(_ scale: TimelineSemanticScale) {
+        let beforeState = memoryBackdropDiagnosticState
+        Self.logger.info(
+            "Memory backdrop semantic commit scale=\(String(describing: scale), privacy: .public) before=\(beforeState, privacy: .public)"
+        )
+        memoryMaterialDiagnostics.capture("semantic-scale-commit", state: beforeState)
         var transaction = Transaction(animation: nil)
         transaction.disablesAnimations = true
         withTransaction(transaction) {
@@ -758,11 +938,25 @@ struct PhotosView: View {
     }
 
     private func semanticTransitionScaleChanged(_ targetScale: TimelineSemanticScale) {
-        setSemanticMemoryScaleVisible(targetScale.isAssets)
+        let diagnosticState = memoryBackdropDiagnosticState
+        Self.logger.info(
+            "Memory backdrop semantic transition target=\(String(describing: targetScale), privacy: .public) requestedScaleVisible=\(targetScale.isAssets) before=\(diagnosticState, privacy: .public)"
+        )
+        memoryMaterialDiagnostics.capture("semantic-transition-target-\(String(describing: targetScale))", state: diagnosticState)
+        setSemanticMemoryScaleVisible(
+            targetScale.isAssets,
+            reason: "semantic-transition-\(String(describing: targetScale))"
+        )
     }
 
-    private func setSemanticMemoryScaleVisible(_ visible: Bool) {
-        guard semanticMemoryScaleVisible != visible else { return }
+    private func setSemanticMemoryScaleVisible(_ visible: Bool, reason: String) {
+        let current = semanticMemoryScaleVisible
+        let diagnosticState = memoryBackdropDiagnosticState
+        Self.logger.info(
+            "Memory scale visibility request reason=\(reason, privacy: .public) requested=\(visible) current=\(current) state=\(diagnosticState, privacy: .public)"
+        )
+        memoryMaterialDiagnostics.capture("scale-visibility-request-\(reason)", state: diagnosticState)
+        guard current != visible else { return }
         withAnimation(reduceMotion ? nil : .smooth(duration: 0.25)) {
             semanticMemoryScaleVisible = visible
         }
@@ -1266,16 +1460,32 @@ struct PhotosView: View {
         return target
     }
 
-    private var memoryBackdropVisible: Bool {
+    private var memoryMaterialVisible: Bool {
         !compactChrome
             && navigationPath.isEmpty
-            && semanticMemoryScaleVisible
             && store.memoryLaneState == .loaded
             && !store.memories.isEmpty
     }
 
+    private var memoryLaneVisible: Bool {
+        memoryMaterialVisible && semanticMemoryScaleVisible
+    }
+
+    private var memoryBackdropVisible: Bool {
+        memoryMaterialVisible
+    }
+
+    private var memoryBackdropDiagnosticState: String {
+        "material=\(memoryMaterialVisible) lane=\(memoryLaneVisible) compact=\(compactChrome) navigationEmpty=\(navigationPath.isEmpty) scaleVisible=\(semanticMemoryScaleVisible) laneState=\(String(describing: store.memoryLaneState)) memories=\(store.memories.count) range=\(String(describing: libraryRange)) viewer=\(viewerRoute != nil)"
+    }
+
     private func setCompactChrome(_ compact: Bool) {
         guard compactChrome != compact else { return }
+        let beforeState = memoryBackdropDiagnosticState
+        Self.logger.info(
+            "Memory backdrop compact request requested=\(compact) before=\(beforeState, privacy: .public)"
+        )
+        memoryMaterialDiagnostics.capture("compact-request-\(compact)", state: beforeState)
         compactChrome = compact
         compactChromeChanged(compact)
     }
