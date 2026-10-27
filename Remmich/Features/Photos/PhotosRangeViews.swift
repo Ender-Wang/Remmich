@@ -1803,7 +1803,7 @@ private final class PhotosRangeCardSlideshowLifetime {
     }
 }
 
-private struct PhotosRangeCard: View {
+struct PhotosRangeCard: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
 
@@ -1816,6 +1816,7 @@ private struct PhotosRangeCard: View {
     var store: PhotosTimelineStore?
     var motion: TimelineRangeCoverMotion = .ordinary
     var allowsCoverLoading = true
+    var externallyVisible: Bool?
     var onCoverChanged: (String?) -> Void = { _ in }
 
     @State private var coverAssets: [TimelineAssetSummary] = []
@@ -1919,10 +1920,15 @@ private struct PhotosRangeCard: View {
                 onCoverChanged(coverID)
             }
             .onScrollVisibilityChange(threshold: 0.15) { visible in
+                guard externallyVisible == nil else { return }
                 slideshowLifetime.visibilityChanged(visible) {
                     guard allowsCoverLoading, scenePhase == .active else { return }
                     await runSlideshow()
                 }
+            }
+            .task(id: "\(String(describing: externallyVisible)):\(scenePhase):\(reduceMotion)") {
+                guard externallyVisible == true, scenePhase == .active else { return }
+                await runSlideshow()
             }
             .onChange(of: allowsCoverLoading) {
                 if allowsCoverLoading {

@@ -146,7 +146,7 @@ nonisolated struct TimelineSemanticProjection: Sendable {
         }
         let focus = catalog.index(containing: focusAssetIndex, scale: scale) ?? count - 1
         let radius = scale.isAssets ? 180 : 26
-        let range = requestedRange ?? max(0, focus - radius) ..< min(count, focus + radius + 1)
+        var range = requestedRange ?? max(0, focus - radius) ..< min(count, focus + radius + 1)
         var items: [Item] = []
         var y: CGFloat = 12
         if scale.isAssets {
@@ -155,6 +155,14 @@ nonisolated struct TimelineSemanticProjection: Sendable {
                 minimumLandscapeColumnWidth: isPhone ? 88 : 120,
                 spacing: 2
             )
+            // Align window boundaries to complete rows of the real day, so
+            // adding either continuation cannot rearrange existing columns.
+            let firstDay = catalog.groups[.day]![catalog.index(containing: range.lowerBound, scale: .day)!]
+            let lastDay = catalog.groups[.day]![catalog.index(containing: range.upperBound - 1, scale: .day)!]
+            let lowerRows = (firstDay.assets.upperBound - range.lowerBound + columns - 1) / columns
+            let upperRows = (lastDay.assets.upperBound - range.upperBound) / columns
+            range = max(firstDay.assets.lowerBound, firstDay.assets.upperBound - lowerRows * columns)
+                ..< min(lastDay.assets.upperBound, lastDay.assets.upperBound - upperRows * columns)
             let baseSide = (size.width - CGFloat(columns - 1) * 2) / CGFloat(columns)
             let progress: CGFloat = scale == .natural ? 1 : 0
             let inset = TimelineGridMetrics.horizontalInset(

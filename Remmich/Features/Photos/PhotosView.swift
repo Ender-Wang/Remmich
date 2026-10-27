@@ -378,6 +378,9 @@ struct PhotosView: View {
     @State private var memoryViewerOpensFromSource = true
     @State private var memoryViewerIsSwitching = false
     @State private var memoryViewerDismissalRequest = 0
+    @State private var semanticCatalog: TimelineSemanticCatalog?
+    @State private var semanticCatalogRevision: UInt64 = 0
+    @State private var semanticRuntime = TimelineSemanticRuntime()
 
     init(
         store: PhotosTimelineStore,
@@ -499,6 +502,21 @@ struct PhotosView: View {
             }
         }
         .task { await store.load() }
+        .task(id: store.semanticContentRevision) {
+            let revision = store.semanticContentRevision
+            let assets = store.semanticAssetsSnapshot()
+            let build = Task.detached(priority: .userInitiated) {
+                TimelineSemanticCatalog(assets: assets)
+            }
+            let catalog = await withTaskCancellationHandler {
+                await build.value
+            } onCancel: {
+                build.cancel()
+            }
+            guard !Task.isCancelled, revision == store.semanticContentRevision else { return }
+            semanticCatalog = catalog
+            semanticCatalogRevision = revision
+        }
         .onChange(
             of: sectionRevisionKeys,
             initial: true
@@ -720,18 +738,152 @@ struct PhotosView: View {
 
     private var rangeContent: some View {
         ZStack {
-            timeline
-                .opacity(showsMainTimeline ? 1 : 0)
-                .allowsHitTesting(showsMainTimeline)
-                .accessibilityHidden(!showsMainTimeline)
+            semanticTimeline
+                .opacity(navigationPath.isEmpty ? 1 : 0)
+                .allowsHitTesting(navigationPath.isEmpty)
+                .accessibilityHidden(!navigationPath.isEmpty)
 
-            if !showsMainTimeline {
-                if let route = navigationPath.last {
-                    rangeDestination(route)
+            if let route = navigationPath.last {
+                rangeDestination(route)
+            }
+        }
+    }
+
+    private var semanticScale: TimelineSemanticScale {
+        switch libraryRange {
+        case .all: presentation.preferences.assetLayout == .square ? .square : .natural
+        case .day: .day
+        case .week: .week
+        case .month: .month
+        case .year: .year
+        }
+    }
+
+    private var semanticTimeline: some View {
+        GeometryReader { geometry in
+            let frame = geometry.frame(in: .global)
+            let isPhone = UIDevice.current.userInterfaceIdiom == .phone
+            let barHeight = tabBarTop > 0
+                ? max(0, frame.maxY - tabBarTop)
+                : TimelineRangeGridLayout.minimumBottomNavigationHeight(isPhone: isPhone, viewportSize: geometry.size)
+            // This viewport already has SwiftUI's safe-area proposal. Add only
+            // the native bar's measured overlap, once, plus the existing gap.
+            let clearance = (isPhone ? barHeight : 0) + 12
+            Group {
+                if let semanticCatalog, !semanticCatalog.assets.isEmpty {
+                    TimelineSemanticCollectionView(
+                        catalog: semanticCatalog, revision: semanticCatalogRevision,
+                        scale: semanticScale, media: media, namespace: viewerNamespace,
+                        bottomClearance: clearance, runtime: semanticRuntime,
+                        latestRequest: scrollToLatestRequest,
+                        isActive: isTabContentActivated && navigationPath.isEmpty && viewerRoute == nil,
+                        hiddenThumbnailID: hiddenReturningThumbnailAssetID,
+                        hiddenLivePhotoID: hiddenLivePhotoBadgeAssetID,
+                        selectAsset: { asset, assets in
+                            presentViewer(AssetViewerRoute(selectedAsset: asset, initialAssets: assets,
+                                                           origin: .timeline(bucketID: semanticBucketID(for: asset), contentName: contentName)))
+                        },
+                        selectGroup: { route, coverID in
+                            selectRoute(semanticRoute(route, coverID: coverID), initialAssetID: coverID)
+                        },
+                        scaleChanged: semanticScaleChanged,
+                        scrolled: { delta, gap, userScrolling in
+                            guard !viewerOwnsTimelineChrome else { return }
+                            if let compact = viewportRuntime.chromeTracker.update(offsetDelta: delta, bottomGap: gap,
+                                                                                  userScrolling: userScrolling, programmaticJump: false)
+                            {
+                                setCompactChrome(compact)
+                            }
+                        },
+                        visibleAssetsChanged: { assets in
+                            let visible = Set(assets.map(\.id))
+                            media.updateTimelineResidency(store.residencyPlan(visibleAssetIDs: visible), targetPixels: .init(width: 600, height: 600))
+                        },
+                        refresh: { await store.refresh() }
+                    )
                 } else {
-                    groupedRangeContent
+                    ProgressView("Preparing timeline…")
                 }
             }
+            .overlay(alignment: .top) { semanticMemoryLane }
+            .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: compactChrome)
+        }
+        .ignoresSafeArea(.container, edges: [.top, .horizontal])
+    }
+
+    @ViewBuilder
+    private var semanticMemoryLane: some View {
+        if memoryBackdropVisible {
+            TimelineMemoryLane(
+                memories: store.memories, media: media, selectedMemoryID: presentedMemoryID,
+                frozenMemoryID: nil, hiddenMemoryID: nil, loadingMemoryID: loadingMemoryID,
+                preferredAssetIDs: memoryCoverAssetIDs, select: presentMemory,
+                laneFrameChanged: updateMemoryLaneFrame, frameChanged: updateMemoryCardFrame
+            )
+            .frame(height: 120)
+            .padding(.bottom, 12)
+            .background {
+                Rectangle().fill(.ultraThinMaterial)
+                    .mask {
+                        LinearGradient(stops: [
+                            .init(color: .black, location: 0), .init(color: .black.opacity(0.78), location: 0.48),
+                            .init(color: .black.opacity(0.32), location: 0.78), .init(color: .black.opacity(0.08), location: 0.94),
+                            .init(color: .clear, location: 1),
+                        ], startPoint: .top, endPoint: .bottom)
+                    }
+                    .ignoresSafeArea(.container, edges: .top)
+            }
+            .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
+        }
+    }
+
+    private func semanticScaleChanged(_ scale: TimelineSemanticScale) {
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            switch scale {
+            case .square, .natural:
+                do { try presentation.setAssetLayout(scale == .square ? .square : .naturalAspect) }
+                catch { Self.logger.error("Failed to persist semantic layout: \(error.localizedDescription, privacy: .public)") }
+                libraryRange = .all
+            case .day: libraryRange = .day
+            case .week: libraryRange = .week
+            case .month: libraryRange = .month
+            case .year: libraryRange = .year
+            }
+        }
+    }
+
+    private func semanticBucketID(for asset: TimelineAssetSummary) -> TimelineBucketID {
+        let day = TimelineCaptureDay(capturedAt: asset.capturedAt)
+        return semanticBucketID(for: day.displayDate!)
+    }
+
+    private func semanticBucketID(for date: Date) -> TimelineBucketID {
+        let day = TimelineCaptureDay(capturedAt: date)
+        return store.bucketSummaries.first { summary in
+            guard let date = summary.id.displayDate else { return false }
+            let other = TimelineCaptureDay(capturedAt: date)
+            return day.year == other.year && day.month == other.month
+        }?.id ?? TimelineBucketID(rawValue: String(format: "%04d-%02d-01", day.year, day.month))
+    }
+
+    private func semanticRoute(_ route: PhotosRangeRoute, coverID: String?) -> PhotosRangeRoute {
+        switch route {
+        case let .day(bucket, day):
+            return .day(semanticBucketID(for: bucket.displayDate ?? day.displayDate!), day)
+        case let .month(bucket):
+            return .month(semanticBucketID(for: bucket.displayDate!))
+        case let .week(bucket, week, scope):
+            var owner = semanticBucketID(for: bucket.displayDate!)
+            if !store.bucketSummaries.contains(where: { $0.id == owner }),
+               let coverID, let catalog = semanticCatalog, let index = catalog.assetIndexes[coverID]
+            {
+                owner = semanticBucketID(for: catalog.assets[index])
+            }
+            return .week(owner, week, scope)
+        case .year:
+            return route
         }
     }
 
@@ -833,7 +985,7 @@ struct PhotosView: View {
                 }
                 navigationPath = Array(navigationPath.dropLast())
             } else {
-                libraryRange = libraryRange.next(for: .finer) ?? .all
+                semanticRuntime.changeScale(coarser: false)
             }
         }
     }
@@ -859,29 +1011,7 @@ struct PhotosView: View {
             return
         }
 
-        let current = TimelinePresentationSelection(
-            range: libraryRange,
-            assetLayout: presentation.preferences.assetLayout
-        )
-        guard let next = TimelinePresentationLadder.selection(after: gesture.direction, from: current)
-        else { return }
-
-        do {
-            try presentation.setAssetLayout(next.assetLayout)
-        } catch {
-            Self.logger.error(
-                "Failed to persist \(contentName, privacy: .public) asset layout: \(error.localizedDescription, privacy: .public)"
-            )
-            return
-        }
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            libraryRange = next.range
-        }
-        Self.logger.info(
-            "\(contentName, privacy: .public) pinch changed presentation to layout=\(next.assetLayout.rawValue, privacy: .public) range=\(String(describing: next.range), privacy: .public)"
-        )
+        semanticRuntime.changeScale(coarser: gesture.direction == .coarser)
     }
 
     private var timeline: some View {
@@ -1806,6 +1936,15 @@ struct PhotosView: View {
                 fillsFrame: true
             )
         }
+        guard showsMainTimeline,
+              let target = semanticRuntime.dismissalTarget(assetID: assetID, aspectRatio: aspectRatio)
+        else {
+            return nil
+        }
+        return target
+    }
+
+    private func legacyViewerDismissalTargetFrame(assetID: String, aspectRatio: Double) -> AssetViewerDismissalTarget? {
         guard showsMainTimeline,
               let frame = viewportRuntime.latestFrameSnapshot?.visibleFrames[assetID],
               let scrollView = viewportRuntime.scrollView

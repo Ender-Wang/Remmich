@@ -1,9 +1,10 @@
 import CoreGraphics
 import Foundation
 import Testing
+import UIKit
 @testable import Remmich
 
-@Suite("Timeline semantic zoom")
+@Suite("Timeline semantic zoom", .serialized)
 struct TimelineSemanticZoomTests {
     @Test func crossMonthWeekOverlapsBothMonthsWithoutDuplicatingAssets() throws {
         let catalog = TimelineSemanticCatalog(assets: [asset("dec", "2026-12-31T12:00:00Z"), asset("jan", "2027-01-01T12:00:00Z")])
@@ -72,6 +73,52 @@ struct TimelineSemanticZoomTests {
         }
         #expect(frames.first?.id == "6")
         #expect(frames[1].id == "5")
+    }
+
+    @Test func growingWindowPreservesCellColumnsAndRelativeFrames() throws {
+        let catalog = TimelineSemanticCatalog(assets: (0 ..< 900).map { asset(String(format: "%04d", $0), "2027-01-01T12:00:00Z") })
+        for scale in [TimelineSemanticScale.square, .natural] {
+            let initial = TimelineSemanticProjection.build(catalog: catalog, scale: scale, focusAssetIndex: 450,
+                                                           size: CGSize(width: 402, height: 874), isPhone: true, dark: true,
+                                                           requestedRange: 333 ..< 567)
+            let expanded = TimelineSemanticProjection.build(catalog: catalog, scale: scale, focusAssetIndex: 450,
+                                                            size: CGSize(width: 402, height: 874), isPhone: true, dark: true,
+                                                            requestedRange: 155 ..< 740)
+            let original = initial.items.filter { !$0.isHeader }
+            let frames = Dictionary(uniqueKeysWithValues: expanded.items.filter { !$0.isHeader }.map { ($0.id, $0.frame) })
+            let reference = try #require(original.first)
+            let delta = try #require(frames[reference.id]).minY - reference.frame.minY
+            for item in original {
+                let frame = try #require(frames[item.id])
+                #expect(frame.minX == item.frame.minX)
+                #expect(abs(frame.minY - item.frame.minY - delta) < 0.01)
+            }
+        }
+    }
+
+    @Test @MainActor func collectionStagesTargetAndAppliesBottomClearanceOnce() throws {
+        let catalog = TimelineSemanticCatalog(assets: (0 ..< 60).map { asset(String(format: "%03d", $0), "2027-01-01T12:00:00Z") })
+        let controller = TimelineSemanticCollectionController()
+        var committed: [TimelineSemanticScale] = []
+        let input = TimelineSemanticCollectionView(
+            catalog: catalog, revision: 1, scale: .natural, media: MediaLibraryController(), namespace: nil,
+            bottomClearance: 96, runtime: TimelineSemanticRuntime(), latestRequest: 0, isActive: true,
+            hiddenThumbnailID: nil, hiddenLivePhotoID: nil, selectAsset: { _, _ in }, selectGroup: { _, _ in },
+            scaleChanged: { committed.append($0) }, scrolled: { _, _, _ in }, visibleAssetsChanged: { _ in }, refresh: {}
+        )
+        controller.update(input)
+        controller.view.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        controller.view.setNeedsLayout()
+        controller.view.layoutIfNeeded()
+        let collection = try #require(controller.view.subviews.compactMap { $0 as? UICollectionView }.first)
+        #expect(collection.contentInset.bottom == 96)
+        #expect(abs(collection.contentSize.height - collection.contentOffset.y - collection.bounds.height + 96) < 0.5)
+        controller.changeScale(coarser: true)
+        #expect(committed == [.day])
+        #expect(collection.numberOfItems(inSection: 0) == 1)
+        controller.stop()
+        #expect(collection.alpha == 1)
+        #expect(controller.view.subviews.count == 1)
     }
 
     private func date(_ value: String) -> Date {

@@ -38,6 +38,7 @@ final class PhotosTimelineStore {
     private(set) var sectionsByID: [TimelineBucketID: TimelineSection] = [:]
     private(set) var groupedCatalogs = TimelineGroupedCatalogCache()
     private(set) var rangeCoverRevision: UInt64 = 0
+    private(set) var semanticContentRevision: UInt64 = 0
     private(set) var memories: [TimelineMemorySummary] = []
     private(set) var visibleAnchor: TimelineVisibleAnchor?
     private(set) var jumpTarget: TimelineBucketID?
@@ -47,6 +48,11 @@ final class PhotosTimelineStore {
 
     var sections: [TimelineSection] {
         bucketSummaries.compactMap { sectionsByID[$0.id] }
+    }
+
+    /// Copy-on-write metadata input for an off-main semantic index build.
+    func semanticAssetsSnapshot() -> [TimelineAssetSummary] {
+        Array(residencyAssetsByID.values)
     }
 
     private let reader: any TimelineReading
@@ -948,6 +954,7 @@ final class PhotosTimelineStore {
     }
 
     private func rebuildResidencyCatalog() {
+        semanticContentRevision &+= 1
         let loadedSections = sections.filter {
             if case .loaded = $0.loadState {
                 return true
