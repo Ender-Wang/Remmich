@@ -256,6 +256,36 @@ nonisolated struct TimelineSemanticProjection: Sendable {
     }
 }
 
+/// The collection layout and semantic transition use the same displayed
+/// header geometry. The header remains in its own day until the next header
+/// pushes it above the readable top edge.
+nonisolated enum TimelinePinnedDayHeaderGeometry {
+    static func activeIndex(frames: [CGRect], headers: [Int], top: CGFloat) -> Int? {
+        var low = 0
+        var high = headers.count
+        while low < high {
+            let middle = (low + high) / 2
+            if frames[headers[middle]].minY <= top {
+                low = middle + 1
+            } else {
+                high = middle
+            }
+        }
+        return low > 0 ? headers[low - 1] : nil
+    }
+
+    static func frame(at index: Int, frames: [CGRect], headers: [Int], top: CGFloat) -> CGRect {
+        let original = frames[index]
+        guard let active = activeIndex(frames: frames, headers: headers, top: top), active == index,
+              let position = headers.firstIndex(of: index)
+        else { return original }
+        let nextY = position + 1 < headers.count ? frames[headers[position + 1]].minY : .greatestFiniteMagnitude
+        var displayed = original
+        displayed.origin.y = min(max(original.minY, top), nextY - original.height)
+        return displayed
+    }
+}
+
 /// Pure gesture state: reversing progress cannot commit a scale until release.
 nonisolated struct TimelineSemanticZoomGesture {
     private(set) var coarser: Bool?

@@ -87,6 +87,75 @@ struct TimelineSemanticZoomTests {
         controller.stop()
     }
 
+    @Test @MainActor func dayHeaderPinsAtReadableTopAndNextDayPushesItAway() throws {
+        let assets = (0 ..< 50).map { asset("first-\($0)", "2027-01-01T12:00:00Z") }
+            + (0 ..< 50).map { asset("second-\($0)", "2027-01-02T12:00:00Z") }
+        let catalog = TimelineSemanticCatalog(assets: assets)
+        let controller = TimelineSemanticCollectionController()
+        var input = TimelineSemanticCollectionView(
+            catalog: catalog, revision: 1, scale: .natural,
+            media: MediaLibraryController(), namespace: nil, bottomClearance: 96, topClearance: 90,
+            pinnedHeaderTopClearance: 90,
+            runtime: TimelineSemanticRuntime(), latestRequest: 0, isActive: true,
+            hiddenThumbnailID: nil, hiddenLivePhotoID: nil, selectAsset: { _, _ in }, selectGroup: { _, _ in },
+            scaleChanged: { _ in }, scrolled: { _, _, _ in }, visibleAssetsChanged: { _, _, _ in }, refresh: {}
+        )
+        controller.update(input)
+        controller.view.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        controller.view.setNeedsLayout()
+        controller.view.layoutIfNeeded()
+
+        let collection = try #require(controller.view.subviews.compactMap { $0 as? UICollectionView }.first)
+        collection.contentOffset.y = -90
+        collection.layoutIfNeeded()
+        let first = IndexPath(item: 0, section: 0)
+        let normalCell = try #require(collection.cellForItem(at: first) as? TimelineSemanticCollectionCell)
+        #expect(!normalCell.isPinnedHeader)
+        let second = try #require((0 ..< collection.numberOfItems(inSection: 0)).first { index in
+            index > 0 && collection.collectionViewLayout.layoutAttributesForItem(at: IndexPath(item: index, section: 0))?.frame.height == 36
+        })
+        let secondPath = IndexPath(item: second, section: 0)
+        let secondY = try #require(collection.collectionViewLayout.layoutAttributesForItem(at: secondPath)).frame.minY
+
+        collection.contentOffset.y = 200
+        collection.layoutIfNeeded()
+        let pinned = try #require(collection.collectionViewLayout.layoutAttributesForItem(at: first))
+        #expect(abs(pinned.frame.minY - (collection.contentOffset.y + 90)) < 0.5)
+        #expect(collection.collectionViewLayout.layoutAttributesForElements(in: collection.bounds)?
+            .contains(where: { $0.indexPath == first }) == true)
+        let pinnedCell = try #require(collection.cellForItem(at: first) as? TimelineSemanticCollectionCell)
+        #expect(abs(pinnedCell.frame.minY - pinned.frame.minY) < 0.5)
+        #expect(pinnedCell.isPinnedHeader)
+
+        collection.contentOffset.y = secondY - 90 - 20
+        collection.layoutIfNeeded()
+        let pushed = try #require(collection.collectionViewLayout.layoutAttributesForItem(at: first))
+        #expect(abs(pushed.frame.minY - (secondY - 36)) < 0.5)
+        #expect(abs(pinnedCell.frame.minY - pushed.frame.minY) < 0.5)
+
+        collection.contentOffset.y = secondY - 90 + 5
+        collection.layoutIfNeeded()
+        let next = try #require(collection.collectionViewLayout.layoutAttributesForItem(at: secondPath))
+        #expect(abs(next.frame.minY - (collection.contentOffset.y + 90)) < 0.5)
+
+        collection.contentOffset.y = 200
+        input.pinnedHeaderTopClearance = 55
+        let offset = collection.contentOffset.y
+        let installCount = controller.installationCount
+        controller.update(input)
+        collection.layoutIfNeeded()
+        let raised = try #require(collection.collectionViewLayout.layoutAttributesForItem(at: first))
+        #expect(abs(raised.frame.minY - (collection.contentOffset.y + 55)) < 0.5)
+        #expect(collection.contentOffset.y == offset)
+        #expect(collection.contentInset.top == 90)
+        #expect(controller.installationCount == installCount)
+        collection.contentOffset.y = -90
+        collection.layoutIfNeeded()
+        let normalAgain = try #require(collection.cellForItem(at: first) as? TimelineSemanticCollectionCell)
+        #expect(!normalAgain.isPinnedHeader)
+        controller.stop()
+    }
+
     @Test func groupedResidencyDoesNotExpandRepresentativesIntoTimelinePages() {
         let visible = (0 ..< 140).map { asset("visible-\($0)", "2027-01-01T12:00:00Z") }
         let plan = TimelineSemanticResidencyPolicy.groupedPlan(visibleAssets: visible + visible.prefix(8))

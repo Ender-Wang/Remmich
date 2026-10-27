@@ -731,12 +731,14 @@ struct PhotosView: View {
                 && store.memoryLaneState == .loaded
                 && !store.memories.isEmpty
             let topClearance = topInset + (reservesMemoryLane ? TimelineMemoryLaneSafeArea.laneHeight : 0)
+            let pinnedHeaderTopClearance = topInset + (memoryLaneVisible ? TimelineMemoryLaneSafeArea.laneHeight : 0)
             Group {
                 if let semanticCatalog {
                     TimelineSemanticCollectionView(
                         catalog: semanticCatalog, revision: semanticCatalogRevision,
                         scale: semanticScale, media: media, namespace: viewerNamespace,
                         bottomClearance: bottomClearance, topClearance: topClearance,
+                        pinnedHeaderTopClearance: pinnedHeaderTopClearance,
                         runtime: semanticRuntime,
                         latestRequest: semanticLatestRequest,
                         isActive: isTabContentActivated && navigationPath.isEmpty && viewerRoute == nil,

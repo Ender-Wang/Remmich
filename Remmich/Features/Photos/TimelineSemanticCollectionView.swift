@@ -27,6 +27,7 @@ struct TimelineSemanticCollectionView: UIViewControllerRepresentable {
     let namespace: Namespace.ID?
     let bottomClearance: CGFloat
     var topClearance: CGFloat = 0
+    var pinnedHeaderTopClearance: CGFloat?
     let runtime: TimelineSemanticRuntime
     let latestRequest: Int
     let isActive: Bool
@@ -61,6 +62,12 @@ struct TimelineSemanticCollectionView: UIViewControllerRepresentable {
 
 private final class TimelineSemanticCollectionLayout: UICollectionViewLayout {
     var frames: [CGRect] = []
+    var headerIndices: [Int] = [] {
+        didSet { headerIndexSet = Set(headerIndices) }
+    }
+
+    private var headerIndexSet = Set<Int>()
+    var pinnedHeaderTopInset: CGFloat = 0
     var height: CGFloat = 0
 
     override var collectionViewContentSize: CGSize {
@@ -68,8 +75,17 @@ private final class TimelineSemanticCollectionLayout: UICollectionViewLayout {
     }
 
     override func layoutAttributesForElements(in rect: CGRect) -> [UICollectionViewLayoutAttributes]? {
-        frames.indices.compactMap { index in
-            frames[index].intersects(rect) ? layoutAttributesForItem(at: IndexPath(item: index, section: 0)) : nil
+        guard let collectionView, collectionView.numberOfSections > 0 else { return [] }
+        let itemCount = collectionView.numberOfItems(inSection: 0)
+        let top = collectionView.contentOffset.y + pinnedHeaderTopInset
+        let pinned = TimelinePinnedDayHeaderGeometry.activeIndex(frames: frames, headers: headerIndices, top: top)
+        return frames.indices.compactMap { index in
+            guard index < itemCount else { return nil }
+            let frame = index == pinned
+                ? TimelinePinnedDayHeaderGeometry.frame(at: index, frames: frames, headers: headerIndices, top: top)
+                : frames[index]
+            guard frame.intersects(rect) else { return nil }
+            return attributes(at: index, frame: frame)
         }
     }
 
@@ -77,9 +93,70 @@ private final class TimelineSemanticCollectionLayout: UICollectionViewLayout {
         guard indexPath.section == 0, frames.indices.contains(indexPath.item),
               let collectionView, collectionView.numberOfSections > 0,
               indexPath.item < collectionView.numberOfItems(inSection: 0) else { return nil }
+        let top = collectionView.contentOffset.y + pinnedHeaderTopInset
+        let frame = headerIndexSet.contains(indexPath.item)
+            ? TimelinePinnedDayHeaderGeometry.frame(at: indexPath.item, frames: frames, headers: headerIndices, top: top)
+            : frames[indexPath.item]
+        return attributes(at: indexPath.item, frame: frame)
+    }
+
+    override func shouldInvalidateLayout(forBoundsChange _: CGRect) -> Bool {
+        !headerIndices.isEmpty
+    }
+
+    private func attributes(at index: Int, frame: CGRect) -> UICollectionViewLayoutAttributes {
+        let indexPath = IndexPath(item: index, section: 0)
         let attributes = UICollectionViewLayoutAttributes(forCellWith: indexPath)
-        attributes.frame = frames[indexPath.item]
+        attributes.frame = frame
+        if headerIndexSet.contains(index) {
+            attributes.zIndex = 10
+        }
         return attributes
+    }
+}
+
+@MainActor
+private final class TimelineHeaderBackdropState: ObservableObject {
+    @Published var isPinned: Bool
+
+    init(isPinned: Bool) {
+        self.isPinned = isPinned
+    }
+}
+
+private struct TimelineSemanticDateHeader: View {
+    let title: String
+    let subtitle: String
+    @ObservedObject var backdrop: TimelineHeaderBackdropState
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(title)
+                .font(.headline)
+                .background { pinnedBackdrop }
+
+            Spacer()
+
+            Text(subtitle)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .background { pinnedBackdrop }
+        }
+        .padding(.horizontal)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
+        .animation(.easeInOut(duration: 0.2), value: backdrop.isPinned)
+    }
+
+    @ViewBuilder private var pinnedBackdrop: some View {
+        if backdrop.isPinned {
+            RoundedRectangle(cornerRadius: 10)
+                .fill(.ultraThinMaterial)
+                .opacity(0.45)
+                .padding(.horizontal, -8)
+                .padding(.vertical, -4)
+                .transition(.opacity)
+        }
     }
 }
 
@@ -104,9 +181,15 @@ final class TimelineSemanticCollectionCell: UICollectionViewCell {
     var coverImageAssetID: String?
     var nodeID: String?
     private var hostingController: UIHostingController<AnyView>?
+    private var headerNaturalY: CGFloat?
+    private var headerBackdrop: TimelineHeaderBackdropState?
+    private(set) var isPinnedHeader = false
     private(set) var hasHostedContent = false
 
     func setHostedContent(_ content: some View, parent: UIViewController) {
+        headerNaturalY = nil
+        headerBackdrop = nil
+        isPinnedHeader = false
         clipsToBounds = true
         contentView.clipsToBounds = true
         let root = AnyView(content)
@@ -127,10 +210,21 @@ final class TimelineSemanticCollectionCell: UICollectionViewCell {
         hasHostedContent = true
     }
 
+    func setHeaderContent(title: String, subtitle: String, naturalY: CGFloat, pinned: Bool, parent: UIViewController) {
+        let backdrop = TimelineHeaderBackdropState(isPinned: pinned)
+        setHostedContent(TimelineSemanticDateHeader(title: title, subtitle: subtitle, backdrop: backdrop), parent: parent)
+        headerNaturalY = naturalY
+        headerBackdrop = backdrop
+        isPinnedHeader = pinned
+    }
+
     func clearHostedContent() {
         guard hasHostedContent else { return }
         hostingController?.rootView = AnyView(EmptyView())
         coverVisibility.isVisible = false
+        headerNaturalY = nil
+        headerBackdrop = nil
+        isPinnedHeader = false
         hasHostedContent = false
     }
 
@@ -150,6 +244,15 @@ final class TimelineSemanticCollectionCell: UICollectionViewCell {
     /// hosted GeometryReader must not self-size cells during scrolling.
     override func preferredLayoutAttributesFitting(_ layoutAttributes: UICollectionViewLayoutAttributes) -> UICollectionViewLayoutAttributes {
         layoutAttributes
+    }
+
+    override func apply(_ layoutAttributes: UICollectionViewLayoutAttributes) {
+        super.apply(layoutAttributes)
+        guard let headerNaturalY else { return }
+        let pinned = layoutAttributes.frame.minY > headerNaturalY + 0.5
+        guard pinned != isPinnedHeader else { return }
+        isPinnedHeader = pinned
+        headerBackdrop?.isPinned = pinned
     }
 
     override func layoutSubviews() {
@@ -381,6 +484,8 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
            previous.hiddenThumbnailID == value.hiddenThumbnailID, previous.hiddenLivePhotoID == value.hiddenLivePhotoID,
            abs(previous.bottomClearance - value.bottomClearance) < 0.5,
            abs(previous.topClearance - value.topClearance) < 0.5,
+           abs((previous.pinnedHeaderTopClearance ?? previous.topClearance)
+               - (value.pinnedHeaderTopClearance ?? value.topClearance)) < 0.5,
            previous.media === value.media
         {
             return
@@ -399,21 +504,25 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         scale = value.scale
         let bottomInsetChanged = abs(collection.contentInset.bottom - value.bottomClearance) > 0.5
         let topInsetChanged = abs(collection.contentInset.top - value.topClearance) > 0.5
+        let pinnedInset = value.pinnedHeaderTopClearance ?? value.topClearance
+        let pinnedInsetChanged = abs(layout.pinnedHeaderTopInset - pinnedInset) > 0.5
         let latestRequested = value.latestRequest != lastLatestRequest
         lastLatestRequest = value.latestRequest
         let jumpToLatest = latestRequested && value.isActive
         let oldOffsetY = collection.contentOffset.y
         isInstalling = true
         collection.contentInset = UIEdgeInsets(top: value.topClearance, left: 0, bottom: value.bottomClearance, right: 0)
+        layout.pinnedHeaderTopInset = pinnedInset
         collection.verticalScrollIndicatorInsets = UIEdgeInsets(
             top: value.topClearance + TimelineSemanticProjection.topPadding,
             left: 0,
             bottom: value.bottomClearance + TimelineSemanticProjection.bottomPadding,
             right: 0
         )
-        if topInsetChanged && !bottomInsetChanged {
+        if (topInsetChanged || pinnedInsetChanged) && !bottomInsetChanged {
             collection.contentOffset.y = wasAtTop && !latest ? -value.topClearance : oldOffsetY
             lastOffset = collection.contentOffset.y
+            layout.invalidateLayout()
         }
         isInstalling = false
         let projectionMissing = projection == nil
@@ -497,6 +606,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         itemIndexes = Dictionary(uniqueKeysWithValues: next.items.enumerated().map { ($0.element.id, $0.offset) })
         scale = next.scale
         layout.frames = next.items.map(\.frame)
+        layout.headerIndices = next.scale.isAssets ? next.items.indices.filter { next.items[$0].isHeader } : []
         layout.height = max(next.height, collection.bounds.height - collection.contentInset.bottom)
         let y = alignTop ? -collection.contentInset.top : offset(for: next, focus: focus, viewportY: viewportY, latest: latest)
         UIView.performWithoutAnimation {
@@ -571,9 +681,12 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         cell.alpha = transitionSurface == nil || isPresentationCrossfading ? 1 : 0
         if item.isHeader {
             let date = catalog.assets[item.assetRange.lowerBound].capturedAt
-            cell.setHostedContent(
-                AssetSectionHeader(title: TimelineCaptureDateFormatting.string(from: date, dateStyle: .long, timeStyle: .none),
-                                   subtitle: "\(item.assetRange.count.formatted()) items"),
+            let displayedY = layout.layoutAttributesForItem(at: path)?.frame.minY ?? item.frame.minY
+            cell.setHeaderContent(
+                title: TimelineCaptureDateFormatting.string(from: date, dateStyle: .long, timeStyle: .none),
+                subtitle: "\(item.assetRange.count.formatted()) items",
+                naturalY: item.frame.minY,
+                pinned: displayedY > item.frame.minY + 0.5,
                 parent: self
             )
         } else if scale.isAssets {
@@ -832,42 +945,75 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         }
         representativeAssets.merge(targetRepresentatives, uniquingKeysWith: { _, new in new })
         let assetLayoutOnly = scale.isAssets && nextScale.isAssets
+        let sourceFrames = source.items.map(\.frame)
+        let sourceHeaders = scale.isAssets ? source.items.indices.filter { source.items[$0].isHeader } : []
+        let sourceTop = collection.contentOffset.y + layout.pinnedHeaderTopInset
+        let sourcePinnedHeader = TimelinePinnedDayHeaderGeometry.activeIndex(
+            frames: sourceFrames, headers: sourceHeaders, top: sourceTop
+        )
+        let targetFrames = next.items.map(\.frame)
+        let targetHeaders = nextScale.isAssets ? next.items.indices.filter { next.items[$0].isHeader } : []
+        let targetTop = targetOffset + layout.pinnedHeaderTopInset
+        let targetPinnedHeader = TimelinePinnedDayHeaderGeometry.activeIndex(
+            frames: targetFrames, headers: targetHeaders, top: targetTop
+        )
         var carriedHeaderIDs = Set<String>()
         let sourceChromeArea = CGRect(x: 0, y: collection.contentOffset.y,
                                       width: collection.bounds.width, height: collection.bounds.height)
-        for sourceItem in source.items where sourceItem.frame.intersects(sourceChromeArea)
+        for (sourceIndex, sourceItem) in source.items.enumerated() where
+            (sourceItem.frame.intersects(sourceChromeArea) || sourceIndex == sourcePinnedHeader)
             && (sourceItem.isHeader || !scale.isAssets)
             && !snapshotsContainingChrome.contains(sourceItem.id)
         {
-            let start = sourceItem.frame.offsetBy(dx: 0, dy: -collection.contentOffset.y)
-            let matchingHeader = assetLayoutOnly && sourceItem.isHeader
-                ? next.items.first(where: { $0.isHeader && $0.id == sourceItem.id }) : nil
-            let end = if let matchingHeader {
-                matchingHeader.frame.offsetBy(dx: 0, dy: -targetOffset)
+            let sourceFrame = sourceIndex == sourcePinnedHeader
+                ? TimelinePinnedDayHeaderGeometry.frame(at: sourceIndex, frames: sourceFrames, headers: sourceHeaders, top: sourceTop)
+                : sourceItem.frame
+            let start = sourceFrame.offsetBy(dx: 0, dy: -collection.contentOffset.y)
+            let matchingHeaderIndex = assetLayoutOnly && sourceItem.isHeader
+                ? next.items.firstIndex(where: { $0.isHeader && $0.id == sourceItem.id }) : nil
+            let matchingHeaderFrame = matchingHeaderIndex.map { index in
+                index == targetPinnedHeader
+                    ? TimelinePinnedDayHeaderGeometry.frame(at: index, frames: targetFrames,
+                                                            headers: targetHeaders, top: targetTop)
+                    : next.items[index].frame
+            }
+            let end = if let matchingHeaderFrame {
+                matchingHeaderFrame.offsetBy(dx: 0, dy: -targetOffset)
             } else if assetLayoutOnly, sourceItem.isHeader {
                 start
             } else {
                 destinations.first(where: { $0.assetRange.overlaps(sourceItem.assetRange) })
                     .map { $0.frame.offsetBy(dx: 0, dy: -targetOffset) } ?? start
             }
-            guard let plan = transitionChromePlan(for: sourceItem, scale: scale, catalog: catalog) else { continue }
+            let sourcePinned = sourceItem.isHeader && sourceFrame.minY > sourceItem.frame.minY + 0.5
+            guard let plan = transitionChromePlan(for: sourceItem, scale: scale, catalog: catalog,
+                                                  pinnedHeader: sourcePinned) else { continue }
             let chrome = transitionChromeView(plan)
             if sourceItem.isHeader {
                 chrome.accessibilityIdentifier = "semantic-zoom-header:\(sourceItem.id)"
             }
-            if matchingHeader != nil {
+            if matchingHeaderIndex != nil {
                 carriedHeaderIDs.insert(sourceItem.id)
             }
-            addTransition(chrome, start: start, end: end, incoming: false, disappears: matchingHeader == nil,
+            addTransition(chrome, start: start, end: end, incoming: false, disappears: matchingHeaderIndex == nil,
                           startRadius: 0, endRadius: 0, to: surface, hosted: true)
             transitionItems[transitionItems.count - 1].isChrome = true
         }
-        for destination in next.items where destination.frame.intersects(targetArea) && (destination.isHeader || !nextScale.isAssets) {
+        for (destinationIndex, destination) in next.items.enumerated() where
+            (destination.frame.intersects(targetArea) || destinationIndex == targetPinnedHeader)
+            && (destination.isHeader || !nextScale.isAssets)
+        {
             if assetLayoutOnly && destination.isHeader && carriedHeaderIDs.contains(destination.id) {
                 continue
             }
-            let end = destination.frame.offsetBy(dx: 0, dy: -targetOffset)
-            guard let plan = transitionChromePlan(for: destination, scale: nextScale, catalog: catalog) else { continue }
+            let destinationFrame = destinationIndex == targetPinnedHeader
+                ? TimelinePinnedDayHeaderGeometry.frame(at: destinationIndex, frames: targetFrames,
+                                                        headers: targetHeaders, top: targetTop)
+                : destination.frame
+            let end = destinationFrame.offsetBy(dx: 0, dy: -targetOffset)
+            let destinationPinned = destination.isHeader && destinationFrame.minY > destination.frame.minY + 0.5
+            guard let plan = transitionChromePlan(for: destination, scale: nextScale, catalog: catalog,
+                                                  pinnedHeader: destinationPinned) else { continue }
             let chrome = transitionChromeView(plan)
             if destination.isHeader {
                 chrome.accessibilityIdentifier = "semantic-zoom-header:\(destination.id)"
@@ -1040,7 +1186,8 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
     private func transitionChromePlan(
         for item: TimelineSemanticProjection.Item,
         scale: TimelineSemanticScale,
-        catalog: TimelineSemanticCatalog
+        catalog: TimelineSemanticCatalog,
+        pinnedHeader: Bool = false
     ) -> TransitionChromePlan? {
         if item.isHeader {
             let title = TimelineCaptureDateFormatting.string(
@@ -1052,9 +1199,12 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             return makeTransitionChromePlan(
                 role: "header",
                 identity: "\(scale.rawValue):\(item.id)",
-                signature: "\(title)|\(subtitle)",
+                signature: "\(title)|\(subtitle)|\(pinnedHeader)",
                 size: item.frame.size,
-                content: AssetSectionHeader(title: title, subtitle: subtitle)
+                content: TimelineSemanticDateHeader(
+                    title: title, subtitle: subtitle,
+                    backdrop: TimelineHeaderBackdropState(isPinned: pinnedHeader)
+                )
             )
         }
 
