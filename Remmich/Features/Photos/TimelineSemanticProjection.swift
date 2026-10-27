@@ -37,9 +37,15 @@ nonisolated struct TimelineSemanticCatalog: Sendable {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
         for scale in [TimelineSemanticScale.day, .week, .month, .year] {
+            if Task.isCancelled {
+                break
+            }
             var result: [Group] = []
             var lower = 0
             while lower < assets.count {
+                if Task.isCancelled {
+                    break
+                }
                 let date = assets[lower].capturedAt
                 let interval = calendar.dateInterval(of: scale == .day ? .day : scale == .week ? .weekOfYear : scale == .month ? .month : .year, for: date)!
                 // ISO week identity is authoritative, independently of locale.
@@ -129,6 +135,15 @@ nonisolated struct TimelineSemanticProjection: Sendable {
     let nodeRange: Range<Int>
     let items: [Item]
     let height: CGFloat
+
+    func bottomAligned(minimumHeight: CGFloat) -> Self {
+        let padding = max(0, minimumHeight - height)
+        guard padding > 0 else { return self }
+        return Self(scale: scale, nodeRange: nodeRange, items: items.map {
+            Item(id: $0.id, nodeIndex: $0.nodeIndex, assetRange: $0.assetRange,
+                 frame: $0.frame.offsetBy(dx: 0, dy: padding), isHeader: $0.isHeader, isFeatured: $0.isFeatured)
+        }, height: height + padding)
+    }
 
     /// Only the requested local window is laid out. No global content Y exists.
     static func build(

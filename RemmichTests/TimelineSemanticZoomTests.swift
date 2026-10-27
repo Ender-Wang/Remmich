@@ -116,9 +116,58 @@ struct TimelineSemanticZoomTests {
         controller.changeScale(coarser: true)
         #expect(committed == [.day])
         #expect(collection.numberOfItems(inSection: 0) == 1)
+        let card = try #require(collection.collectionViewLayout.layoutAttributesForItem(at: IndexPath(item: 0, section: 0)))
+        let clearance = collection.bounds.height - 96 - card.frame.maxY
+        #expect(clearance >= 12 && clearance <= 24)
+        // Rotation interrupts an in-flight settle without a hidden destination
+        // or a dependency on the shell's retired scroll-settlement callback.
+        controller.view.frame = CGRect(x: 0, y: 0, width: 874, height: 402)
+        controller.view.setNeedsLayout()
+        controller.view.layoutIfNeeded()
+        #expect(committed == [.day])
         controller.stop()
         #expect(collection.alpha == 1)
         #expect(controller.view.subviews.count == 1)
+    }
+
+    @Test @MainActor func nativeWindowGrowthPreservesVisibleFramesAndCells() throws {
+        let catalog = TimelineSemanticCatalog(assets: (0 ..< 900).map { asset(String(format: "%04d", $0), "2027-01-01T12:00:00Z") })
+        let controller = TimelineSemanticCollectionController()
+        controller.update(TimelineSemanticCollectionView(
+            catalog: catalog, revision: 1, scale: .natural, media: MediaLibraryController(), namespace: nil,
+            bottomClearance: 96, runtime: TimelineSemanticRuntime(), latestRequest: 0, isActive: true,
+            hiddenThumbnailID: nil, hiddenLivePhotoID: nil, selectAsset: { _, _ in }, selectGroup: { _, _ in },
+            scaleChanged: { _ in }, scrolled: { _, _, _ in }, visibleAssetsChanged: { _ in }, refresh: {}
+        ))
+        controller.view.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        controller.view.setNeedsLayout()
+        controller.view.layoutIfNeeded()
+        let collection = try #require(controller.view.subviews.compactMap { $0 as? UICollectionView }.first)
+        let dataSource = try #require(collection.dataSource as? UICollectionViewDiffableDataSource<Int, String>)
+        collection.delegate = nil
+        collection.contentOffset.y = 300
+        collection.layoutIfNeeded()
+        let before = Dictionary(uniqueKeysWithValues: collection.indexPathsForVisibleItems.compactMap { path -> (String, (CGRect, UICollectionViewCell))? in
+            guard let id = dataSource.itemIdentifier(for: path), !id.hasPrefix("header:"),
+                  let cell = collection.cellForItem(at: path) else { return nil }
+            return (id, (cell.frame.offsetBy(dx: 0, dy: -collection.contentOffset.y), cell))
+        })
+        #expect(!before.isEmpty)
+        collection.delegate = controller
+        controller.scrollViewDidScroll(collection)
+        collection.layoutIfNeeded()
+        var compared = 0
+        for path in collection.indexPathsForVisibleItems {
+            guard let id = dataSource.itemIdentifier(for: path), let old = before[id],
+                  let cell = collection.cellForItem(at: path) else { continue }
+            let frame = cell.frame.offsetBy(dx: 0, dy: -collection.contentOffset.y)
+            compared += 1
+            #expect(abs(frame.minY - old.0.minY) < 0.5)
+            #expect(frame.minX == old.0.minX)
+            #expect(cell === old.1)
+        }
+        #expect(compared == before.count)
+        controller.stop()
     }
 
     private func date(_ value: String) -> Date {

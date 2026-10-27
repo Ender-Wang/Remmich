@@ -55,6 +55,21 @@ final class PhotosTimelineStore {
         Array(residencyAssetsByID.values)
     }
 
+    /// Network metadata is requested only after ordinary scrolling ends.
+    func loadOlderSemanticPage() async {
+        guard !retainsPersistentBootstrap else { return }
+        let loaded = bucketSummaries.indices.filter { index in
+            guard let section = sectionsByID[bucketSummaries[index].id] else { return false }
+            if case .loaded = section.loadState {
+                return true
+            }
+            return false
+        }
+        let next = (loaded.max() ?? -1) + 1
+        guard bucketSummaries.indices.contains(next) else { return }
+        await loadBucket(bucketSummaries[next].id)
+    }
+
     private let reader: any TimelineReading
     private let persistentRefreshPolicy: PersistentTimelineRefreshPolicy
     private let now: () -> Date

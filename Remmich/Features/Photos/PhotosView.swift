@@ -3,13 +3,6 @@ import OSLog
 import SwiftUI
 import UIKit
 
-private struct PhotosChromeGeometry: Equatable {
-    let offset: CGFloat
-    let bottomGap: CGFloat
-    let containerSize: CGSize
-    let contentSize: CGSize
-}
-
 nonisolated enum TimelineViewportAnchor: Equatable {
     case latest
     case asset(id: String, viewportCenterOffset: CGFloat)
@@ -98,23 +91,6 @@ nonisolated enum TimelineAssetFrameSnapshotPolicy {
     }
 }
 
-private struct TimelineRotationTransaction {
-    enum Stage: Equatable {
-        case awaitingDestination
-        case restoreRequested(rowID: String)
-    }
-
-    let generation: Int
-    let assetID: String
-    let sourceLayoutKey: TimelineDeterministicLayout.Key
-    let targetWidth: CGFloat
-    let targetColumnCount: Int
-    let sourceScrollPhase: TimelineScrollMotionPhase
-    let sourceContentOffset: CGPoint
-    let momentumStopped: Bool
-    var stage: Stage = .awaitingDestination
-}
-
 nonisolated enum TimelineRotationCapturePolicy {
     static func shouldCapture(
         generation: Int,
@@ -143,71 +119,9 @@ private final class TimelineViewportRuntime {
     var visibleDescriptors: [String: MediaRequestDescriptor] = [:]
     var visibleAssets: [String: Date] = [:]
     var viewportUpdateTask: Task<Void, Never>?
-    var timelineBottomGap = CGFloat.infinity
-    var scrollMotionPhase = TimelineScrollMotionPhase.idle
-    weak var scrollView: UIScrollView?
-    var rotationOwnsScrollCallbacks = false
     var chromeTracker = PhotosChromeTracker()
     var lastResidencyPlan = TimelineResidencyPlan.empty
     var lastResidencyTarget: MediaPixelSize?
-    var scrollOffset: CGFloat = 0
-    var scrollContainerSize: CGSize = .zero
-    var retainedAnchor = TimelineViewportAnchor.latest
-    var latestFrameSnapshot: TimelineAssetFrameSnapshot?
-    var previousFrameSnapshot: TimelineAssetFrameSnapshot?
-    var rotationTransaction: TimelineRotationTransaction?
-    var layoutCache = TimelineDeterministicLayoutCache()
-    var lastLoggedContainerSize: CGSize?
-
-    var userScrollPhase: Bool {
-        scrollMotionPhase.isMoving
-    }
-}
-
-private struct TimelineScrollViewResolver: UIViewRepresentable {
-    let resolved: (UIScrollView?) -> Void
-
-    func makeUIView(context _: Context) -> TimelineScrollProbeView {
-        let view = TimelineScrollProbeView()
-        view.resolved = resolved
-        return view
-    }
-
-    func updateUIView(_ uiView: TimelineScrollProbeView, context _: Context) {
-        uiView.resolved = resolved
-        uiView.resolveScrollView()
-    }
-}
-
-private final class TimelineScrollProbeView: UIView {
-    var resolved: ((UIScrollView?) -> Void)?
-    private weak var lastResolvedScrollView: UIScrollView?
-
-    override func didMoveToSuperview() {
-        super.didMoveToSuperview()
-        resolveScrollView()
-    }
-
-    override func didMoveToWindow() {
-        super.didMoveToWindow()
-        resolveScrollView()
-    }
-
-    func resolveScrollView() {
-        var candidate = superview
-        while let current = candidate {
-            if let scrollView = current as? UIScrollView {
-                guard scrollView !== lastResolvedScrollView else { return }
-                lastResolvedScrollView = scrollView
-                resolved?(scrollView)
-                return
-            }
-            candidate = current.superview
-        }
-        guard lastResolvedScrollView != nil else { return }
-        lastResolvedScrollView = nil
-        resolved?(nil)
-    }
 }
 
 struct PhotosChromeTracker {
@@ -349,16 +263,7 @@ struct PhotosView: View {
     let showAccount: () -> Void
 
     @Namespace private var viewerNamespace
-    @State private var timelinePosition = ScrollPosition(edge: .bottom)
-    @State private var latestJumpTask: Task<Void, Never>?
     @State private var viewportRuntime = TimelineViewportRuntime()
-    @State private var timelineSections: [TimelineSection]
-    @State private var timelineResumeTask: Task<Void, Never>?
-    @State private var contentRestoreTask: Task<Void, Never>?
-    @State private var pendingViewportAnchor: TimelineViewportAnchor?
-    @State private var pinchInteraction = PhotosRangePinchInteraction()
-    @State private var layoutMorphProgress: CGFloat?
-    @State private var layoutMorphResetTask: Task<Void, Never>?
     @State private var compactChrome = false
     @State private var viewerOwnsTimelineChrome = false
     @State private var viewerChromeReleaseTask: Task<Void, Never>?
@@ -418,7 +323,6 @@ struct PhotosView: View {
         self.tabSelectionState = tabSelectionState
         self.tabDestination = tabDestination
         self.showAccount = showAccount
-        _timelineSections = State(initialValue: store.sections)
     }
 
     var body: some View {
@@ -493,7 +397,7 @@ struct PhotosView: View {
         .onAppear {
             viewportRuntime.isTimelineActive = isTimelineActive
             rotationState?.setVisualHandoffEligible(
-                isTimelineActive,
+                false,
                 for: tabDestination
             )
             media.beginTimelinePresentation()
@@ -517,58 +421,13 @@ struct PhotosView: View {
             semanticCatalog = catalog
             semanticCatalogRevision = revision
         }
-        .onChange(
-            of: sectionRevisionKeys,
-            initial: true
-        ) {
-            guard isTimelineActive else { return }
-            if viewportRuntime.userScrollPhase {
-                contentRestoreTask?.cancel()
-                pendingViewportAnchor = nil
-            } else if rotationState?.isRotating != true {
-                pendingViewportAnchor = captureViewportAnchor(
-                    using: viewportRuntime.layoutCache.current
-                ) ?? pendingViewportAnchor ?? viewportRuntime.retainedAnchor
-            }
-            timelineSections = store.sections
-            scheduleViewportUpdate()
-        }
         .onChange(of: isTimelineActive) { _, isVisible in
             viewportRuntime.isTimelineActive = isVisible
-            rotationState?.setVisualHandoffEligible(
-                isVisible,
-                for: tabDestination
-            )
-            timelineResumeTask?.cancel()
+            // The collection performs deterministic rotation directly. It does
+            // not register for the retired SwiftUI scroll-settlement gate.
+            rotationState?.setVisualHandoffEligible(false, for: tabDestination)
             if isVisible {
                 media.beginTimelineContentPresentation(contentName)
-                pendingViewportAnchor = pendingViewportAnchor ?? viewportRuntime.retainedAnchor
-                timelineResumeTask = Task { @MainActor in
-                    // Reveal the retained timeline first, then reconcile its
-                    // frozen section snapshot on the following run loop.
-                    await Task.yield()
-                    guard !Task.isCancelled, isTimelineActive else { return }
-                    timelineSections = store.sections
-                    restorePendingViewportAnchor(
-                        using: viewportRuntime.layoutCache.current,
-                        viewportHeight: viewportRuntime.scrollContainerSize.height,
-                        reason: "tab-resume",
-                        clearsAnchor: false
-                    )
-                    scheduleViewportUpdate()
-                    if let bucketID = store.visibleAnchor?.bucketID {
-                        await store.loadBucket(bucketID)
-                    }
-                    timelineResumeTask = nil
-                }
-            } else {
-                pendingViewportAnchor = captureViewportAnchor(
-                    using: viewportRuntime.layoutCache.current
-                )
-                cancelRotationTransaction(reason: "tab-deactivated")
-                viewportRuntime.viewportUpdateTask?.cancel()
-                viewportRuntime.viewportUpdateTask = nil
-                timelineResumeTask = nil
             }
         }
         .onChange(of: scrollToLatestRequest) {
@@ -576,35 +435,11 @@ struct PhotosView: View {
                 memoryViewerDismissalRequest &+= 1
                 return
             }
-            guard libraryRange != .all || !navigationPath.isEmpty else { return }
-            let request = scrollToLatestRequest
-            var transaction = Transaction()
+            var transaction = Transaction(animation: nil)
             transaction.disablesAnimations = true
             withTransaction(transaction) {
                 navigationPath = []
                 libraryRange = .all
-            }
-            latestJumpTask?.cancel()
-            latestJumpTask = Task { @MainActor in
-                defer { latestJumpTask = nil }
-                guard !Task.isCancelled,
-                      request == scrollToLatestRequest,
-                      let latest = store.bucketSummaries.first?.id,
-                      await store.prepareJump(to: latest)
-                else {
-                    store.completeJump()
-                    return
-                }
-                resetViewportTracking()
-                var scrollTransaction = Transaction(animation: nil)
-                scrollTransaction.disablesAnimations = true
-                withTransaction(scrollTransaction) {
-                    timelinePosition.scrollTo(
-                        id: TimelineDeterministicLayout.bottomSpacerID,
-                        anchor: .bottom
-                    )
-                }
-                store.completeJump()
             }
         }
         .onChange(of: requestedLibraryRange, initial: true) { _, requestedLibraryRange in
@@ -620,15 +455,9 @@ struct PhotosView: View {
             rotationState?.setVisualHandoffEligible(false, for: tabDestination)
             viewportRuntime.viewportUpdateTask?.cancel()
             viewportRuntime.viewportUpdateTask = nil
-            timelineResumeTask?.cancel()
-            contentRestoreTask?.cancel()
-            pendingViewportAnchor = nil
-            layoutMorphResetTask?.cancel()
             memoryPresentationTask?.cancel()
             memoryPresentationTask = nil
             loadingMemoryID = nil
-            latestJumpTask?.cancel()
-            latestJumpTask = nil
             store.completeJump()
         }
         .onChange(of: memoryBackdropVisible) { _, visible in
@@ -799,7 +628,8 @@ struct PhotosView: View {
                             let visible = Set(assets.map(\.id))
                             media.updateTimelineResidency(store.residencyPlan(visibleAssetIDs: visible), targetPixels: .init(width: 600, height: 600))
                         },
-                        refresh: { await store.refresh() }
+                        refresh: { await store.refresh() },
+                        loadOlder: { await store.loadOlderSemanticPage() }
                     )
                 } else {
                     ProgressView("Preparing timeline…")
@@ -809,6 +639,13 @@ struct PhotosView: View {
             .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: compactChrome)
         }
         .ignoresSafeArea(.container, edges: [.top, .horizontal])
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if case let .failed(message) = store.refreshState {
+                TimelineRefreshError(message: message) {
+                    Task { await store.refresh() }
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -899,38 +736,6 @@ struct PhotosView: View {
         tabSelectionState.map { $0.selection == tabDestination } ?? true
     }
 
-    @ViewBuilder
-    private var groupedRangeContent: some View {
-        switch libraryRange {
-        case .all:
-            EmptyView()
-        case .day:
-            PhotosLibraryDaysView(
-                store: store,
-                media: media,
-                dayIconSystemImage: dayIconSystemImage,
-                tabBarTop: tabBarTop,
-                onSelect: selectRoute,
-                onPinch: pinchLibraryRange
-            )
-        case .week:
-            PhotosLibraryWeeksView(
-                store: store, media: media, tabBarTop: tabBarTop,
-                onSelect: selectRoute, onPinch: pinchLibraryRange
-            )
-        case .month:
-            PhotosMonthsView(
-                summaries: store.bucketSummaries, store: store, media: media,
-                tabBarTop: tabBarTop, onSelect: selectRoute, onPinch: pinchLibraryRange
-            )
-        case .year:
-            PhotosYearsView(
-                store: store, media: media, tabBarTop: tabBarTop,
-                onSelect: selectRoute, onPinch: pinchLibraryRange
-            )
-        }
-    }
-
     private func rangeDestination(_ route: PhotosRangeRoute) -> some View {
         PhotosRangeAssetsView(
             route: route,
@@ -1014,433 +819,6 @@ struct PhotosView: View {
         semanticRuntime.changeScale(coarser: gesture.direction == .coarser)
     }
 
-    private var timeline: some View {
-        GeometryReader { geometry in
-            let layoutWidth = geometry.size.width
-            let layoutHeight = geometry.size.height
-            let columnCount = timelineColumnCount(
-                width: layoutWidth,
-                height: layoutHeight
-            )
-            let layoutKey = TimelineDeterministicLayout.Key(
-                width: layoutWidth,
-                minimumColumnWidth: horizontalSizeClass == .regular ? 120 : 88,
-                spacing: timelineItemSpacing,
-                fixedColumnCount: columnCount,
-                sectionRevisions: timelineSectionRevisionKeys
-            )
-            let layout = viewportRuntime.layoutCache.resolve(
-                sections: timelineSections,
-                key: layoutKey
-            )
-
-            ScrollViewReader { _ in
-                VStack(spacing: 0) {
-                    if case let .failed(message) = store.refreshState {
-                        TimelineRefreshError(message: message) {
-                            Task { await store.refresh() }
-                        }
-                    }
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 0) {
-                            ForEach(layout.rows) { row in
-                                timelineRow(
-                                    row,
-                                    layout: layout,
-                                    requestSide: layout.itemSide
-                                )
-                                .frame(width: layoutWidth, height: row.height, alignment: .topLeading)
-                                .id(row.id)
-                            }
-                            Color.clear
-                                .frame(height: TimelineDeterministicLayout.bottomSpacing)
-                                .id(TimelineDeterministicLayout.bottomSpacerID)
-                                .accessibilityHidden(true)
-                        }
-                        .scrollTargetLayout()
-                        .frame(width: layoutWidth, alignment: .topLeading)
-                        .background {
-                            TimelineScrollViewResolver { scrollView in
-                                viewportRuntime.scrollView = scrollView
-                            }
-                            .frame(width: 0, height: 0)
-                        }
-                    }
-                    .coordinateSpace(name: timelineFrameCoordinateSpaceName)
-                    .accessibilityElement(children: .contain)
-                    .accessibilityLabel(contentName == "Videos" ? "Video grid" : "Photo grid")
-                    .defaultScrollAnchor(.bottom)
-                    .scrollPosition($timelinePosition)
-                    .scrollEdgeEffectHidden(for: .bottom)
-                    .photosRangePinchGesture(
-                        interaction: pinchInteraction,
-                        onMagnificationChanged: updateLayoutMorph,
-                        onMagnificationEnded: finishLayoutMorph,
-                        onPinch: pinchLibraryRange
-                    )
-                    .accessibilityAction(named: layoutAccessibilityActionName) {
-                        guard libraryRange == .all else { return }
-                        let magnification = presentation.preferences.assetLayout == .square ? 0.6 : 1.5
-                        guard let gesture = PhotosPinchGesture(magnification: magnification) else { return }
-                        pinchLibraryRange(gesture)
-                    }
-                    .onScrollPhaseChange { _, phase in
-                        let motionPhase: TimelineScrollMotionPhase = if phase == .decelerating {
-                            .decelerating
-                        } else if phase == .tracking || phase == .interacting {
-                            .interacting
-                        } else {
-                            .idle
-                        }
-                        viewportRuntime.scrollMotionPhase = motionPhase
-
-                        if viewportRuntime.rotationOwnsScrollCallbacks {
-                            if TimelineRotationScrollPolicy.releasesRotationOwnership(phase: motionPhase) {
-                                viewportRuntime.rotationOwnsScrollCallbacks = false
-                                viewportRuntime.chromeTracker.scrollingEnded()
-                                scheduleViewportUpdate()
-                            }
-                            return
-                        }
-
-                        if TimelineRotationScrollPolicy.shouldCancelRotation(
-                            phase: motionPhase,
-                            rotationOwnsScrollCallbacks: false
-                        ) {
-                            viewportRuntime.viewportUpdateTask?.cancel()
-                            viewportRuntime.viewportUpdateTask = nil
-                            cancelRotationTransaction(reason: "user-scroll")
-                            contentRestoreTask?.cancel()
-                            pendingViewportAnchor = nil
-                        } else {
-                            viewportRuntime.chromeTracker.scrollingEnded()
-                            scheduleViewportUpdate()
-                        }
-                    }
-                    .onScrollGeometryChange(for: PhotosChromeGeometry.self) { scrollGeometry in
-                        let visibleBottom = scrollGeometry.contentOffset.y
-                            + scrollGeometry.containerSize.height
-                            - scrollGeometry.contentInsets.bottom
-                        return PhotosChromeGeometry(
-                            offset: scrollGeometry.contentOffset.y,
-                            bottomGap: max(0, scrollGeometry.contentSize.height - visibleBottom),
-                            containerSize: scrollGeometry.containerSize,
-                            contentSize: scrollGeometry.contentSize
-                        )
-                    } action: { old, new in
-                        guard isTimelineActive else { return }
-                        viewportRuntime.timelineBottomGap = new.bottomGap
-                        viewportRuntime.scrollOffset = new.offset
-                        viewportRuntime.scrollContainerSize = new.containerSize
-                        if viewportRuntime.userScrollPhase,
-                           new.bottomGap <= TimelineViewportAnchorRetention.latestBoundary
-                        {
-                            viewportRuntime.retainedAnchor = .latest
-                        }
-                        if viewportRuntime.lastLoggedContainerSize != new.containerSize {
-                            viewportRuntime.lastLoggedContainerSize = new.containerSize
-                            let selectionElapsed = NativeTabTransitionTrace.elapsedMilliseconds(
-                                for: tabDestination
-                            ) ?? -1
-                            Self.logger.info(
-                                "Timeline geometry content=\(contentName, privacy: .public) container=\(Self.describe(new.containerSize), privacy: .public) content=\(Self.describe(new.contentSize), privacy: .public) layoutWidth=\(Int(layout.key.width)) columns=\(layout.columns) rows=\(layout.rows.count) height=\(Int(layout.totalHeight)) frameCount=\(viewportRuntime.latestFrameSnapshot?.frames.count ?? 0) layoutBuildMs=\(layout.buildMilliseconds) selectionElapsedMs=\(selectionElapsed)"
-                            )
-                        }
-                        updateChrome(old: old, new: new)
-                        if new.bottomGap <= 24, store.jumpTarget == latestScrollTarget {
-                            store.completeJump()
-                        }
-                    }
-                    .ignoresSafeArea(.container, edges: [.top, .horizontal])
-                    .ignoresSafeArea(
-                        .container,
-                        edges: UIDevice.current.userInterfaceIdiom == .pad ? .bottom : []
-                    )
-                    .contentMargins(.horizontal, 0, for: .scrollContent)
-                    .onPreferenceChange(TimelineAssetFramePreferenceKey.self) { frames in
-                        updateAssetFrameSnapshot(
-                            frames,
-                            layout: layout,
-                            fallbackContainerSize: geometry.size
-                        )
-                    }
-                    .refreshable { await store.refresh() }
-                    .overlay(alignment: .top) {
-                        if memoryBackdropVisible {
-                            TimelineMemoryLane(
-                                memories: store.memories,
-                                media: media,
-                                selectedMemoryID: presentedMemoryID,
-                                frozenMemoryID: nil,
-                                hiddenMemoryID: nil,
-                                loadingMemoryID: loadingMemoryID,
-                                preferredAssetIDs: memoryCoverAssetIDs,
-                                select: presentMemory,
-                                laneFrameChanged: updateMemoryLaneFrame,
-                                frameChanged: updateMemoryCardFrame
-                            )
-                            .frame(height: 120)
-                            .padding(.bottom, 12)
-                            .background {
-                                Rectangle()
-                                    .fill(.ultraThinMaterial)
-                                    .mask {
-                                        LinearGradient(
-                                            stops: [
-                                                .init(color: .black, location: 0),
-                                                .init(color: .black.opacity(0.78), location: 0.48),
-                                                .init(color: .black.opacity(0.32), location: 0.78),
-                                                .init(color: .black.opacity(0.08), location: 0.94),
-                                                .init(color: .clear, location: 1),
-                                            ],
-                                            startPoint: .top,
-                                            endPoint: .bottom
-                                        )
-                                    }
-                                    .ignoresSafeArea(.container, edges: .top)
-                            }
-                            .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
-                        }
-                    }
-                    .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: compactChrome)
-                    .onChange(of: rotationState?.generation ?? 0) { _, generation in
-                        guard let rotationState,
-                              let targetSize = rotationState.targetSize
-                        else { return }
-                        let sourceSizes = [
-                            viewportRuntime.latestFrameSnapshot,
-                            viewportRuntime.previousFrameSnapshot,
-                        ]
-                        .compactMap { $0?.containerSize }
-                        guard TimelineRotationCapturePolicy.shouldCapture(
-                            generation: generation,
-                            isRotating: rotationState.isRotating,
-                            isTimelineActive: isTimelineActive,
-                            sourceSizes: sourceSizes,
-                            targetSize: targetSize
-                        ) else {
-                            rotationState.resolveVisualHandoff(
-                                generation: generation,
-                                verified: false,
-                                reason: "capture-ignored"
-                            )
-                            Self.logger.info(
-                                "Timeline rotation ignored content=\(contentName, privacy: .public) generation=\(generation) active=\(isTimelineActive) rotating=\(rotationState.isRotating) target=\(Self.describe(targetSize), privacy: .public) reason=replayed-or-unchanged"
-                            )
-                            return
-                        }
-                        beginRotationTransaction(
-                            generation: generation,
-                            targetWidth: targetSize.width,
-                            targetColumns: timelineColumnCount(
-                                width: targetSize.width,
-                                height: targetSize.height
-                            )
-                        )
-                    }
-                    .task(id: layout.key) {
-                        guard pendingViewportAnchor != nil,
-                              rotationState?.isRotating != true
-                        else { return }
-                        restorePendingViewportAnchor(
-                            using: layout,
-                            viewportHeight: viewportRuntime.scrollContainerSize.height,
-                            reason: "content",
-                            clearsAnchor: true
-                        )
-                    }
-                    .onChange(of: rotationState?.isRotating ?? false) { _, isRotating in
-                        guard !isRotating,
-                              let snapshot = viewportRuntime.latestFrameSnapshot
-                        else { return }
-                        advanceRotationTransaction(using: snapshot, layout: layout)
-                    }
-                }
-                .onChange(of: scrollToLatestRequest) {
-                    guard navigationPath.isEmpty,
-                          libraryRange == .all,
-                          let latest = latestScrollTarget,
-                          latestJumpTask == nil,
-                          viewportRuntime.timelineBottomGap > 24
-                    else { return }
-                    cancelRotationTransaction(reason: "return-to-latest")
-                    contentRestoreTask?.cancel()
-                    contentRestoreTask = nil
-                    pendingViewportAnchor = nil
-                    store.completeJump()
-                    latestJumpTask = Task { @MainActor in
-                        defer { latestJumpTask = nil }
-                        guard await store.prepareJump(to: latest), !Task.isCancelled else {
-                            store.completeJump()
-                            return
-                        }
-                        resetViewportTracking()
-                        var transaction = Transaction(
-                            animation: reduceMotion ? nil : .smooth(duration: 0.45)
-                        )
-                        transaction.disablesAnimations = reduceMotion
-                        withTransaction(transaction) {
-                            timelinePosition.scrollTo(
-                                id: TimelineDeterministicLayout.bottomSpacerID,
-                                anchor: .bottom
-                            )
-                        }
-                        Self.logger.info(
-                            "\(contentName, privacy: .public) re-tap scrolled to latest bucket=\(latest.rawValue, privacy: .public) animated=\(!reduceMotion)"
-                        )
-                    }
-                }
-            }
-        }
-        .ignoresSafeArea(.container, edges: .horizontal)
-    }
-
-    private var latestScrollTarget: TimelineBucketID? {
-        store.sections.first?.id
-    }
-
-    @ViewBuilder
-    private func timelineRow(
-        _ row: TimelineDeterministicLayout.Row,
-        layout: TimelineDeterministicLayout,
-        requestSide: CGFloat
-    ) -> some View {
-        switch row.content {
-        case let .header(group):
-            AssetSectionHeader(
-                title: timelineDayTitle(group.id),
-                subtitle: group.assets.count.formatted() + " items"
-            )
-            .frame(height: row.height)
-            .accessibilityIdentifier("timeline-day-\(group.id.id)")
-        case let .assets(assets):
-            TimelineDeterministicAssetRow(
-                assets: assets,
-                media: media,
-                itemSide: layout.itemSide,
-                spacing: layout.key.spacing,
-                assetLayout: presentation.preferences.assetLayout,
-                naturalAspectProgress: timelineNaturalAspectProgress,
-                requestSide: requestSide,
-                visibilityChanged: updateVisibility,
-                viewportChanged: updateViewport,
-                transitionNamespace: nil,
-                assetSelected: { asset in
-                    presentViewer(AssetViewerRoute(
-                        selectedAsset: asset,
-                        initialAssets: [asset],
-                        origin: .timeline(bucketID: row.bucketID, contentName: contentName)
-                    ))
-                },
-                frameCoordinateSpaceName: timelineFrameCoordinateSpaceName,
-                priority: timelinePriority(for: row, layout: layout),
-                hiddenLivePhotoBadgeAssetID: hiddenLivePhotoBadgeAssetID,
-                hiddenReturningThumbnailAssetID: hiddenReturningThumbnailAssetID
-            )
-            .frame(height: row.height, alignment: .top)
-        case let .placeholder(section):
-            VStack(spacing: 8) {
-                AssetSectionHeader(
-                    title: section.id.displayDate?.formatted(date: .long, time: .omitted)
-                        ?? section.id.rawValue,
-                    subtitle: section.summary.assetCount.formatted() + " items"
-                )
-                switch section.loadState {
-                case .unloaded, .loading:
-                    ProgressView()
-                        .task {
-                            guard viewportRuntime.isTimelineActive else { return }
-                            await store.loadBucket(section.id)
-                        }
-                case let .failed(message):
-                    Text(message)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Button("Retry") {
-                        Task { await store.retryBucket(section.id) }
-                    }
-                    .buttonStyle(.bordered)
-                case .loaded:
-                    Text("No \(contentName.lowercased()) in this section")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .frame(maxWidth: .infinity, minHeight: row.height, alignment: .top)
-            .accessibilityIdentifier("timeline-section-\(section.id.rawValue)")
-        }
-    }
-
-    private func timelinePriority(
-        for row: TimelineDeterministicLayout.Row,
-        layout: TimelineDeterministicLayout
-    ) -> ImageRequest.Priority {
-        guard isTimelineActive else { return .veryLow }
-
-        let measuredHeight = viewportRuntime.scrollContainerSize.height
-        let viewportHeight = measuredHeight > 0 ? measuredHeight : 800
-        let viewportOffset = measuredHeight > 0
-            ? viewportRuntime.scrollOffset
-            : max(0, layout.totalHeight - viewportHeight)
-        let priorityMargin = viewportHeight * 0.25
-        let priorityRange = (viewportOffset - priorityMargin) ...
-            (viewportOffset + viewportHeight + priorityMargin)
-        let rowRange = row.offset ... (row.offset + row.height)
-        return rowRange.overlaps(priorityRange) ? .veryHigh : .low
-    }
-
-    private var timelineItemSpacing: CGFloat {
-        2
-    }
-
-    private var timelineNaturalAspectProgress: CGFloat {
-        layoutMorphProgress
-            ?? (presentation.preferences.assetLayout == .naturalAspect ? 1 : 0)
-    }
-
-    private var layoutMorphAnimation: Animation {
-        .snappy(duration: 0.32, extraBounce: 0.03)
-    }
-
-    private func updateLayoutMorph(magnification: CGFloat) {
-        guard navigationPath.isEmpty, libraryRange == .all else { return }
-        let layout = presentation.preferences.assetLayout
-        let movesBetweenAssetLayouts = if magnification < 1 {
-            layout == .square
-        } else {
-            layout == .naturalAspect
-        }
-        guard movesBetweenAssetLayouts else { return }
-
-        layoutMorphResetTask?.cancel()
-        var transaction = Transaction(animation: nil)
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            layoutMorphProgress = Self.naturalAspectProgress(
-                magnification: magnification,
-                layout: layout
-            )
-        }
-    }
-
-    private func finishLayoutMorph() {
-        layoutMorphResetTask?.cancel()
-        let settledProgress: CGFloat = presentation.preferences.assetLayout == .naturalAspect ? 1 : 0
-        if reduceMotion {
-            layoutMorphProgress = nil
-            return
-        }
-        withAnimation(layoutMorphAnimation) {
-            layoutMorphProgress = settledProgress
-        }
-        layoutMorphResetTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(320))
-            guard !Task.isCancelled else { return }
-            layoutMorphProgress = nil
-            layoutMorphResetTask = nil
-        }
-    }
-
     nonisolated static func naturalAspectProgress(
         magnification: CGFloat,
         layout: PhotosAssetLayout
@@ -1455,139 +833,6 @@ struct PhotosView: View {
             let visualDistance = Self.finerLayoutVisualEndpoint - 1
             return 1 - min(1, distance / visualDistance)
         }
-    }
-
-    private func timelineColumnCount(width: CGFloat, height: CGFloat) -> Int {
-        TimelineGridOrder.timelineColumnCount(
-            availableSize: CGSize(width: width, height: height),
-            minimumLandscapeColumnWidth: horizontalSizeClass == .regular ? 120 : 88,
-            spacing: timelineItemSpacing
-        )
-    }
-
-    private var timelineSectionRevisionKeys: [String] {
-        timelineSections.map { section in
-            section.id.rawValue + ":" + String(section.contentRevision)
-        }
-    }
-
-    private func timelineDayTitle(_ day: TimelineCaptureDay) -> String {
-        guard let date = day.displayDate else { return day.id }
-        return TimelineCaptureDateFormatting.string(
-            from: date,
-            dateStyle: .long,
-            timeStyle: .none
-        )
-    }
-
-    private func captureViewportAnchor(
-        using layout: TimelineDeterministicLayout
-    ) -> TimelineViewportAnchor? {
-        guard !layout.rows.isEmpty else { return nil }
-        switch viewportRuntime.retainedAnchor {
-        case .latest:
-            return .latest
-        case let .asset(assetID, viewportCenterOffset)
-            where layout.rowTarget(of: assetID) != nil:
-            return .asset(
-                id: assetID,
-                viewportCenterOffset: viewportCenterOffset
-            )
-        case .asset:
-            break
-        }
-        if let nearest = viewportRuntime.latestFrameSnapshot?.assetNearestVisualCenter(),
-           layout.rowTarget(of: nearest.id) != nil
-        {
-            return .asset(
-                id: nearest.id,
-                viewportCenterOffset: nearest.verticalOffset
-            )
-        }
-        return nil
-    }
-
-    private func targetRow(
-        for anchor: TimelineViewportAnchor,
-        in layout: TimelineDeterministicLayout,
-        viewportHeight: CGFloat
-    ) -> (rowID: String, unitAnchor: UnitPoint)? {
-        switch anchor {
-        case .latest:
-            return (TimelineDeterministicLayout.bottomSpacerID, .bottom)
-        case let .asset(assetID, viewportCenterOffset):
-            guard let target = layout.rowTarget(of: assetID) else { return nil }
-            return (
-                target.rowID,
-                TimelineViewportAnchorRetention.restoredUnitAnchor(
-                    viewportCenterOffset: viewportCenterOffset,
-                    viewportHeight: viewportHeight,
-                    rowHeight: target.rowHeight
-                )
-            )
-        }
-    }
-
-    private func restorePendingViewportAnchor(
-        using layout: TimelineDeterministicLayout,
-        viewportHeight: CGFloat,
-        reason: String,
-        clearsAnchor: Bool
-    ) {
-        guard let anchor = pendingViewportAnchor else { return }
-        let task = Task { @MainActor in
-            await Task.yield()
-            guard !Task.isCancelled, pendingViewportAnchor == anchor else { return }
-            guard !viewportRuntime.userScrollPhase else {
-                pendingViewportAnchor = nil
-                contentRestoreTask = nil
-                return
-            }
-            let targetRow = targetRow(
-                for: anchor,
-                in: layout,
-                viewportHeight: viewportHeight
-            )
-            if case let .asset(assetID, _) = anchor, targetRow == nil {
-                if let visibleID = centerVisibleAssetID {
-                    viewportRuntime.retainedAnchor = .asset(
-                        id: visibleID,
-                        viewportCenterOffset: 0
-                    )
-                }
-                if clearsAnchor {
-                    pendingViewportAnchor = nil
-                }
-                contentRestoreTask = nil
-                Self.logger.info(
-                    "Timeline anchor restore stale content=\(contentName, privacy: .public) reason=\(reason, privacy: .public) asset=\(assetID.prefix(8), privacy: .public) action=keep-position"
-                )
-                return
-            }
-            var transaction = Transaction(animation: nil)
-            transaction.disablesAnimations = true
-            withTransaction(transaction) {
-                if let targetRow {
-                    timelinePosition.scrollTo(
-                        id: targetRow.rowID,
-                        anchor: targetRow.unitAnchor
-                    )
-                }
-            }
-            if clearsAnchor {
-                pendingViewportAnchor = nil
-            }
-            contentRestoreTask = nil
-            Self.logger.info(
-                "Timeline anchor restored content=\(contentName, privacy: .public) reason=\(reason, privacy: .public) anchor=\(Self.describe(anchor), privacy: .public) targetRow=\(targetRow?.rowID ?? "bottom", privacy: .public) unitY=\(targetRow.map { String(format: "%.3f", $0.unitAnchor.y) } ?? "bottom", privacy: .public) result=requested viewportHeight=\(Int(viewportHeight))"
-            )
-        }
-        contentRestoreTask?.cancel()
-        contentRestoreTask = task
-    }
-
-    private var timelineFrameCoordinateSpaceName: String {
-        "timeline-frames-\(contentName)"
     }
 
     private var memoryOverlayRoute: AssetViewerRoute? {
@@ -1944,300 +1189,12 @@ struct PhotosView: View {
         return target
     }
 
-    private func legacyViewerDismissalTargetFrame(assetID: String, aspectRatio: Double) -> AssetViewerDismissalTarget? {
-        guard showsMainTimeline,
-              let frame = viewportRuntime.latestFrameSnapshot?.visibleFrames[assetID],
-              let scrollView = viewportRuntime.scrollView
-        else { return nil }
-        let imageRect = TimelineThumbnailGeometry.renderedImageRect(
-            in: frame.size,
-            aspectRatio: aspectRatio,
-            naturalAspectProgress: presentation.preferences.assetLayout == .naturalAspect ? 1 : 0
-        )
-        let origin = scrollView.convert(scrollView.bounds.origin, to: nil)
-        let frameInWindow = imageRect.offsetBy(
-            dx: frame.minX + origin.x,
-            dy: frame.minY + origin.y
-        )
-        return AssetViewerDismissalTarget(
-            imageFrame: frameInWindow,
-            cornerRadius: presentation.preferences.assetLayout == .naturalAspect
-                ? DesignMetrics.compactCornerRadius : 0,
-            fillsFrame: presentation.preferences.assetLayout == .square
-        )
-    }
-
-    private func updateAssetFrameSnapshot(
-        _ frames: [String: CGRect],
-        layout: TimelineDeterministicLayout,
-        fallbackContainerSize: CGSize
-    ) {
-        guard isTimelineActive, !frames.isEmpty else { return }
-        let measured = viewportRuntime.scrollContainerSize
-        let containerSize = measured.width > 0 && abs(measured.width - fallbackContainerSize.width) < 1
-            ? measured
-            : fallbackContainerSize
-        guard containerSize.width > 0, containerSize.height > 0 else { return }
-
-        let snapshot = TimelineAssetFrameSnapshot(
-            layoutKey: layout.key,
-            containerSize: containerSize,
-            frames: frames
-        )
-        guard TimelineAssetFrameSnapshotPolicy.isCoherent(snapshot) else { return }
-        if viewportRuntime.latestFrameSnapshot?.layoutKey != snapshot.layoutKey {
-            viewportRuntime.previousFrameSnapshot = viewportRuntime.latestFrameSnapshot
-        }
-        viewportRuntime.latestFrameSnapshot = snapshot
-
-        if viewportRuntime.userScrollPhase,
-           viewportRuntime.timelineBottomGap > TimelineViewportAnchorRetention.latestBoundary,
-           let nearest = snapshot.assetNearestVisualCenter()
-        {
-            viewportRuntime.retainedAnchor = .asset(
-                id: nearest.id,
-                viewportCenterOffset: nearest.verticalOffset
-            )
-        }
-
-        if let nearest = snapshot.assetNearestVisualCenter(),
-           let target = layout.rowTarget(of: nearest.id)
-        {
-            store.updateVisibleAnchor(.init(
-                bucketID: target.bucketID,
-                assetID: nearest.id
-            ))
-        }
-
-        if let jumpTarget = store.jumpTarget,
-           jumpTarget != latestScrollTarget,
-           snapshot.visibleFrames.keys.contains(where: {
-               layout.rowTarget(of: $0)?.bucketID == jumpTarget
-           })
-        {
-            Self.logger.info(
-                "Calendar jump target became visible bucket=\(jumpTarget.rawValue, privacy: .public)"
-            )
-            store.completeJump()
-        }
-
-        advanceRotationTransaction(using: snapshot, layout: layout)
-    }
-
-    private func beginRotationTransaction(
-        generation: Int,
-        targetWidth: CGFloat,
-        targetColumns: Int
-    ) {
-        contentRestoreTask?.cancel()
-        contentRestoreTask = nil
-        pendingViewportAnchor = nil
-
-        let existing = viewportRuntime.rotationTransaction
-        let sourceSnapshot = [
-            viewportRuntime.latestFrameSnapshot,
-            viewportRuntime.previousFrameSnapshot,
-        ]
-        .compactMap(\.self)
-        .first { abs($0.layoutKey.width - targetWidth) > 1 }
-        ?? viewportRuntime.latestFrameSnapshot
-        let inheritedAssetID = existing?.assetID
-        let captured = sourceSnapshot?.assetNearestVisualCenter()
-        let assetID = inheritedAssetID ?? captured?.id
-
-        guard let sourceSnapshot else {
-            viewportRuntime.rotationTransaction = nil
-            rotationState?.resolveVisualHandoff(
-                generation: generation,
-                verified: false,
-                reason: "no-source-snapshot"
-            )
-            Self.logger.error(
-                "Timeline rotation capture failed content=\(contentName, privacy: .public) generation=\(generation) targetWidth=\(Int(targetWidth)) reason=no-source-snapshot latest=\(Self.describe(viewportRuntime.latestFrameSnapshot), privacy: .public) previous=\(Self.describe(viewportRuntime.previousFrameSnapshot), privacy: .public)"
-            )
-            return
-        }
-        guard let assetID else {
-            viewportRuntime.rotationTransaction = nil
-            rotationState?.resolveVisualHandoff(
-                generation: generation,
-                verified: false,
-                reason: "no-visible-center"
-            )
-            Self.logger.error(
-                "Timeline rotation capture failed content=\(contentName, privacy: .public) generation=\(generation) targetWidth=\(Int(targetWidth)) reason=no-visible-center source=\(Self.describe(sourceSnapshot), privacy: .public) latest=\(Self.describe(viewportRuntime.latestFrameSnapshot), privacy: .public) previous=\(Self.describe(viewportRuntime.previousFrameSnapshot), privacy: .public)"
-            )
-            return
-        }
-
-        let sourceScrollPhase = viewportRuntime.scrollMotionPhase
-        let sourceContentOffset = viewportRuntime.scrollView?.contentOffset
-            ?? CGPoint(x: 0, y: viewportRuntime.scrollOffset)
-        let momentumStopped = stopTimelineMotionForRotation(phase: sourceScrollPhase)
-
-        viewportRuntime.rotationTransaction = TimelineRotationTransaction(
-            generation: generation,
-            assetID: assetID,
-            sourceLayoutKey: sourceSnapshot.layoutKey,
-            targetWidth: targetWidth,
-            targetColumnCount: targetColumns,
-            sourceScrollPhase: sourceScrollPhase,
-            sourceContentOffset: sourceContentOffset,
-            momentumStopped: momentumStopped
-        )
-        Self.logger.info(
-            "Timeline rotation captured content=\(contentName, privacy: .public) generation=\(generation) asset=\(assetID.prefix(8), privacy: .public) inherited=\(inheritedAssetID != nil) sourceWidth=\(Int(sourceSnapshot.layoutKey.width)) targetWidth=\(Int(targetWidth)) targetColumns=\(targetColumns) sourceFrames=\(sourceSnapshot.frames.count) sourcePhase=\(sourceScrollPhase.rawValue, privacy: .public) sourceOffset=\(Int(sourceContentOffset.y)) momentumStopped=\(momentumStopped)"
-        )
-
-        if let latest = viewportRuntime.latestFrameSnapshot {
-            advanceRotationTransaction(
-                using: latest,
-                layout: viewportRuntime.layoutCache.current
-            )
-        }
-    }
-
-    private func advanceRotationTransaction(
-        using snapshot: TimelineAssetFrameSnapshot,
-        layout: TimelineDeterministicLayout
-    ) {
-        guard var rotation = viewportRuntime.rotationTransaction,
-              !viewportRuntime.userScrollPhase || viewportRuntime.rotationOwnsScrollCallbacks,
-              abs(snapshot.layoutKey.width - rotation.targetWidth) < 1,
-              abs(snapshot.containerSize.width - rotation.targetWidth) < 1,
-              layout.key == snapshot.layoutKey,
-              layout.columns == rotation.targetColumnCount
-        else { return }
-
-        guard let target = layout.rowTarget(of: rotation.assetID) else {
-            Self.logger.error(
-                "Timeline rotation stale content=\(contentName, privacy: .public) generation=\(rotation.generation) asset=\(rotation.assetID.prefix(8), privacy: .public) action=keep-position"
-            )
-            viewportRuntime.rotationTransaction = nil
-            viewportRuntime.rotationOwnsScrollCallbacks = false
-            viewportRuntime.scrollMotionPhase = .idle
-            rotationState?.resolveVisualHandoff(
-                generation: rotation.generation,
-                verified: false,
-                reason: "stale-target"
-            )
-            return
-        }
-
-        switch rotation.stage {
-        case .awaitingDestination:
-            var transaction = Transaction(animation: nil)
-            transaction.disablesAnimations = true
-            withTransaction(transaction) {
-                timelinePosition.scrollTo(id: target.rowID, anchor: .center)
-            }
-            rotation.stage = .restoreRequested(rowID: target.rowID)
-            viewportRuntime.rotationTransaction = rotation
-            Self.logger.info(
-                "Timeline rotation restore requested content=\(contentName, privacy: .public) generation=\(rotation.generation) asset=\(rotation.assetID.prefix(8), privacy: .public) targetRow=\(target.rowID, privacy: .public) container=\(Self.describe(snapshot.containerSize), privacy: .public)"
-            )
-        case let .restoreRequested(rowID):
-            guard let frame = snapshot.frames[rotation.assetID] else { return }
-            let verticalDelta = frame.midY - snapshot.visualCenter.y
-            let tolerance = max(12, frame.height * 0.55)
-            guard abs(verticalDelta) <= tolerance else { return }
-            viewportRuntime.retainedAnchor = .asset(
-                id: rotation.assetID,
-                viewportCenterOffset: verticalDelta
-            )
-            viewportRuntime.rotationTransaction = nil
-            viewportRuntime.rotationOwnsScrollCallbacks = false
-            viewportRuntime.scrollMotionPhase = .idle
-            rotationState?.resolveVisualHandoff(
-                generation: rotation.generation,
-                verified: true,
-                reason: "asset-verified"
-            )
-            Self.logger.info(
-                "Timeline rotation verified content=\(contentName, privacy: .public) generation=\(rotation.generation) asset=\(rotation.assetID.prefix(8), privacy: .public) targetRow=\(rowID, privacy: .public) verticalDelta=\(Int(verticalDelta)) tolerance=\(Int(tolerance)) frames=\(snapshot.frames.count) sourcePhase=\(rotation.sourceScrollPhase.rawValue, privacy: .public) sourceOffset=\(Int(rotation.sourceContentOffset.y)) momentumStopped=\(rotation.momentumStopped)"
-            )
-        }
-    }
-
-    private func stopTimelineMotionForRotation(phase: TimelineScrollMotionPhase) -> Bool {
-        guard phase.isMoving, let scrollView = viewportRuntime.scrollView else { return false }
-        let presentedOffset = scrollView.contentOffset
-        viewportRuntime.rotationOwnsScrollCallbacks = true
-
-        // Cancelling the pan stops both a finger-down drag and UIKit deceleration.
-        // Re-enable it immediately so the destination accepts a new gesture.
-        scrollView.panGestureRecognizer.isEnabled = false
-        scrollView.panGestureRecognizer.isEnabled = true
-        scrollView.setContentOffset(presentedOffset, animated: false)
-        viewportRuntime.scrollMotionPhase = .idle
-        return true
-    }
-
-    private func cancelRotationTransaction(reason: String) {
-        guard let rotation = viewportRuntime.rotationTransaction else { return }
-        viewportRuntime.rotationTransaction = nil
-        viewportRuntime.rotationOwnsScrollCallbacks = false
-        rotationState?.resolveVisualHandoff(
-            generation: rotation.generation,
-            verified: false,
-            reason: reason
-        )
-        Self.logger.info(
-            "Timeline rotation cancelled content=\(contentName, privacy: .public) generation=\(rotation.generation) asset=\(rotation.assetID.prefix(8), privacy: .public) reason=\(reason, privacy: .public)"
-        )
-    }
-
-    private var sectionRevisionKeys: [String] {
-        store.sections.map { section in
-            section.id.rawValue + ":" + String(section.contentRevision)
-        }
-    }
-
     private var memoryBackdropVisible: Bool {
         !compactChrome
             && navigationPath.isEmpty
             && libraryRange == .all
             && store.memoryLaneState == .loaded
             && !store.memories.isEmpty
-    }
-
-    private var centerVisibleAssetID: String? {
-        if let nearest = viewportRuntime.latestFrameSnapshot?.assetNearestVisualCenter() {
-            return nearest.id
-        }
-        if case let .asset(assetID, _) = captureViewportAnchor(
-            using: viewportRuntime.layoutCache.current
-        ) {
-            return assetID
-        }
-        let ordered = viewportRuntime.visibleAssets.sorted { $0.value < $1.value }
-        guard !ordered.isEmpty else { return nil }
-        return ordered[ordered.count / 2].key
-    }
-
-    private func updateChrome(old: PhotosChromeGeometry, new: PhotosChromeGeometry) {
-        guard !viewerOwnsTimelineChrome else {
-            viewportRuntime.chromeTracker.scrollingEnded()
-            return
-        }
-        let programmaticJump = store.jumpTarget != nil
-            || latestJumpTask != nil
-            || viewportRuntime.rotationTransaction != nil
-            || contentRestoreTask != nil
-        if let compact = viewportRuntime.chromeTracker.update(
-            offsetDelta: new.offset - old.offset,
-            bottomGap: new.bottomGap,
-            userScrolling: viewportRuntime.userScrollPhase,
-            programmaticJump: programmaticJump
-        ) {
-            setCompactChrome(compact)
-        }
-    }
-
-    private var layoutAccessibilityActionName: String {
-        presentation.preferences.assetLayout == .square
-            ? "Use Natural Aspect Layout"
-            : "Use Square Layout"
     }
 
     private func setCompactChrome(_ compact: Bool) {
@@ -2266,7 +1223,7 @@ struct PhotosView: View {
     }
 
     private func scheduleViewportUpdate() {
-        guard isTimelineActive, !viewportRuntime.userScrollPhase else { return }
+        guard isTimelineActive else { return }
         viewportRuntime.viewportUpdateTask?.cancel()
         viewportRuntime.viewportUpdateTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(120))
@@ -2285,126 +1242,6 @@ struct PhotosView: View {
             viewportRuntime.lastResidencyTarget = target
             media.updateTimelineResidency(plan, targetPixels: target)
         }
-    }
-
-    private func resetViewportTracking() {
-        viewportRuntime.viewportUpdateTask?.cancel()
-        viewportRuntime.viewportUpdateTask = nil
-        viewportRuntime.visibleDescriptors.removeAll(keepingCapacity: true)
-        viewportRuntime.visibleAssets.removeAll(keepingCapacity: true)
-        viewportRuntime.latestFrameSnapshot = nil
-        viewportRuntime.previousFrameSnapshot = nil
-        viewportRuntime.rotationTransaction = nil
-        viewportRuntime.rotationOwnsScrollCallbacks = false
-        viewportRuntime.scrollMotionPhase = .idle
-        viewportRuntime.retainedAnchor = .latest
-        viewportRuntime.lastResidencyPlan = .empty
-        viewportRuntime.lastResidencyTarget = nil
-    }
-
-    private nonisolated static func describe(_ size: CGSize) -> String {
-        "\(Int(size.width))x\(Int(size.height))"
-    }
-
-    private nonisolated static func describe(_ snapshot: TimelineAssetFrameSnapshot?) -> String {
-        guard let snapshot else { return "none" }
-        return "layout=\(Int(snapshot.layoutKey.width)),container=\(describe(snapshot.containerSize)),frames=\(snapshot.frames.count),visible=\(snapshot.visibleFrames.count)"
-    }
-
-    private nonisolated static func describe(_ anchor: TimelineViewportAnchor?) -> String {
-        switch anchor {
-        case .latest:
-            "latest"
-        case let .asset(assetID, viewportCenterOffset):
-            "asset:\(assetID.prefix(8))@\(Int(viewportCenterOffset))"
-        case nil:
-            "none"
-        }
-    }
-}
-
-private struct TimelineSectionView: View, Equatable {
-    let section: TimelineSection
-    let store: PhotosTimelineStore
-    let media: MediaLibraryController
-    let viewportRuntime: TimelineViewportRuntime
-    let availableWidth: CGFloat
-    let assetLayout: PhotosAssetLayout
-    let visibilityChanged: (String, MediaRequestDescriptor?) -> Void
-    let viewportChanged: (TimelineAssetSummary, Bool) -> Void
-    let transitionNamespace: Namespace.ID
-    let assetSelected: (TimelineAssetSummary, TimelineBucketID) -> Void
-
-    static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.section.summary == rhs.section.summary
-            && lhs.section.loadState == rhs.section.loadState
-            && lhs.section.contentRevision == rhs.section.contentRevision
-            && lhs.availableWidth == rhs.availableWidth
-            && lhs.assetLayout == rhs.assetLayout
-            && lhs.store === rhs.store
-            && lhs.media === rhs.media
-            && lhs.viewportRuntime === rhs.viewportRuntime
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            switch section.loadState {
-            case .unloaded, .loading:
-                bucketHeader
-                ProgressView()
-                    .frame(maxWidth: .infinity, minHeight: 88)
-                    .task {
-                        guard viewportRuntime.isTimelineActive else { return }
-                        await store.loadBucket(section.id)
-                    }
-            case .loaded:
-                if section.assets.isEmpty {
-                    Text("No photos in this section")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, minHeight: 64)
-                } else {
-                    ForEach(Array(section.dayGroups.reversed())) { group in
-                        TimelineDayAssetSection(
-                            group: group,
-                            media: media,
-                            availableWidth: availableWidth,
-                            assetLayout: assetLayout,
-                            visibilityChanged: visibilityChanged,
-                            viewportChanged: viewportChanged,
-                            transitionNamespace: transitionNamespace,
-                            assetSelected: { asset in assetSelected(asset, section.id) }
-                        )
-                    }
-                }
-            case let .failed(message):
-                bucketHeader
-                VStack(spacing: 8) {
-                    Text(message)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                    Button("Retry") {
-                        Task { await store.retryBucket(section.id) }
-                    }
-                    .buttonStyle(.bordered)
-                }
-                .frame(maxWidth: .infinity, minHeight: 88)
-                .padding(.horizontal)
-            }
-        }
-        .accessibilityIdentifier("timeline-section-\(section.id.rawValue)")
-    }
-
-    private var bucketHeader: some View {
-        AssetSectionHeader(
-            title: bucketTitle,
-            subtitle: section.summary.assetCount.formatted() + " items"
-        )
-    }
-
-    private var bucketTitle: String {
-        section.id.displayDate?.formatted(date: .long, time: .omitted) ?? section.id.rawValue
     }
 }
 
