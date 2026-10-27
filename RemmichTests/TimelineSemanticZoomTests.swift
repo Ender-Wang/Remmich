@@ -45,6 +45,23 @@ struct TimelineSemanticZoomTests {
         #expect(warmIndexes.count <= TimelineSemanticTransitionPolicy.warmLimit)
     }
 
+    @Test @MainActor func hostedTransitionMovesWithoutRelayingOutItsContent() {
+        let destination = CGRect(x: 42, y: 170, width: 280, height: 190)
+        let source = CGRect(x: 155, y: 610, width: 90, height: 130)
+        let hostedView = UIView(frame: destination)
+
+        hostedView.layer.setAffineTransform(TimelineSemanticCollectionController.transitionTransform(from: destination, to: source))
+        #expect(hostedView.bounds.size == destination.size)
+        #expect(abs(hostedView.frame.minX - source.minX) < 0.01)
+        #expect(abs(hostedView.frame.minY - source.minY) < 0.01)
+        #expect(abs(hostedView.frame.width - source.width) < 0.01)
+        #expect(abs(hostedView.frame.height - source.height) < 0.01)
+
+        hostedView.layer.setAffineTransform(TimelineSemanticCollectionController.transitionTransform(from: destination, to: destination))
+        #expect(hostedView.frame == destination)
+        #expect(hostedView.bounds.size == destination.size)
+    }
+
     @Test func groupedResidencyDoesNotExpandRepresentativesIntoTimelinePages() {
         let visible = (0 ..< 140).map { asset("visible-\($0)", "2027-01-01T12:00:00Z") }
         let plan = TimelineSemanticResidencyPolicy.groupedPlan(visibleAssets: visible + visible.prefix(8))
@@ -259,7 +276,9 @@ struct TimelineSemanticZoomTests {
         #expect(abs(collection.contentSize.height - collection.contentOffset.y - collection.bounds.height + 96) < 0.5)
         controller.changeScale(coarser: true)
         #expect(committed == [.day])
-        #expect(reportedScales.last == .day)
+        // The staged destination must not publish a viewport and start thumbnail
+        // work while its image is still moving or crossfading into the collection.
+        #expect(reportedScales.last == .natural)
         #expect(collection.numberOfItems(inSection: 0) == 1)
         let card = try #require(collection.collectionViewLayout.layoutAttributesForItem(at: IndexPath(item: 0, section: 0)))
         let clearance = collection.bounds.height - 96 - card.frame.maxY
@@ -270,12 +289,13 @@ struct TimelineSemanticZoomTests {
         controller.view.setNeedsLayout()
         controller.view.layoutIfNeeded()
         #expect(committed == [.day])
+        #expect(reportedScales.last == .day)
         controller.stop()
         #expect(collection.alpha == 1)
         #expect(controller.view.subviews.count == 1)
     }
 
-    @Test @MainActor func nativeWindowGrowthPreservesVisibleFramesAndCells() throws {
+    @Test @MainActor func nativeWindowGrowthPreservesVisibleFramesAndCells() async throws {
         let catalog = TimelineSemanticCatalog(assets: (0 ..< 900).map { asset(String(format: "%04d", $0), "2027-01-01T12:00:00Z") })
         let controller = TimelineSemanticCollectionController()
         controller.update(TimelineSemanticCollectionView(
@@ -298,8 +318,10 @@ struct TimelineSemanticZoomTests {
             return (id, (cell.frame.offsetBy(dx: 0, dy: -collection.contentOffset.y), cell))
         })
         #expect(!before.isEmpty)
+        let initialCount = collection.numberOfItems(inSection: 0)
         collection.delegate = controller
         controller.scrollViewDidScroll(collection)
+        try await Task.sleep(for: .milliseconds(10))
         collection.layoutIfNeeded()
         var compared = 0
         for path in collection.indexPathsForVisibleItems {
@@ -312,6 +334,39 @@ struct TimelineSemanticZoomTests {
             #expect(cell === old.1)
         }
         #expect(compared == before.count)
+        let expandedCount = collection.numberOfItems(inSection: 0)
+        #expect(expandedCount > initialCount)
+        controller.scrollViewDidScroll(collection)
+        try await Task.sleep(for: .milliseconds(10))
+        #expect(collection.numberOfItems(inSection: 0) == expandedCount)
+        controller.stop()
+    }
+
+    @Test @MainActor func latestJumpWithCatalogRefreshInstallsOnlyFinalWindow() throws {
+        let media = MediaLibraryController()
+        let controller = TimelineSemanticCollectionController()
+        func input(count: Int, revision: UInt64, latestRequest: Int) -> TimelineSemanticCollectionView {
+            TimelineSemanticCollectionView(
+                catalog: TimelineSemanticCatalog(assets: (0 ..< count).map {
+                    asset(String(format: "%03d", $0), "2027-01-01T12:00:00Z")
+                }),
+                revision: revision, scale: .natural, media: media, namespace: nil,
+                bottomClearance: 96, runtime: TimelineSemanticRuntime(), latestRequest: latestRequest, isActive: true,
+                hiddenThumbnailID: nil, hiddenLivePhotoID: nil, selectAsset: { _, _ in }, selectGroup: { _, _ in },
+                scaleChanged: { _ in }, scrolled: { _, _, _ in }, visibleAssetsChanged: { _, _, _ in }, refresh: {}
+            )
+        }
+        controller.update(input(count: 60, revision: 1, latestRequest: 0))
+        controller.view.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        controller.view.setNeedsLayout()
+        controller.view.layoutIfNeeded()
+        let before = controller.installationCount
+
+        controller.update(input(count: 90, revision: 2, latestRequest: 1))
+
+        let collection = try #require(controller.view.subviews.compactMap { $0 as? UICollectionView }.first)
+        #expect(controller.installationCount == before + 1)
+        #expect(abs(collection.contentSize.height - collection.contentOffset.y - collection.bounds.height + 96) < 0.5)
         controller.stop()
     }
 

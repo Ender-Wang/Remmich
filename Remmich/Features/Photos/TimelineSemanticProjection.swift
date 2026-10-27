@@ -15,7 +15,7 @@ nonisolated enum TimelineSemanticScale: Int, CaseIterable, Sendable {
 
 /// Metadata is indexed once outside the gesture. Every group owns a range in
 /// chronological assets; overlap comes from ranges, never from a bucket owner.
-nonisolated struct TimelineSemanticCatalog: Sendable {
+final nonisolated class TimelineSemanticCatalog: Sendable {
     struct Group: Sendable {
         let id: String
         let date: Date
@@ -26,6 +26,8 @@ nonisolated struct TimelineSemanticCatalog: Sendable {
     let assets: [TimelineAssetSummary]
     let assetIndexes: [String: Int]
     let groups: [TimelineSemanticScale: [Group]]
+    let standardMosaicBlocks: [TimelineSemanticScale: [TimelineRangeMosaicBlockPlan]]
+    let landscapeMosaicBlocks: [TimelineSemanticScale: [TimelineRangeMosaicBlockPlan]]
 
     init(assets source: [TimelineAssetSummary]) {
         var seen = Set<String>()
@@ -84,6 +86,19 @@ nonisolated struct TimelineSemanticCatalog: Sendable {
             projections[scale] = result
         }
         groups = projections
+        standardMosaicBlocks = projections.mapValues { groups in
+            TimelineRangeMosaicPlanner.blocks(keys: groups.map(\.id), layout: .standard)
+        }
+        landscapeMosaicBlocks = projections.mapValues { groups in
+            TimelineRangeMosaicPlanner.blocks(keys: groups.map(\.id), layout: .landscape)
+        }
+    }
+
+    func mosaicBlocks(at scale: TimelineSemanticScale, layout: TimelineRangeMosaicLayout) -> [TimelineRangeMosaicBlockPlan] {
+        switch layout {
+        case .standard: standardMosaicBlocks[scale, default: []]
+        case .landscape: landscapeMosaicBlocks[scale, default: []]
+        }
     }
 
     func index(containing assetIndex: Int, scale: TimelineSemanticScale) -> Int? {
@@ -213,7 +228,7 @@ nonisolated struct TimelineSemanticProjection: Sendable {
             let spacing = TimelineRangeMosaicPlanner.spacing
             let side = (size.width - inset * 2 - CGFloat(layout.columns - 1) * spacing) / CGFloat(layout.columns)
             // Build membership plans only; geometry is calculated for intersecting blocks.
-            let plans = TimelineRangeMosaicPlanner.blocks(keys: nodes.map(\.id), layout: layout)
+            let plans = catalog.mosaicBlocks(at: scale, layout: layout)
             let selected = plans.filter { $0.range.overlaps(range) }
             for block in selected {
                 for placement in block.placements {

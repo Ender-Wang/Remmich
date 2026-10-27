@@ -1,3 +1,4 @@
+import Combine
 import Nuke
 import OSLog
 import SwiftUI
@@ -81,7 +82,22 @@ private final class TimelineSemanticCollectionLayout: UICollectionViewLayout {
     }
 }
 
+@MainActor
+private final class TimelineSemanticCoverVisibility: ObservableObject {
+    @Published var isVisible = false
+}
+
+private struct TimelineSemanticObservedVisibility<Content: View>: View {
+    @ObservedObject var visibility: TimelineSemanticCoverVisibility
+    @ViewBuilder let content: (Bool) -> Content
+
+    var body: some View {
+        content(visibility.isVisible)
+    }
+}
+
 final class TimelineSemanticCollectionCell: UICollectionViewCell {
+    fileprivate let coverVisibility = TimelineSemanticCoverVisibility()
     var coverAssetID: String?
     var coverImage: UIImage?
     var coverImageAssetID: String?
@@ -113,6 +129,7 @@ final class TimelineSemanticCollectionCell: UICollectionViewCell {
     func clearHostedContent() {
         guard hasHostedContent else { return }
         hostingController?.rootView = AnyView(EmptyView())
+        coverVisibility.isVisible = false
         hasHostedContent = false
     }
 
@@ -199,7 +216,7 @@ nonisolated enum TimelineSemanticTransitionPolicy {
 
 @MainActor
 final class TimelineSemanticCollectionController: UIViewController, UICollectionViewDataSource, UICollectionViewDelegate, UIGestureRecognizerDelegate {
-    private static let logger = Logger(subsystem: "io.github.ender-wang.Remmich", category: "SemanticZoom")
+    private static let signposter = OSSignposter(subsystem: "io.github.ender-wang.Remmich", category: "SemanticZoom")
     private var input: TimelineSemanticCollectionView?
     private var deferredInput: TimelineSemanticCollectionView?
     private var catalog: TimelineSemanticCatalog?
@@ -222,14 +239,25 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
     private var transitionSurface: UIView?
     private var transitionItems: [TransitionItem] = []
     private var transitionHostingControllers: [UIViewController] = []
+    private var transitionHostingControllerPool: [UIHostingController<AnyView>] = []
+    private var transitionHostingControllerCursor = 0
+    private var transitionChromeControllers: [TransitionChromeKey: UIHostingController<AnyView>] = [:]
+    private var transitionChromeKeysInUse = Set<TransitionChromeKey>()
+    private var transitionChromeWarmTask: Task<Void, Never>?
+    private var transitionChromeWarmGeneration: UInt64 = 0
+    private var windowExpansionTask: Task<Void, Never>?
+    private var olderExpansionRearmOffset: CGFloat?
+    private var newerExpansionRearmOffset: CGFloat?
     private var handoffImages: [String: UIImage] = [:]
     private var representativeAssets: [String: Int] = [:]
     private var isInstalling = false
+    private(set) var installationCount = 0
     private var isExpanding = false
     private var hiddenThumbnailID: String?
     private var hiddenLivePhotoID: String?
     private var loadOlderTask: Task<Void, Never>?
     private var viewportTask: Task<Void, Never>?
+    private var transitionWarmTask: Task<Void, Never>?
     private var itemIndexes: [String: Int] = [:]
     private var lastPublishedTarget: MediaPixelSize?
     private var lastPublishedScale: TimelineSemanticScale?
@@ -248,6 +276,23 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         let startRadius: CGFloat
         let endRadius: CGFloat
         var isChrome = false
+        var usesLayerTransform = false
+    }
+
+    private struct TransitionChromeKey: Hashable {
+        let role: String
+        let identity: String
+        let signature: String
+        let widthPixels: Int
+        let heightPixels: Int
+        let interfaceStyle: Int
+        let contentSizeCategory: String
+    }
+
+    private struct TransitionChromePlan {
+        let key: TransitionChromeKey
+        let content: AnyView
+        let size: CGSize
     }
 
     override func loadView() {
@@ -280,7 +325,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             controller.rebuildForAppearance()
         }
         NotificationCenter.default.addObserver(self, selector: #selector(interrupted), name: UIApplication.willResignActiveNotification, object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(interrupted), name: UIApplication.didReceiveMemoryWarningNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(receivedMemoryWarning), name: UIApplication.didReceiveMemoryWarningNotification, object: nil)
     }
 
     override func viewDidLayoutSubviews() {
@@ -345,26 +390,31 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         let needsScale = scale != value.scale
         scale = value.scale
         let insetChanged = abs(collection.contentInset.bottom - value.bottomClearance) > 0.5
+        let latestRequested = value.latestRequest != lastLatestRequest
+        lastLatestRequest = value.latestRequest
+        let jumpToLatest = latestRequested && value.isActive
         isInstalling = true
         collection.contentInset.bottom = value.bottomClearance
         collection.verticalScrollIndicatorInsets.bottom = value.bottomClearance
         isInstalling = false
-        if needsCatalog || needsScale || projection == nil {
+        let projectionMissing = projection == nil
+        if needsCatalog || needsScale {
             representativeAssets = [:]
+        }
+        // A latest request can arrive in the same SwiftUI transaction as a new
+        // catalog. Build its final destination once instead of installing the
+        // old focus and immediately replacing it with the newest window.
+        if jumpToLatest {
             if lastSize.width > 0 {
-                let focus = oldFocusID.flatMap { value.catalog.assetIndexes[$0] } ?? max(0, value.catalog.assets.count - 1)
-                install(makeProjection(scale: scale, focus: focus), focusing: focus, viewportY: focusY, latest: latest && !needsScale,
+                let focus = max(0, value.catalog.assets.count - 1)
+                install(makeProjection(scale: scale, focus: focus), focusing: focus, viewportY: nil, latest: true,
                         refreshContents: needsCatalog)
             }
-        } else if insetChanged {
+        } else if needsCatalog || needsScale || projectionMissing || insetChanged {
             let focus = oldFocusID.flatMap { value.catalog.assetIndexes[$0] } ?? max(0, value.catalog.assets.count - 1)
-            install(makeProjection(scale: scale, focus: focus, range: projection?.nodeRange), focusing: focus, viewportY: focusY, latest: latest)
-        }
-        if value.latestRequest != lastLatestRequest {
-            lastLatestRequest = value.latestRequest
-            if value.isActive {
-                let focus = max(0, value.catalog.assets.count - 1)
-                install(makeProjection(scale: scale, focus: focus), focusing: focus, viewportY: nil, latest: true)
+            if lastSize.width > 0 {
+                install(makeProjection(scale: scale, focus: focus, range: needsCatalog || needsScale || projectionMissing ? nil : projection?.nodeRange),
+                        focusing: focus, viewportY: focusY, latest: latest && !needsScale, refreshContents: needsCatalog)
             }
         }
         if hiddenThumbnailID != value.hiddenThumbnailID || hiddenLivePhotoID != value.hiddenLivePhotoID {
@@ -391,9 +441,11 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
     }
 
     private func makeProjection(scale: TimelineSemanticScale, focus: Int, range: Range<Int>? = nil) -> TimelineSemanticProjection {
-        TimelineSemanticProjection.build(catalog: catalog!, scale: scale, focusAssetIndex: focus, size: lastSize,
-                                         isPhone: traitCollection.userInterfaceIdiom == .phone,
-                                         dark: traitCollection.userInterfaceStyle == .dark, requestedRange: range)
+        let interval = Self.signposter.beginInterval("ProjectionBuild", id: Self.signposter.makeSignpostID())
+        defer { Self.signposter.endInterval("ProjectionBuild", interval) }
+        return TimelineSemanticProjection.build(catalog: catalog!, scale: scale, focusAssetIndex: focus, size: lastSize,
+                                                isPhone: traitCollection.userInterfaceIdiom == .phone,
+                                                dark: traitCollection.userInterfaceStyle == .dark, requestedRange: range)
             .bottomAligned(minimumHeight: max(0, collection.bounds.height - collection.contentInset.bottom))
     }
 
@@ -407,9 +459,17 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
     private func install(_ next: TimelineSemanticProjection, focusing focus: Int, viewportY: CGFloat?, latest: Bool,
                          refreshContents: Bool = false)
     {
+        installationCount += 1
+        let interval = Self.signposter.beginInterval("CollectionInstall", id: Self.signposter.makeSignpostID())
+        defer { Self.signposter.endInterval("CollectionInstall", interval) }
         isInstalling = true
         let oldScale = projection?.scale
+        let replaceScaleBehindTransition = oldScale != nil && oldScale != next.scale && transitionSurface != nil
         let oldIDs = Set(dataSource.snapshot().itemIdentifiers)
+        if oldScale != next.scale || refreshContents {
+            olderExpansionRearmOffset = nil
+            newerExpansionRearmOffset = nil
+        }
         projection = next
         itemIndexes = Dictionary(uniqueKeysWithValues: next.items.enumerated().map { ($0.element.id, $0.offset) })
         scale = next.scale
@@ -421,17 +481,36 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             snapshot.appendSections([0])
             let ids = next.items.map(\.id)
             snapshot.appendItems(ids)
-            if oldScale != next.scale || refreshContents {
-                snapshot.reconfigureItems(ids.filter { oldIDs.contains($0) })
+            let applyInterval = Self.signposter.beginInterval("SnapshotApply", id: Self.signposter.makeSignpostID())
+            if replaceScaleBehindTransition {
+                // The transition surface already owns the visible pixels. A
+                // full scale change replaces its item identities, so avoid
+                // diffable batch rebasing of cells that cannot be reused.
+                dataSource.applySnapshotUsingReloadData(snapshot)
+            } else {
+                dataSource.apply(snapshot, animatingDifferences: false)
             }
-            dataSource.apply(snapshot, animatingDifferences: false)
+            Self.signposter.endInterval("SnapshotApply", applyInterval)
+            let layoutInterval = Self.signposter.beginInterval("CollectionLayout", id: Self.signposter.makeSignpostID())
             layout.invalidateLayout()
             collection.contentOffset = CGPoint(x: 0, y: y)
             collection.layoutIfNeeded()
+            Self.signposter.endInterval("CollectionLayout", layoutInterval)
+            if !replaceScaleBehindTransition, oldScale != next.scale || refreshContents {
+                let configureInterval = Self.signposter.beginInterval("VisibleCellConfigure", id: Self.signposter.makeSignpostID())
+                for path in collection.indexPathsForVisibleItems {
+                    if let id = dataSource.itemIdentifier(for: path), oldIDs.contains(id) {
+                        configure(path)
+                    }
+                }
+                Self.signposter.endInterval("VisibleCellConfigure", configureInterval)
+            }
         }
         lastOffset = y
         isInstalling = false
+        let viewportInterval = Self.signposter.beginInterval("ViewportPublish", id: Self.signposter.makeSignpostID())
         publishViewport()
+        Self.signposter.endInterval("ViewportPublish", viewportInterval)
     }
 
     func collectionView(_: UICollectionView, numberOfItemsInSection _: Int) -> Int {
@@ -463,6 +542,9 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         let assetIndex = representativeIndex(item)
         let asset = catalog.assets[assetIndex]
         let coversVisible = input.isActive && gesture == nil && transitionSurface == nil
+        if cell.coverVisibility.isVisible != coversVisible {
+            cell.coverVisibility.isVisible = coversVisible
+        }
         cell.alpha = transitionSurface == nil || isPresentationCrossfading ? 1 : 0
         if item.isHeader {
             let date = catalog.assets[item.assetRange.lowerBound].capturedAt
@@ -508,25 +590,29 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             )
             cell.coverAssetID = asset.id
             let contentID = "\(item.id):\(revision ?? 0)"
+            let placeholderImage = handoffImages[item.id]
+            let coverVisibility = cell.coverVisibility
             cell.setHostedContent(
-                PhotosRangeCard(title: group.route.navigationTitle, count: group.assets.count,
-                                systemImage: "calendar", assets: covers, media: input.media,
-                                motion: motion, externallyVisible: coversVisible,
-                                placeholderImage: handoffImages[item.id],
-                                imageLoaded: { [weak cell] assetID, image in
-                                    guard cell?.nodeID == item.id, cell?.coverAssetID == assetID else { return }
-                                    cell?.coverImage = image
-                                    cell?.coverImageAssetID = assetID
-                                },
-                                onCoverChanged: { [weak cell] assetID in
-                                    guard cell?.nodeID == item.id else { return }
-                                    if cell?.coverAssetID != assetID {
-                                        cell?.coverImage = nil
-                                        cell?.coverImageAssetID = nil
-                                    }
-                                    cell?.coverAssetID = assetID
-                                })
-                                .id(contentID),
+                TimelineSemanticObservedVisibility(visibility: coverVisibility) { [weak cell] visible in
+                    PhotosRangeCard(title: group.route.navigationTitle, count: group.assets.count,
+                                    systemImage: "calendar", assets: covers, media: input.media,
+                                    motion: motion, externallyVisible: visible,
+                                    placeholderImage: placeholderImage,
+                                    imageLoaded: { [weak cell] assetID, image in
+                                        guard cell?.nodeID == item.id, cell?.coverAssetID == assetID else { return }
+                                        cell?.coverImage = image
+                                        cell?.coverImageAssetID = assetID
+                                    },
+                                    onCoverChanged: { [weak cell] assetID in
+                                        guard cell?.nodeID == item.id else { return }
+                                        if cell?.coverAssetID != assetID {
+                                            cell?.coverImage = nil
+                                            cell?.coverImageAssetID = nil
+                                        }
+                                        cell?.coverAssetID = assetID
+                                    })
+                                    .id(contentID)
+                },
                 parent: self
             )
             cell.isAccessibilityElement = true
@@ -578,12 +664,11 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         switch recognizer.state {
         case .began:
             finishPresentation()
+            cancelTransitionWarmup()
             guard input?.isActive == true, let focused = focusedItem(at: recognizer.location(in: collection)) else { return }
             focusAssetIndex = representativeIndex(focused)
             pinchCentroid = recognizer.location(in: view)
             gesture = TimelineSemanticZoomGesture()
-            let sourceScale = scale.rawValue
-            Self.logger.info("Semantic pinch began scale=\(sourceScale, privacy: .public)")
             collection.setContentOffset(collection.contentOffset, animated: false)
             collection.panGestureRecognizer.isEnabled = false
         case .changed:
@@ -595,8 +680,6 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             renderProgress(gesture?.progress ?? 0)
         case .ended:
             guard let gesture else { return }
-            let hasTarget = target != nil
-            Self.logger.info("Semantic pinch ended magnification=\(recognizer.scale) hasTarget=\(hasTarget)")
             settle(commit: gesture.commits(magnification: recognizer.scale) && target != nil)
         case .cancelled, .failed:
             cancelTracking()
@@ -606,7 +689,6 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
 
     private func prepareTransition(to nextScale: TimelineSemanticScale) {
         guard let source = projection, let catalog else { return }
-        let started = ContinuousClock.now
         let next = makeProjection(scale: nextScale, focus: focusAssetIndex)
         guard !next.items.isEmpty else { return }
         target = next
@@ -614,6 +696,9 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         targetOffset = offset(for: next, focus: focusAssetIndex, viewportY: pinchCentroid.y, latest: false)
         collection.panGestureRecognizer.isEnabled = false
         handoffImages = [:]
+        cancelTransitionChromeWarmup()
+        transitionHostingControllerCursor = 0
+        transitionChromeKeysInUse = []
         guard !UIAccessibility.isReduceMotionEnabled else { return }
         let surface = UIView(frame: view.bounds)
         surface.isUserInteractionEnabled = false
@@ -732,44 +817,18 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             let start = sourceItem.frame.offsetBy(dx: 0, dy: -collection.contentOffset.y)
             let end = destinations.first(where: { $0.assetRange.overlaps(sourceItem.assetRange) })
                 .map { $0.frame.offsetBy(dx: 0, dy: -targetOffset) } ?? start
-            let chrome: UIView
-            if sourceItem.isHeader {
-                chrome = hostedTransitionView(
-                    assetSectionHeader(for: sourceItem),
-                    size: start.size
-                )
-            } else {
-                let group = catalog.groups[scale]![sourceItem.nodeIndex]
-                chrome = hostedTransitionView(
-                    PhotosRangeCardChrome(title: group.route.navigationTitle,
-                                          count: group.assets.count,
-                                          isFeatured: sourceItem.isFeatured),
-                    size: start.size
-                )
-            }
+            guard let plan = transitionChromePlan(for: sourceItem, scale: scale, catalog: catalog) else { continue }
+            let chrome = transitionChromeView(plan)
             addTransition(chrome, start: start, end: end, incoming: false, disappears: true,
-                          startRadius: 0, endRadius: 0, to: surface)
+                          startRadius: 0, endRadius: 0, to: surface, hosted: true)
             transitionItems[transitionItems.count - 1].isChrome = true
         }
         for destination in next.items where destination.frame.intersects(targetArea) && (destination.isHeader || !nextScale.isAssets) {
             let end = destination.frame.offsetBy(dx: 0, dy: -targetOffset)
-            let chrome: UIView
-            if destination.isHeader {
-                chrome = hostedTransitionView(
-                    assetSectionHeader(for: destination),
-                    size: end.size
-                )
-            } else {
-                let group = catalog.groups[nextScale]![destination.nodeIndex]
-                chrome = hostedTransitionView(
-                    PhotosRangeCardChrome(title: group.route.navigationTitle,
-                                          count: group.assets.count,
-                                          isFeatured: destination.isFeatured),
-                    size: end.size
-                )
-            }
+            guard let plan = transitionChromePlan(for: destination, scale: nextScale, catalog: catalog) else { continue }
+            let chrome = transitionChromeView(plan)
             addTransition(chrome, start: end.offsetBy(dx: 0, dy: 12), end: end, incoming: true, disappears: false,
-                          startRadius: 0, endRadius: 0, to: surface)
+                          startRadius: 0, endRadius: 0, to: surface, hosted: true)
             transitionItems[transitionItems.count - 1].isChrome = true
         }
         if nextScale.isAssets {
@@ -784,14 +843,10 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
                     imageRect(item: $0, scale: scale, asset: asset)
                         .offsetBy(dx: 0, dy: -collection.contentOffset.y)
                 } ?? end.offsetBy(dx: 0, dy: 12)
-                let badge = hostedTransitionView(
-                    TimelineAssetBadgeOverlay(asset: asset,
-                                              hiddenLivePhotoBadgeAssetID: input?.hiddenLivePhotoID),
-                    size: end.size
-                )
+                let badge = transitionChromeView(badgeTransitionChromePlan(asset: asset, size: end.size))
                 addTransition(badge, start: start, end: end,
                               incoming: !scale.isAssets || sourceItem == nil, disappears: false,
-                              startRadius: 0, endRadius: 0, to: surface)
+                              startRadius: 0, endRadius: 0, to: surface, hosted: true)
             }
         } else if scale.isAssets {
             for (_, sourceItem) in sources {
@@ -804,13 +859,9 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
                     .offsetBy(dx: 0, dy: -collection.contentOffset.y)
                 let end = imageRect(item: destination, scale: nextScale, asset: asset)
                     .offsetBy(dx: 0, dy: -targetOffset)
-                let badge = hostedTransitionView(
-                    TimelineAssetBadgeOverlay(asset: asset,
-                                              hiddenLivePhotoBadgeAssetID: input?.hiddenLivePhotoID),
-                    size: start.size
-                )
+                let badge = transitionChromeView(badgeTransitionChromePlan(asset: asset, size: start.size))
                 addTransition(badge, start: start, end: end, incoming: false, disappears: true,
-                              startRadius: 0, endRadius: 0, to: surface)
+                              startRadius: 0, endRadius: 0, to: surface, hosted: true)
             }
         }
         for cell in collection.visibleCells {
@@ -821,15 +872,6 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
                 configure(path)
             }
         }
-        let duration = started.duration(to: .now).components
-        let layerCount = transitionItems.count
-        let immediateTargets = destinations.reduce(into: 0) { count, destination in
-            if handoffImages[destination.id] != nil {
-                count += 1
-            }
-        }
-        let hostedChromeCount = transitionHostingControllers.count
-        Self.logger.info("Semantic transition prepared sourceItems=\(sources.count) targetItems=\(destinations.count) immediateTargets=\(immediateTargets) hostedChrome=\(hostedChromeCount) layers=\(layerCount) elapsedMs=\(duration.seconds * 1000 + duration.attoseconds / 1_000_000_000_000_000)")
     }
 
     private func cachedImage(asset: TimelineAssetSummary, frame: CGRect) -> UIImage? {
@@ -892,43 +934,152 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
     }
 
     private func addTransition(_ snapshot: UIView, start: CGRect, end: CGRect, incoming: Bool, disappears: Bool,
-                               startRadius: CGFloat, endRadius: CGFloat, to surface: UIView)
+                               startRadius: CGFloat, endRadius: CGFloat, to surface: UIView, hosted: Bool = false)
     {
-        snapshot.frame = start
+        if hosted {
+            snapshot.layer.setAffineTransform(.identity)
+        }
+        snapshot.frame = hosted ? end : start
+        if hosted {
+            snapshot.layer.setAffineTransform(Self.transitionTransform(from: end, to: start))
+        }
         snapshot.clipsToBounds = true
         snapshot.layer.cornerRadius = startRadius
         snapshot.alpha = incoming ? 0 : 1
         surface.addSubview(snapshot)
         transitionItems.append(TransitionItem(view: snapshot, start: start, end: end, incoming: incoming,
-                                              disappears: disappears, startRadius: startRadius, endRadius: endRadius))
+                                              disappears: disappears, startRadius: startRadius, endRadius: endRadius,
+                                              usesLayerTransform: hosted))
     }
 
-    private func hostedTransitionView(_ content: some View, size: CGSize) -> UIView {
-        let controller = UIHostingController(rootView: AnyView(content))
+    static func transitionTransform(from base: CGRect, to target: CGRect) -> CGAffineTransform {
+        CGAffineTransform(a: target.width / max(1, base.width), b: 0,
+                          c: 0, d: target.height / max(1, base.height),
+                          tx: target.midX - base.midX, ty: target.midY - base.midY)
+    }
+
+    private func transitionChromeView(_ plan: TransitionChromePlan) -> UIView {
+        if let controller = transitionChromeControllers[plan.key],
+           transitionChromeKeysInUse.insert(plan.key).inserted
+        {
+            controller.view.layer.setAffineTransform(.identity)
+            controller.view.frame = CGRect(origin: .zero, size: plan.size)
+            transitionHostingControllers.append(controller)
+            return controller.view
+        }
+
+        let controller: UIHostingController<AnyView>
+        if transitionHostingControllerPool.indices.contains(transitionHostingControllerCursor) {
+            controller = transitionHostingControllerPool[transitionHostingControllerCursor]
+            controller.rootView = plan.content
+        } else {
+            controller = UIHostingController(rootView: plan.content)
+            controller.safeAreaRegions = []
+            controller.view.backgroundColor = .clear
+            transitionHostingControllerPool.append(controller)
+        }
+        transitionHostingControllerCursor += 1
         controller.safeAreaRegions = []
         controller.view.backgroundColor = .clear
-        controller.view.frame = CGRect(origin: .zero, size: size)
+        controller.view.layer.setAffineTransform(.identity)
+        controller.view.frame = CGRect(origin: .zero, size: plan.size)
         controller.view.setNeedsLayout()
         controller.view.layoutIfNeeded()
         transitionHostingControllers.append(controller)
         return controller.view
     }
 
-    private func assetSectionHeader(for item: TimelineSemanticProjection.Item) -> AssetSectionHeader {
-        AssetSectionHeader(
-            title: TimelineCaptureDateFormatting.string(
-                from: catalog!.assets[item.assetRange.lowerBound].capturedAt,
+    private func transitionChromePlan(
+        for item: TimelineSemanticProjection.Item,
+        scale: TimelineSemanticScale,
+        catalog: TimelineSemanticCatalog
+    ) -> TransitionChromePlan? {
+        if item.isHeader {
+            let title = TimelineCaptureDateFormatting.string(
+                from: catalog.assets[item.assetRange.lowerBound].capturedAt,
                 dateStyle: .long,
                 timeStyle: .none
-            ),
-            subtitle: "\(item.assetRange.count.formatted()) items"
+            )
+            let subtitle = "\(item.assetRange.count.formatted()) items"
+            return makeTransitionChromePlan(
+                role: "header",
+                identity: "\(scale.rawValue):\(item.id)",
+                signature: "\(title)|\(subtitle)",
+                size: item.frame.size,
+                content: AssetSectionHeader(title: title, subtitle: subtitle)
+            )
+        }
+
+        if !scale.isAssets {
+            guard let groups = catalog.groups[scale], groups.indices.contains(item.nodeIndex) else { return nil }
+            let group = groups[item.nodeIndex]
+            let title = group.route.navigationTitle
+            let count = group.assets.count
+            return makeTransitionChromePlan(
+                role: "group",
+                identity: "\(scale.rawValue):\(item.id)",
+                signature: "\(title)|\(count)|\(item.isFeatured)",
+                size: item.frame.size,
+                content: PhotosRangeCardChrome(title: title, count: count, isFeatured: item.isFeatured)
+            )
+        }
+
+        guard catalog.assets.indices.contains(item.assetRange.lowerBound) else { return nil }
+        let asset = catalog.assets[item.assetRange.lowerBound]
+        guard TimelineAssetBadgeOverlay.isVisible(for: asset) else { return nil }
+        return badgeTransitionChromePlan(
+            asset: asset,
+            size: imageRect(item: item, scale: scale, asset: asset).size
+        )
+    }
+
+    private func badgeTransitionChromePlan(asset: TimelineAssetSummary, size: CGSize) -> TransitionChromePlan {
+        makeTransitionChromePlan(
+            role: "badge",
+            identity: asset.id,
+            signature: "\(asset.livePhotoVideoID != nil)|\(asset.projectionType ?? "")|\(asset.stack?.assetCount ?? 0)|\(input?.hiddenLivePhotoID == asset.id)",
+            size: size,
+            content: TimelineAssetBadgeOverlay(
+                asset: asset,
+                hiddenLivePhotoBadgeAssetID: input?.hiddenLivePhotoID
+            )
+        )
+    }
+
+    private func makeTransitionChromePlan(
+        role: String,
+        identity: String,
+        signature: String,
+        size: CGSize,
+        content: some View
+    ) -> TransitionChromePlan {
+        let displayScale = traitCollection.displayScale
+        let colorScheme: ColorScheme = traitCollection.userInterfaceStyle == .dark ? .dark : .light
+        let key = TransitionChromeKey(
+            role: role,
+            identity: identity,
+            signature: signature,
+            widthPixels: max(1, Int((size.width * displayScale).rounded())),
+            heightPixels: max(1, Int((size.height * displayScale).rounded())),
+            interfaceStyle: traitCollection.userInterfaceStyle.rawValue,
+            contentSizeCategory: traitCollection.preferredContentSizeCategory.rawValue
+        )
+        return TransitionChromePlan(
+            key: key,
+            content: AnyView(content.environment(\.colorScheme, colorScheme)),
+            size: size
         )
     }
 
     private func renderProgress(_ progress: CGFloat) {
         for item in transitionItems {
-            item.view.frame = CGRect(x: mix(item.start.minX, item.end.minX, progress), y: mix(item.start.minY, item.end.minY, progress),
-                                     width: mix(item.start.width, item.end.width, progress), height: mix(item.start.height, item.end.height, progress))
+            let frame = CGRect(x: mix(item.start.minX, item.end.minX, progress), y: mix(item.start.minY, item.end.minY, progress),
+                               width: mix(item.start.width, item.end.width, progress), height: mix(item.start.height, item.end.height, progress))
+            if item.usesLayerTransform {
+                item.view.layer.setAffineTransform(Self.transitionTransform(from: item.end, to: frame))
+            } else {
+                item.view.frame = frame
+            }
             item.view.layer.cornerRadius = mix(item.startRadius, item.endRadius, progress)
             item.view.alpha = if item.isChrome {
                 item.incoming ? progress : item.disappears ? 1 - progress : 1
@@ -948,7 +1099,6 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         if commit, let target {
             install(target, focusing: focusAssetIndex, viewportY: pinchCentroid.y, latest: false)
             input?.scaleChanged(target.scale)
-            Self.logger.info("Semantic zoom committed scale=\(String(describing: target.scale), privacy: .public) items=\(target.items.count)")
         }
         guard !UIAccessibility.isReduceMotionEnabled, transitionSurface != nil else { finishPresentation(); return }
         let duration = 0.16 + Double(commit ? 1 - progress : progress) * 0.18
@@ -973,11 +1123,6 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         guard let surface = transitionSurface else {
             completePresentationCleanup()
             return
-        }
-        if collection != nil, !scale.isAssets {
-            for path in collection.indexPathsForVisibleItems {
-                configure(path)
-            }
         }
         collection?.alpha = 1
         collection?.visibleCells.forEach { $0.alpha = 1 }
@@ -1008,8 +1153,17 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         localTransitionTasks = []
         transitionSurface?.removeFromSuperview()
         transitionSurface = nil
+        if collection != nil, !scale.isAssets {
+            for cell in collection.visibleCells.compactMap({ $0 as? TimelineSemanticCollectionCell }) {
+                let isVisible = input?.isActive == true
+                if cell.coverVisibility.isVisible != isVisible {
+                    cell.coverVisibility.isVisible = isVisible
+                }
+            }
+        }
         transitionItems = []
         transitionHostingControllers = []
+        transitionChromeKeysInUse = []
         target = nil
         input?.transitionScaleChanged(scale)
         collection?.alpha = 1
@@ -1025,19 +1179,28 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
 
     @objc private func interrupted() {
         gesture = nil
+        cancelTransitionWarmup()
+        windowExpansionTask?.cancel()
+        windowExpansionTask = nil
         completePresentationCleanup()
     }
 
     func stop() {
         interrupted()
+        windowExpansionTask?.cancel()
+        windowExpansionTask = nil
         loadOlderTask?.cancel()
         loadOlderTask = nil
         viewportTask?.cancel()
         viewportTask = nil
+        cancelTransitionChromeWarmup(resetCache: true)
         transitionPrefetcher?.stopPrefetching()
         transitionPrefetcher = nil
         warmedRequests = [:]
         warmPipeline = nil
+        transitionHostingControllers = []
+        transitionHostingControllerPool = []
+        transitionHostingControllerCursor = 0
         deferredInput = nil
         input = nil
         collection?.visibleCells.forEach { ($0 as? TimelineSemanticCollectionCell)?.clearHostedContent() }
@@ -1074,13 +1237,20 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         }
     }
 
+    func scrollViewWillBeginDragging(_: UIScrollView) {
+        guard input?.isActive == true, gesture == nil, animator == nil else { return }
+        cancelTransitionWarmup()
+        olderExpansionRearmOffset = nil
+        newerExpansionRearmOffset = nil
+    }
+
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         guard !isInstalling, gesture == nil, animator == nil, input?.isActive == true else { return }
         let gap = isAtLatest ? 0 : max(25, layout.height - scrollView.contentOffset.y - scrollView.bounds.height + scrollView.contentInset.bottom)
         input?.scrolled(scrollView.contentOffset.y - lastOffset, gap, scrollView.isDragging || scrollView.isDecelerating)
         lastOffset = scrollView.contentOffset.y
         scheduleViewportPublication()
-        expandWindowIfNeeded()
+        scheduleWindowExpansion()
     }
 
     func scrollViewDidEndDecelerating(_: UIScrollView) {
@@ -1111,7 +1281,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
 
     private func publishViewport() {
         guard let input, input.isActive, let catalog, let projection, collection != nil,
-              gesture == nil, animator == nil, !isInstalling else { return }
+              gesture == nil, animator == nil, transitionSurface == nil, !isInstalling else { return }
         let visibleItems = collection.indexPathsForVisibleItems.compactMap { path -> TimelineSemanticProjection.Item? in
             guard projection.items.indices.contains(path.item) else { return nil }
             let item = projection.items[path.item]
@@ -1130,13 +1300,36 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             : 900
         let target = MediaPixelSize(width: side, height: side)
         if !collection.isDragging, !collection.isDecelerating {
-            warmTransitionNeighborhood()
+            scheduleTransitionWarmup()
         }
         guard ids != lastVisibleIDs || target != lastPublishedTarget || scale != lastPublishedScale else { return }
         lastVisibleIDs = ids
         lastPublishedTarget = target
         lastPublishedScale = scale
         input.visibleAssetsChanged(assets, target, scale)
+    }
+
+    private func scheduleTransitionWarmup() {
+        guard transitionWarmTask == nil else { return }
+        transitionWarmTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(for: .milliseconds(70))
+            } catch {
+                return
+            }
+            guard let self else { return }
+            transitionWarmTask = nil
+            guard !Task.isCancelled, gesture == nil, animator == nil, transitionSurface == nil,
+                  !collection.isDragging, !collection.isDecelerating, input?.isActive == true else { return }
+            let interval = Self.signposter.beginInterval("TransitionWarmup", id: Self.signposter.makeSignpostID())
+            warmTransitionNeighborhood()
+            Self.signposter.endInterval("TransitionWarmup", interval)
+        }
+    }
+
+    private func cancelTransitionWarmup() {
+        transitionWarmTask?.cancel()
+        transitionWarmTask = nil
     }
 
     private func warmTransitionNeighborhood() {
@@ -1149,6 +1342,9 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             warmedRequests = [:]
         }
         var descriptors: [MediaRequestDescriptor] = []
+        var chromePlans = projection.items.filter { $0.frame.intersects(collection.bounds) }.compactMap {
+            transitionChromePlan(for: $0, scale: scale, catalog: catalog)
+        }
         let adjacentDirections = scale.isAssets ? [true, false] : [false, true]
         for coarser in adjacentDirections {
             guard let nextScale = scale.adjacent(coarser: coarser) else { continue }
@@ -1157,6 +1353,9 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             let y = offset(for: next, focus: focus, viewportY: focused.frame.midY - collection.contentOffset.y, latest: false)
             let rect = CGRect(origin: CGPoint(x: 0, y: y), size: collection.bounds.size)
             let area = rect.insetBy(dx: 0, dy: -rect.height * 0.25)
+            chromePlans += next.items.filter { $0.frame.intersects(area) }.compactMap {
+                transitionChromePlan(for: $0, scale: nextScale, catalog: catalog)
+            }
             let warmIndexes = TimelineSemanticTransitionPolicy.warmIndexes(
                 items: next.items,
                 area: area,
@@ -1189,6 +1388,57 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             warmedRequests[descriptor] = request
         }
         transitionPrefetcher?.startPrefetching(with: additions.map(\.1))
+        scheduleTransitionChromeWarmup(plans: chromePlans)
+    }
+
+    private func scheduleTransitionChromeWarmup(plans: [TransitionChromePlan]) {
+        var seen = Set<TransitionChromeKey>()
+        let desiredPlans = plans.filter { seen.insert($0.key).inserted }
+        let boundedPlans = Array(desiredPlans.prefix(TimelineSemanticTransitionPolicy.warmLimit))
+        let desiredKeys = Set(boundedPlans.map(\.key))
+        transitionChromeControllers = transitionChromeControllers.filter { desiredKeys.contains($0.key) }
+
+        cancelTransitionChromeWarmup()
+        let missingPlans = boundedPlans.filter { transitionChromeControllers[$0.key] == nil }
+        guard !missingPlans.isEmpty, gesture == nil, transitionSurface == nil else { return }
+
+        transitionChromeWarmGeneration &+= 1
+        let generation = transitionChromeWarmGeneration
+        transitionChromeWarmTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            for plan in missingPlans {
+                guard !Task.isCancelled, gesture == nil, transitionSurface == nil else { break }
+                let controller = UIHostingController(rootView: plan.content)
+                controller.safeAreaRegions = []
+                controller.view.backgroundColor = .clear
+                controller.view.frame = CGRect(origin: .zero, size: plan.size)
+                controller.view.setNeedsLayout()
+                controller.view.layoutIfNeeded()
+                transitionChromeControllers[plan.key] = controller
+                try? await Task.sleep(for: .milliseconds(4))
+            }
+            if transitionChromeWarmGeneration == generation {
+                transitionChromeWarmTask = nil
+            }
+        }
+    }
+
+    private func cancelTransitionChromeWarmup(resetCache: Bool = false) {
+        transitionChromeWarmGeneration &+= 1
+        transitionChromeWarmTask?.cancel()
+        transitionChromeWarmTask = nil
+        if resetCache {
+            transitionChromeControllers = [:]
+            transitionChromeKeysInUse = []
+        }
+    }
+
+    @objc private func receivedMemoryWarning() {
+        interrupted()
+        cancelTransitionChromeWarmup(resetCache: true)
+        transitionHostingControllers = []
+        transitionHostingControllerPool = []
+        transitionHostingControllerCursor = 0
     }
 
     private func thumbnailDescriptor(asset: TimelineAssetSummary, frame: CGRect, scale: TimelineSemanticScale) -> MediaRequestDescriptor {
@@ -1207,18 +1457,33 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         }
     }
 
+    private func scheduleWindowExpansion() {
+        guard windowExpansionTask == nil else { return }
+        windowExpansionTask = Task { @MainActor [weak self] in
+            await Task.yield()
+            guard !Task.isCancelled, let self else { return }
+            windowExpansionTask = nil
+            guard gesture == nil, animator == nil, input?.isActive == true else { return }
+            expandWindowIfNeeded()
+        }
+    }
+
     private func expandWindowIfNeeded() {
         guard !isExpanding, let projection, let catalog else { return }
         let older = collection.contentOffset.y < collection.bounds.height
         let newer = layout.height - collection.bounds.maxY < collection.bounds.height
-        guard (older && projection.nodeRange.lowerBound > 0) || (newer && projection.nodeRange.upperBound < catalog.count(at: scale)),
+        let expandOlder = older && projection.nodeRange.lowerBound > 0
+            && olderExpansionRearmOffset.map { collection.contentOffset.y <= $0 } != false
+        let expandNewer = newer && projection.nodeRange.upperBound < catalog.count(at: scale)
+            && newerExpansionRearmOffset.map { collection.contentOffset.y >= $0 } != false
+        guard expandOlder || expandNewer,
               let focus = focusedItem(at: CGPoint(x: collection.bounds.midX, y: collection.bounds.midY)) else { return }
-        var lower = older ? max(0, projection.nodeRange.lowerBound - (scale.isAssets ? 180 : 26)) : projection.nodeRange.lowerBound
-        var upper = newer ? min(catalog.count(at: scale), projection.nodeRange.upperBound + (scale.isAssets ? 180 : 26)) : projection.nodeRange.upperBound
+        var lower = expandOlder ? max(0, projection.nodeRange.lowerBound - (scale.isAssets ? 180 : 26)) : projection.nodeRange.lowerBound
+        var upper = expandNewer ? min(catalog.count(at: scale), projection.nodeRange.upperBound + (scale.isAssets ? 180 : 26)) : projection.nodeRange.upperBound
         guard lower != projection.nodeRange.lowerBound || upper != projection.nodeRange.upperBound else { return }
         let limit = scale.isAssets ? 1080 : 156
         if upper - lower > limit {
-            if older {
+            if expandOlder {
                 upper = lower + limit
             } else {
                 lower = upper - limit
@@ -1229,6 +1494,13 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         let viewportY = focus.frame.midY - collection.contentOffset.y
         let next = makeProjection(scale: scale, focus: representative, range: lower ..< upper)
         install(next, focusing: representative, viewportY: viewportY, latest: false)
+        let rearmDistance = collection.bounds.height * 0.5
+        if expandOlder {
+            olderExpansionRearmOffset = collection.contentOffset.y - rearmDistance
+        }
+        if expandNewer {
+            newerExpansionRearmOffset = collection.contentOffset.y + rearmDistance
+        }
         isExpanding = false
     }
 
@@ -1245,7 +1517,6 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
     func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
         let active = input?.isActive == true
         let hasFocus = focusedItem(at: recognizer.location(in: collection)) != nil
-        Self.logger.info("Semantic pinch eligibility active=\(active) hasFocus=\(hasFocus)")
         return active && hasFocus
     }
 
