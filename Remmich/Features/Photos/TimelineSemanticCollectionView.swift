@@ -831,6 +831,8 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
                           startRadius: radius(scale), endRadius: radius(nextScale), to: surface)
         }
         representativeAssets.merge(targetRepresentatives, uniquingKeysWith: { _, new in new })
+        let assetLayoutOnly = scale.isAssets && nextScale.isAssets
+        var carriedHeaderIDs = Set<String>()
         let sourceChromeArea = CGRect(x: 0, y: collection.contentOffset.y,
                                       width: collection.bounds.width, height: collection.bounds.height)
         for sourceItem in source.items where sourceItem.frame.intersects(sourceChromeArea)
@@ -838,19 +840,40 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             && !snapshotsContainingChrome.contains(sourceItem.id)
         {
             let start = sourceItem.frame.offsetBy(dx: 0, dy: -collection.contentOffset.y)
-            let end = destinations.first(where: { $0.assetRange.overlaps(sourceItem.assetRange) })
-                .map { $0.frame.offsetBy(dx: 0, dy: -targetOffset) } ?? start
+            let matchingHeader = assetLayoutOnly && sourceItem.isHeader
+                ? next.items.first(where: { $0.isHeader && $0.id == sourceItem.id }) : nil
+            let end = if let matchingHeader {
+                matchingHeader.frame.offsetBy(dx: 0, dy: -targetOffset)
+            } else if assetLayoutOnly, sourceItem.isHeader {
+                start
+            } else {
+                destinations.first(where: { $0.assetRange.overlaps(sourceItem.assetRange) })
+                    .map { $0.frame.offsetBy(dx: 0, dy: -targetOffset) } ?? start
+            }
             guard let plan = transitionChromePlan(for: sourceItem, scale: scale, catalog: catalog) else { continue }
             let chrome = transitionChromeView(plan)
-            addTransition(chrome, start: start, end: end, incoming: false, disappears: true,
+            if sourceItem.isHeader {
+                chrome.accessibilityIdentifier = "semantic-zoom-header:\(sourceItem.id)"
+            }
+            if matchingHeader != nil {
+                carriedHeaderIDs.insert(sourceItem.id)
+            }
+            addTransition(chrome, start: start, end: end, incoming: false, disappears: matchingHeader == nil,
                           startRadius: 0, endRadius: 0, to: surface, hosted: true)
             transitionItems[transitionItems.count - 1].isChrome = true
         }
         for destination in next.items where destination.frame.intersects(targetArea) && (destination.isHeader || !nextScale.isAssets) {
+            if assetLayoutOnly && destination.isHeader && carriedHeaderIDs.contains(destination.id) {
+                continue
+            }
             let end = destination.frame.offsetBy(dx: 0, dy: -targetOffset)
             guard let plan = transitionChromePlan(for: destination, scale: nextScale, catalog: catalog) else { continue }
             let chrome = transitionChromeView(plan)
-            addTransition(chrome, start: end.offsetBy(dx: 0, dy: 12), end: end, incoming: true, disappears: false,
+            if destination.isHeader {
+                chrome.accessibilityIdentifier = "semantic-zoom-header:\(destination.id)"
+            }
+            let start = assetLayoutOnly && destination.isHeader ? end : end.offsetBy(dx: 0, dy: 12)
+            addTransition(chrome, start: start, end: end, incoming: true, disappears: false,
                           startRadius: 0, endRadius: 0, to: surface, hosted: true)
             transitionItems[transitionItems.count - 1].isChrome = true
         }
@@ -987,6 +1010,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         {
             controller.view.layer.setAffineTransform(.identity)
             controller.view.frame = CGRect(origin: .zero, size: plan.size)
+            controller.view.accessibilityIdentifier = nil
             transitionHostingControllers.append(controller)
             return controller.view
         }
@@ -1006,6 +1030,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         controller.view.backgroundColor = .clear
         controller.view.layer.setAffineTransform(.identity)
         controller.view.frame = CGRect(origin: .zero, size: plan.size)
+        controller.view.accessibilityIdentifier = nil
         controller.view.setNeedsLayout()
         controller.view.layoutIfNeeded()
         transitionHostingControllers.append(controller)

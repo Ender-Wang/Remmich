@@ -62,6 +62,31 @@ struct TimelineSemanticZoomTests {
         #expect(hostedView.bounds.size == destination.size)
     }
 
+    @Test @MainActor func assetLayoutPinchCarriesEachDateHeaderOnceWithoutScalingIt() throws {
+        let assets = (0 ..< 25).map { asset("first-\($0)", "2027-01-01T12:00:00Z") }
+            + (0 ..< 25).map { asset("second-\($0)", "2027-01-02T12:00:00Z") }
+        let controller = TimelineSemanticCollectionController()
+        controller.update(TimelineSemanticCollectionView(
+            catalog: TimelineSemanticCatalog(assets: assets), revision: 1, scale: .square,
+            media: MediaLibraryController(), namespace: nil, bottomClearance: 96,
+            runtime: TimelineSemanticRuntime(), latestRequest: 0, isActive: true,
+            hiddenThumbnailID: nil, hiddenLivePhotoID: nil, selectAsset: { _, _ in }, selectGroup: { _, _ in },
+            scaleChanged: { _ in }, scrolled: { _, _, _ in }, visibleAssetsChanged: { _, _, _ in }, refresh: {}
+        ))
+        controller.view.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        controller.view.setNeedsLayout()
+        controller.view.layoutIfNeeded()
+
+        controller.changeScale(coarser: true)
+
+        let surface = try #require(controller.view.subviews.last)
+        let headers = surface.subviews.filter { $0.accessibilityIdentifier?.hasPrefix("semantic-zoom-header:") == true }
+        #expect(!headers.isEmpty)
+        #expect(Set(headers.compactMap(\.accessibilityIdentifier)).count == headers.count)
+        #expect(headers.allSatisfy { abs($0.bounds.height - 36) < 0.5 })
+        controller.stop()
+    }
+
     @Test func groupedResidencyDoesNotExpandRepresentativesIntoTimelinePages() {
         let visible = (0 ..< 140).map { asset("visible-\($0)", "2027-01-01T12:00:00Z") }
         let plan = TimelineSemanticResidencyPolicy.groupedPlan(visibleAssets: visible + visible.prefix(8))
