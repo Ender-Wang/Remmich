@@ -1,5 +1,6 @@
 import Nuke
 import SwiftUI
+import UIKit
 
 nonisolated enum TimelineCoverAnimation {
     static let zoomScale = 1.1
@@ -566,6 +567,8 @@ struct TimelineAssetThumbnail: View {
     let transitionNamespace: Namespace.ID?
     let assetSelected: (TimelineAssetSummary) -> Void
     var priority: ImageRequest.Priority = .normal
+    var placeholderImage: UIImage?
+    var imageLoaded: (UIImage) -> Void = { _ in }
     var hiddenLivePhotoBadgeAssetID: String?
     var hiddenReturningThumbnailAssetID: String?
 
@@ -602,12 +605,14 @@ struct TimelineAssetThumbnail: View {
                         naturalAspectProgress: progress
                     ),
                     priority: priority,
+                    placeholderImage: placeholderImage,
                     didLoad: {
                         media.retainTimelineThumbnail(
                             $0.container,
                             descriptor: descriptor,
                             cacheType: $0.cacheType
                         )
+                        imageLoaded($0.image)
                     }
                 )
                 .frame(width: proxy.size.width, height: proxy.size.height)
@@ -630,28 +635,16 @@ struct TimelineAssetThumbnail: View {
                                 aspectRatio: asset.aspectRatio,
                                 naturalAspectProgress: progress
                             )
-                            HStack(spacing: 5) {
-                                if asset.livePhotoVideoID != nil {
-                                    Image(systemName: "livephoto")
-                                        .opacity(hiddenLivePhotoBadgeAssetID == asset.id ? 0 : 1)
-                                }
-                                if asset.projectionType != nil {
-                                    Image(systemName: "view.360")
-                                }
-                                if let stack = asset.stack, stack.assetCount > 1 {
-                                    Label("\(stack.assetCount)", systemImage: "square.stack.3d.up.fill")
-                                }
-                            }
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.white)
-                            .padding([.leading, .bottom], 3)
+                            TimelineAssetBadgeOverlay(
+                                asset: asset,
+                                hiddenLivePhotoBadgeAssetID: hiddenLivePhotoBadgeAssetID
+                            )
                             .frame(
                                 width: thumbnailRect.width,
                                 height: thumbnailRect.height,
                                 alignment: .bottomLeading
                             )
                             .position(x: thumbnailRect.midX, y: thumbnailRect.midY)
-                            .shadow(radius: 3)
                         }
                     }
                 }
@@ -722,6 +715,38 @@ struct TimelineAssetThumbnail: View {
 
     private static func targetPixels(for points: CGFloat, scale: CGFloat) -> Int {
         min(2048, max(1, Int((points * scale).rounded(.up))))
+    }
+}
+
+struct TimelineAssetBadgeOverlay: View {
+    let asset: TimelineAssetSummary
+    var hiddenLivePhotoBadgeAssetID: String?
+
+    static func isVisible(for asset: TimelineAssetSummary) -> Bool {
+        asset.livePhotoVideoID != nil
+            || asset.projectionType != nil
+            || (asset.stack?.assetCount ?? 0) > 1
+    }
+
+    var body: some View {
+        HStack(spacing: 5) {
+            if asset.livePhotoVideoID != nil {
+                Image(systemName: "livephoto")
+                    .opacity(hiddenLivePhotoBadgeAssetID == asset.id ? 0 : 1)
+            }
+            if asset.projectionType != nil {
+                Image(systemName: "view.360")
+            }
+            if let stack = asset.stack, stack.assetCount > 1 {
+                Label("\(stack.assetCount)", systemImage: "square.stack.3d.up.fill")
+            }
+        }
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(.white)
+        .padding([.leading, .bottom], 3)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+        .shadow(radius: 3)
+        .allowsHitTesting(false)
     }
 }
 

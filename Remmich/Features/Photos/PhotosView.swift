@@ -265,6 +265,7 @@ struct PhotosView: View {
     @Namespace private var viewerNamespace
     @State private var viewportRuntime = TimelineViewportRuntime()
     @State private var compactChrome = false
+    @State private var semanticMemoryScaleVisible = true
     @State private var viewerOwnsTimelineChrome = false
     @State private var viewerChromeReleaseTask: Task<Void, Never>?
     @State private var hiddenLivePhotoBadgeAssetID: String?
@@ -469,6 +470,9 @@ struct PhotosView: View {
             libraryRange = requestedLibraryRange.range
             requestedLibraryRangeHandled()
         }
+        .onChange(of: libraryRange, initial: true) { _, range in
+            setSemanticMemoryScaleVisible(range == .all)
+        }
         .onDisappear {
             semanticLatestTask?.cancel()
             semanticLatestTask = nil
@@ -639,6 +643,7 @@ struct PhotosView: View {
                             selectRoute(semanticRoute(route, coverID: coverID), initialAssetID: coverID)
                         },
                         scaleChanged: semanticScaleChanged,
+                        transitionScaleChanged: semanticTransitionScaleChanged,
                         scrolled: { delta, gap, userScrolling in
                             guard !viewerOwnsTimelineChrome else { return }
                             if let compact = viewportRuntime.chromeTracker.update(offsetDelta: delta, bottomGap: gap,
@@ -701,31 +706,38 @@ struct PhotosView: View {
         }
     }
 
-    @ViewBuilder
     private func semanticMemoryLane(topInset: CGFloat) -> some View {
-        if memoryBackdropVisible {
-            TimelineMemoryLane(
-                memories: store.memories, media: media, selectedMemoryID: presentedMemoryID,
-                frozenMemoryID: nil, hiddenMemoryID: nil, loadingMemoryID: loadingMemoryID,
-                preferredAssetIDs: memoryCoverAssetIDs, select: presentMemory,
-                laneFrameChanged: updateMemoryLaneFrame, frameChanged: updateMemoryCardFrame
-            )
-            .frame(height: 120)
-            .padding(.bottom, 12)
-            .padding(.top, topInset)
-            .background {
-                Rectangle().fill(.ultraThinMaterial)
-                    .mask {
-                        LinearGradient(stops: [
-                            .init(color: .black, location: 0), .init(color: .black.opacity(0.78), location: 0.48),
-                            .init(color: .black.opacity(0.32), location: 0.78), .init(color: .black.opacity(0.08), location: 0.94),
-                            .init(color: .clear, location: 1),
-                        ], startPoint: .top, endPoint: .bottom)
-                    }
-                    .ignoresSafeArea(.container, edges: .top)
+        ZStack(alignment: .top) {
+            Rectangle().fill(.ultraThinMaterial)
+                .mask {
+                    LinearGradient(stops: [
+                        .init(color: .black, location: 0), .init(color: .black.opacity(0.78), location: 0.48),
+                        .init(color: .black.opacity(0.32), location: 0.78), .init(color: .black.opacity(0.08), location: 0.94),
+                        .init(color: .clear, location: 1),
+                    ], startPoint: .top, endPoint: .bottom)
+                }
+                .frame(height: topInset + 132)
+                .ignoresSafeArea(.container, edges: .top)
+                .opacity(memoryBackdropVisible ? 1 : 0)
+
+            if memoryBackdropVisible {
+                TimelineMemoryLane(
+                    memories: store.memories, media: media, selectedMemoryID: presentedMemoryID,
+                    frozenMemoryID: nil, hiddenMemoryID: nil, loadingMemoryID: loadingMemoryID,
+                    preferredAssetIDs: memoryCoverAssetIDs, select: presentMemory,
+                    laneFrameChanged: updateMemoryLaneFrame, frameChanged: updateMemoryCardFrame
+                )
+                .frame(height: 120)
+                .padding(.bottom, 12)
+                .padding(.top, topInset)
+                .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
             }
-            .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
         }
+        .frame(height: topInset + 132, alignment: .top)
+        .frame(maxWidth: .infinity, alignment: .top)
+        .allowsHitTesting(memoryBackdropVisible)
+        .accessibilityHidden(!memoryBackdropVisible)
+        .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: memoryBackdropVisible)
     }
 
     private func semanticScaleChanged(_ scale: TimelineSemanticScale) {
@@ -742,6 +754,17 @@ struct PhotosView: View {
             case .month: libraryRange = .month
             case .year: libraryRange = .year
             }
+        }
+    }
+
+    private func semanticTransitionScaleChanged(_ targetScale: TimelineSemanticScale) {
+        setSemanticMemoryScaleVisible(targetScale.isAssets)
+    }
+
+    private func setSemanticMemoryScaleVisible(_ visible: Bool) {
+        guard semanticMemoryScaleVisible != visible else { return }
+        withAnimation(reduceMotion ? nil : .smooth(duration: 0.25)) {
+            semanticMemoryScaleVisible = visible
         }
     }
 
@@ -1246,7 +1269,7 @@ struct PhotosView: View {
     private var memoryBackdropVisible: Bool {
         !compactChrome
             && navigationPath.isEmpty
-            && libraryRange == .all
+            && semanticMemoryScaleVisible
             && store.memoryLaneState == .loaded
             && !store.memories.isEmpty
     }

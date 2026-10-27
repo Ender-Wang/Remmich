@@ -1,3 +1,4 @@
+import Nuke
 import SwiftUI
 import UIKit
 
@@ -1803,6 +1804,40 @@ private final class PhotosRangeCardSlideshowLifetime {
     }
 }
 
+struct PhotosRangeCardChrome: View {
+    let title: String
+    let count: Int
+    let isFeatured: Bool
+
+    var body: some View {
+        Color.clear
+            .overlay {
+                LinearGradient(
+                    colors: [.clear, .black.opacity(0.78)],
+                    startPoint: .center,
+                    endPoint: .bottom
+                )
+                .clipShape(RoundedRectangle(
+                    cornerRadius: DesignMetrics.defaultCornerRadius,
+                    style: .continuous
+                ))
+            }
+            .overlay(alignment: .bottomLeading) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(isFeatured ? .title3.weight(.semibold) : .caption.weight(.semibold))
+                        .lineLimit(2)
+                    Text("\(count.formatted()) items")
+                        .font(isFeatured ? .subheadline : .caption2)
+                }
+                .foregroundStyle(.white)
+                .shadow(color: .black.opacity(0.45), radius: 2, y: 1)
+                .padding(isFeatured ? 16 : 8)
+            }
+            .allowsHitTesting(false)
+    }
+}
+
 struct PhotosRangeCard: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
@@ -1817,6 +1852,8 @@ struct PhotosRangeCard: View {
     var motion: TimelineRangeCoverMotion = .ordinary
     var allowsCoverLoading = true
     var externallyVisible: Bool?
+    var placeholderImage: UIImage?
+    var imageLoaded: (String, UIImage) -> Void = { _, _ in }
     var onCoverChanged: (String?) -> Void = { _ in }
 
     @State private var coverAssets: [TimelineAssetSummary] = []
@@ -1829,7 +1866,7 @@ struct PhotosRangeCard: View {
     @State private var slideshowLifetime = PhotosRangeCardSlideshowLifetime()
 
     private var currentAsset: TimelineAssetSummary? {
-        coverAssets.indices.contains(currentIndex) ? coverAssets[currentIndex] : coverAssets.first
+        coverAssets.indices.contains(currentIndex) ? coverAssets[currentIndex] : coverAssets.first ?? assets.first
     }
 
     private var renderedAssets: [TimelineAssetSummary] {
@@ -1851,15 +1888,25 @@ struct PhotosRangeCard: View {
                     Rectangle().fill(.quaternary)
                     if currentAsset != nil {
                         ForEach(renderedAssets) { asset in
+                            let descriptor = MediaRequestDescriptor(
+                                assetID: asset.id,
+                                updatedAt: asset.thumbnailRevision,
+                                derivative: .thumbnail,
+                                targetPixels: .init(width: 900, height: 900)
+                            )
                             ImmichThumbnail(
-                                descriptor: .init(
-                                    assetID: asset.id,
-                                    updatedAt: asset.thumbnailRevision,
-                                    derivative: .thumbnail,
-                                    targetPixels: .init(width: 900, height: 900)
-                                ),
+                                descriptor: descriptor,
                                 media: media,
-                                contentMode: .fill
+                                contentMode: .fill,
+                                placeholderImage: asset.id == currentAsset?.id ? placeholderImage : nil,
+                                didLoad: {
+                                    media.retainTimelineThumbnail(
+                                        $0.container,
+                                        descriptor: descriptor,
+                                        cacheType: $0.cacheType
+                                    )
+                                    imageLoaded(asset.id, $0.image)
+                                }
                             )
                             .frame(
                                 maxWidth: .infinity,
@@ -1887,29 +1934,7 @@ struct PhotosRangeCard: View {
                 style: .continuous
             ))
             .overlay {
-                LinearGradient(
-                    colors: [.clear, .black.opacity(0.78)],
-                    startPoint: .center,
-                    endPoint: .bottom
-                )
-                .clipShape(RoundedRectangle(
-                    cornerRadius: DesignMetrics.defaultCornerRadius,
-                    style: .continuous
-                ))
-                .allowsHitTesting(false)
-            }
-            .overlay(alignment: .bottomLeading) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(isFeatured ? .title3.weight(.semibold) : .caption.weight(.semibold))
-                        .lineLimit(2)
-                    Text("\(count.formatted()) items")
-                        .font(isFeatured ? .subheadline : .caption2)
-                }
-                .foregroundStyle(.white)
-                .shadow(color: .black.opacity(0.45), radius: 2, y: 1)
-                .padding(isFeatured ? 16 : 8)
-                .allowsHitTesting(false)
+                PhotosRangeCardChrome(title: title, count: count, isFeatured: isFeatured)
             }
             .frame(maxWidth: .infinity)
             .contentShape(RoundedRectangle(
@@ -1952,7 +1977,7 @@ struct PhotosRangeCard: View {
     }
 
     private func opacity(for asset: TimelineAssetSummary) -> Double {
-        coverOpacities[asset.id] ?? 0
+        coverOpacities[asset.id] ?? (asset.id == currentAsset?.id ? 1 : 0)
     }
 
     private func scale(for asset: TimelineAssetSummary) -> Double {

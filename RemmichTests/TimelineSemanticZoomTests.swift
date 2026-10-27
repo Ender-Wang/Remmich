@@ -36,6 +36,13 @@ struct TimelineSemanticZoomTests {
         })
         #expect(visible.isSubset(of: Set(indexes)))
         #expect(indexes.count <= max(TimelineSemanticTransitionPolicy.sourceLimit, visible.count))
+        let warmIndexes = TimelineSemanticTransitionPolicy.warmIndexes(
+            items: projection.items,
+            area: viewport.insetBy(dx: 0, dy: -viewport.height * 0.25),
+            focus: CGPoint(x: viewport.midX, y: viewport.midY)
+        )
+        #expect(visible.isSubset(of: Set(warmIndexes)))
+        #expect(warmIndexes.count <= TimelineSemanticTransitionPolicy.warmLimit)
     }
 
     @Test func groupedResidencyDoesNotExpandRepresentativesIntoTimelinePages() {

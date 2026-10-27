@@ -1,6 +1,7 @@
 import Nuke
 import NukeUI
 import SwiftUI
+import UIKit
 
 struct ImmichThumbnail: View {
     let descriptor: MediaRequestDescriptor
@@ -11,6 +12,7 @@ struct ImmichThumbnail: View {
     var imageCornerRadius: CGFloat = 0
     var imageScale: CGFloat = 1
     var priority: ImageRequest.Priority = .normal
+    var placeholderImage: UIImage?
     var didLoad: (ImageResponse) -> Void = { _ in }
 
     @State private var retryID = 0
@@ -27,25 +29,9 @@ struct ImmichThumbnail: View {
                         .opacity(backgroundOpacity)
                 }
                 if let image = state.image {
-                    GeometryReader { geometry in
-                        image
-                            .resizable()
-                            .aspectRatio(contentMode: contentMode)
-                            .clipShape(
-                                RoundedRectangle(
-                                    cornerRadius: imageCornerRadius,
-                                    style: .continuous
-                                )
-                            )
-                            .scaleEffect(imageScale)
-                            .frame(
-                                width: geometry.size.width,
-                                height: geometry.size.height,
-                                alignment: .center
-                            )
-                            .clipped()
-                    }
-                    .transition(.opacity)
+                    rendered(image)
+                } else if let placeholderImage {
+                    rendered(Image(uiImage: placeholderImage))
                 } else if state.error != nil {
                     Button {
                         retryID += 1
@@ -71,5 +57,27 @@ struct ImmichThumbnail: View {
         }
         .onDisappear(.cancel)
         .id("\(descriptor.assetID)-\(descriptor.updatedAt.timeIntervalSinceReferenceDate)-\(retryID)")
+    }
+
+    private func rendered(_ image: Image) -> some View {
+        GeometryReader { geometry in
+            image
+                .resizable()
+                .aspectRatio(contentMode: contentMode)
+                .clipShape(
+                    RoundedRectangle(
+                        cornerRadius: imageCornerRadius,
+                        style: .continuous
+                    )
+                )
+                .scaleEffect(imageScale)
+                .frame(
+                    width: geometry.size.width,
+                    height: geometry.size.height,
+                    alignment: .center
+                )
+                .clipped()
+        }
+        .transition(.opacity)
     }
 }
