@@ -39,6 +39,7 @@ final class PhotosTimelineStore {
     private(set) var groupedCatalogs = TimelineGroupedCatalogCache()
     private(set) var rangeCoverRevision: UInt64 = 0
     private(set) var semanticContentRevision: UInt64 = 0
+    private(set) var semanticHistoryState: PhotosTimelineLoadState = .idle
     private(set) var memories: [TimelineMemorySummary] = []
     private(set) var visibleAnchor: TimelineVisibleAnchor?
     private(set) var jumpTarget: TimelineBucketID?
@@ -52,22 +53,40 @@ final class PhotosTimelineStore {
 
     /// Copy-on-write metadata input for an off-main semantic index build.
     func semanticAssetsSnapshot() -> [TimelineAssetSummary] {
-        Array(residencyAssetsByID.values)
+        // Match the store's newest-owning-bucket duplicate precedence.
+        bucketSummaries.flatMap { semanticAssetsByBucket[$0.id, default: []] }
     }
 
-    /// Network metadata is requested only after ordinary scrolling ends.
+    var hasUnloadedSemanticBuckets: Bool {
+        guard !retainsPersistentBootstrap else { return false }
+        return bucketSummaries.contains { summary in
+            semanticAssetsByBucket[summary.id] == nil
+        }
+    }
+
+    /// Fill the first gap in newest-to-oldest order, including empty periods.
+    /// An isolated older load must not move the continuation past missing data.
     func loadOlderSemanticPage() async {
         guard !retainsPersistentBootstrap else { return }
-        let loaded = bucketSummaries.indices.filter { index in
-            guard let section = sectionsByID[bucketSummaries[index].id] else { return false }
-            if case .loaded = section.loadState {
-                return true
+        let requestGeneration = generation
+        semanticHistoryState = .loading
+        for summary in bucketSummaries {
+            if semanticAssetsByBucket[summary.id] != nil {
+                continue
             }
-            return false
+            guard !Task.isCancelled, requestGeneration == generation else { return }
+            await loadBucket(summary.id)
+            guard !Task.isCancelled, requestGeneration == generation else { return }
+            if case let .failed(message) = sectionsByID[summary.id]?.loadState {
+                semanticHistoryState = .failed(message: message)
+                return
+            }
+            if sectionsByID[summary.id]?.assets.isEmpty == false {
+                semanticHistoryState = .loaded
+                return
+            }
         }
-        let next = (loaded.max() ?? -1) + 1
-        guard bucketSummaries.indices.contains(next) else { return }
-        await loadBucket(bucketSummaries[next].id)
+        semanticHistoryState = .empty
     }
 
     private let reader: any TimelineReading
@@ -78,6 +97,9 @@ final class PhotosTimelineStore {
     private var publicationRevision: UInt64 = 0
     private var bucketRequestRevisions: [TimelineBucketID: UInt64] = [:]
     private var rawAssetsByID: [TimelineBucketID: [TimelineAssetSummary]] = [:]
+    /// Accepted metadata survives decoded/visible residency eviction. Keeping
+    /// these arrays does not retain images or create a second media cache.
+    private var semanticAssetsByBucket: [TimelineBucketID: [TimelineAssetSummary]] = [:]
     private var residencyAssetsByID: [String: TimelineAssetSummary] = [:]
     private var residencyPages: [TimelineLogicalPage] = []
     private var residencyPageIndexByAssetID: [String: Int] = [:]
@@ -105,6 +127,7 @@ final class PhotosTimelineStore {
     }
 
     func bootstrap(_ snapshot: TimelineBootstrapSnapshot) {
+        semanticHistoryState = .idle
         let previousVisibleAnchor = visibleAnchor
         generation &+= 1
         cancelInFlightWork()
@@ -112,6 +135,8 @@ final class PhotosTimelineStore {
         let revision = publicationRevision
         bucketSummaries = snapshot.summaries
         rawAssetsByID = snapshot.assetsByBucket
+        semanticAssetsByBucket = snapshot.assetsByBucket
+        semanticContentRevision &+= 1
         sectionsByID = Dictionary(uniqueKeysWithValues: snapshot.summaries.map { summary in
             let assets = snapshot.assetsByBucket[summary.id, default: []]
             return (
@@ -347,7 +372,12 @@ final class PhotosTimelineStore {
         if let jumpTarget, anchor.bucketID != jumpTarget {
             return
         }
-        guard visibleAnchor?.bucketID != anchor.bucketID else { return }
+        if visibleAnchor?.bucketID == anchor.bucketID {
+            if visibleAnchor != anchor {
+                visibleAnchor = anchor
+            }
+            return
+        }
         let previous = visibleAnchor
         visibleAnchor = anchor
         let previousBucketID = previous?.bucketID.rawValue ?? "none"
@@ -645,6 +675,9 @@ final class PhotosTimelineStore {
         rangeVisibleBucketID = nil
         bucketRequestRevisions = [:]
         rawAssetsByID = [:]
+        semanticAssetsByBucket = [:]
+        semanticContentRevision &+= 1
+        semanticHistoryState = .idle
         residencyAssetsByID = [:]
         residencyPages = []
         residencyPageIndexByAssetID = [:]
@@ -747,6 +780,8 @@ final class PhotosTimelineStore {
             let assets = Self.deduplicate(response)
             let deduplicationFinishedAt = Date()
             rawAssetsByID[bucketID] = assets
+            semanticAssetsByBucket[bucketID] = assets
+            semanticContentRevision &+= 1
             sectionsByID[bucketID]?.loadState = .loaded
             reconcileCrossBucketDuplicates(forceRevisionFor: bucketID)
             let reconciliationFinishedAt = Date()
@@ -821,6 +856,11 @@ final class PhotosTimelineStore {
         rangeCardCoverTasks = [:]
         let unique = Self.deduplicateSummaries(summaries)
         let validIDs = Set(unique.map(\.id))
+        let retainedSemantic = semanticAssetsByBucket.filter { validIDs.contains($0.key) }
+        if retainedSemantic.count != semanticAssetsByBucket.count {
+            semanticAssetsByBucket = retainedSemantic
+            semanticContentRevision &+= 1
+        }
         sectionsByID = sectionsByID.filter { validIDs.contains($0.key) }
         rawAssetsByID = rawAssetsByID.filter { validIDs.contains($0.key) }
         for summary in unique {
@@ -969,7 +1009,6 @@ final class PhotosTimelineStore {
     }
 
     private func rebuildResidencyCatalog() {
-        semanticContentRevision &+= 1
         let loadedSections = sections.filter {
             if case .loaded = $0.loadState {
                 return true

@@ -1926,8 +1926,8 @@ struct PhotosRangeCard: View {
                     await runSlideshow()
                 }
             }
-            .task(id: "\(String(describing: externallyVisible)):\(scenePhase):\(reduceMotion)") {
-                guard externallyVisible == true, scenePhase == .active else { return }
+            .task(id: "\(String(describing: externallyVisible)):\(scenePhase):\(reduceMotion):\(motion):\(allowsCoverLoading):\(store?.rangeCoverRevision ?? 0)") {
+                guard externallyVisible == true, allowsCoverLoading, scenePhase == .active else { return }
                 await runSlideshow()
             }
             .onChange(of: allowsCoverLoading) {

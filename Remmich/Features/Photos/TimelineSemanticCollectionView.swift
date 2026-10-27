@@ -34,9 +34,10 @@ struct TimelineSemanticCollectionView: UIViewControllerRepresentable {
     let selectGroup: (PhotosRangeRoute, String?) -> Void
     let scaleChanged: (TimelineSemanticScale) -> Void
     let scrolled: (CGFloat, CGFloat, Bool) -> Void
-    let visibleAssetsChanged: ([TimelineAssetSummary]) -> Void
+    let visibleAssetsChanged: ([TimelineAssetSummary], MediaPixelSize) -> Void
     let refresh: () async -> Void
     var loadOlder: () async -> Void = {}
+    var focusChanged: (TimelineAssetSummary) -> Void = { _ in }
 
     func makeUIViewController(context _: Context) -> TimelineSemanticCollectionController {
         let controller = TimelineSemanticCollectionController()
@@ -81,6 +82,12 @@ private final class TimelineSemanticCollectionCell: UICollectionViewCell {
     var coverAssetID: String?
     var nodeID: String?
 
+    /// Geometry belongs to the deterministic collection layout. SwiftUI's
+    /// hosted GeometryReader must not self-size cells during scrolling.
+    override func preferredLayoutAttributesFitting(_ layoutAttributes: UICollectionViewLayoutAttributes) -> UICollectionViewLayoutAttributes {
+        layoutAttributes
+    }
+
     override func prepareForReuse() {
         super.prepareForReuse()
         contentConfiguration = nil
@@ -123,6 +130,13 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
     private var hiddenThumbnailID: String?
     private var hiddenLivePhotoID: String?
     private var loadOlderTask: Task<Void, Never>?
+    private var viewportTask: Task<Void, Never>?
+    private var itemIndexes: [String: Int] = [:]
+    private var lastPublishedTarget: MediaPixelSize?
+    private var transitionPrefetcher: ImagePrefetcher?
+    private var warmPipeline: ImagePipeline?
+    private var warmedRequests: [MediaRequestDescriptor: ImageRequest] = [:]
+    private var localTransitionTasks: [Task<Void, Never>] = []
 
     private struct TransitionItem {
         let view: UIView
@@ -171,12 +185,12 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         super.viewDidLayoutSubviews()
         guard view.bounds.width > 0, view.bounds.height > 0 else { return }
         let changed = lastSize != view.bounds.size
+        guard changed else { return }
         let focus = focusedItem(at: CGPoint(x: collection.bounds.midX, y: collection.bounds.midY))
         let focusY = focus.map { $0.frame.midY - collection.contentOffset.y }
         let sourceHeight = max(1, collection.bounds.height)
         let wasAtLatest = isAtLatest
         collection.frame = view.bounds
-        guard changed else { return }
         cancelTracking()
         finishPresentation()
         lastSize = view.bounds.size
@@ -184,13 +198,16 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         let asset = focus.map(representativeIndex) ?? max(0, catalog.assets.count - 1)
         let next = makeProjection(scale: scale, focus: asset)
         install(next, focusing: asset, viewportY: focusY.map { $0 / sourceHeight * view.bounds.height }, latest: focus == nil || wasAtLatest)
+        if catalog.assets.isEmpty {
+            loadOlderIfNeeded()
+        }
     }
 
     private func rebuildForAppearance() {
         guard catalog != nil, lastSize.width > 0 else { return }
         interrupted()
         let focus = focusedItem(at: CGPoint(x: collection.bounds.midX, y: collection.bounds.midY))
-        let asset = focus.map(representativeIndex) ?? 0
+        let asset = focus.map(representativeIndex) ?? max(0, catalog!.assets.count - 1)
         install(makeProjection(scale: scale, focus: asset), focusing: asset,
                 viewportY: focus.map { $0.frame.midY - collection.contentOffset.y }, latest: isAtLatest)
     }
@@ -206,6 +223,14 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         }
         let previous = input
         input = value
+        if let previous, revision == value.revision, scale == value.scale,
+           previous.isActive == value.isActive, previous.latestRequest == value.latestRequest,
+           previous.hiddenThumbnailID == value.hiddenThumbnailID, previous.hiddenLivePhotoID == value.hiddenLivePhotoID,
+           abs(previous.bottomClearance - value.bottomClearance) < 0.5,
+           previous.media === value.media
+        {
+            return
+        }
         collection.isUserInteractionEnabled = value.isActive
         collection.accessibilityElementsHidden = !value.isActive
         let oldFocus = focusedItem(at: CGPoint(x: collection.bounds.midX, y: collection.bounds.midY))
@@ -220,6 +245,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         let insetChanged = abs(collection.contentInset.bottom - value.bottomClearance) > 0.5
         isInstalling = true
         collection.contentInset.bottom = value.bottomClearance
+        collection.verticalScrollIndicatorInsets.bottom = value.bottomClearance
         isInstalling = false
         if needsCatalog || needsScale || projection == nil {
             representativeAssets = [:]
@@ -283,6 +309,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         let oldScale = projection?.scale
         let oldIDs = Set(dataSource.snapshot().itemIdentifiers)
         projection = next
+        itemIndexes = Dictionary(uniqueKeysWithValues: next.items.enumerated().map { ($0.element.id, $0.offset) })
         scale = next.scale
         layout.frames = next.items.map(\.frame)
         layout.height = max(next.height, collection.bounds.height - collection.contentInset.bottom)
@@ -381,6 +408,12 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         cell.contentConfiguration = nil
     }
 
+    func collectionView(_: UICollectionView, willDisplay cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
+        if cell.contentConfiguration == nil {
+            configure(indexPath, cell: cell as? TimelineSemanticCollectionCell)
+        }
+    }
+
     func collectionView(_: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         guard gesture == nil, animator == nil, let input, let catalog, let projection,
               projection.items.indices.contains(indexPath.item), !scale.isAssets else { return }
@@ -390,8 +423,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
     }
 
     private func representativeIndex(_ item: TimelineSemanticProjection.Item) -> Int {
-        if let catalog, let projection,
-           let index = projection.items.firstIndex(where: { $0.id == item.id }),
+        if let catalog, let index = itemIndexes[item.id],
            let cell = collection.cellForItem(at: IndexPath(item: index, section: 0)) as? TimelineSemanticCollectionCell,
            let id = cell.coverAssetID, let assetIndex = catalog.assetIndexes[id], item.assetRange.contains(assetIndex)
         {
@@ -437,92 +469,128 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
 
     private func prepareTransition(to nextScale: TimelineSemanticScale) {
         guard let source = projection, let catalog else { return }
+        let started = ContinuousClock.now
         let next = makeProjection(scale: nextScale, focus: focusAssetIndex)
         guard !next.items.isEmpty else { return }
         target = next
         targetOffset = offset(for: next, focus: focusAssetIndex, viewportY: pinchCentroid.y, latest: false)
         collection.panGestureRecognizer.isEnabled = false
+        transitionPrefetcher?.stopPrefetching()
+        warmedRequests = [:]
         guard !UIAccessibility.isReduceMotionEnabled else { return }
         let surface = UIView(frame: view.bounds)
         surface.isUserInteractionEnabled = false
         surface.clipsToBounds = true
         view.addSubview(surface)
         transitionSurface = surface
-        let visible = source.items.enumerated().filter { !$0.element.isHeader && $0.element.frame.intersects(collection.bounds) }
-        var represented = Set<String>()
+
+        // Include a bounded apron around the source, and every tile that can
+        // appear in the destination viewport. Target coverage is unconditional:
+        // a neighboring period can arrive even without a visible source member.
+        let apron = collection.bounds.insetBy(dx: 0, dy: -collection.bounds.height * 0.75)
+        let sources = source.items.enumerated().filter { !$0.element.isHeader && $0.element.frame.intersects(apron) }
+        let targetArea = CGRect(x: 0, y: targetOffset, width: view.bounds.width, height: view.bounds.height)
+            .insetBy(dx: 0, dy: -view.bounds.height * 0.25)
+        let destinations = next.items.filter { !$0.isHeader && $0.frame.intersects(targetArea) }
+        var selectedSources: [String: String] = [:]
         var targetRepresentatives: [String: Int] = [:]
-        for destination in next.items where !destination.isHeader {
-            let candidates = visible.filter { $0.element.assetRange.overlaps(destination.assetRange) }
-            let selected = candidates.min {
-                distance($0.element.frame, offset: collection.contentOffset.y) < distance($1.element.frame, offset: collection.contentOffset.y)
+        for destination in destinations {
+            let selected = sources.filter { $0.element.assetRange.overlaps(destination.assetRange) }.min {
+                distance($0.element.frame, offset: collection.contentOffset.y)
+                    < distance($1.element.frame, offset: collection.contentOffset.y)
             }
             if let selected {
+                selectedSources[destination.id] = selected.element.id
                 let representative = representativeIndex(selected.element)
                 targetRepresentatives[destination.id] = destination.assetRange.contains(representative)
                     ? representative : destination.assetRange.lowerBound
+            } else {
+                targetRepresentatives[destination.id] = destination.assetRange.lowerBound
             }
         }
-        for (index, sourceItem) in visible {
-            let representative = representativeIndex(sourceItem)
-            let destinations = next.items.filter { !$0.isHeader && $0.assetRange.overlaps(sourceItem.assetRange) }
-            let destination = destinations.first { $0.assetRange.contains(representative) } ?? destinations.first
-            guard let destination, let cell = collection.cellForItem(at: IndexPath(item: index, section: 0)) else { continue }
-            let keepsCover = targetRepresentatives[destination.id] == representative && represented.insert(destination.id).inserted
+
+        var represented = Set<String>()
+        for (index, item) in sources {
+            let representative = representativeIndex(item)
+            guard let destination = destinations.first(where: { $0.assetRange.contains(representative) }) else { continue }
             let asset = catalog.assets[representative]
-            let start = imageRect(item: sourceItem, scale: scale, asset: asset).offsetBy(dx: 0, dy: -collection.contentOffset.y)
+            let start = imageRect(item: item, scale: scale, asset: asset).offsetBy(dx: 0, dy: -collection.contentOffset.y)
             let end = imageRect(item: destination, scale: nextScale, asset: asset).offsetBy(dx: 0, dy: -targetOffset)
-            let image = cachedImage(asset: asset, frame: sourceItem.frame)
+            let image = cachedImage(asset: asset, frame: item.frame)
             let snapshot: UIView
             if let image {
                 let imageView = UIImageView(image: image)
                 imageView.contentMode = .scaleAspectFill
                 snapshot = imageView
+            } else if let cell = collection.cellForItem(at: IndexPath(item: index, section: 0)),
+                      let captured = cell.resizableSnapshotView(
+                          from: imageRect(item: item, scale: scale, asset: asset).offsetBy(dx: -item.frame.minX, dy: -item.frame.minY),
+                          afterScreenUpdates: false, withCapInsets: .zero
+                      )
+            {
+                snapshot = captured
             } else {
-                snapshot = cell.snapshotView(afterScreenUpdates: false) ?? UIView()
+                continue
+            }
+            let keepsCover = selectedSources[destination.id] == item.id
+                && targetRepresentatives[destination.id] == representative
+                && represented.insert(destination.id).inserted
+            if keepsCover {
+                snapshot.accessibilityIdentifier = "semantic-zoom-target:\(destination.id)"
             }
             addTransition(snapshot, start: start, end: end, incoming: false, disappears: !keepsCover,
                           startRadius: radius(scale), endRadius: radius(nextScale), to: surface)
         }
-        // Refinement and week/month overlap can create multiple target covers
-        // from one visible source. Add each unrepresented target exactly once.
-        for destination in next.items where !destination.isHeader {
-            let end = destination.frame.offsetBy(dx: 0, dy: -targetOffset)
-            guard end.intersects(view.bounds), !represented.contains(destination.id),
-                  let sourceItem = visible.first(where: { $0.element.assetRange.overlaps(destination.assetRange) })?.element
-            else { continue }
-            let representative = targetRepresentatives[destination.id] ?? destination.assetRange.lowerBound
+
+        for destination in destinations where !represented.contains(destination.id) {
+            let representative = targetRepresentatives[destination.id]!
             let asset = catalog.assets[representative]
+            let end = imageRect(item: destination, scale: nextScale, asset: asset).offsetBy(dx: 0, dy: -targetOffset)
+            let sourceItem = sources.first(where: { $0.element.assetRange.overlaps(destination.assetRange) })?.element
+            let start: CGRect
+            if let sourceItem {
+                start = imageRect(item: sourceItem, scale: scale, asset: asset).offsetBy(dx: 0, dy: -collection.contentOffset.y)
+            } else {
+                let side = min(end.width, end.height)
+                start = CGRect(x: end.midX - side / 2,
+                               y: end.midY < view.bounds.midY ? -side : view.bounds.height,
+                               width: side, height: side)
+            }
             let imageView = UIImageView(image: cachedImage(asset: asset, frame: destination.frame))
             imageView.contentMode = .scaleAspectFill
             imageView.backgroundColor = .tertiarySystemFill
-            let start = imageRect(item: sourceItem, scale: scale, asset: asset).offsetBy(dx: 0, dy: -collection.contentOffset.y)
-            addTransition(imageView, start: start, end: imageRect(item: destination, scale: nextScale, asset: asset).offsetBy(dx: 0, dy: -targetOffset),
-                          incoming: true, disappears: false, startRadius: radius(scale), endRadius: radius(nextScale), to: surface)
+            imageView.accessibilityIdentifier = "semantic-zoom-target:\(destination.id)"
+            if imageView.image == nil {
+                loadLocalTransitionImage(into: imageView, asset: asset, frame: destination.frame, scale: nextScale, surface: surface)
+            }
+            addTransition(imageView, start: start, end: end, incoming: true, disappears: false,
+                          startRadius: radius(scale), endRadius: radius(nextScale), to: surface)
         }
         representativeAssets.merge(targetRepresentatives, uniquingKeysWith: { _, new in new })
-        if !nextScale.isAssets {
-            for destination in next.items where !destination.isHeader {
-                let end = destination.frame.offsetBy(dx: 0, dy: -targetOffset)
-                guard end.intersects(view.bounds),
-                      let sourceItem = visible.first(where: { $0.element.assetRange.overlaps(destination.assetRange) })?.element
-                else { continue }
-                let start = sourceItem.frame.offsetBy(dx: 0, dy: -collection.contentOffset.y)
-                let chrome = UIView(frame: start)
-                let label = UILabel(frame: CGRect(x: 8, y: max(0, start.height - 52), width: max(1, start.width - 16), height: 44))
-                label.autoresizingMask = [.flexibleWidth, .flexibleTopMargin]
-                label.numberOfLines = 2
-                label.font = .preferredFont(forTextStyle: destination.isFeatured ? .headline : .caption1)
-                label.textColor = .white
+        for destination in next.items where destination.frame.intersects(targetArea) && (destination.isHeader || !nextScale.isAssets) {
+            let end = destination.frame.offsetBy(dx: 0, dy: -targetOffset)
+            let chrome = UIView(frame: end)
+            let inset: CGFloat = destination.isHeader ? 16 : 8
+            let label = UILabel(frame: CGRect(x: inset, y: destination.isHeader ? 0 : max(0, end.height - 52),
+                                              width: max(1, end.width - inset * 2), height: destination.isHeader ? 36 : 44))
+            label.autoresizingMask = [.flexibleWidth, .flexibleTopMargin]
+            label.numberOfLines = destination.isHeader ? 1 : 2
+            label.font = .preferredFont(forTextStyle: destination.isHeader || destination.isFeatured ? .headline : .caption1)
+            label.textColor = destination.isHeader ? .label : .white
+            if destination.isHeader {
+                label.text = TimelineCaptureDateFormatting.string(from: catalog.assets[destination.assetRange.lowerBound].capturedAt,
+                                                                  dateStyle: .long, timeStyle: .none)
+            } else {
                 label.layer.shadowColor = UIColor.black.cgColor
                 label.layer.shadowOpacity = 0.8
                 label.layer.shadowRadius = 3
                 let group = catalog.groups[nextScale]![destination.nodeIndex]
                 label.text = "\(group.route.navigationTitle)\n\(group.assets.count.formatted()) items"
-                chrome.addSubview(label)
-                addTransition(chrome, start: start, end: end, incoming: true, disappears: false,
-                              startRadius: radius(scale), endRadius: radius(nextScale), to: surface)
-                transitionItems[transitionItems.count - 1].isChrome = true
             }
+            chrome.addSubview(label)
+            addTransition(chrome, start: end.offsetBy(dx: 0, dy: 12), end: end, incoming: true, disappears: false,
+                          startRadius: 0, endRadius: 0, to: surface)
+            transitionItems[transitionItems.count - 1].isChrome = true
         }
         for cell in collection.visibleCells {
             cell.alpha = 0
@@ -532,6 +600,9 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
                 configure(path)
             }
         }
+        let duration = started.duration(to: .now).components
+        let layerCount = transitionItems.count
+        Self.logger.info("Semantic transition prepared sourceItems=\(sources.count) targetItems=\(destinations.count) layers=\(layerCount) elapsedMs=\(duration.seconds * 1000 + duration.attoseconds / 1_000_000_000_000_000)")
     }
 
     private func cachedImage(asset: TimelineAssetSummary, frame: CGRect) -> UIImage? {
@@ -545,6 +616,31 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             }
         }
         return nil
+    }
+
+    private func loadLocalTransitionImage(into imageView: UIImageView, asset: TimelineAssetSummary, frame: CGRect,
+                                          scale: TimelineSemanticScale, surface: UIView)
+    {
+        guard let media = input?.media, let pipeline = media.pipeline else { return }
+        let descriptor = thumbnailDescriptor(asset: asset, frame: frame, scale: scale)
+        guard let pixels = descriptor.targetPixels,
+              media.viewerThumbnailFallbackRequest(for: asset, targetPixels: pixels) != nil,
+              let request = media.imageRequest(for: descriptor) else { return }
+        // Only an already-managed local file may be decoded for the apron.
+        // No server request or decode completion gates the gesture or commit.
+        let imageTask = pipeline.imageTask(with: request)
+        let task = Task { @MainActor [weak self, weak imageView, weak surface] in
+            let response = try? await withTaskCancellationHandler { try await imageTask.response } onCancel: { imageTask.cancel() }
+            guard !Task.isCancelled, let self, let surface, transitionSurface === surface,
+                  let imageView, let response else { return }
+            media.retainTimelineThumbnail(response.container, descriptor: descriptor, cacheType: response.cacheType)
+            UIView.transition(with: imageView, duration: UIAccessibility.isReduceMotionEnabled ? 0 : 0.12,
+                              options: [.transitionCrossDissolve, .allowUserInteraction])
+            {
+                imageView.image = response.image
+            }
+        }
+        localTransitionTasks.append(task)
     }
 
     private func imageRect(item: TimelineSemanticProjection.Item, scale: TimelineSemanticScale, asset: TimelineAssetSummary) -> CGRect {
@@ -614,6 +710,8 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
     private func finishPresentation() {
         animator?.stopAnimation(true)
         animator = nil
+        localTransitionTasks.forEach { $0.cancel() }
+        localTransitionTasks = []
         transitionSurface?.removeFromSuperview()
         transitionSurface = nil
         transitionItems = []
@@ -641,6 +739,12 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         interrupted()
         loadOlderTask?.cancel()
         loadOlderTask = nil
+        viewportTask?.cancel()
+        viewportTask = nil
+        transitionPrefetcher?.stopPrefetching()
+        transitionPrefetcher = nil
+        warmedRequests = [:]
+        warmPipeline = nil
         deferredInput = nil
         input = nil
         collection?.visibleCells.forEach { $0.contentConfiguration = nil }
@@ -682,17 +786,21 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         let gap = isAtLatest ? 0 : max(25, layout.height - scrollView.contentOffset.y - scrollView.bounds.height + scrollView.contentInset.bottom)
         input?.scrolled(scrollView.contentOffset.y - lastOffset, gap, scrollView.isDragging || scrollView.isDecelerating)
         lastOffset = scrollView.contentOffset.y
-        publishViewport()
+        scheduleViewportPublication()
         expandWindowIfNeeded()
     }
 
     func scrollViewDidEndDecelerating(_: UIScrollView) {
+        viewportTask?.cancel()
+        viewportTask = nil
         publishViewport()
         loadOlderIfNeeded()
     }
 
     func scrollViewDidEndDragging(_: UIScrollView, willDecelerate decelerate: Bool) {
         if !decelerate {
+            viewportTask?.cancel()
+            viewportTask = nil
             publishViewport(); loadOlderIfNeeded()
         }
     }
@@ -711,18 +819,94 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
     private func publishViewport() {
         guard let input, input.isActive, let catalog, let projection, collection != nil,
               gesture == nil, animator == nil, !isInstalling else { return }
-        let indexes = projection.items.filter { !$0.isHeader && $0.frame.intersects(collection.bounds) }.map(representativeIndex)
+        let visibleItems = collection.indexPathsForVisibleItems.compactMap { path -> TimelineSemanticProjection.Item? in
+            guard projection.items.indices.contains(path.item) else { return nil }
+            let item = projection.items[path.item]
+            return item.isHeader ? nil : item
+        }
+        let indexes = visibleItems.map(representativeIndex)
         let assets = indexes.map { catalog.assets[$0] }
         let ids = Set(assets.map(\.id))
-        guard ids != lastVisibleIDs else { return }
+        if !collection.isDragging, !collection.isDecelerating,
+           let item = focusedItem(at: CGPoint(x: collection.bounds.midX, y: collection.bounds.midY))
+        {
+            input.focusChanged(catalog.assets[representativeIndex(item)])
+        }
+        let side = scale.isAssets
+            ? visibleItems.map { max($0.frame.width, $0.frame.height) }.max().map { min(2048, max(1, Int(($0 * traitCollection.displayScale).rounded(.up)))) } ?? 1
+            : 900
+        let target = MediaPixelSize(width: side, height: side)
+        if !collection.isDragging, !collection.isDecelerating {
+            warmTransitionNeighborhood()
+        }
+        guard ids != lastVisibleIDs || target != lastPublishedTarget else { return }
         lastVisibleIDs = ids
-        input.visibleAssetsChanged(assets)
+        lastPublishedTarget = target
+        input.visibleAssetsChanged(assets, target)
+    }
+
+    private func warmTransitionNeighborhood() {
+        guard let input, let catalog, let projection, let pipeline = input.media.pipeline,
+              let focused = focusedItem(at: CGPoint(x: collection.bounds.midX, y: collection.bounds.midY)) else { return }
+        if warmPipeline !== pipeline {
+            transitionPrefetcher?.stopPrefetching()
+            transitionPrefetcher = ImagePrefetcher(pipeline: pipeline, destination: .memoryCache, maxConcurrentRequestCount: 2)
+            warmPipeline = pipeline
+            warmedRequests = [:]
+        }
+        let area = collection.bounds.insetBy(dx: 0, dy: -collection.bounds.height)
+        var descriptors = projection.items.filter { !$0.isHeader && $0.frame.intersects(area) }
+            .sorted { abs($0.frame.midY - collection.bounds.midY) < abs($1.frame.midY - collection.bounds.midY) }
+            .prefix(24).map { item -> MediaRequestDescriptor in
+                let asset = catalog.assets[representativeIndex(item)]
+                return thumbnailDescriptor(asset: asset, frame: item.frame, scale: scale)
+            }
+        for coarser in [true, false] {
+            guard let nextScale = scale.adjacent(coarser: coarser) else { continue }
+            let focus = representativeIndex(focused)
+            let next = makeProjection(scale: nextScale, focus: focus)
+            let y = offset(for: next, focus: focus, viewportY: focused.frame.midY - collection.contentOffset.y, latest: false)
+            let rect = CGRect(origin: CGPoint(x: 0, y: y), size: collection.bounds.size)
+            descriptors += next.items.filter { !$0.isHeader && $0.frame.intersects(rect) }.prefix(6).map { item in
+                let asset = catalog.assets[item.assetRange.contains(focus) ? focus : item.assetRange.lowerBound]
+                return thumbnailDescriptor(asset: asset, frame: item.frame, scale: nextScale)
+            }
+        }
+        let desired = Set(descriptors)
+        let removed = warmedRequests.filter { !desired.contains($0.key) }.map(\.value)
+        transitionPrefetcher?.stopPrefetching(with: removed)
+        warmedRequests = warmedRequests.filter { desired.contains($0.key) }
+        let additions = desired.subtracting(warmedRequests.keys).compactMap { descriptor -> (MediaRequestDescriptor, ImageRequest)? in
+            input.media.imageRequest(for: descriptor, priority: .low).map { (descriptor, $0) }
+        }
+        for (descriptor, request) in additions {
+            warmedRequests[descriptor] = request
+        }
+        transitionPrefetcher?.startPrefetching(with: additions.map(\.1))
+    }
+
+    private func thumbnailDescriptor(asset: TimelineAssetSummary, frame: CGRect, scale: TimelineSemanticScale) -> MediaRequestDescriptor {
+        let side = scale.isAssets ? min(2048, max(1, Int((max(frame.width, frame.height) * traitCollection.displayScale).rounded(.up)))) : 900
+        return MediaRequestDescriptor(assetID: asset.id, updatedAt: asset.thumbnailRevision, derivative: .thumbnail,
+                                      targetPixels: .init(width: side, height: side))
+    }
+
+    private func scheduleViewportPublication() {
+        guard viewportTask == nil else { return }
+        viewportTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(120))
+            guard !Task.isCancelled, let self else { return }
+            viewportTask = nil
+            publishViewport()
+        }
     }
 
     private func expandWindowIfNeeded() {
-        guard !isExpanding, let projection, let catalog, let focus = focusedItem(at: CGPoint(x: collection.bounds.midX, y: collection.bounds.midY)) else { return }
+        guard !isExpanding, let projection, let catalog else { return }
         let older = collection.contentOffset.y < collection.bounds.height
         let newer = layout.height - collection.bounds.maxY < collection.bounds.height
+        guard (older && projection.nodeRange.lowerBound > 0) || (newer && projection.nodeRange.upperBound < catalog.count(at: scale)),
+              let focus = focusedItem(at: CGPoint(x: collection.bounds.midX, y: collection.bounds.midY)) else { return }
         var lower = older ? max(0, projection.nodeRange.lowerBound - (scale.isAssets ? 180 : 26)) : projection.nodeRange.lowerBound
         var upper = newer ? min(catalog.count(at: scale), projection.nodeRange.upperBound + (scale.isAssets ? 180 : 26)) : projection.nodeRange.upperBound
         guard lower != projection.nodeRange.lowerBound || upper != projection.nodeRange.upperBound else { return }

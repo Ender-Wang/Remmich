@@ -100,11 +100,15 @@ struct TimelineSemanticZoomTests {
         let catalog = TimelineSemanticCatalog(assets: (0 ..< 60).map { asset(String(format: "%03d", $0), "2027-01-01T12:00:00Z") })
         let controller = TimelineSemanticCollectionController()
         var committed: [TimelineSemanticScale] = []
+        var reportedTargets: [MediaPixelSize] = []
+        var focusedAssets: [String] = []
         let input = TimelineSemanticCollectionView(
             catalog: catalog, revision: 1, scale: .natural, media: MediaLibraryController(), namespace: nil,
             bottomClearance: 96, runtime: TimelineSemanticRuntime(), latestRequest: 0, isActive: true,
             hiddenThumbnailID: nil, hiddenLivePhotoID: nil, selectAsset: { _, _ in }, selectGroup: { _, _ in },
-            scaleChanged: { committed.append($0) }, scrolled: { _, _, _ in }, visibleAssetsChanged: { _ in }, refresh: {}
+            scaleChanged: { committed.append($0) }, scrolled: { _, _, _ in },
+            visibleAssetsChanged: { _, pixels in reportedTargets.append(pixels) }, refresh: {},
+            focusChanged: { focusedAssets.append($0.id) }
         )
         controller.update(input)
         controller.view.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
@@ -112,6 +116,19 @@ struct TimelineSemanticZoomTests {
         controller.view.layoutIfNeeded()
         let collection = try #require(controller.view.subviews.compactMap { $0 as? UICollectionView }.first)
         #expect(collection.contentInset.bottom == 96)
+        #expect(!focusedAssets.isEmpty)
+        let assetPath = try #require(collection.indexPathsForVisibleItems.first {
+            (collection.dataSource as? UICollectionViewDiffableDataSource<Int, String>)?.itemIdentifier(for: $0)?.hasPrefix("header:") == false
+        })
+        let assetCell = try #require(collection.cellForItem(at: assetPath))
+        let pixels = Int((max(assetCell.bounds.width, assetCell.bounds.height) * controller.traitCollection.displayScale).rounded(.up))
+        #expect(reportedTargets.last == MediaPixelSize(width: pixels, height: pixels))
+        let attributes = try #require(collection.collectionViewLayout.layoutAttributesForItem(at: assetPath))
+        #expect(assetCell.preferredLayoutAttributesFitting(attributes).frame == attributes.frame)
+        controller.collectionView(collection, didEndDisplaying: assetCell, forItemAt: assetPath)
+        #expect(assetCell.contentConfiguration == nil)
+        controller.collectionView(collection, willDisplay: assetCell, forItemAt: assetPath)
+        #expect(assetCell.contentConfiguration != nil)
         #expect(abs(collection.contentSize.height - collection.contentOffset.y - collection.bounds.height + 96) < 0.5)
         controller.changeScale(coarser: true)
         #expect(committed == [.day])
@@ -137,7 +154,7 @@ struct TimelineSemanticZoomTests {
             catalog: catalog, revision: 1, scale: .natural, media: MediaLibraryController(), namespace: nil,
             bottomClearance: 96, runtime: TimelineSemanticRuntime(), latestRequest: 0, isActive: true,
             hiddenThumbnailID: nil, hiddenLivePhotoID: nil, selectAsset: { _, _ in }, selectGroup: { _, _ in },
-            scaleChanged: { _ in }, scrolled: { _, _, _ in }, visibleAssetsChanged: { _ in }, refresh: {}
+            scaleChanged: { _ in }, scrolled: { _, _, _ in }, visibleAssetsChanged: { _, _ in }, refresh: {}
         ))
         controller.view.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
         controller.view.setNeedsLayout()
@@ -174,10 +191,122 @@ struct TimelineSemanticZoomTests {
         try! Date(value, strategy: .iso8601)
     }
 
+    @Test @MainActor func zoomCoversEveryIncomingViewportTileWithoutVisibleSourceMembership() throws {
+        let start = date("2026-01-01T12:00:00Z")
+        let assets = (0 ..< 180).map { i in
+            let base = asset("day-\(i)", "2026-01-01T12:00:00Z")
+            return TimelineAssetSummary(id: base.id, ownerID: base.ownerID,
+                                        capturedAt: start.addingTimeInterval(Double(i) * 86400), uploadedAt: start,
+                                        localOffsetHours: 0, mediaKind: .image, durationMilliseconds: nil, aspectRatio: 1,
+                                        isFavorite: false, visibility: .timeline, livePhotoVideoID: nil, stack: nil,
+                                        projectionType: nil, thumbhash: nil, thumbnailRevision: start)
+        }
+        let controller = TimelineSemanticCollectionController()
+        controller.update(TimelineSemanticCollectionView(
+            catalog: TimelineSemanticCatalog(assets: assets), revision: 1, scale: .day, media: MediaLibraryController(), namespace: nil,
+            bottomClearance: 96, runtime: TimelineSemanticRuntime(), latestRequest: 0, isActive: true,
+            hiddenThumbnailID: nil, hiddenLivePhotoID: nil, selectAsset: { _, _ in }, selectGroup: { _, _ in },
+            scaleChanged: { _ in }, scrolled: { _, _, _ in }, visibleAssetsChanged: { _, _ in }, refresh: {}
+        ))
+        controller.view.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        controller.view.setNeedsLayout()
+        controller.view.layoutIfNeeded()
+        controller.changeScale(coarser: true)
+        let collection = try #require(controller.view.subviews.compactMap { $0 as? UICollectionView }.first)
+        let dataSource = try #require(collection.dataSource as? UICollectionViewDiffableDataSource<Int, String>)
+        let visibleIDs = Set(collection.indexPathsForVisibleItems.compactMap { dataSource.itemIdentifier(for: $0) })
+        let surface = try #require(controller.view.subviews.first { $0 !== collection })
+        let covered = Set(surface.subviews.compactMap { view -> String? in
+            guard let id = view.accessibilityIdentifier, id.hasPrefix("semantic-zoom-target:") else { return nil }
+            return String(id.dropFirst("semantic-zoom-target:".count))
+        })
+        #expect(visibleIDs.count > 1)
+        #expect(visibleIDs.isSubset(of: covered))
+        controller.stop()
+    }
+
+    @Test @MainActor func historyLoadingFillsGapsBeforeAnOlderLoadedIsland() async {
+        let buckets = (1 ... 7).reversed().map { TimelineBucketSummary(id: .init(rawValue: String(format: "2027-%02d-01", $0)), assetCount: 1) }
+        let reader = SemanticHistoryReader(buckets: buckets, emptyIDs: [])
+        let store = PhotosTimelineStore(reader: reader)
+        await store.load()
+        await store.loadBucket(buckets[1].id)
+        await store.loadBucket(buckets[4].id)
+        #expect(store.sectionsByID[buckets[2].id]?.assets.isEmpty == true)
+        await store.loadOlderSemanticPage()
+        #expect(store.sectionsByID[buckets[2].id]?.loadState == .loaded)
+        #expect(store.sectionsByID[buckets[2].id]?.assets.isEmpty == false)
+    }
+
+    @Test @MainActor func emptyNewestPeriodsAdvanceToDisplayableHistory() async {
+        let buckets = ["2027-03-01", "2027-02-01", "2027-01-01"].map { TimelineBucketSummary(id: .init(rawValue: $0), assetCount: 1) }
+        let reader = SemanticHistoryReader(buckets: buckets, emptyIDs: Set(buckets.prefix(2).map(\.id)))
+        let store = PhotosTimelineStore(reader: reader)
+        await store.load()
+        await store.loadOlderSemanticPage()
+        #expect(store.semanticAssetsSnapshot().count == 1)
+        #expect(store.sectionsByID[buckets[2].id]?.loadState == .loaded)
+        #expect(!store.hasUnloadedSemanticBuckets)
+    }
+
+    @Test @MainActor func entirelyFilteredHistoryFinishesWithAnExplicitEmptyState() async {
+        let buckets = ["2027-03-01", "2027-02-01", "2027-01-01"].map { TimelineBucketSummary(id: .init(rawValue: $0), assetCount: 1) }
+        let reader = SemanticHistoryReader(buckets: buckets, emptyIDs: Set(buckets.map(\.id)))
+        let store = PhotosTimelineStore(reader: reader)
+        await store.load()
+        await store.loadOlderSemanticPage()
+        #expect(store.semanticAssetsSnapshot().isEmpty)
+        #expect(store.semanticHistoryState == .empty)
+        #expect(!store.hasUnloadedSemanticBuckets)
+    }
+
+    @Test func semanticWeeksMatchTheExistingCrossMonthCatalog() throws {
+        let december = TimelineBucketSummary(id: .init(rawValue: "2026-12-01"), assetCount: 1)
+        let january = TimelineBucketSummary(id: .init(rawValue: "2027-01-01"), assetCount: 2)
+        let decAssets = [asset("dec-31", "2026-12-31T12:00:00Z")]
+        let janAssets = [asset("jan-4", "2027-01-04T12:00:00Z"), asset("jan-1", "2027-01-01T12:00:00Z")]
+        let old = TimelineRangeCatalog.libraryWeeks(endingIn: january.id,
+                                                    current: .init(summary: january, assets: janAssets, loadState: .loaded, contentRevision: 1),
+                                                    previous: .init(summary: december, assets: decAssets, loadState: .loaded, contentRevision: 1), hasNextMonth: false)
+        let semantic = TimelineSemanticCatalog(assets: decAssets + janAssets)
+        let groups = try #require(semantic.groups[.week])
+        #expect(groups.map(\.assets.count) == old.map(\.assetCount))
+        #expect(groups.map(\.id) == old.map { "week:\($0.id.id)" })
+    }
+
     private func asset(_ id: String, _ timestamp: String) -> TimelineAssetSummary {
         TimelineAssetSummary(id: id, ownerID: "owner", capturedAt: date(timestamp), uploadedAt: date(timestamp),
                              localOffsetHours: 0, mediaKind: .image, durationMilliseconds: nil, aspectRatio: 1.5,
                              isFavorite: false, visibility: .timeline, livePhotoVideoID: nil, stack: nil,
                              projectionType: nil, thumbhash: nil, thumbnailRevision: date(timestamp))
+    }
+}
+
+private actor SemanticHistoryReader: TimelineReading {
+    let buckets: [TimelineBucketSummary]
+    let emptyIDs: Set<TimelineBucketID>
+
+    init(buckets: [TimelineBucketSummary], emptyIDs: Set<TimelineBucketID>) {
+        self.buckets = buckets
+        self.emptyIDs = emptyIDs
+    }
+
+    func bucketSummaries(query _: TimelineQuery) async throws -> [TimelineBucketSummary] {
+        buckets
+    }
+
+    func assets(in bucketID: TimelineBucketID, query _: TimelineQuery) async throws -> [TimelineAssetSummary] {
+        if emptyIDs.contains(bucketID) {
+            return []
+        }
+        let date = bucketID.displayDate!
+        return [.init(id: bucketID.rawValue, ownerID: "owner", capturedAt: date, uploadedAt: date,
+                      localOffsetHours: 0, mediaKind: .image, durationMilliseconds: nil, aspectRatio: 1,
+                      isFavorite: false, visibility: .timeline, livePhotoVideoID: nil, stack: nil,
+                      projectionType: nil, thumbhash: nil, thumbnailRevision: date)]
+    }
+
+    func memories() async throws -> [TimelineMemorySummary] {
+        []
     }
 }

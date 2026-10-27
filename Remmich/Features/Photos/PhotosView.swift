@@ -286,6 +286,8 @@ struct PhotosView: View {
     @State private var semanticCatalog: TimelineSemanticCatalog?
     @State private var semanticCatalogRevision: UInt64 = 0
     @State private var semanticRuntime = TimelineSemanticRuntime()
+    @State private var semanticLatestRequest = 0
+    @State private var semanticLatestTask: Task<Void, Never>?
 
     init(
         store: PhotosTimelineStore,
@@ -435,11 +437,30 @@ struct PhotosView: View {
                 memoryViewerDismissalRequest &+= 1
                 return
             }
-            var transaction = Transaction(animation: nil)
-            transaction.disablesAnimations = true
-            withTransaction(transaction) {
-                navigationPath = []
-                libraryRange = .all
+            semanticLatestTask?.cancel()
+            semanticLatestTask = Task { @MainActor in
+                defer { store.completeJump(); semanticLatestTask = nil }
+                guard let newest = store.bucketSummaries.first?.id,
+                      await store.prepareJump(to: newest), !Task.isCancelled else { return }
+                if store.semanticAssetsSnapshot().isEmpty {
+                    await store.loadOlderSemanticPage()
+                }
+                let revision = store.semanticContentRevision
+                let assets = store.semanticAssetsSnapshot()
+                let build = Task.detached(priority: .userInitiated) { TimelineSemanticCatalog(assets: assets) }
+                let catalog = await withTaskCancellationHandler { await build.value } onCancel: { build.cancel() }
+                guard !Task.isCancelled else { return }
+                var transaction = Transaction(animation: nil)
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    if revision >= semanticCatalogRevision {
+                        semanticCatalog = catalog
+                        semanticCatalogRevision = revision
+                    }
+                    navigationPath = []
+                    libraryRange = .all
+                    semanticLatestRequest &+= 1
+                }
             }
         }
         .onChange(of: requestedLibraryRange, initial: true) { _, requestedLibraryRange in
@@ -449,6 +470,8 @@ struct PhotosView: View {
             requestedLibraryRangeHandled()
         }
         .onDisappear {
+            semanticLatestTask?.cancel()
+            semanticLatestTask = nil
             if memoryOverlayRoute != nil {
                 closeViewer()
             }
@@ -599,12 +622,12 @@ struct PhotosView: View {
             // the native bar's measured overlap, once, plus the existing gap.
             let clearance = (isPhone ? barHeight : 0) + 12
             Group {
-                if let semanticCatalog, !semanticCatalog.assets.isEmpty {
+                if let semanticCatalog {
                     TimelineSemanticCollectionView(
                         catalog: semanticCatalog, revision: semanticCatalogRevision,
                         scale: semanticScale, media: media, namespace: viewerNamespace,
                         bottomClearance: clearance, runtime: semanticRuntime,
-                        latestRequest: scrollToLatestRequest,
+                        latestRequest: semanticLatestRequest,
                         isActive: isTabContentActivated && navigationPath.isEmpty && viewerRoute == nil,
                         hiddenThumbnailID: hiddenReturningThumbnailAssetID,
                         hiddenLivePhotoID: hiddenLivePhotoBadgeAssetID,
@@ -624,26 +647,48 @@ struct PhotosView: View {
                                 setCompactChrome(compact)
                             }
                         },
-                        visibleAssetsChanged: { assets in
+                        visibleAssetsChanged: { assets, target in
                             let visible = Set(assets.map(\.id))
-                            media.updateTimelineResidency(store.residencyPlan(visibleAssetIDs: visible), targetPixels: .init(width: 600, height: 600))
+                            let plan = store.residencyPlan(visibleAssetIDs: visible)
+                            guard plan != viewportRuntime.lastResidencyPlan || target != viewportRuntime.lastResidencyTarget else { return }
+                            viewportRuntime.lastResidencyPlan = plan
+                            viewportRuntime.lastResidencyTarget = target
+                            media.updateTimelineResidency(plan, targetPixels: target)
                         },
                         refresh: { await store.refresh() },
-                        loadOlder: { await store.loadOlderSemanticPage() }
+                        loadOlder: { await store.loadOlderSemanticPage() },
+                        focusChanged: { asset in
+                            store.updateVisibleAnchor(.init(bucketID: semanticBucketID(for: asset), assetID: asset.id))
+                        }
                     )
                 } else {
                     ProgressView("Preparing timeline…")
                 }
             }
+            .overlay {
+                if semanticCatalog?.assets.isEmpty == true {
+                    if store.hasUnloadedSemanticBuckets {
+                        if case .failed = store.semanticHistoryState {
+                            Button("Retry loading timeline") { Task { await store.loadOlderSemanticPage() } }
+                        } else {
+                            ProgressView("Loading earlier periods…")
+                        }
+                    } else {
+                        Text("No displayable assets in these periods.").foregroundStyle(.secondary)
+                    }
+                }
+            }
             .overlay(alignment: .top) { semanticMemoryLane }
             .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: compactChrome)
         }
-        .ignoresSafeArea(.container, edges: [.top, .horizontal])
+        .ignoresSafeArea(.container, edges: [.top, .horizontal, .bottom])
         .safeAreaInset(edge: .top, spacing: 0) {
             if case let .failed(message) = store.refreshState {
                 TimelineRefreshError(message: message) {
                     Task { await store.refresh() }
                 }
+            } else if case let .failed(message) = store.semanticHistoryState {
+                TimelineRefreshError(message: message) { Task { await store.loadOlderSemanticPage() } }
             }
         }
     }
