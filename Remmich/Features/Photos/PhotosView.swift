@@ -647,9 +647,10 @@ struct PhotosView: View {
                                 setCompactChrome(compact)
                             }
                         },
-                        visibleAssetsChanged: { assets, target in
-                            let visible = Set(assets.map(\.id))
-                            let plan = store.residencyPlan(visibleAssetIDs: visible)
+                        visibleAssetsChanged: { assets, target, renderedScale in
+                            let plan = renderedScale.isAssets
+                                ? store.residencyPlan(visibleAssetIDs: Set(assets.map(\.id)))
+                                : TimelineSemanticResidencyPolicy.groupedPlan(visibleAssets: assets)
                             guard plan != viewportRuntime.lastResidencyPlan || target != viewportRuntime.lastResidencyTarget else { return }
                             viewportRuntime.lastResidencyPlan = plan
                             viewportRuntime.lastResidencyTarget = target
@@ -678,7 +679,14 @@ struct PhotosView: View {
                     }
                 }
             }
-            .overlay(alignment: .top) { semanticMemoryLane }
+            .overlay(alignment: .top) {
+                semanticMemoryLane(
+                    topInset: TimelineMemoryLaneSafeArea.topInset(
+                        proposed: geometry.safeAreaInsets.top,
+                        window: TimelineMemoryLaneSafeArea.activeWindowTopInset
+                    )
+                )
+            }
             .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: compactChrome)
         }
         .ignoresSafeArea(.container, edges: [.top, .horizontal, .bottom])
@@ -694,7 +702,7 @@ struct PhotosView: View {
     }
 
     @ViewBuilder
-    private var semanticMemoryLane: some View {
+    private func semanticMemoryLane(topInset: CGFloat) -> some View {
         if memoryBackdropVisible {
             TimelineMemoryLane(
                 memories: store.memories, media: media, selectedMemoryID: presentedMemoryID,
@@ -704,6 +712,7 @@ struct PhotosView: View {
             )
             .frame(height: 120)
             .padding(.bottom, 12)
+            .padding(.top, topInset)
             .background {
                 Rectangle().fill(.ultraThinMaterial)
                     .mask {
@@ -1287,6 +1296,34 @@ struct PhotosView: View {
             viewportRuntime.lastResidencyTarget = target
             media.updateTimelineResidency(plan, targetPixels: target)
         }
+    }
+}
+
+nonisolated enum TimelineMemoryLaneSafeArea {
+    static func topInset(proposed: CGFloat, window: CGFloat) -> CGFloat {
+        max(0, max(proposed, window))
+    }
+
+    @MainActor
+    static var activeWindowTopInset: CGFloat {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let scene = scenes.first { $0.activationState == .foregroundActive } ?? scenes.first
+        let window = scene?.windows.first(where: \.isKeyWindow) ?? scene?.windows.first
+        return window?.safeAreaInsets.top ?? 0
+    }
+}
+
+nonisolated enum TimelineSemanticResidencyPolicy {
+    static let groupedAssetLimit = 96
+
+    static func groupedPlan(visibleAssets: [TimelineAssetSummary]) -> TimelineResidencyPlan {
+        var seen = Set<String>()
+        let bounded = visibleAssets.filter { seen.insert($0.id).inserted }.prefix(groupedAssetLimit)
+        return TimelineResidencyPlan(
+            newestAssets: [],
+            viewportAssets: Array(bounded),
+            prefetchAssets: []
+        )
     }
 }
 

@@ -1,11 +1,127 @@
 import CoreGraphics
 import Foundation
+import SwiftUI
 import Testing
 import UIKit
 @testable import Remmich
 
 @Suite("Timeline semantic zoom", .serialized)
 struct TimelineSemanticZoomTests {
+    @Test func memoryLaneUsesTheLargestAvailableTopSafeArea() {
+        #expect(TimelineMemoryLaneSafeArea.topInset(proposed: 0, window: 62) == 62)
+        #expect(TimelineMemoryLaneSafeArea.topInset(proposed: 59, window: 0) == 59)
+        #expect(TimelineMemoryLaneSafeArea.topInset(proposed: 24, window: 59) == 59)
+    }
+
+    @Test func transitionCoverageKeepsVisibleSourcesAndBoundsOverscanWork() {
+        let catalog = TimelineSemanticCatalog(assets: (0 ..< 900).map {
+            asset(String(format: "%04d", $0), "2027-01-01T12:00:00Z")
+        })
+        let projection = TimelineSemanticProjection.build(
+            catalog: catalog,
+            scale: .natural,
+            focusAssetIndex: 450,
+            size: CGSize(width: 402, height: 874),
+            isPhone: true,
+            dark: true
+        )
+        let viewport = CGRect(x: 0, y: projection.height / 2 - 437, width: 402, height: 874)
+        let indexes = TimelineSemanticTransitionPolicy.sourceIndexes(
+            items: projection.items,
+            viewport: viewport,
+            focus: CGPoint(x: viewport.midX, y: viewport.midY)
+        )
+        let visible = Set(projection.items.indices.filter {
+            !projection.items[$0].isHeader && projection.items[$0].frame.intersects(viewport)
+        })
+        #expect(visible.isSubset(of: Set(indexes)))
+        #expect(indexes.count <= max(TimelineSemanticTransitionPolicy.sourceLimit, visible.count))
+    }
+
+    @Test func groupedResidencyDoesNotExpandRepresentativesIntoTimelinePages() {
+        let visible = (0 ..< 140).map { asset("visible-\($0)", "2027-01-01T12:00:00Z") }
+        let plan = TimelineSemanticResidencyPolicy.groupedPlan(visibleAssets: visible + visible.prefix(8))
+        #expect(plan.newestAssets.isEmpty)
+        #expect(plan.prefetchAssets.isEmpty)
+        #expect(plan.viewportAssets.count == TimelineSemanticResidencyPolicy.groupedAssetLimit)
+        #expect(Set(plan.viewportAssets.map(\.id)).count == plan.viewportAssets.count)
+    }
+
+    @Test @MainActor func hostedCellNeutralizesSystemBarsAtTheHostingBoundary() async throws {
+        var measured = CGSize.zero
+        let size = CGSize(width: 74, height: 122)
+        let parent = UIViewController()
+        let cell = TimelineSemanticCollectionCell(frame: CGRect(origin: .zero, size: size))
+        cell.setHostedContent(
+            GeometryReader { _ in
+                Color.clear.onGeometryChange(for: CGSize.self) { $0.size } action: { measured = $0 }
+            },
+            parent: parent
+        )
+        parent.additionalSafeAreaInsets = UIEdgeInsets(top: 40, left: 0, bottom: 45, right: 0)
+        let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(origin: .zero, size: size)
+        window.rootViewController = parent
+        parent.view.addSubview(cell)
+        window.isHidden = false
+        defer { window.isHidden = true }
+        parent.view.setNeedsLayout()
+        parent.view.layoutIfNeeded()
+        cell.setNeedsLayout()
+        cell.layoutIfNeeded()
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(cell.hostedSafeAreaRegions == [])
+        #expect(cell.hostedViewFrame == cell.contentView.bounds)
+        #expect(cell.clipsToBounds)
+        #expect(cell.contentView.clipsToBounds)
+        #expect(cell.hostedViewClipsToBounds)
+        #expect(measured == size)
+    }
+
+    @Test @MainActor func hostedAssetKeepsItsTapPathAlongsideNativePinch() throws {
+        let catalog = TimelineSemanticCatalog(assets: (0 ..< 60).map { asset(String(format: "%03d", $0), "2027-01-01T12:00:00Z") })
+        let controller = TimelineSemanticCollectionController()
+        var selected: [String] = []
+        var committed: [TimelineSemanticScale] = []
+        controller.update(TimelineSemanticCollectionView(
+            catalog: catalog, revision: 1, scale: .natural, media: MediaLibraryController(), namespace: nil,
+            bottomClearance: 96, runtime: TimelineSemanticRuntime(), latestRequest: 0, isActive: true,
+            hiddenThumbnailID: nil, hiddenLivePhotoID: nil,
+            selectAsset: { asset, _ in selected.append(asset.id) }, selectGroup: { _, _ in },
+            scaleChanged: { committed.append($0) }, scrolled: { _, _, _ in }, visibleAssetsChanged: { _, _, _ in }, refresh: {}
+        ))
+        controller.view.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        controller.view.setNeedsLayout()
+        controller.view.layoutIfNeeded()
+        let collection = try #require(controller.view.subviews.compactMap { $0 as? UICollectionView }.first)
+        let source = try #require(collection.dataSource as? UICollectionViewDiffableDataSource<Int, String>)
+        let path = try #require(collection.indexPathsForVisibleItems.first { source.itemIdentifier(for: $0)?.hasPrefix("header:") == false })
+        let cell = try #require(collection.cellForItem(at: path))
+        #expect(cell.contentView.isUserInteractionEnabled)
+        #expect(cell.contentConfiguration == nil)
+        let hostedCell = try #require(cell as? TimelineSemanticCollectionCell)
+        #expect(hostedCell.hasHostedContent)
+        #expect(hostedCell.hostedSafeAreaRegions == [])
+        controller.collectionView(collection, didSelectItemAt: path)
+        // Asset selection remains owned by the hosted SwiftUI Button. The
+        // collection delegate must not create a duplicate presentation.
+        #expect(selected.isEmpty)
+        let nativePinch = try #require(collection.gestureRecognizers?.first { $0.name == "timeline-semantic-pinch" })
+        #expect(controller.gestureRecognizer(nativePinch, shouldRecognizeSimultaneouslyWith: collection.panGestureRecognizer))
+        let pinch = SemanticTestPinch()
+        pinch.point = CGPoint(x: collection.bounds.midX, y: collection.bounds.midY)
+        pinch.testState = .began
+        controller.perform(NSSelectorFromString("pinched:"), with: pinch)
+        pinch.testState = .changed
+        pinch.scale = 0.65
+        controller.perform(NSSelectorFromString("pinched:"), with: pinch)
+        pinch.testState = .ended
+        controller.perform(NSSelectorFromString("pinched:"), with: pinch)
+        #expect(committed == [.day])
+        controller.stop()
+    }
+
     @Test func crossMonthWeekOverlapsBothMonthsWithoutDuplicatingAssets() throws {
         let catalog = TimelineSemanticCatalog(assets: [asset("dec", "2026-12-31T12:00:00Z"), asset("jan", "2027-01-01T12:00:00Z")])
         let week = try #require(catalog.groups[.week]?.first)
@@ -101,13 +217,17 @@ struct TimelineSemanticZoomTests {
         let controller = TimelineSemanticCollectionController()
         var committed: [TimelineSemanticScale] = []
         var reportedTargets: [MediaPixelSize] = []
+        var reportedScales: [TimelineSemanticScale] = []
         var focusedAssets: [String] = []
         let input = TimelineSemanticCollectionView(
             catalog: catalog, revision: 1, scale: .natural, media: MediaLibraryController(), namespace: nil,
             bottomClearance: 96, runtime: TimelineSemanticRuntime(), latestRequest: 0, isActive: true,
             hiddenThumbnailID: nil, hiddenLivePhotoID: nil, selectAsset: { _, _ in }, selectGroup: { _, _ in },
             scaleChanged: { committed.append($0) }, scrolled: { _, _, _ in },
-            visibleAssetsChanged: { _, pixels in reportedTargets.append(pixels) }, refresh: {},
+            visibleAssetsChanged: { _, pixels, scale in
+                reportedTargets.append(pixels)
+                reportedScales.append(scale)
+            }, refresh: {},
             focusChanged: { focusedAssets.append($0.id) }
         )
         controller.update(input)
@@ -126,12 +246,13 @@ struct TimelineSemanticZoomTests {
         let attributes = try #require(collection.collectionViewLayout.layoutAttributesForItem(at: assetPath))
         #expect(assetCell.preferredLayoutAttributesFitting(attributes).frame == attributes.frame)
         controller.collectionView(collection, didEndDisplaying: assetCell, forItemAt: assetPath)
-        #expect(assetCell.contentConfiguration == nil)
+        #expect((assetCell as? TimelineSemanticCollectionCell)?.hasHostedContent == false)
         controller.collectionView(collection, willDisplay: assetCell, forItemAt: assetPath)
-        #expect(assetCell.contentConfiguration != nil)
+        #expect((assetCell as? TimelineSemanticCollectionCell)?.hasHostedContent == true)
         #expect(abs(collection.contentSize.height - collection.contentOffset.y - collection.bounds.height + 96) < 0.5)
         controller.changeScale(coarser: true)
         #expect(committed == [.day])
+        #expect(reportedScales.last == .day)
         #expect(collection.numberOfItems(inSection: 0) == 1)
         let card = try #require(collection.collectionViewLayout.layoutAttributesForItem(at: IndexPath(item: 0, section: 0)))
         let clearance = collection.bounds.height - 96 - card.frame.maxY
@@ -154,7 +275,7 @@ struct TimelineSemanticZoomTests {
             catalog: catalog, revision: 1, scale: .natural, media: MediaLibraryController(), namespace: nil,
             bottomClearance: 96, runtime: TimelineSemanticRuntime(), latestRequest: 0, isActive: true,
             hiddenThumbnailID: nil, hiddenLivePhotoID: nil, selectAsset: { _, _ in }, selectGroup: { _, _ in },
-            scaleChanged: { _ in }, scrolled: { _, _, _ in }, visibleAssetsChanged: { _, _ in }, refresh: {}
+            scaleChanged: { _ in }, scrolled: { _, _, _ in }, visibleAssetsChanged: { _, _, _ in }, refresh: {}
         ))
         controller.view.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
         controller.view.setNeedsLayout()
@@ -206,7 +327,7 @@ struct TimelineSemanticZoomTests {
             catalog: TimelineSemanticCatalog(assets: assets), revision: 1, scale: .day, media: MediaLibraryController(), namespace: nil,
             bottomClearance: 96, runtime: TimelineSemanticRuntime(), latestRequest: 0, isActive: true,
             hiddenThumbnailID: nil, hiddenLivePhotoID: nil, selectAsset: { _, _ in }, selectGroup: { _, _ in },
-            scaleChanged: { _ in }, scrolled: { _, _, _ in }, visibleAssetsChanged: { _, _ in }, refresh: {}
+            scaleChanged: { _ in }, scrolled: { _, _, _ in }, visibleAssetsChanged: { _, _, _ in }, refresh: {}
         ))
         controller.view.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
         controller.view.setNeedsLayout()
@@ -279,6 +400,21 @@ struct TimelineSemanticZoomTests {
                              localOffsetHours: 0, mediaKind: .image, durationMilliseconds: nil, aspectRatio: 1.5,
                              isFavorite: false, visibility: .timeline, livePhotoVideoID: nil, stack: nil,
                              projectionType: nil, thumbhash: nil, thumbnailRevision: date(timestamp))
+    }
+}
+
+@MainActor
+private final class SemanticTestPinch: UIPinchGestureRecognizer {
+    var testState: UIGestureRecognizer.State = .possible
+    var point = CGPoint.zero
+
+    override var state: UIGestureRecognizer.State {
+        get { testState }
+        set { testState = newValue }
+    }
+
+    override func location(in _: UIView?) -> CGPoint {
+        point
     }
 }
 

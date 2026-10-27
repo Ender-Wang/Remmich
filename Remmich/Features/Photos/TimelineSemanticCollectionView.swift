@@ -34,7 +34,7 @@ struct TimelineSemanticCollectionView: UIViewControllerRepresentable {
     let selectGroup: (PhotosRangeRoute, String?) -> Void
     let scaleChanged: (TimelineSemanticScale) -> Void
     let scrolled: (CGFloat, CGFloat, Bool) -> Void
-    let visibleAssetsChanged: ([TimelineAssetSummary], MediaPixelSize) -> Void
+    let visibleAssetsChanged: ([TimelineAssetSummary], MediaPixelSize, TimelineSemanticScale) -> Void
     let refresh: () async -> Void
     var loadOlder: () async -> Void = {}
     var focusChanged: (TimelineAssetSummary) -> Void = { _ in }
@@ -71,16 +71,57 @@ private final class TimelineSemanticCollectionLayout: UICollectionViewLayout {
     }
 
     override func layoutAttributesForItem(at indexPath: IndexPath) -> UICollectionViewLayoutAttributes? {
-        guard frames.indices.contains(indexPath.item) else { return nil }
+        guard indexPath.section == 0, frames.indices.contains(indexPath.item),
+              let collectionView, collectionView.numberOfSections > 0,
+              indexPath.item < collectionView.numberOfItems(inSection: 0) else { return nil }
         let attributes = UICollectionViewLayoutAttributes(forCellWith: indexPath)
         attributes.frame = frames[indexPath.item]
         return attributes
     }
 }
 
-private final class TimelineSemanticCollectionCell: UICollectionViewCell {
+final class TimelineSemanticCollectionCell: UICollectionViewCell {
     var coverAssetID: String?
     var nodeID: String?
+    private var hostingController: UIHostingController<AnyView>?
+    private(set) var hasHostedContent = false
+
+    func setHostedContent(_ content: some View, parent: UIViewController) {
+        let root = AnyView(content)
+        if let hostingController {
+            hostingController.rootView = root
+        } else {
+            let controller = UIHostingController(rootView: root)
+            controller.safeAreaRegions = []
+            controller.view.backgroundColor = .clear
+            controller.view.clipsToBounds = true
+            controller.view.frame = contentView.bounds
+            controller.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            parent.addChild(controller)
+            contentView.addSubview(controller.view)
+            controller.didMove(toParent: parent)
+            hostingController = controller
+        }
+        hasHostedContent = true
+    }
+
+    func clearHostedContent() {
+        guard hasHostedContent else { return }
+        hostingController?.rootView = AnyView(EmptyView())
+        hasHostedContent = false
+    }
+
+    var hostedSafeAreaRegions: SafeAreaRegions? {
+        hostingController?.safeAreaRegions
+    }
+
+    var hostedViewFrame: CGRect? {
+        hostingController?.view.frame
+    }
+
+    var hostedViewClipsToBounds: Bool {
+        hostingController?.view.clipsToBounds == true
+    }
 
     /// Geometry belongs to the deterministic collection layout. SwiftUI's
     /// hosted GeometryReader must not self-size cells during scrolling.
@@ -88,15 +129,50 @@ private final class TimelineSemanticCollectionCell: UICollectionViewCell {
         layoutAttributes
     }
 
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        hostingController?.view.frame = contentView.bounds
+    }
+
     override func prepareForReuse() {
         super.prepareForReuse()
-        contentConfiguration = nil
+        clearHostedContent()
         coverAssetID = nil
         nodeID = nil
         isAccessibilityElement = false
         accessibilityLabel = nil
+        accessibilityIdentifier = nil
         accessibilityTraits = []
         alpha = 1
+    }
+
+    isolated deinit {
+        hostingController?.willMove(toParent: nil)
+        hostingController?.view.removeFromSuperview()
+        hostingController?.removeFromParent()
+    }
+}
+
+nonisolated enum TimelineSemanticTransitionPolicy {
+    static let sourceLimit = 64
+    static let sourceOverscan: CGFloat = 0.15
+
+    static func sourceIndexes(
+        items: [TimelineSemanticProjection.Item],
+        viewport: CGRect,
+        focus: CGPoint
+    ) -> [Int] {
+        let area = viewport.insetBy(dx: 0, dy: -viewport.height * sourceOverscan)
+        let candidates = items.enumerated().filter {
+            !$0.element.isHeader && $0.element.frame.intersects(area)
+        }
+        let visible = candidates.filter { $0.element.frame.intersects(viewport) }
+        let visibleIndexes = Set(visible.map(\.offset))
+        let overscan = candidates.filter { !visibleIndexes.contains($0.offset) }.sorted {
+            hypot($0.element.frame.midX - focus.x, $0.element.frame.midY - focus.y)
+                < hypot($1.element.frame.midX - focus.x, $1.element.frame.midY - focus.y)
+        }
+        return Array((visible + overscan).prefix(max(sourceLimit, visible.count)).map(\.offset))
     }
 }
 
@@ -133,6 +209,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
     private var viewportTask: Task<Void, Never>?
     private var itemIndexes: [String: Int] = [:]
     private var lastPublishedTarget: MediaPixelSize?
+    private var lastPublishedScale: TimelineSemanticScale?
     private var transitionPrefetcher: ImagePrefetcher?
     private var warmPipeline: ImagePipeline?
     private var warmedRequests: [MediaRequestDescriptor: ImageRequest] = [:]
@@ -164,6 +241,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         view.addSubview(collection)
         let pinch = UIPinchGestureRecognizer(target: self, action: #selector(pinched(_:)))
         pinch.delegate = self
+        pinch.name = "timeline-semantic-pinch"
         pinch.cancelsTouchesInView = true
         collection.addGestureRecognizer(pinch)
         collection.panGestureRecognizer.maximumNumberOfTouches = 1
@@ -315,7 +393,6 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         layout.height = max(next.height, collection.bounds.height - collection.contentInset.bottom)
         let y = offset(for: next, focus: focus, viewportY: viewportY, latest: latest)
         UIView.performWithoutAnimation {
-            layout.invalidateLayout()
             var snapshot = NSDiffableDataSourceSnapshot<Int, String>()
             snapshot.appendSections([0])
             let ids = next.items.map(\.id)
@@ -324,6 +401,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
                 snapshot.reconfigureItems(ids.filter { oldIDs.contains($0) })
             }
             dataSource.apply(snapshot, animatingDifferences: false)
+            layout.invalidateLayout()
             collection.contentOffset = CGPoint(x: 0, y: y)
             collection.layoutIfNeeded()
         }
@@ -346,6 +424,13 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         guard let input, let catalog, let projection, projection.items.indices.contains(path.item),
               let cell = supplied ?? collection.cellForItem(at: path) as? TimelineSemanticCollectionCell else { return }
         let item = projection.items[path.item]
+        cell.contentView.isUserInteractionEnabled = true
+        cell.clipsToBounds = true
+        cell.contentView.clipsToBounds = true
+        cell.isAccessibilityElement = false
+        cell.accessibilityIdentifier = nil
+        cell.accessibilityLabel = nil
+        cell.accessibilityTraits = []
         cell.nodeID = item.id
         let assetIndex = representativeIndex(item)
         let asset = catalog.assets[assetIndex]
@@ -353,13 +438,14 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         cell.alpha = transitionSurface == nil ? 1 : 0
         if item.isHeader {
             let date = catalog.assets[item.assetRange.lowerBound].capturedAt
-            cell.contentConfiguration = UIHostingConfiguration {
+            cell.setHostedContent(
                 AssetSectionHeader(title: TimelineCaptureDateFormatting.string(from: date, dateStyle: .long, timeStyle: .none),
-                                   subtitle: "\(item.assetRange.count.formatted()) items")
-            }.margins(.all, 0)
+                                   subtitle: "\(item.assetRange.count.formatted()) items"),
+                parent: self
+            )
         } else if scale.isAssets {
             cell.coverAssetID = asset.id
-            cell.contentConfiguration = UIHostingConfiguration {
+            cell.setHostedContent(
                 TimelineAssetThumbnail(asset: asset, media: input.media,
                                        assetLayout: projection.scale == .square ? .square : .naturalAspect,
                                        requestSide: max(item.frame.width, item.frame.height),
@@ -370,8 +456,9 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
                                            input.selectAsset(selected, Array(catalog.assets[max(0, assetIndex - 80) ..< min(catalog.assets.count, assetIndex + 81)].reversed()))
                                        },
                                        hiddenLivePhotoBadgeAssetID: input.hiddenLivePhotoID,
-                                       hiddenReturningThumbnailAssetID: input.hiddenThumbnailID)
-            }.margins(.all, 0)
+                                       hiddenReturningThumbnailAssetID: input.hiddenThumbnailID),
+                parent: self
+            )
         } else {
             let group = catalog.groups[scale]![item.nodeIndex]
             let coverCount = min(TimelineGroupedCatalogEntry.coverLimit, item.assetRange.count)
@@ -387,7 +474,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             )
             cell.coverAssetID = asset.id
             let contentID = "\(item.id):\(revision ?? 0)"
-            cell.contentConfiguration = UIHostingConfiguration {
+            cell.setHostedContent(
                 PhotosRangeCard(title: group.route.navigationTitle, count: group.assets.count,
                                 systemImage: "calendar", assets: covers, media: input.media,
                                 motion: motion, externallyVisible: coversVisible,
@@ -395,8 +482,9 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
                                     guard cell?.nodeID == item.id else { return }
                                     cell?.coverAssetID = assetID
                                 })
-                                .id(contentID)
-            }.margins(.all, 0)
+                                .id(contentID),
+                parent: self
+            )
             cell.isAccessibilityElement = true
             cell.accessibilityLabel = "\(group.route.navigationTitle), \(group.assets.count) items"
             cell.accessibilityTraits = .button
@@ -405,11 +493,11 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
 
     func collectionView(_: UICollectionView, didEndDisplaying cell: UICollectionViewCell, forItemAt _: IndexPath) {
         // Cancel hosted thumbnail/slideshow tasks immediately when virtualized out.
-        cell.contentConfiguration = nil
+        (cell as? TimelineSemanticCollectionCell)?.clearHostedContent()
     }
 
     func collectionView(_: UICollectionView, willDisplay cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
-        if cell.contentConfiguration == nil {
+        if (cell as? TimelineSemanticCollectionCell)?.hasHostedContent == false {
             configure(indexPath, cell: cell as? TimelineSemanticCollectionCell)
         }
     }
@@ -418,6 +506,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         guard gesture == nil, animator == nil, let input, let catalog, let projection,
               projection.items.indices.contains(indexPath.item), !scale.isAssets else { return }
         let item = projection.items[indexPath.item]
+        guard !item.isHeader else { return }
         let cell = collection.cellForItem(at: indexPath) as? TimelineSemanticCollectionCell
         input.selectGroup(catalog.groups[scale]![item.nodeIndex].route, cell?.coverAssetID)
     }
@@ -449,6 +538,8 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             focusAssetIndex = representativeIndex(focused)
             pinchCentroid = recognizer.location(in: view)
             gesture = TimelineSemanticZoomGesture()
+            let sourceScale = scale.rawValue
+            Self.logger.info("Semantic pinch began scale=\(sourceScale, privacy: .public)")
             collection.setContentOffset(collection.contentOffset, animated: false)
             collection.panGestureRecognizer.isEnabled = false
         case .changed:
@@ -460,6 +551,8 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             renderProgress(gesture?.progress ?? 0)
         case .ended:
             guard let gesture else { return }
+            let hasTarget = target != nil
+            Self.logger.info("Semantic pinch ended magnification=\(recognizer.scale) hasTarget=\(hasTarget)")
             settle(commit: gesture.commits(magnification: recognizer.scale) && target != nil)
         case .cancelled, .failed:
             cancelTracking()
@@ -487,8 +580,12 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         // Include a bounded apron around the source, and every tile that can
         // appear in the destination viewport. Target coverage is unconditional:
         // a neighboring period can arrive even without a visible source member.
-        let apron = collection.bounds.insetBy(dx: 0, dy: -collection.bounds.height * 0.75)
-        let sources = source.items.enumerated().filter { !$0.element.isHeader && $0.element.frame.intersects(apron) }
+        let sourceIndexes = TimelineSemanticTransitionPolicy.sourceIndexes(
+            items: source.items,
+            viewport: collection.bounds,
+            focus: CGPoint(x: pinchCentroid.x, y: collection.contentOffset.y + pinchCentroid.y)
+        )
+        let sources = sourceIndexes.map { (offset: $0, element: source.items[$0]) }
         let targetArea = CGRect(x: 0, y: targetOffset, width: view.bounds.width, height: view.bounds.height)
             .insetBy(dx: 0, dy: -view.bounds.height * 0.25)
         let destinations = next.items.filter { !$0.isHeader && $0.frame.intersects(targetArea) }
@@ -747,7 +844,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         warmPipeline = nil
         deferredInput = nil
         input = nil
-        collection?.visibleCells.forEach { $0.contentConfiguration = nil }
+        collection?.visibleCells.forEach { ($0 as? TimelineSemanticCollectionCell)?.clearHostedContent() }
     }
 
     func changeScale(coarser: Bool) {
@@ -839,10 +936,11 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         if !collection.isDragging, !collection.isDecelerating {
             warmTransitionNeighborhood()
         }
-        guard ids != lastVisibleIDs || target != lastPublishedTarget else { return }
+        guard ids != lastVisibleIDs || target != lastPublishedTarget || scale != lastPublishedScale else { return }
         lastVisibleIDs = ids
         lastPublishedTarget = target
-        input.visibleAssetsChanged(assets, target)
+        lastPublishedScale = scale
+        input.visibleAssetsChanged(assets, target, scale)
     }
 
     private func warmTransitionNeighborhood() {
@@ -936,7 +1034,16 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         return AssetViewerDismissalTarget(imageFrame: frame, cornerRadius: radius(scale), fillsFrame: scale == .square)
     }
 
-    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
-        !(gestureRecognizer is UIPinchGestureRecognizer || otherGestureRecognizer is UIPinchGestureRecognizer)
+    func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
+        let active = input?.isActive == true
+        let hasFocus = focusedItem(at: recognizer.location(in: collection)) != nil
+        Self.logger.info("Semantic pinch eligibility active=\(active) hasFocus=\(hasFocus)")
+        return active && hasFocus
+    }
+
+    func gestureRecognizer(_: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith _: UIGestureRecognizer) -> Bool {
+        // UIKit/SwiftUI ancestor recognizers must not veto the two-finger path.
+        // Our one-finger pan is explicitly suspended once the pinch begins.
+        true
     }
 }
