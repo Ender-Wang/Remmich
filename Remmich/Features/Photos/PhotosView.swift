@@ -719,15 +719,25 @@ struct PhotosView: View {
             let barHeight = tabBarTop > 0
                 ? max(0, frame.maxY - tabBarTop)
                 : TimelineRangeGridLayout.minimumBottomNavigationHeight(isPhone: isPhone, viewportSize: geometry.size)
-            // This viewport already has SwiftUI's safe-area proposal. Add only
-            // the native bar's measured overlap, once, plus the existing gap.
-            let clearance = (isPhone ? barHeight : 0) + 12
+            let topInset = TimelineMemoryLaneSafeArea.topInset(
+                proposed: geometry.safeAreaInsets.top,
+                window: TimelineMemoryLaneSafeArea.activeWindowTopInset
+            )
+            // Keep the row's scroll clearance while compact chrome hides it,
+            // so showing the row does not move the timeline underneath it.
+            let bottomClearance = isPhone ? barHeight : 0
+            let reservesMemoryLane = semanticScale.isAssets
+                && navigationPath.isEmpty
+                && store.memoryLaneState == .loaded
+                && !store.memories.isEmpty
+            let topClearance = topInset + (reservesMemoryLane ? TimelineMemoryLaneSafeArea.laneHeight : 0)
             Group {
                 if let semanticCatalog {
                     TimelineSemanticCollectionView(
                         catalog: semanticCatalog, revision: semanticCatalogRevision,
                         scale: semanticScale, media: media, namespace: viewerNamespace,
-                        bottomClearance: clearance, runtime: semanticRuntime,
+                        bottomClearance: bottomClearance, topClearance: topClearance,
+                        runtime: semanticRuntime,
                         latestRequest: semanticLatestRequest,
                         isActive: isTabContentActivated && navigationPath.isEmpty && viewerRoute == nil,
                         hiddenThumbnailID: hiddenReturningThumbnailAssetID,
@@ -781,12 +791,7 @@ struct PhotosView: View {
                 }
             }
             .overlay(alignment: .top) {
-                semanticMemoryLane(
-                    topInset: TimelineMemoryLaneSafeArea.topInset(
-                        proposed: geometry.safeAreaInsets.top,
-                        window: TimelineMemoryLaneSafeArea.activeWindowTopInset
-                    )
-                )
+                semanticMemoryLane(topInset: topInset)
             }
             .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: compactChrome)
         }
@@ -809,7 +814,7 @@ struct PhotosView: View {
                 extended: memoryLaneVisible,
                 reduceMotion: reduceMotion
             )
-            .frame(height: topInset + 132)
+            .frame(height: topInset + TimelineMemoryLaneSafeArea.laneHeight)
             .ignoresSafeArea(.container, edges: .top)
 
             if memoryLaneVisible {
@@ -825,7 +830,7 @@ struct PhotosView: View {
                 .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
             }
         }
-        .frame(height: topInset + 132, alignment: .top)
+        .frame(height: topInset + TimelineMemoryLaneSafeArea.laneHeight, alignment: .top)
         .frame(maxWidth: .infinity, alignment: .top)
         .allowsHitTesting(memoryLaneVisible)
         .accessibilityHidden(!memoryLaneVisible)
@@ -1418,6 +1423,8 @@ struct PhotosView: View {
 }
 
 nonisolated enum TimelineMemoryLaneSafeArea {
+    static let laneHeight: CGFloat = 132
+
     static func topInset(proposed: CGFloat, window: CGFloat) -> CGFloat {
         max(0, max(proposed, window))
     }

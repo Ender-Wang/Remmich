@@ -26,6 +26,7 @@ struct TimelineSemanticCollectionView: UIViewControllerRepresentable {
     let media: MediaLibraryController
     let namespace: Namespace.ID?
     let bottomClearance: CGFloat
+    var topClearance: CGFloat = 0
     let runtime: TimelineSemanticRuntime
     let latestRequest: Int
     let isActive: Bool
@@ -301,6 +302,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         collection = UICollectionView(frame: .zero, collectionViewLayout: layout)
         collection.backgroundColor = .clear
         collection.contentInsetAdjustmentBehavior = .never
+        collection.automaticallyAdjustsScrollIndicatorInsets = false
         collection.alwaysBounceVertical = true
         collection.delegate = self
         collection.register(TimelineSemanticCollectionCell.self, forCellWithReuseIdentifier: "semantic")
@@ -337,6 +339,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         let focusY = focus.map { $0.frame.midY - collection.contentOffset.y }
         let sourceHeight = max(1, collection.bounds.height)
         let wasAtLatest = isAtLatest
+        let wasAtTop = collection.contentOffset.y <= -collection.contentInset.top + 1
         collection.frame = view.bounds
         gesture = nil
         completePresentationCleanup()
@@ -344,7 +347,8 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         guard let catalog else { return }
         let asset = focus.map(representativeIndex) ?? max(0, catalog.assets.count - 1)
         let next = makeProjection(scale: scale, focus: asset)
-        install(next, focusing: asset, viewportY: focusY.map { $0 / sourceHeight * view.bounds.height }, latest: focus == nil || wasAtLatest)
+        install(next, focusing: asset, viewportY: focusY.map { $0 / sourceHeight * view.bounds.height },
+                latest: focus == nil || wasAtLatest, alignTop: wasAtTop && !wasAtLatest)
         if catalog.assets.isEmpty {
             loadOlderIfNeeded()
         }
@@ -355,8 +359,10 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         interrupted()
         let focus = focusedItem(at: CGPoint(x: collection.bounds.midX, y: collection.bounds.midY))
         let asset = focus.map(representativeIndex) ?? max(0, catalog!.assets.count - 1)
+        let wasAtTop = collection.contentOffset.y <= -collection.contentInset.top + 1
         install(makeProjection(scale: scale, focus: asset), focusing: asset,
-                viewportY: focus.map { $0.frame.midY - collection.contentOffset.y }, latest: isAtLatest)
+                viewportY: focus.map { $0.frame.midY - collection.contentOffset.y },
+                latest: isAtLatest, alignTop: wasAtTop && !isAtLatest)
     }
 
     func update(_ value: TimelineSemanticCollectionView) {
@@ -374,6 +380,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
            previous.isActive == value.isActive, previous.latestRequest == value.latestRequest,
            previous.hiddenThumbnailID == value.hiddenThumbnailID, previous.hiddenLivePhotoID == value.hiddenLivePhotoID,
            abs(previous.bottomClearance - value.bottomClearance) < 0.5,
+           abs(previous.topClearance - value.topClearance) < 0.5,
            previous.media === value.media
         {
             return
@@ -384,18 +391,30 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         let oldFocusID = oldFocus.flatMap { item in catalog.map { $0.assets[representativeIndex(item)].id } }
         let focusY = oldFocus.map { $0.frame.midY - collection.contentOffset.y }
         let latest = projection == nil || isAtLatest
+        let wasAtTop = collection.contentOffset.y <= -collection.contentInset.top + 1
         let needsCatalog = revision != value.revision
         catalog = value.catalog
         revision = value.revision
         let needsScale = scale != value.scale
         scale = value.scale
-        let insetChanged = abs(collection.contentInset.bottom - value.bottomClearance) > 0.5
+        let bottomInsetChanged = abs(collection.contentInset.bottom - value.bottomClearance) > 0.5
+        let topInsetChanged = abs(collection.contentInset.top - value.topClearance) > 0.5
         let latestRequested = value.latestRequest != lastLatestRequest
         lastLatestRequest = value.latestRequest
         let jumpToLatest = latestRequested && value.isActive
+        let oldOffsetY = collection.contentOffset.y
         isInstalling = true
-        collection.contentInset.bottom = value.bottomClearance
-        collection.verticalScrollIndicatorInsets.bottom = value.bottomClearance
+        collection.contentInset = UIEdgeInsets(top: value.topClearance, left: 0, bottom: value.bottomClearance, right: 0)
+        collection.verticalScrollIndicatorInsets = UIEdgeInsets(
+            top: value.topClearance + TimelineSemanticProjection.topPadding,
+            left: 0,
+            bottom: value.bottomClearance + TimelineSemanticProjection.bottomPadding,
+            right: 0
+        )
+        if topInsetChanged && !bottomInsetChanged {
+            collection.contentOffset.y = wasAtTop && !latest ? -value.topClearance : oldOffsetY
+            lastOffset = collection.contentOffset.y
+        }
         isInstalling = false
         let projectionMissing = projection == nil
         if needsCatalog || needsScale {
@@ -410,11 +429,12 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
                 install(makeProjection(scale: scale, focus: focus), focusing: focus, viewportY: nil, latest: true,
                         refreshContents: needsCatalog)
             }
-        } else if needsCatalog || needsScale || projectionMissing || insetChanged {
+        } else if needsCatalog || needsScale || projectionMissing || bottomInsetChanged {
             let focus = oldFocusID.flatMap { value.catalog.assetIndexes[$0] } ?? max(0, value.catalog.assets.count - 1)
             if lastSize.width > 0 {
                 install(makeProjection(scale: scale, focus: focus, range: needsCatalog || needsScale || projectionMissing ? nil : projection?.nodeRange),
-                        focusing: focus, viewportY: focusY, latest: latest && !needsScale, refreshContents: needsCatalog)
+                        focusing: focus, viewportY: focusY, latest: latest && !needsScale,
+                        refreshContents: needsCatalog, alignTop: wasAtTop && !latest && !needsScale)
             }
         }
         if hiddenThumbnailID != value.hiddenThumbnailID || hiddenLivePhotoID != value.hiddenLivePhotoID {
@@ -431,6 +451,9 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             if value.isActive {
                 publishViewport()
             }
+        }
+        if topInsetChanged, !bottomInsetChanged {
+            publishViewport()
         }
     }
 
@@ -453,11 +476,11 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         let height = max(next.height, collection.bounds.height - collection.contentInset.bottom)
         let maximum = max(0, height - collection.bounds.height + collection.contentInset.bottom)
         guard !latest, let item = next.items.first(where: { !$0.isHeader && $0.assetRange.contains(focus) }) else { return maximum }
-        return min(maximum, max(0, item.frame.midY - (viewportY ?? collection.bounds.height / 2)))
+        return min(maximum, max(-collection.contentInset.top, item.frame.midY - (viewportY ?? collection.bounds.height / 2)))
     }
 
     private func install(_ next: TimelineSemanticProjection, focusing focus: Int, viewportY: CGFloat?, latest: Bool,
-                         refreshContents: Bool = false)
+                         refreshContents: Bool = false, alignTop: Bool = false)
     {
         installationCount += 1
         let interval = Self.signposter.beginInterval("CollectionInstall", id: Self.signposter.makeSignpostID())
@@ -475,7 +498,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         scale = next.scale
         layout.frames = next.items.map(\.frame)
         layout.height = max(next.height, collection.bounds.height - collection.contentInset.bottom)
-        let y = offset(for: next, focus: focus, viewportY: viewportY, latest: latest)
+        let y = alignTop ? -collection.contentInset.top : offset(for: next, focus: focus, viewportY: viewportY, latest: latest)
         UIView.performWithoutAnimation {
             var snapshot = NSDiffableDataSourceSnapshot<Int, String>()
             snapshot.appendSections([0])

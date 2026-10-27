@@ -295,6 +295,44 @@ struct TimelineSemanticZoomTests {
         #expect(controller.view.subviews.count == 1)
     }
 
+    @Test @MainActor func timelineInsetsAlignContentAndScrollIndicatorAtBothEdges() throws {
+        let catalog = TimelineSemanticCatalog(assets: (0 ..< 60).map { asset(String(format: "%03d", $0), "2027-01-01T12:00:00Z") })
+        let controller = TimelineSemanticCollectionController()
+        var input = TimelineSemanticCollectionView(
+            catalog: catalog, revision: 1, scale: .natural, media: MediaLibraryController(), namespace: nil,
+            bottomClearance: 96, topClearance: 180, runtime: TimelineSemanticRuntime(), latestRequest: 0, isActive: true,
+            hiddenThumbnailID: nil, hiddenLivePhotoID: nil, selectAsset: { _, _ in }, selectGroup: { _, _ in },
+            scaleChanged: { _ in }, scrolled: { _, _, _ in }, visibleAssetsChanged: { _, _, _ in }, refresh: {}
+        )
+        controller.update(input)
+        controller.view.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        controller.view.setNeedsLayout()
+        controller.view.layoutIfNeeded()
+        let collection = try #require(controller.view.subviews.compactMap { $0 as? UICollectionView }.first)
+        #expect(!collection.automaticallyAdjustsScrollIndicatorInsets)
+        #expect(collection.contentInset.top == 180)
+        #expect(collection.contentInset.bottom == 96)
+        #expect(collection.verticalScrollIndicatorInsets.top == 180 + TimelineSemanticProjection.topPadding)
+        #expect(collection.verticalScrollIndicatorInsets.bottom == 96 + TimelineSemanticProjection.bottomPadding)
+
+        let last = try #require(collection.collectionViewLayout.layoutAttributesForItem(
+            at: IndexPath(item: collection.numberOfItems(inSection: 0) - 1, section: 0)
+        ))
+        #expect(abs(last.frame.maxY - collection.contentOffset.y
+                - (collection.bounds.height - collection.verticalScrollIndicatorInsets.bottom)) < 0.5)
+
+        collection.contentOffset.y = -180
+        let first = try #require(collection.collectionViewLayout.layoutAttributesForItem(at: IndexPath(item: 0, section: 0)))
+        #expect(abs(first.frame.minY - collection.contentOffset.y - collection.verticalScrollIndicatorInsets.top) < 0.5)
+
+        input.topClearance = 120
+        let installCount = controller.installationCount
+        controller.update(input)
+        #expect(collection.contentOffset.y == -120)
+        #expect(controller.installationCount == installCount)
+        controller.stop()
+    }
+
     @Test @MainActor func nativeWindowGrowthPreservesVisibleFramesAndCells() async throws {
         let catalog = TimelineSemanticCatalog(assets: (0 ..< 900).map { asset(String(format: "%04d", $0), "2027-01-01T12:00:00Z") })
         let controller = TimelineSemanticCollectionController()
