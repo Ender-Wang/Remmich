@@ -137,6 +137,9 @@ final nonisolated class TimelineSemanticCatalog: Sendable {
 }
 
 nonisolated struct TimelineSemanticProjection: Sendable {
+    static let topPadding: CGFloat = 12
+    static let bottomPadding: CGFloat = 21
+
     struct Item: Sendable {
         let id: String
         let nodeIndex: Int
@@ -178,12 +181,13 @@ nonisolated struct TimelineSemanticProjection: Sendable {
         let radius = scale.isAssets ? 180 : 26
         var range = requestedRange ?? max(0, focus - radius) ..< min(count, focus + radius + 1)
         var items: [Item] = []
-        var y: CGFloat = 12
+        var y = topPadding
+        let assetSpacing: CGFloat = scale == .natural ? 8 : 2
         if scale.isAssets {
             let columns = TimelineGridOrder.timelineColumnCount(
                 availableSize: size,
                 minimumLandscapeColumnWidth: isPhone ? 88 : 120,
-                spacing: 2
+                spacing: assetSpacing
             )
             // Align window boundaries to complete rows of the real day, so
             // adding either continuation cannot rearrange existing columns.
@@ -193,12 +197,12 @@ nonisolated struct TimelineSemanticProjection: Sendable {
             let upperRows = (lastDay.assets.upperBound - range.upperBound) / columns
             range = max(firstDay.assets.lowerBound, firstDay.assets.upperBound - lowerRows * columns)
                 ..< min(lastDay.assets.upperBound, lastDay.assets.upperBound - upperRows * columns)
-            let baseSide = (size.width - CGFloat(columns - 1) * 2) / CGFloat(columns)
+            let baseSide = (size.width - CGFloat(columns - 1) * assetSpacing) / CGFloat(columns)
             let progress: CGFloat = scale == .natural ? 1 : 0
             let inset = TimelineGridMetrics.horizontalInset(
                 naturalAspectProgress: progress, isPhone: isPhone, squareInset: 2, isDarkMode: dark
             )
-            let side = TimelineGridMetrics.itemWidth(rowWidth: size.width, columns: columns, spacing: 2, horizontalInset: inset)
+            let side = TimelineGridMetrics.itemWidth(rowWidth: size.width, columns: columns, spacing: assetSpacing, horizontalInset: inset)
             var lower = range.lowerBound
             while lower < range.upperBound {
                 let dayIndex = catalog.index(containing: lower, scale: .day)!
@@ -214,10 +218,10 @@ nonisolated struct TimelineSemanticProjection: Sendable {
                               let reverse = slots[rowStart + column] else { continue }
                         let index = upper - 1 - reverse
                         items.append(Item(id: catalog.assets[index].id, nodeIndex: index, assetRange: index ..< index + 1,
-                                          frame: CGRect(x: inset + CGFloat(column) * (side + 2), y: y, width: side, height: baseSide),
+                                          frame: CGRect(x: inset + CGFloat(column) * (side + assetSpacing), y: y, width: side, height: baseSide),
                                           isHeader: false, isFeatured: false))
                     }
-                    y += baseSide + 2
+                    y += baseSide + assetSpacing
                 }
                 lower = upper
             }
@@ -246,9 +250,9 @@ nonisolated struct TimelineSemanticProjection: Sendable {
                 y += CGFloat(rows) * (side + spacing)
             }
             let actual = selected.first!.range.lowerBound ..< selected.last!.range.upperBound
-            return Self(scale: scale, nodeRange: actual, items: items, height: y + 12)
+            return Self(scale: scale, nodeRange: actual, items: items, height: y + bottomPadding - spacing)
         }
-        return Self(scale: scale, nodeRange: range, items: items, height: y + 12)
+        return Self(scale: scale, nodeRange: range, items: items, height: y + bottomPadding - assetSpacing)
     }
 }
 
