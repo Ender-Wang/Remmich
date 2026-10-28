@@ -27,12 +27,23 @@ struct LibraryIndexStoreTests {
             expectedAssetCount: 4,
             scope: scope
         )
+        let indexSyncAt = Date(timeIntervalSince1970: 600)
+        let cacheSyncAt = Date(timeIntervalSince1970: 700)
+        try await store.setLastIndexSyncAt(indexSyncAt, scope: scope)
+        try await store.setLastCacheSyncAt(cacheSyncAt, scope: scope)
         let snapshot = try #require(try await store.snapshot(scope: scope))
         #expect(snapshot.generation == generation)
         #expect(snapshot.assets.map(\.id) == ["asset-1"])
         #expect(snapshot.syncState.indexedAssetCount == 1)
         #expect(snapshot.syncState.expectedAssetCount == 4)
         #expect(snapshot.syncState.historicalCursor == "cursor")
+        #expect(snapshot.syncState.lastIndexSyncAt == indexSyncAt)
+        #expect(snapshot.syncState.lastCacheSyncAt == cacheSyncAt)
+
+        try await store.setLastCacheSyncAt(nil, scope: scope)
+        let cacheClearedSnapshot = try #require(try await store.snapshot(scope: scope))
+        #expect(cacheClearedSnapshot.syncState.lastIndexSyncAt == indexSyncAt)
+        #expect(cacheClearedSnapshot.syncState.lastCacheSyncAt == nil)
     }
 
     @Test func isolatesAccountsAndRetainsPriorAcceptedGeneration() async throws {

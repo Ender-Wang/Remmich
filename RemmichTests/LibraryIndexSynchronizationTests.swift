@@ -182,6 +182,10 @@ struct LibraryIndexSynchronizationTests {
             expectedAssetCount: 1,
             scope: Self.scope
         )
+        let indexSyncAt = Date(timeIntervalSince1970: 1000)
+        let cacheSyncAt = Date(timeIntervalSince1970: 2000)
+        try await store.setLastIndexSyncAt(indexSyncAt, scope: Self.scope)
+        try await store.setLastCacheSyncAt(cacheSyncAt, scope: Self.scope)
         try await store.upsert(
             derivatives: [
                 .init(
@@ -210,6 +214,8 @@ struct LibraryIndexSynchronizationTests {
         #expect(controller.thumbnailWarmingCachedCount == 1)
         #expect(controller.thumbnailWarmingCachedBytes == 1234)
         #expect(controller.thumbnailWarmingEligibleCount == 1)
+        #expect(controller.lastUpdatedAt == indexSyncAt)
+        #expect(controller.thumbnailWarmingLastUpdatedAt == cacheSyncAt)
     }
 
     @Test func thumbnailManifestOperationsPreserveOtherDerivativeKinds() async throws {
@@ -515,6 +521,11 @@ struct LibraryIndexSynchronizationTests {
 
         controller.start(session: .fixture, endpoint: AccountSession.fixture.apiURL)
         try await Self.waitUntilUpToDate(controller)
+        let firstLastUpdatedAt = try #require(controller.lastUpdatedAt)
+        #expect(
+            try await store.snapshot(scope: Self.scope)?.syncState.lastIndexSyncAt
+                == firstLastUpdatedAt
+        )
         #expect(publicationStatuses == [.indexing])
         let firstStartedAt = try #require(controller.startedAt)
         let firstElapsed = try #require(controller.elapsed)
@@ -570,6 +581,7 @@ struct LibraryIndexSynchronizationTests {
         controller.start(session: .fixture, endpoint: AccountSession.fixture.apiURL)
         try await Self.waitUntilFailed(controller)
 
+        #expect(controller.lastUpdatedAt != nil)
         let diagnostics = try #require(controller.indexFailureDiagnostics)
         #expect(diagnostics.contains("Operation: Sync"))
         #expect(diagnostics.contains("Failure: fixture index failure"))

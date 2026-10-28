@@ -2,7 +2,7 @@ import Foundation
 import SQLite3
 
 actor SQLiteLibraryIndexStore: LibraryIndexStoring {
-    static let currentSchemaVersion = 3
+    static let currentSchemaVersion = 4
 
     private let databaseURL: URL
     private var connection: SQLiteConnection?
@@ -411,6 +411,28 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
             ON CONFLICT(scope) DO UPDATE SET last_error = excluded.last_error
             """,
             [.text(scope.cacheNamespace), .optionalText(message)]
+        )
+    }
+
+    func setLastIndexSyncAt(_ date: Date?, scope: MediaAccountScope) async throws {
+        let database = try preparedDatabase(scope: scope)
+        try database.execute(
+            """
+            INSERT INTO sync_state(scope, last_index_sync_at) VALUES(?, ?)
+            ON CONFLICT(scope) DO UPDATE SET last_index_sync_at = excluded.last_index_sync_at
+            """,
+            [.text(scope.cacheNamespace), .optionalDate(date)]
+        )
+    }
+
+    func setLastCacheSyncAt(_ date: Date?, scope: MediaAccountScope) async throws {
+        let database = try preparedDatabase(scope: scope)
+        try database.execute(
+            """
+            INSERT INTO sync_state(scope, last_cache_sync_at) VALUES(?, ?)
+            ON CONFLICT(scope) DO UPDATE SET last_cache_sync_at = excluded.last_cache_sync_at
+            """,
+            [.text(scope.cacheNamespace), .optionalDate(date)]
         )
     }
 
@@ -912,6 +934,13 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
                 try database.execute("PRAGMA user_version = 3")
             }
         }
+        if version < 4 {
+            try database.transaction {
+                try database.execute("ALTER TABLE sync_state ADD COLUMN last_index_sync_at REAL")
+                try database.execute("ALTER TABLE sync_state ADD COLUMN last_cache_sync_at REAL")
+                try database.execute("PRAGMA user_version = 4")
+            }
+        }
     }
 
     private func ensureScope(_ scope: MediaAccountScope, database: SQLiteConnection) throws {
@@ -1083,7 +1112,8 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
             SELECT accepted_generation, last_watermark, historical_cursor,
                    is_paused, expected_asset_count, last_error,
                    (SELECT COUNT(*) FROM assets
-                    WHERE scope = ? AND generation = sync_state.accepted_generation AND tombstone = 0)
+                    WHERE scope = ? AND generation = sync_state.accepted_generation AND tombstone = 0),
+                   last_index_sync_at, last_cache_sync_at
             FROM sync_state WHERE scope = ?
             """,
             [.text(scope.cacheNamespace), .text(scope.cacheNamespace)]
@@ -1091,12 +1121,15 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
             LibraryIndexSyncState(
                 acceptedGeneration: row.optionalInt64(0),
                 lastSuccessfulWatermark: row.optionalDate(1),
+                lastIndexSyncAt: row.optionalDate(7),
+                lastCacheSyncAt: row.optionalDate(8),
                 historicalCursor: row.optionalText(2), isPaused: row.bool(3),
                 expectedAssetCount: row.optionalInt(4), indexedAssetCount: row.int(6),
                 lastError: row.optionalText(5)
             )
         } ?? .init(
             acceptedGeneration: nil, lastSuccessfulWatermark: nil,
+            lastIndexSyncAt: nil, lastCacheSyncAt: nil,
             historicalCursor: nil, isPaused: false, expectedAssetCount: nil,
             indexedAssetCount: 0, lastError: nil
         )

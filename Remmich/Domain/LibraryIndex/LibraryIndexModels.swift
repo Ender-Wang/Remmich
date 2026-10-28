@@ -148,6 +148,8 @@ nonisolated struct LibraryIndexDerivativeRecord: Codable, Hashable, Identifiable
 nonisolated struct LibraryIndexSyncState: Codable, Equatable, Sendable {
     let acceptedGeneration: Int64?
     let lastSuccessfulWatermark: Date?
+    let lastIndexSyncAt: Date?
+    let lastCacheSyncAt: Date?
     let historicalCursor: String?
     let isPaused: Bool
     let expectedAssetCount: Int?
@@ -236,6 +238,8 @@ nonisolated protocol LibraryIndexStoring: Sendable {
     func snapshot(scope: MediaAccountScope) async throws -> LibraryIndexSnapshot?
     func setPaused(_ paused: Bool, scope: MediaAccountScope) async throws
     func setLastError(_ message: String?, scope: MediaAccountScope) async throws
+    func setLastIndexSyncAt(_ date: Date?, scope: MediaAccountScope) async throws
+    func setLastCacheSyncAt(_ date: Date?, scope: MediaAccountScope) async throws
     func upsert(derivatives: [LibraryIndexDerivativeRecord], scope: MediaAccountScope) async throws
     func replace(
         derivatives: [LibraryIndexDerivativeRecord],

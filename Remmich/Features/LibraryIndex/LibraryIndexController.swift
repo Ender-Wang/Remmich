@@ -255,6 +255,8 @@ final class LibraryIndexController {
             indexedPhotoCount = snapshot.assets.count { $0.kind == .image }
             indexedVideoCount = snapshot.assets.count { $0.kind == .video }
             expectedAssetCount = snapshot.syncState.expectedAssetCount ?? snapshot.assets.count
+            lastUpdatedAt = snapshot.syncState.lastIndexSyncAt
+            thumbnailWarmingLastUpdatedAt = snapshot.syncState.lastCacheSyncAt
             status = snapshot.syncState.isPaused ? .paused : .upToDate
             async let storageReportTask = store.storageReport(snapshot: snapshot)
             async let thumbnailsTask = thumbnailCache.indexedThumbnails(
@@ -331,6 +333,7 @@ final class LibraryIndexController {
             indexedVideoCount = 0
             expectedAssetCount = 0
             startedAt = nil
+            lastUpdatedAt = nil
             thumbnailWarmingLastUpdatedAt = nil
             thumbnailWarmingFailedAt = nil
         }
@@ -418,6 +421,7 @@ final class LibraryIndexController {
         guard let scope else { return }
         Task {
             try? await thumbnailCache.clearThumbnails(scope: scope)
+            try? await store.setLastCacheSyncAt(nil, scope: scope)
             media?.clearRegisteredWarmedThumbnails()
             storageReport = await (try? store.storageReport(scope: scope)) ?? storageReport
             thumbnailWarmingCachedCount = 0
@@ -466,6 +470,7 @@ final class LibraryIndexController {
             thumbnailWarmingEligibleCount = 0
             thumbnailWarmingProcessedCount = 0
             thumbnailWarmingPendingCount = 0
+            lastUpdatedAt = nil
             thumbnailWarmingLastUpdatedAt = nil
             storedAccounts = try await store.storedAccounts()
             Self.logger.info(
@@ -679,13 +684,14 @@ final class LibraryIndexController {
                 if thumbnailWarmingEnabled {
                     warmThumbnails()
                 }
+                let completedAt = Date()
+                await recordIndexSync(at: completedAt, scope: scope)
                 // Publish readiness only after the final asynchronous work so
                 // a new sync cannot be rejected by the previous run's task.
                 task = nil
                 completedElapsed = Date().timeIntervalSince(runStartedAt)
                 status = .upToDate
                 indexFailedAt = nil
-                lastUpdatedAt = Date()
                 let metadataBytes = storageReport.metadataBytes
                 Self.logger.info(
                     "Library index completed generation=\(result.generation) indexed=\(result.indexedAssetCount) expected=\(result.expectedAssetCount) elapsedMs=\(Self.elapsedMilliseconds(since: runStartedAt)) metadataBytes=\(metadataBytes)"
@@ -702,9 +708,11 @@ final class LibraryIndexController {
                 )
             } catch {
                 if currentRunID == runID {
+                    let failedAt = Date()
                     completedElapsed = Date().timeIntervalSince(runStartedAt)
                     status = .failed(Self.message(for: error))
-                    indexFailedAt = Date()
+                    indexFailedAt = failedAt
+                    await recordIndexSync(at: failedAt, scope: scope)
                 }
                 Self.logger.error(
                     "Library index failed elapsedMs=\(Self.elapsedMilliseconds(since: runStartedAt)) error=\(Self.message(for: error), privacy: .public)"
@@ -862,9 +870,10 @@ final class LibraryIndexController {
                 let completedReport = try await store.storageReport(scope: scope)
                 storageReport = completedReport
                 thumbnailWarmingCompletedElapsed = Date().timeIntervalSince(startedAt)
-                thumbnailWarmingLastUpdatedAt = Date()
                 let unavailableCount = finalProgress.eligibleCount - finalProgress.cachedCount
                 thumbnailWarmingFailures = finalProgress.failures
+                let completedAt = Date()
+                await recordCacheSync(at: completedAt, scope: scope)
                 if unavailableCount == 0 {
                     thumbnailWarmingStatus = thumbnailWarmingEnabled ? .upToDate : .off
                     thumbnailWarmingFailedAt = nil
@@ -894,11 +903,13 @@ final class LibraryIndexController {
                         applyThumbnailWarmingProgress(restoredProgress)
                     }
                     if currentWarmingRunID == warmingRunID {
+                        let failedAt = Date()
                         thumbnailWarmingCompletedElapsed = Date().timeIntervalSince(startedAt)
                         thumbnailWarmingStatus = .failed(
                             "Failed: \(Self.message(for: error))"
                         )
-                        thumbnailWarmingFailedAt = Date()
+                        thumbnailWarmingFailedAt = failedAt
+                        await recordCacheSync(at: failedAt, scope: scope)
                     }
                     Self.logger.error(
                         "Thumbnail warming failed elapsedMs=\(Self.elapsedMilliseconds(since: startedAt)) error=\(Self.message(for: error), privacy: .public)"
@@ -965,6 +976,30 @@ final class LibraryIndexController {
         thumbnailWarmingPendingCount = progress.pendingCount
         if !progress.failures.isEmpty {
             thumbnailWarmingFailures = progress.failures
+        }
+    }
+
+    private func recordIndexSync(at date: Date, scope expectedScope: MediaAccountScope) async {
+        guard scope == expectedScope else { return }
+        lastUpdatedAt = date
+        do {
+            try await store.setLastIndexSyncAt(date, scope: expectedScope)
+        } catch {
+            Self.logger.error(
+                "Failed to persist index sync time error=\(Self.message(for: error), privacy: .public)"
+            )
+        }
+    }
+
+    private func recordCacheSync(at date: Date, scope expectedScope: MediaAccountScope) async {
+        guard scope == expectedScope else { return }
+        thumbnailWarmingLastUpdatedAt = date
+        do {
+            try await store.setLastCacheSyncAt(date, scope: expectedScope)
+        } catch {
+            Self.logger.error(
+                "Failed to persist cache sync time error=\(Self.message(for: error), privacy: .public)"
+            )
         }
     }
 

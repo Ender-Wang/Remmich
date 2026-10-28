@@ -119,6 +119,8 @@ struct LibraryTimelineBootstrapBuilderTests {
             syncState: .init(
                 acceptedGeneration: 42,
                 lastSuccessfulWatermark: nil,
+                lastIndexSyncAt: nil,
+                lastCacheSyncAt: nil,
                 historicalCursor: nil,
                 isPaused: false,
                 expectedAssetCount: 5,
