@@ -1412,6 +1412,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
 
     func scrollViewWillBeginDragging(_: UIScrollView) {
         guard input?.isActive == true, gesture == nil, animator == nil else { return }
+        publishScrollGestureBoundary()
         cancelTransitionWarmup()
         olderExpansionRearmOffset = nil
         newerExpansionRearmOffset = nil
@@ -1420,11 +1421,20 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         guard !isInstalling, gesture == nil, animator == nil, input?.isActive == true else { return }
         updateVisibleHeaderOpacities()
-        let gap = isAtLatest ? 0 : max(25, layout.height - scrollView.contentOffset.y - scrollView.bounds.height + scrollView.contentInset.bottom)
+        let gap = bottomGap(for: scrollView)
         input?.scrolled(scrollView.contentOffset.y - lastOffset, gap, scrollView.isDragging || scrollView.isDecelerating)
         lastOffset = scrollView.contentOffset.y
         scheduleViewportPublication()
         scheduleWindowExpansion()
+    }
+
+    private func bottomGap(for scrollView: UIScrollView) -> CGFloat {
+        isAtLatest ? 0 : max(25, layout.height - scrollView.contentOffset.y - scrollView.bounds.height + scrollView.contentInset.bottom)
+    }
+
+    private func publishScrollGestureBoundary() {
+        guard let collection, input?.isActive == true else { return }
+        input?.scrolled(0, bottomGap(for: collection), false)
     }
 
     private func headerOpacity(at index: Int) -> CGFloat {
@@ -1447,6 +1457,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
     }
 
     func scrollViewDidEndDecelerating(_: UIScrollView) {
+        publishScrollGestureBoundary()
         viewportTask?.cancel()
         viewportTask = nil
         publishViewport()
@@ -1455,6 +1466,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
 
     func scrollViewDidEndDragging(_: UIScrollView, willDecelerate decelerate: Bool) {
         if !decelerate {
+            publishScrollGestureBoundary()
             viewportTask?.cancel()
             viewportTask = nil
             publishViewport(); loadOlderIfNeeded()

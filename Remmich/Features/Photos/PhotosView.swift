@@ -253,11 +253,12 @@ struct PhotosChromeTracker {
         if userScrolling {
             leftLatestDuringCurrentScroll = true
         }
-        guard !reachedLatestDuringCurrentScroll, userScrolling, !programmaticJump, abs(offsetDelta) >= 1 else {
+        guard !reachedLatestDuringCurrentScroll, userScrolling, !programmaticJump else {
             travel = 0
             return nil
         }
-        if travel.sign != offsetDelta.sign {
+        guard offsetDelta != 0 else { return nil }
+        if travel != 0, travel.sign != offsetDelta.sign {
             travel = 0
         }
         travel += offsetDelta

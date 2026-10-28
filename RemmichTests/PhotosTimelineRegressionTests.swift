@@ -295,6 +295,49 @@ struct PhotosTimelineRegressionTests {
         #expect(tracker.update(offsetDelta: 0, bottomGap: 20, userScrolling: false, programmaticJump: false) == false)
     }
 
+    @Test @MainActor func slowHighRefreshScrollStillCompactsChrome() {
+        var tracker = PhotosChromeTracker()
+
+        for step in 0 ..< 95 {
+            #expect(tracker.update(
+                offsetDelta: -0.5,
+                bottomGap: 80 + CGFloat(step) / 2.0,
+                userScrolling: true,
+                programmaticJump: false
+            ) == nil)
+        }
+
+        #expect(tracker.update(
+            offsetDelta: -0.5,
+            bottomGap: 128,
+            userScrolling: true,
+            programmaticJump: false
+        ) == true)
+        #expect(tracker.isCompact)
+    }
+
+    @Test @MainActor func stationaryScrollCallbackPreservesDirectionalTravel() {
+        var tracker = PhotosChromeTracker()
+
+        #expect(tracker.update(offsetDelta: -24, bottomGap: 100, userScrolling: true, programmaticJump: false) == nil)
+        #expect(tracker.update(offsetDelta: 0, bottomGap: 100, userScrolling: true, programmaticJump: false) == nil)
+        #expect(tracker.update(offsetDelta: -24, bottomGap: 124, userScrolling: true, programmaticJump: false) == true)
+        #expect(tracker.isCompact)
+    }
+
+    @Test @MainActor func independentGestureCanCompactAfterReturningToLatest() {
+        var tracker = PhotosChromeTracker()
+
+        #expect(tracker.update(offsetDelta: -48, bottomGap: 100, userScrolling: true, programmaticJump: false) == true)
+        #expect(tracker.update(offsetDelta: 100, bottomGap: 12, userScrolling: true, programmaticJump: false) == false)
+        #expect(tracker.update(offsetDelta: -48, bottomGap: 60, userScrolling: true, programmaticJump: false) == nil)
+        #expect(!tracker.isCompact)
+
+        #expect(tracker.update(offsetDelta: 0, bottomGap: 60, userScrolling: false, programmaticJump: false) == nil)
+        #expect(tracker.update(offsetDelta: -48, bottomGap: 108, userScrolling: true, programmaticJump: false) == true)
+        #expect(tracker.isCompact)
+    }
+
     @Test @MainActor func latestBoundaryBounceDoesNotCompactChrome() {
         var tracker = PhotosChromeTracker()
 
