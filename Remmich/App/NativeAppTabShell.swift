@@ -162,6 +162,22 @@ enum NativeTabLayout {
     }
 }
 
+enum NativeTabPageGesturePolicy {
+    static func blocksRootPaging(startingAt touchedView: UIView?) -> Bool {
+        var candidate = touchedView
+        while let view = candidate {
+            if let scrollView = view as? UIScrollView,
+               scrollView.alwaysBounceHorizontal
+               || scrollView.contentSize.width > scrollView.bounds.width + 1
+            {
+                return true
+            }
+            candidate = view.superview
+        }
+        return false
+    }
+}
+
 /// One UIKit-owned tab bar on both devices. UIKit owns the Liquid Glass treatment
 /// and animates the range tabs when either media timeline changes browsing mode.
 nonisolated struct NativeLibraryContentRevision: Equatable {
@@ -253,7 +269,7 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
 
         private lazy var pagePanRecognizer: UIPanGestureRecognizer = {
             let recognizer = UIPanGestureRecognizer(target: self, action: #selector(primaryPagePanned(_:)))
-            recognizer.cancelsTouchesInView = false
+            recognizer.cancelsTouchesInView = true
             recognizer.maximumNumberOfTouches = 1
             recognizer.delegate = self
             return recognizer
@@ -767,20 +783,7 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
                   !parent.isViewerPresented
             else { return false }
 
-            var touchedView = touch.view
-            while let view = touchedView {
-                if view is UIControl {
-                    return false
-                }
-                if let scrollView = view as? UIScrollView,
-                   scrollView.alwaysBounceHorizontal
-                   || scrollView.contentSize.width > scrollView.bounds.width + 1
-                {
-                    return false
-                }
-                touchedView = view.superview
-            }
-            return true
+            return !NativeTabPageGesturePolicy.blocksRootPaging(startingAt: touch.view)
         }
 
         func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {

@@ -264,6 +264,24 @@ struct PhotosTimelineRegressionTests {
         #expect(NativeTabLayout.pageDirection(from: .weeks, to: .years, compactOwner: .photos) == .next)
     }
 
+    @Test @MainActor func rootPageSwipeStartsOnTappableContentButDefersToHorizontalScrollers() {
+        let root = UIView(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
+        let vertical = UIScrollView(frame: root.bounds)
+        vertical.contentSize = CGSize(width: root.bounds.width, height: 1600)
+        root.addSubview(vertical)
+
+        let button = UIButton(type: .system)
+        vertical.addSubview(button)
+        #expect(!NativeTabPageGesturePolicy.blocksRootPaging(startingAt: button))
+
+        let horizontal = UIScrollView(frame: root.bounds)
+        horizontal.contentSize = CGSize(width: root.bounds.width * 2, height: root.bounds.height)
+        root.addSubview(horizontal)
+        let horizontalChild = UIView()
+        horizontal.addSubview(horizontalChild)
+        #expect(NativeTabPageGesturePolicy.blocksRootPaging(startingAt: horizontalChild))
+    }
+
     @Test @MainActor func scrollChromeNeedsDeliberateDirectionAndRestoresAtLatest() {
         var tracker = PhotosChromeTracker()
         #expect(tracker.update(offsetDelta: -100, bottomGap: 12, userScrolling: true, programmaticJump: false) == nil)
