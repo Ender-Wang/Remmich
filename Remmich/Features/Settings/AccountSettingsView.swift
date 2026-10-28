@@ -486,7 +486,6 @@ struct AccountSettingsView: View {
                     )
                     if let libraryIndexDatabaseSizeEstimate {
                         Text(libraryIndexDatabaseSizeEstimate)
-                        Text("Index only → with thumbnail inventory")
                     }
                     Text(libraryIndexMediaBreakdown)
                 }
@@ -847,23 +846,10 @@ struct AccountSettingsView: View {
     }
 
     private var libraryIndexDatabaseSizeEstimate: String? {
-        let count = libraryIndex.indexedAssetCount
-        let bytes = libraryIndex.storageReport.metadataBytes
-        guard count > 0, bytes > 0 else { return nil }
-        let accumulatedBytesPerTenThousand = Int64(
-            (Double(bytes) / Double(count) * 10000).rounded()
+        Self.sizePerTenThousandEstimate(
+            bytes: libraryIndex.storageReport.metadataBytes,
+            count: libraryIndex.indexedAssetCount
         )
-        let indexOnlyBytesPerTenThousand: Int64 = 8_400_000
-        let accumulated = max(indexOnlyBytesPerTenThousand, accumulatedBytesPerTenThousand)
-        let indexOnlyLabel = ByteCountFormatter.string(
-            fromByteCount: indexOnlyBytesPerTenThousand,
-            countStyle: .file
-        )
-        let accumulatedLabel = ByteCountFormatter.string(
-            fromByteCount: accumulated,
-            countStyle: .file
-        )
-        return "~\(indexOnlyLabel)–\(accumulatedLabel) / 10K assets"
     }
 
     @ViewBuilder
@@ -1205,6 +1191,13 @@ struct AccountSettingsView: View {
         let bytes = hasLiveInventory
             ? libraryIndex.thumbnailWarmingCachedBytes
             : libraryIndex.storageReport.derivativeBytes
+        return Self.sizePerTenThousandEstimate(bytes: bytes, count: count)
+    }
+
+    private nonisolated static func sizePerTenThousandEstimate(
+        bytes: Int64,
+        count: Int
+    ) -> String? {
         guard count > 0, bytes > 0 else { return nil }
         let bytesPerTenThousand = Int64(
             (Double(bytes) / Double(count) * 10000).rounded()
