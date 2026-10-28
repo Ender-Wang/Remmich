@@ -13,6 +13,20 @@ struct TimelineSemanticZoomTests {
         #expect(TimelineMemoryLaneSafeArea.topInset(proposed: 24, window: 59) == 59)
     }
 
+    @Test func pushedStickyHeaderOpacityTracksDistanceAboveStickyLine() {
+        let frames = [
+            CGRect(x: 0, y: 0, width: 402, height: 36),
+            CGRect(x: 0, y: 200, width: 402, height: 36),
+        ]
+        let headers = [0, 1]
+
+        #expect(TimelinePinnedDayHeaderGeometry.opacity(at: 0, frames: frames, headers: headers, top: 164) == 1)
+        #expect(TimelinePinnedDayHeaderGeometry.opacity(at: 0, frames: frames, headers: headers, top: 176) == 0.5)
+        #expect(TimelinePinnedDayHeaderGeometry.opacity(at: 0, frames: frames, headers: headers, top: 188) == 0)
+        #expect(TimelinePinnedDayHeaderGeometry.opacity(at: 1, frames: frames, headers: headers, top: 188) == 1)
+        #expect(TimelinePinnedDayHeaderGeometry.opacity(at: 1, frames: frames, headers: headers, top: 200) == 1)
+    }
+
     @Test func transitionCoverageKeepsVisibleSourcesAndBoundsOverscanWork() {
         let catalog = TimelineSemanticCatalog(assets: (0 ..< 900).map {
             asset(String(format: "%04d", $0), "2027-01-01T12:00:00Z")

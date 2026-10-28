@@ -260,6 +260,8 @@ nonisolated struct TimelineSemanticProjection: Sendable {
 /// header geometry. The header remains in its own day until the next header
 /// pushes it above the readable top edge.
 nonisolated enum TimelinePinnedDayHeaderGeometry {
+    static let fadeDistance: CGFloat = 24
+
     static func activeIndex(frames: [CGRect], headers: [Int], top: CGFloat) -> Int? {
         var low = 0
         var high = headers.count
@@ -283,6 +285,15 @@ nonisolated enum TimelinePinnedDayHeaderGeometry {
         var displayed = original
         displayed.origin.y = min(max(original.minY, top), nextY - original.height)
         return displayed
+    }
+
+    /// Headers at or below the sticky line remain fully visible. Only a title
+    /// pushed above that line fades, and the same distance curve reveals it
+    /// when reverse scrolling brings it back toward the sticky position.
+    static func opacity(at index: Int, frames: [CGRect], headers: [Int], top: CGFloat) -> CGFloat {
+        let displayed = frame(at: index, frames: frames, headers: headers, top: top)
+        let distanceAboveStickyLine = max(0, top - displayed.minY)
+        return min(1, max(0, 1 - distanceAboveStickyLine / fadeDistance))
     }
 }
 

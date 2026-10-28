@@ -115,48 +115,24 @@ private final class TimelineSemanticCollectionLayout: UICollectionViewLayout {
     }
 }
 
-@MainActor
-private final class TimelineHeaderBackdropState: ObservableObject {
-    @Published var isPinned: Bool
-
-    init(isPinned: Bool) {
-        self.isPinned = isPinned
-    }
-}
-
 private struct TimelineSemanticDateHeader: View {
     let title: String
     let subtitle: String
-    @ObservedObject var backdrop: TimelineHeaderBackdropState
 
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
             Text(title)
                 .font(.headline)
-                .background { pinnedBackdrop }
 
             Spacer()
 
             Text(subtitle)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
-                .background { pinnedBackdrop }
         }
         .padding(.horizontal)
         .padding(.top, 8)
         .padding(.bottom, 4)
-        .animation(.easeInOut(duration: 0.2), value: backdrop.isPinned)
-    }
-
-    @ViewBuilder private var pinnedBackdrop: some View {
-        if backdrop.isPinned {
-            RoundedRectangle(cornerRadius: 10)
-                .fill(.ultraThinMaterial)
-                .opacity(0.45)
-                .padding(.horizontal, -8)
-                .padding(.vertical, -4)
-                .transition(.opacity)
-        }
     }
 }
 
@@ -182,13 +158,11 @@ final class TimelineSemanticCollectionCell: UICollectionViewCell {
     var nodeID: String?
     private var hostingController: UIHostingController<AnyView>?
     private var headerNaturalY: CGFloat?
-    private var headerBackdrop: TimelineHeaderBackdropState?
     private(set) var isPinnedHeader = false
     private(set) var hasHostedContent = false
 
     func setHostedContent(_ content: some View, parent: UIViewController) {
         headerNaturalY = nil
-        headerBackdrop = nil
         isPinnedHeader = false
         clipsToBounds = true
         contentView.clipsToBounds = true
@@ -207,14 +181,13 @@ final class TimelineSemanticCollectionCell: UICollectionViewCell {
             controller.didMove(toParent: parent)
             hostingController = controller
         }
+        hostingController?.view.alpha = 1
         hasHostedContent = true
     }
 
     func setHeaderContent(title: String, subtitle: String, naturalY: CGFloat, pinned: Bool, parent: UIViewController) {
-        let backdrop = TimelineHeaderBackdropState(isPinned: pinned)
-        setHostedContent(TimelineSemanticDateHeader(title: title, subtitle: subtitle, backdrop: backdrop), parent: parent)
+        setHostedContent(TimelineSemanticDateHeader(title: title, subtitle: subtitle), parent: parent)
         headerNaturalY = naturalY
-        headerBackdrop = backdrop
         isPinnedHeader = pinned
     }
 
@@ -223,7 +196,6 @@ final class TimelineSemanticCollectionCell: UICollectionViewCell {
         hostingController?.rootView = AnyView(EmptyView())
         coverVisibility.isVisible = false
         headerNaturalY = nil
-        headerBackdrop = nil
         isPinnedHeader = false
         hasHostedContent = false
     }
@@ -240,6 +212,12 @@ final class TimelineSemanticCollectionCell: UICollectionViewCell {
         hostingController?.view.clipsToBounds == true
     }
 
+    func setHeaderOpacity(_ opacity: CGFloat) {
+        if headerNaturalY != nil {
+            hostingController?.view.alpha = opacity
+        }
+    }
+
     /// Geometry belongs to the deterministic collection layout. SwiftUI's
     /// hosted GeometryReader must not self-size cells during scrolling.
     override func preferredLayoutAttributesFitting(_ layoutAttributes: UICollectionViewLayoutAttributes) -> UICollectionViewLayoutAttributes {
@@ -252,7 +230,6 @@ final class TimelineSemanticCollectionCell: UICollectionViewCell {
         let pinned = layoutAttributes.frame.minY > headerNaturalY + 0.5
         guard pinned != isPinnedHeader else { return }
         isPinnedHeader = pinned
-        headerBackdrop?.isPinned = pinned
     }
 
     override func layoutSubviews() {
@@ -525,6 +502,9 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             layout.invalidateLayout()
         }
         isInstalling = false
+        if topInsetChanged || pinnedInsetChanged {
+            updateVisibleHeaderOpacities()
+        }
         let projectionMissing = projection == nil
         if needsCatalog || needsScale {
             representativeAssets = [:]
@@ -641,6 +621,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         }
         lastOffset = y
         isInstalling = false
+        updateVisibleHeaderOpacities()
         let viewportInterval = Self.signposter.beginInterval("ViewportPublish", id: Self.signposter.makeSignpostID())
         publishViewport()
         Self.signposter.endInterval("ViewportPublish", viewportInterval)
@@ -682,13 +663,15 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         if item.isHeader {
             let date = catalog.assets[item.assetRange.lowerBound].capturedAt
             let displayedY = layout.layoutAttributesForItem(at: path)?.frame.minY ?? item.frame.minY
+            let initiallyPinned = displayedY > item.frame.minY + 0.5
             cell.setHeaderContent(
                 title: TimelineCaptureDateFormatting.string(from: date, dateStyle: .long, timeStyle: .none),
                 subtitle: "\(item.assetRange.count.formatted()) items",
                 naturalY: item.frame.minY,
-                pinned: displayedY > item.frame.minY + 0.5,
+                pinned: initiallyPinned,
                 parent: self
             )
+            cell.setHeaderOpacity(headerOpacity(at: path.item))
         } else if scale.isAssets {
             cell.coverAssetID = asset.id
             cell.setHostedContent(
@@ -985,9 +968,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
                 destinations.first(where: { $0.assetRange.overlaps(sourceItem.assetRange) })
                     .map { $0.frame.offsetBy(dx: 0, dy: -targetOffset) } ?? start
             }
-            let sourcePinned = sourceItem.isHeader && sourceFrame.minY > sourceItem.frame.minY + 0.5
-            guard let plan = transitionChromePlan(for: sourceItem, scale: scale, catalog: catalog,
-                                                  pinnedHeader: sourcePinned) else { continue }
+            guard let plan = transitionChromePlan(for: sourceItem, scale: scale, catalog: catalog) else { continue }
             let chrome = transitionChromeView(plan)
             if sourceItem.isHeader {
                 chrome.accessibilityIdentifier = "semantic-zoom-header:\(sourceItem.id)"
@@ -1011,9 +992,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
                                                         headers: targetHeaders, top: targetTop)
                 : destination.frame
             let end = destinationFrame.offsetBy(dx: 0, dy: -targetOffset)
-            let destinationPinned = destination.isHeader && destinationFrame.minY > destination.frame.minY + 0.5
-            guard let plan = transitionChromePlan(for: destination, scale: nextScale, catalog: catalog,
-                                                  pinnedHeader: destinationPinned) else { continue }
+            guard let plan = transitionChromePlan(for: destination, scale: nextScale, catalog: catalog) else { continue }
             let chrome = transitionChromeView(plan)
             if destination.isHeader {
                 chrome.accessibilityIdentifier = "semantic-zoom-header:\(destination.id)"
@@ -1186,8 +1165,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
     private func transitionChromePlan(
         for item: TimelineSemanticProjection.Item,
         scale: TimelineSemanticScale,
-        catalog: TimelineSemanticCatalog,
-        pinnedHeader: Bool = false
+        catalog: TimelineSemanticCatalog
     ) -> TransitionChromePlan? {
         if item.isHeader {
             let title = TimelineCaptureDateFormatting.string(
@@ -1199,12 +1177,9 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             return makeTransitionChromePlan(
                 role: "header",
                 identity: "\(scale.rawValue):\(item.id)",
-                signature: "\(title)|\(subtitle)|\(pinnedHeader)",
+                signature: "\(title)|\(subtitle)",
                 size: item.frame.size,
-                content: TimelineSemanticDateHeader(
-                    title: title, subtitle: subtitle,
-                    backdrop: TimelineHeaderBackdropState(isPinned: pinnedHeader)
-                )
+                content: TimelineSemanticDateHeader(title: title, subtitle: subtitle)
             )
         }
 
@@ -1444,11 +1419,31 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         guard !isInstalling, gesture == nil, animator == nil, input?.isActive == true else { return }
+        updateVisibleHeaderOpacities()
         let gap = isAtLatest ? 0 : max(25, layout.height - scrollView.contentOffset.y - scrollView.bounds.height + scrollView.contentInset.bottom)
         input?.scrolled(scrollView.contentOffset.y - lastOffset, gap, scrollView.isDragging || scrollView.isDecelerating)
         lastOffset = scrollView.contentOffset.y
         scheduleViewportPublication()
         scheduleWindowExpansion()
+    }
+
+    private func headerOpacity(at index: Int) -> CGFloat {
+        TimelinePinnedDayHeaderGeometry.opacity(
+            at: index,
+            frames: layout.frames,
+            headers: layout.headerIndices,
+            top: collection.contentOffset.y + layout.pinnedHeaderTopInset
+        )
+    }
+
+    private func updateVisibleHeaderOpacities() {
+        guard scale.isAssets, let projection else { return }
+        for path in collection.indexPathsForVisibleItems
+            where projection.items.indices.contains(path.item) && projection.items[path.item].isHeader
+        {
+            (collection.cellForItem(at: path) as? TimelineSemanticCollectionCell)?
+                .setHeaderOpacity(headerOpacity(at: path.item))
+        }
     }
 
     func scrollViewDidEndDecelerating(_: UIScrollView) {
