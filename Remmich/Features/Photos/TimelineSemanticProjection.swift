@@ -261,6 +261,7 @@ nonisolated struct TimelineSemanticProjection: Sendable {
 /// pushes it above the readable top edge.
 nonisolated enum TimelinePinnedDayHeaderGeometry {
     static let fadeDistance: CGFloat = 24
+    static let backgroundRevealDistance: CGFloat = 36
 
     static func activeIndex(frames: [CGRect], headers: [Int], top: CGFloat) -> Int? {
         var low = 0
@@ -293,6 +294,24 @@ nonisolated enum TimelinePinnedDayHeaderGeometry {
     static func opacity(at index: Int, frames: [CGRect], headers: [Int], top: CGFloat) -> CGFloat {
         let displayed = frame(at: index, frames: frames, headers: headers, top: top)
         let distanceAboveStickyLine = max(0, top - displayed.minY)
+        return min(1, max(0, 1 - distanceAboveStickyLine / fadeDistance))
+    }
+
+    /// Compact title backgrounds appear only in the sticky handoff corridor.
+    /// An incoming header gains material as it approaches the sticky line;
+    /// the outgoing header relinquishes it on the text's distance curve.
+    static func backgroundOpacity(
+        at index: Int,
+        frames: [CGRect],
+        headers: [Int],
+        top: CGFloat
+    ) -> CGFloat {
+        let displayed = frame(at: index, frames: frames, headers: headers, top: top)
+        let distanceBelowStickyLine = max(0, displayed.minY - top)
+        let distanceAboveStickyLine = max(0, top - displayed.minY)
+        if distanceBelowStickyLine > 0 {
+            return min(1, max(0, 1 - distanceBelowStickyLine / backgroundRevealDistance))
+        }
         return min(1, max(0, 1 - distanceAboveStickyLine / fadeDistance))
     }
 }

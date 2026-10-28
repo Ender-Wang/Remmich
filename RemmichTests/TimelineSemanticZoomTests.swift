@@ -27,6 +27,28 @@ struct TimelineSemanticZoomTests {
         #expect(TimelinePinnedDayHeaderGeometry.opacity(at: 1, frames: frames, headers: headers, top: 200) == 1)
     }
 
+    @Test func stickyHeaderBackgroundTracksDistanceOnBothSidesOfHandoff() {
+        let frames = [
+            CGRect(x: 0, y: 0, width: 402, height: 36),
+            CGRect(x: 0, y: 200, width: 402, height: 36),
+        ]
+        let headers = [0, 1]
+
+        #expect(TimelinePinnedDayHeaderGeometry.backgroundOpacity(
+            at: 0, frames: frames, headers: headers, top: 164
+        ) == 1)
+        #expect(TimelinePinnedDayHeaderGeometry.backgroundOpacity(
+            at: 0, frames: frames, headers: headers, top: 176
+        ) == 0.5)
+        let incoming = TimelinePinnedDayHeaderGeometry.backgroundOpacity(
+            at: 1, frames: frames, headers: headers, top: 176
+        )
+        #expect(abs(incoming - 1.0 / 3.0) < 0.001)
+        #expect(TimelinePinnedDayHeaderGeometry.backgroundOpacity(
+            at: 1, frames: frames, headers: headers, top: 200
+        ) == 1)
+    }
+
     @Test func transitionCoverageKeepsVisibleSourcesAndBoundsOverscanWork() {
         let catalog = TimelineSemanticCatalog(assets: (0 ..< 900).map {
             asset(String(format: "%04d", $0), "2027-01-01T12:00:00Z")
@@ -125,6 +147,19 @@ struct TimelineSemanticZoomTests {
         let first = IndexPath(item: 0, section: 0)
         let normalCell = try #require(collection.cellForItem(at: first) as? TimelineSemanticCollectionCell)
         #expect(!normalCell.isPinnedHeader)
+        #expect(normalCell.hasContent)
+        normalCell.layoutIfNeeded()
+        let headerLabels = normalCell.contentView.subviews.compactMap { $0 as? UILabel }
+        let headerMaterials = normalCell.contentView.subviews.compactMap { $0 as? UIVisualEffectView }
+        #expect(headerLabels.count == 2)
+        #expect(headerMaterials.count == 2)
+        for label in headerLabels {
+            let material = try #require(headerMaterials.min {
+                abs($0.frame.midX - label.frame.midX) < abs($1.frame.midX - label.frame.midX)
+            })
+            #expect(abs(material.frame.midX - label.frame.midX) < 0.5)
+            #expect(abs(material.frame.midY - label.frame.midY) < 0.5)
+        }
         let second = try #require((0 ..< collection.numberOfItems(inSection: 0)).first { index in
             index > 0 && collection.collectionViewLayout.layoutAttributesForItem(at: IndexPath(item: index, section: 0))?.frame.height == 36
         })
@@ -233,7 +268,7 @@ struct TimelineSemanticZoomTests {
         #expect(cell.contentView.isUserInteractionEnabled)
         #expect(cell.contentConfiguration == nil)
         let hostedCell = try #require(cell as? TimelineSemanticCollectionCell)
-        #expect(hostedCell.hasHostedContent)
+        #expect(hostedCell.hasContent)
         #expect(hostedCell.hostedSafeAreaRegions == [])
         controller.collectionView(collection, didSelectItemAt: path)
         // Asset selection remains owned by the hosted SwiftUI Button. The
@@ -378,9 +413,9 @@ struct TimelineSemanticZoomTests {
         let attributes = try #require(collection.collectionViewLayout.layoutAttributesForItem(at: assetPath))
         #expect(assetCell.preferredLayoutAttributesFitting(attributes).frame == attributes.frame)
         controller.collectionView(collection, didEndDisplaying: assetCell, forItemAt: assetPath)
-        #expect((assetCell as? TimelineSemanticCollectionCell)?.hasHostedContent == false)
+        #expect((assetCell as? TimelineSemanticCollectionCell)?.hasContent == false)
         controller.collectionView(collection, willDisplay: assetCell, forItemAt: assetPath)
-        #expect((assetCell as? TimelineSemanticCollectionCell)?.hasHostedContent == true)
+        #expect((assetCell as? TimelineSemanticCollectionCell)?.hasContent == true)
         #expect(abs(collection.contentSize.height - collection.contentOffset.y - collection.bounds.height + 96) < 0.5)
         controller.changeScale(coarser: true)
         #expect(committed == [.day])

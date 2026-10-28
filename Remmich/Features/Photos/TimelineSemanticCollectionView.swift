@@ -151,18 +151,57 @@ private struct TimelineSemanticObservedVisibility<Content: View>: View {
 }
 
 final class TimelineSemanticCollectionCell: UICollectionViewCell {
+    private static let headerHorizontalInset: CGFloat = 16
+    private static let headerBackgroundHorizontalPadding: CGFloat = 7
+    private static let headerBackgroundVerticalPadding: CGFloat = 3
+    private static let headerBackgroundMaximumOpacity: CGFloat = 0.72
+
     fileprivate let coverVisibility = TimelineSemanticCoverVisibility()
     var coverAssetID: String?
     var coverImage: UIImage?
     var coverImageAssetID: String?
     var nodeID: String?
     private var hostingController: UIHostingController<AnyView>?
+    private let headerTitleMaterialView = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
+    private let headerCountMaterialView = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
+    private let headerTitleLabel = UILabel()
+    private let headerCountLabel = UILabel()
     private var headerNaturalY: CGFloat?
     private(set) var isPinnedHeader = false
-    private(set) var hasHostedContent = false
+    private(set) var hasContent = false
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        for materialView in [headerTitleMaterialView, headerCountMaterialView] {
+            materialView.alpha = 0
+            materialView.isUserInteractionEnabled = false
+            materialView.clipsToBounds = true
+            contentView.insertSubview(materialView, at: 0)
+        }
+        headerTitleLabel.font = .preferredFont(forTextStyle: .headline)
+        headerTitleLabel.textColor = .label
+        headerTitleLabel.adjustsFontForContentSizeCategory = true
+        headerCountLabel.font = .preferredFont(forTextStyle: .subheadline)
+        headerCountLabel.textColor = .secondaryLabel
+        headerCountLabel.adjustsFontForContentSizeCategory = true
+        for label in [headerTitleLabel, headerCountLabel] {
+            label.isHidden = true
+            label.isUserInteractionEnabled = false
+            contentView.addSubview(label)
+        }
+    }
+
+    @available(*, unavailable)
+    required init?(coder _: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
 
     func setHostedContent(_ content: some View, parent: UIViewController) {
         headerNaturalY = nil
+        headerTitleLabel.isHidden = true
+        headerCountLabel.isHidden = true
+        headerTitleMaterialView.alpha = 0
+        headerCountMaterialView.alpha = 0
         isPinnedHeader = false
         clipsToBounds = true
         contentView.clipsToBounds = true
@@ -182,22 +221,41 @@ final class TimelineSemanticCollectionCell: UICollectionViewCell {
             hostingController = controller
         }
         hostingController?.view.alpha = 1
-        hasHostedContent = true
+        hasContent = true
     }
 
-    func setHeaderContent(title: String, subtitle: String, naturalY: CGFloat, pinned: Bool, parent: UIViewController) {
-        setHostedContent(TimelineSemanticDateHeader(title: title, subtitle: subtitle), parent: parent)
+    func setHeaderContent(title: String, count: String, naturalY: CGFloat, pinned: Bool) {
+        hostingController?.rootView = AnyView(EmptyView())
+        hostingController?.view.alpha = 0
+        coverVisibility.isVisible = false
+        clipsToBounds = true
+        contentView.clipsToBounds = true
+        headerTitleLabel.text = title
+        headerTitleLabel.isHidden = false
+        headerTitleLabel.alpha = 1
+        headerCountLabel.text = count
+        headerCountLabel.isHidden = false
+        headerCountLabel.alpha = 1
         headerNaturalY = naturalY
         isPinnedHeader = pinned
+        hasContent = true
+        setNeedsLayout()
     }
 
-    func clearHostedContent() {
-        guard hasHostedContent else { return }
+    func clearContent() {
         hostingController?.rootView = AnyView(EmptyView())
         coverVisibility.isVisible = false
         headerNaturalY = nil
+        headerTitleLabel.text = nil
+        headerTitleLabel.isHidden = true
+        headerTitleLabel.alpha = 1
+        headerCountLabel.text = nil
+        headerCountLabel.isHidden = true
+        headerCountLabel.alpha = 1
+        headerTitleMaterialView.alpha = 0
+        headerCountMaterialView.alpha = 0
         isPinnedHeader = false
-        hasHostedContent = false
+        hasContent = false
     }
 
     var hostedSafeAreaRegions: SafeAreaRegions? {
@@ -214,8 +272,16 @@ final class TimelineSemanticCollectionCell: UICollectionViewCell {
 
     func setHeaderOpacity(_ opacity: CGFloat) {
         if headerNaturalY != nil {
-            hostingController?.view.alpha = opacity
+            headerTitleLabel.alpha = opacity
+            headerCountLabel.alpha = opacity
         }
+    }
+
+    func setHeaderBackgroundOpacity(_ opacity: CGFloat) {
+        guard headerNaturalY != nil else { return }
+        let subtleOpacity = opacity * Self.headerBackgroundMaximumOpacity
+        headerTitleMaterialView.alpha = subtleOpacity
+        headerCountMaterialView.alpha = subtleOpacity
     }
 
     /// Geometry belongs to the deterministic collection layout. SwiftUI's
@@ -234,12 +300,33 @@ final class TimelineSemanticCollectionCell: UICollectionViewCell {
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        if headerNaturalY != nil {
+            layoutHeaderLabel(headerTitleLabel, materialView: headerTitleMaterialView, trailing: false)
+            layoutHeaderLabel(headerCountLabel, materialView: headerCountMaterialView, trailing: true)
+        }
         hostingController?.view.frame = contentView.bounds
+    }
+
+    private func layoutHeaderLabel(_ label: UILabel, materialView: UIVisualEffectView, trailing: Bool) {
+        label.font = .preferredFont(forTextStyle: trailing ? .subheadline : .headline)
+        let fittingSize = label.sizeThatFits(CGSize(width: .greatestFiniteMagnitude, height: contentView.bounds.height))
+        let labelSize = CGSize(width: ceil(fittingSize.width), height: ceil(fittingSize.height))
+        label.frame = CGRect(
+            x: trailing ? contentView.bounds.width - Self.headerHorizontalInset - labelSize.width : Self.headerHorizontalInset,
+            y: (contentView.bounds.height - labelSize.height) / 2,
+            width: labelSize.width,
+            height: labelSize.height
+        )
+        materialView.frame = label.frame.insetBy(
+            dx: -Self.headerBackgroundHorizontalPadding,
+            dy: -Self.headerBackgroundVerticalPadding
+        )
+        materialView.layer.cornerRadius = materialView.bounds.height / 2
     }
 
     override func prepareForReuse() {
         super.prepareForReuse()
-        clearHostedContent()
+        clearContent()
         coverAssetID = nil
         coverImage = nil
         coverImageAssetID = nil
@@ -249,6 +336,8 @@ final class TimelineSemanticCollectionCell: UICollectionViewCell {
         accessibilityIdentifier = nil
         accessibilityTraits = []
         alpha = 1
+        clipsToBounds = true
+        contentView.clipsToBounds = true
     }
 
     isolated deinit {
@@ -503,7 +592,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         }
         isInstalling = false
         if topInsetChanged || pinnedInsetChanged {
-            updateVisibleHeaderOpacities()
+            updateVisibleHeaderAppearances()
         }
         let projectionMissing = projection == nil
         if needsCatalog || needsScale {
@@ -621,7 +710,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         }
         lastOffset = y
         isInstalling = false
-        updateVisibleHeaderOpacities()
+        updateVisibleHeaderAppearances()
         let viewportInterval = Self.signposter.beginInterval("ViewportPublish", id: Self.signposter.makeSignpostID())
         publishViewport()
         Self.signposter.endInterval("ViewportPublish", viewportInterval)
@@ -666,12 +755,12 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             let initiallyPinned = displayedY > item.frame.minY + 0.5
             cell.setHeaderContent(
                 title: TimelineCaptureDateFormatting.string(from: date, dateStyle: .long, timeStyle: .none),
-                subtitle: "\(item.assetRange.count.formatted()) items",
+                count: "\(item.assetRange.count.formatted()) items",
                 naturalY: item.frame.minY,
-                pinned: initiallyPinned,
-                parent: self
+                pinned: initiallyPinned
             )
             cell.setHeaderOpacity(headerOpacity(at: path.item))
+            cell.setHeaderBackgroundOpacity(headerBackgroundOpacity(at: path.item))
         } else if scale.isAssets {
             cell.coverAssetID = asset.id
             cell.setHostedContent(
@@ -742,11 +831,11 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
 
     func collectionView(_: UICollectionView, didEndDisplaying cell: UICollectionViewCell, forItemAt _: IndexPath) {
         // Cancel hosted thumbnail/slideshow tasks immediately when virtualized out.
-        (cell as? TimelineSemanticCollectionCell)?.clearHostedContent()
+        (cell as? TimelineSemanticCollectionCell)?.clearContent()
     }
 
     func collectionView(_: UICollectionView, willDisplay cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
-        if (cell as? TimelineSemanticCollectionCell)?.hasHostedContent == false {
+        if (cell as? TimelineSemanticCollectionCell)?.hasContent == false {
             configure(indexPath, cell: cell as? TimelineSemanticCollectionCell)
         }
     }
@@ -1376,7 +1465,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         transitionHostingControllerCursor = 0
         deferredInput = nil
         input = nil
-        collection?.visibleCells.forEach { ($0 as? TimelineSemanticCollectionCell)?.clearHostedContent() }
+        collection?.visibleCells.forEach { ($0 as? TimelineSemanticCollectionCell)?.clearContent() }
     }
 
     func changeScale(coarser: Bool) {
@@ -1420,7 +1509,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         guard !isInstalling, gesture == nil, animator == nil, input?.isActive == true else { return }
-        updateVisibleHeaderOpacities()
+        updateVisibleHeaderAppearances()
         let gap = bottomGap(for: scrollView)
         input?.scrolled(scrollView.contentOffset.y - lastOffset, gap, scrollView.isDragging || scrollView.isDecelerating)
         lastOffset = scrollView.contentOffset.y
@@ -1446,13 +1535,23 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         )
     }
 
-    private func updateVisibleHeaderOpacities() {
+    private func headerBackgroundOpacity(at index: Int) -> CGFloat {
+        TimelinePinnedDayHeaderGeometry.backgroundOpacity(
+            at: index,
+            frames: layout.frames,
+            headers: layout.headerIndices,
+            top: collection.contentOffset.y + layout.pinnedHeaderTopInset
+        )
+    }
+
+    private func updateVisibleHeaderAppearances() {
         guard scale.isAssets, let projection else { return }
         for path in collection.indexPathsForVisibleItems
             where projection.items.indices.contains(path.item) && projection.items[path.item].isHeader
         {
-            (collection.cellForItem(at: path) as? TimelineSemanticCollectionCell)?
-                .setHeaderOpacity(headerOpacity(at: path.item))
+            guard let cell = collection.cellForItem(at: path) as? TimelineSemanticCollectionCell else { continue }
+            cell.setHeaderOpacity(headerOpacity(at: path.item))
+            cell.setHeaderBackgroundOpacity(headerBackgroundOpacity(at: path.item))
         }
     }
 
