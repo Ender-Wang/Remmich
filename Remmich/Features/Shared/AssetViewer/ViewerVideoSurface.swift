@@ -1,4 +1,5 @@
 import AVKit
+import QuartzCore
 import SwiftUI
 
 nonisolated enum ViewerVideoReadiness {
@@ -29,37 +30,30 @@ private struct ViewerVideoControllerHost: UIViewControllerRepresentable {
         Coordinator(readyForDisplayChanged: readyForDisplayChanged)
     }
 
-    func makeUIViewController(context: Context) -> AVPlayerViewController {
-        let controller = AVPlayerViewController()
-        controller.player = player
-        controller.showsPlaybackControls = true
-        controller.videoGravity = .resizeAspect
-        controller.entersFullScreenWhenPlaybackBegins = false
-        controller.exitsFullScreenWhenPlaybackEnds = false
-        controller.allowsPictureInPicturePlayback = false
-        controller.updatesNowPlayingInfoCenter = false
-        controller.view.backgroundColor = .clear
-        context.coordinator.observe(controller)
-        return controller
+    func makeUIViewController(context: Context) -> ViewerVideoContainerViewController {
+        let container = ViewerVideoContainerViewController()
+        container.playerController.player = player
+        context.coordinator.observe(container.playerController)
+        return container
     }
 
     func updateUIViewController(
-        _ controller: AVPlayerViewController,
+        _ container: ViewerVideoContainerViewController,
         context: Context
     ) {
         context.coordinator.readyForDisplayChanged = readyForDisplayChanged
-        if controller.player !== player {
-            controller.player = player
+        if container.playerController.player !== player {
+            container.playerController.player = player
         }
-        context.coordinator.observe(controller)
+        context.coordinator.observe(container.playerController)
     }
 
     static func dismantleUIViewController(
-        _ controller: AVPlayerViewController,
+        _ container: ViewerVideoContainerViewController,
         coordinator: Coordinator
     ) {
         coordinator.invalidate()
-        controller.player = nil
+        container.playerController.player = nil
     }
 
     @MainActor
@@ -91,5 +85,77 @@ private struct ViewerVideoControllerHost: UIViewControllerRepresentable {
             readyObservation = nil
             observedController = nil
         }
+    }
+}
+
+@MainActor
+private final class ViewerVideoContainerViewController: UIViewController {
+    let playerController = AVPlayerViewController()
+
+    private var rotationGeneration = 0
+    private var restoresPlaybackControlsAfterRotation = false
+
+    override func loadView() {
+        view = UIView()
+        view.backgroundColor = .clear
+        view.clipsToBounds = true
+
+        playerController.showsPlaybackControls = true
+        playerController.videoGravity = .resizeAspect
+        playerController.entersFullScreenWhenPlaybackBegins = false
+        playerController.exitsFullScreenWhenPlaybackEnds = false
+        playerController.allowsPictureInPicturePlayback = false
+        playerController.updatesNowPlayingInfoCenter = false
+        playerController.view.backgroundColor = .clear
+        playerController.view.clipsToBounds = true
+
+        addChild(playerController)
+        view.addSubview(playerController.view)
+        playerController.didMove(toParent: self)
+        layoutPlayerWithoutImplicitAnimations()
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        layoutPlayerWithoutImplicitAnimations()
+    }
+
+    override func viewWillTransition(
+        to size: CGSize,
+        with coordinator: any UIViewControllerTransitionCoordinator
+    ) {
+        rotationGeneration += 1
+        let generation = rotationGeneration
+        let hidesPlaybackControls = playerController.showsPlaybackControls
+        restoresPlaybackControlsAfterRotation = restoresPlaybackControlsAfterRotation
+            || hidesPlaybackControls
+
+        if hidesPlaybackControls {
+            UIView.performWithoutAnimation {
+                playerController.showsPlaybackControls = false
+                playerController.view.layoutIfNeeded()
+            }
+        }
+
+        super.viewWillTransition(to: size, with: coordinator)
+        coordinator.animate { [weak self] _ in
+            self?.layoutPlayerWithoutImplicitAnimations()
+        } completion: { [weak self] _ in
+            guard let self, rotationGeneration == generation else { return }
+            layoutPlayerWithoutImplicitAnimations()
+            guard restoresPlaybackControlsAfterRotation else { return }
+            UIView.performWithoutAnimation {
+                playerController.showsPlaybackControls = true
+                playerController.view.layoutIfNeeded()
+            }
+            restoresPlaybackControlsAfterRotation = false
+        }
+    }
+
+    private func layoutPlayerWithoutImplicitAnimations() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        playerController.view.frame = view.bounds
+        CATransaction.commit()
     }
 }
