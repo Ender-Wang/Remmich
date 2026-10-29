@@ -32,4 +32,33 @@ struct VideoPlaybackSessionTests {
             currentSeconds: 3
         ) == 0)
     }
+
+    @Test func transportFailuresKeepTheirUserRelevantCategory() {
+        #expect(VideoPlaybackSession.normalizedFailure(
+            for: AuthenticatedVideoStreamError.unauthorized
+        ) == .authentication)
+        #expect(VideoPlaybackSession.normalizedFailure(
+            for: AuthenticatedVideoStreamError.invalidRange
+        ) == .invalidRange)
+        #expect(VideoPlaybackSession.normalizedFailure(
+            for: AuthenticatedVideoStreamError.network(retryable: true)
+        ) == .network(retryable: true))
+        #expect(VideoPlaybackSession.normalizedFailure(
+            for: AuthenticatedVideoStreamError.cancelled
+        ) == nil)
+    }
+
+    @Test func nativePlaybackErrorsSeparateDecoderAndConnectivityFailures() {
+        let decoder = NSError(
+            domain: AVFoundationErrorDomain,
+            code: AVError.decoderNotFound.rawValue
+        )
+        let offline = NSError(
+            domain: NSURLErrorDomain,
+            code: URLError.notConnectedToInternet.rawValue
+        )
+
+        #expect(VideoPlaybackSession.normalizedFailure(for: decoder) == .unsupportedMedia)
+        #expect(VideoPlaybackSession.normalizedFailure(for: offline) == .network(retryable: true))
+    }
 }

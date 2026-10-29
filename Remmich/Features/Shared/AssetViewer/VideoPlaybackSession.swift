@@ -33,11 +33,15 @@ nonisolated struct VideoPlaybackBufferState: Equatable, Sendable {
 }
 
 nonisolated enum VideoPlaybackFailure: Equatable, Sendable {
-    case unauthorized
+    case authentication
     case unavailable
-    case invalidMedia
+    case network(retryable: Bool)
+    case unsupportedMedia
+    case playbackServiceReset
+    case invalidRange
     case audioSession
     case firstFrameTimedOut
+    case unknown
 }
 
 nonisolated enum VideoPlaybackPhase: Equatable, Sendable {
@@ -72,6 +76,7 @@ final class VideoPlaybackSession {
     private var observations: [NSKeyValueObservation] = []
     private var notificationTokens: [NSObjectProtocol] = []
     private var metadataTask: Task<Void, Never>?
+    private var audioActivationTask: Task<Void, Never>?
     private var intendedPlayback = true
     private var savedPosition: Double = 0
     private var contentLengthBytes: Int?
@@ -80,6 +85,10 @@ final class VideoPlaybackSession {
         self.assetID = assetID
         player = AVPlayer()
         player.automaticallyWaitsToMinimizeStalling = true
+    }
+
+    var isPlaybackIntended: Bool {
+        intendedPlayback && !isClosed
     }
 
     func prepare(using media: MediaLibraryController) async {
@@ -147,6 +156,8 @@ final class VideoPlaybackSession {
     func pause() {
         guard !isClosed else { return }
         intendedPlayback = false
+        audioActivationTask?.cancel()
+        audioActivationTask = nil
         saveCurrentPosition()
         player.pause()
         audioSession.deactivate()
@@ -176,6 +187,8 @@ final class VideoPlaybackSession {
     func suspend() {
         guard !isClosed else { return }
         intendedPlayback = false
+        audioActivationTask?.cancel()
+        audioActivationTask = nil
         saveCurrentPosition()
         player.pause()
         audioSession.deactivate()
@@ -197,6 +210,8 @@ final class VideoPlaybackSession {
         isClosed = true
         generation += 1
         intendedPlayback = false
+        audioActivationTask?.cancel()
+        audioActivationTask = nil
         saveCurrentPosition()
         resetItem()
         audioSession.deactivate()
@@ -208,6 +223,8 @@ final class VideoPlaybackSession {
             return
         }
         intendedPlayback = false
+        audioActivationTask?.cancel()
+        audioActivationTask = nil
         player.pause()
         audioSession.deactivate()
         phase = .failed(.firstFrameTimedOut)
@@ -312,15 +329,29 @@ final class VideoPlaybackSession {
         guard accepts(generation: generation) else { return }
         switch status {
         case .playing:
+            intendedPlayback = true
             phase = .playing
+            activateAudioForObservedPlayback(generation: generation)
         case .paused:
-            guard !intendedPlayback, phase != .suspended else { return }
-            if case .failed = phase {
-                return
-            }
+            guard playerItem?.status == .readyToPlay,
+                  phase != .preparing,
+                  phase != .suspended,
+                  !phase.isFailed,
+                  !phase.isSeeking
+            else { return }
+            intendedPlayback = false
+            audioActivationTask?.cancel()
+            audioActivationTask = nil
+            saveCurrentPosition()
+            audioSession.deactivate()
             phase = .paused
         case .waitingToPlayAtSpecifiedRate:
-            break
+            guard playerItem?.status == .readyToPlay,
+                  phase != .suspended,
+                  !phase.isFailed
+            else { return }
+            intendedPlayback = true
+            activateAudioForObservedPlayback(generation: generation)
         @unknown default:
             break
         }
@@ -343,6 +374,27 @@ final class VideoPlaybackSession {
         saveCurrentPosition()
         audioSession.deactivate()
         phase = .paused
+    }
+
+    private func activateAudioForObservedPlayback(generation: Int) {
+        audioActivationTask?.cancel()
+        audioActivationTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await audioSession.activate()
+                guard accepts(generation: generation), intendedPlayback,
+                      player.timeControlStatus != .paused
+                else {
+                    audioSession.deactivate()
+                    return
+                }
+            } catch {
+                guard accepts(generation: generation) else { return }
+                intendedPlayback = false
+                player.pause()
+                phase = .failed(.audioSession)
+            }
+        }
     }
 
     private func updateBufferState(generation: Int) {
@@ -415,16 +467,13 @@ final class VideoPlaybackSession {
     }
 
     private func fail(_ error: any Error, generation: Int) {
-        guard accepts(generation: generation) else { return }
+        guard accepts(generation: generation), let failure = Self.normalizedFailure(for: error) else { return }
         intendedPlayback = false
+        audioActivationTask?.cancel()
+        audioActivationTask = nil
         player.pause()
         audioSession.deactivate()
-        let streamError = error as? AuthenticatedVideoStreamError
-        phase = switch streamError {
-        case .unauthorized: .failed(.unauthorized)
-        case .unavailable: .failed(.unavailable)
-        default: .failed(.invalidMedia)
-        }
+        phase = .failed(failure)
     }
 
     private func saveCurrentPosition() {
@@ -435,6 +484,8 @@ final class VideoPlaybackSession {
     }
 
     private func resetItem() {
+        audioActivationTask?.cancel()
+        audioActivationTask = nil
         metadataTask?.cancel()
         metadataTask = nil
         observations.removeAll()
@@ -453,6 +504,69 @@ final class VideoPlaybackSession {
 
     private func accepts(generation: Int) -> Bool {
         !isClosed && generation == self.generation
+    }
+
+    nonisolated static func normalizedFailure(
+        for error: any Error
+    ) -> VideoPlaybackFailure? {
+        if let streamError = error as? AuthenticatedVideoStreamError {
+            return switch streamError {
+            case .unauthorized: .authentication
+            case .unavailable: .unavailable
+            case let .network(retryable): .network(retryable: retryable)
+            case .invalidRange: .invalidRange
+            case .cancelled: nil
+            case .invalidRequest: .unknown
+            case .invalidResponse: .network(retryable: true)
+            }
+        }
+
+        let nsError = error as NSError
+        if nsError.domain == NSURLErrorDomain {
+            let code = URLError.Code(rawValue: nsError.code)
+            if code == .cancelled {
+                return nil
+            }
+            let retryable: Set<URLError.Code> = [
+                .timedOut,
+                .cannotFindHost,
+                .cannotConnectToHost,
+                .networkConnectionLost,
+                .dnsLookupFailed,
+                .notConnectedToInternet,
+                .internationalRoamingOff,
+                .callIsActive,
+                .dataNotAllowed,
+                .secureConnectionFailed,
+            ]
+            return .network(retryable: retryable.contains(code))
+        }
+
+        if nsError.domain == AVFoundationErrorDomain,
+           let code = AVError.Code(rawValue: nsError.code)
+        {
+            switch code {
+            case .mediaServicesWereReset, .decoderTemporarilyUnavailable:
+                return .playbackServiceReset
+            case .fileFormatNotRecognized,
+                 .fileFailedToParse,
+                 .decoderNotFound,
+                 .decodeFailed,
+                 .undecodableMediaData,
+                 .formatUnsupported,
+                 .incompatibleAsset:
+                return .unsupportedMedia
+            default:
+                break
+            }
+        }
+
+        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError,
+           underlying !== nsError
+        {
+            return normalizedFailure(for: underlying)
+        }
+        return .unknown
     }
 
     nonisolated static func bufferedSecondsAhead(
@@ -514,5 +628,21 @@ final class VideoPlaybackSession {
         }
         let characteristics = try? await track.load(.mediaCharacteristics)
         return characteristics?.contains(.containsHDRVideo) == true ? .hdr : .sdr
+    }
+}
+
+private extension VideoPlaybackPhase {
+    var isFailed: Bool {
+        if case .failed = self {
+            return true
+        }
+        return false
+    }
+
+    var isSeeking: Bool {
+        if case .seeking = self {
+            return true
+        }
+        return false
     }
 }

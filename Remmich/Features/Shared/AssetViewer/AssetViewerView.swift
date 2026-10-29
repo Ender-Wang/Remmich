@@ -2178,7 +2178,7 @@ struct AssetViewerView: View {
     private func pauseVideoForDismissalIfNeeded() {
         guard !resumesVideoAfterCancelledDismissal,
               let videoPlaybackSession,
-              videoPlaybackSession.phase == .playing
+              videoPlaybackSession.isPlaybackIntended
         else { return }
         resumesVideoAfterCancelledDismissal = true
         videoPlaybackSession.pause()
@@ -2232,9 +2232,9 @@ struct AssetViewerView: View {
                     .frame(height: 48)
                     .background(.regularMaterial, in: Capsule())
                     .position(x: mediaRect.midX, y: mediaRect.midY)
-            case .failed:
+            case let .failed(failure):
                 VStack(spacing: 10) {
-                    Text("This video is currently unavailable.")
+                    Text(videoPlaybackFailureMessage(failure))
                         .font(.footnote)
                         .multilineTextAlignment(.center)
                     Button("Retry") {
@@ -2252,6 +2252,29 @@ struct AssetViewerView: View {
             case .playing, .paused, .seeking, .suspended:
                 EmptyView()
             }
+        }
+    }
+
+    private func videoPlaybackFailureMessage(_ failure: VideoPlaybackFailure) -> String {
+        switch failure {
+        case .authentication:
+            "The connection is no longer authorized."
+        case .unavailable:
+            "This video is no longer available."
+        case .network:
+            "The video stream was interrupted."
+        case .unsupportedMedia:
+            "This video format cannot be played on this device."
+        case .playbackServiceReset:
+            "Video playback was interrupted by the system."
+        case .invalidRange:
+            "The server returned an invalid video range."
+        case .audioSession:
+            "Audio playback could not be started."
+        case .firstFrameTimedOut:
+            "The first video frame did not become ready."
+        case .unknown:
+            "This video is currently unavailable."
         }
     }
 
