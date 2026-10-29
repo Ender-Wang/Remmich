@@ -86,6 +86,39 @@ struct AssetViewerSessionTests {
         #expect(session.assets.map(\.id) == ["scoped-1", "scoped-2"])
     }
 
+    @Test @MainActor func lockedVideoSessionNeverRequestsTimelineBuckets() async {
+        let october = TimelineBucketID(rawValue: "2026-10-01")
+        let selected = asset(
+            "video",
+            at: "2026-10-02T10:00:00Z",
+            mediaKind: .video
+        )
+        let route = AssetViewerRoute(
+            selectedAsset: selected,
+            initialAssets: [
+                asset("photo", at: "2026-10-03T10:00:00Z"),
+                selected,
+            ],
+            origin: .timeline(bucketID: october, contentName: "Photos")
+        )
+        var loads: [TimelineBucketID] = []
+        let session = AssetViewerSession(
+            route: route,
+            bucketIDs: [october, .init(rawValue: "2026-09-01")],
+            loadBucket: { bucketID in
+                loads.append(bucketID)
+                return []
+            }
+        )
+
+        await session.start()
+        await session.loadNeighborsIfNeeded()
+
+        #expect(loads.isEmpty)
+        #expect(session.assets.map(\.id) == ["video"])
+        #expect(session.selectedAssetID == "video")
+    }
+
     @Test @MainActor func immediateSelectionTracksTheInteractivePagerWithoutWaitingForLoading() {
         let newer = asset("newer", at: "2026-10-03T10:00:00Z")
         let older = asset("older", at: "2026-10-02T10:00:00Z")
@@ -159,7 +192,11 @@ struct AssetViewerSessionTests {
         )
     }
 
-    private func asset(_ id: String, at timestamp: String) -> TimelineAssetSummary {
+    private func asset(
+        _ id: String,
+        at timestamp: String,
+        mediaKind: TimelineMediaKind = .image
+    ) -> TimelineAssetSummary {
         let date = ISO8601DateFormatter().date(from: timestamp)!
         return TimelineAssetSummary(
             id: id,
@@ -167,7 +204,7 @@ struct AssetViewerSessionTests {
             capturedAt: date,
             uploadedAt: date,
             localOffsetHours: 0,
-            mediaKind: .image,
+            mediaKind: mediaKind,
             durationMilliseconds: nil,
             aspectRatio: 1,
             isFavorite: false,

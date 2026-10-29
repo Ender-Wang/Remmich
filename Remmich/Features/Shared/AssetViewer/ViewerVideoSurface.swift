@@ -11,29 +11,8 @@ struct ViewerVideoSurface: View {
     let session: VideoPlaybackSession
     let readyForDisplayChanged: (Bool) -> Void
 
-    @State private var controller: AVPlayerViewController
-
-    init(
-        session: VideoPlaybackSession,
-        readyForDisplayChanged: @escaping (Bool) -> Void
-    ) {
-        self.session = session
-        self.readyForDisplayChanged = readyForDisplayChanged
-        let controller = AVPlayerViewController()
-        controller.player = session.player
-        controller.showsPlaybackControls = true
-        controller.videoGravity = .resizeAspect
-        controller.entersFullScreenWhenPlaybackBegins = false
-        controller.exitsFullScreenWhenPlaybackEnds = false
-        controller.allowsPictureInPicturePlayback = false
-        controller.updatesNowPlayingInfoCenter = false
-        controller.view.backgroundColor = .clear
-        _controller = State(initialValue: controller)
-    }
-
     var body: some View {
         ViewerVideoControllerHost(
-            controller: controller,
             player: session.player,
             readyForDisplayChanged: readyForDisplayChanged
         )
@@ -43,7 +22,6 @@ struct ViewerVideoSurface: View {
 }
 
 private struct ViewerVideoControllerHost: UIViewControllerRepresentable {
-    let controller: AVPlayerViewController
     let player: AVPlayer
     let readyForDisplayChanged: (Bool) -> Void
 
@@ -52,7 +30,15 @@ private struct ViewerVideoControllerHost: UIViewControllerRepresentable {
     }
 
     func makeUIViewController(context: Context) -> AVPlayerViewController {
+        let controller = AVPlayerViewController()
         controller.player = player
+        controller.showsPlaybackControls = true
+        controller.videoGravity = .resizeAspect
+        controller.entersFullScreenWhenPlaybackBegins = false
+        controller.exitsFullScreenWhenPlaybackEnds = false
+        controller.allowsPictureInPicturePlayback = false
+        controller.updatesNowPlayingInfoCenter = false
+        controller.view.backgroundColor = .clear
         context.coordinator.observe(controller)
         return controller
     }

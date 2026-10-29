@@ -98,7 +98,9 @@ final class AssetViewerSession {
     }
 
     func start() async {
-        guard case let .timeline(bucketID, _) = origin else { return }
+        guard !isVideoPlayback,
+              case let .timeline(bucketID, _) = origin
+        else { return }
         await load(bucketID)
         await loadNeighborsIfNeeded()
     }
@@ -133,7 +135,8 @@ final class AssetViewerSession {
     }
 
     func loadNeighborsIfNeeded() async {
-        guard case .timeline = origin,
+        guard allowsHorizontalPaging,
+              case .timeline = origin,
               let selectedIndex,
               !assets.isEmpty
         else { return }
