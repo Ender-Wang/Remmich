@@ -43,6 +43,7 @@ final nonisolated class AuthenticatedVideoStreamSource: NSObject, @unchecked Sen
     let asset: AVURLAsset
 
     private let configuration: AuthenticatedVideoStreamConfiguration
+    private let contentLengthChanged: @Sendable (Int64) -> Void
     private let delegateQueue: DispatchQueue
     private let operationQueue: OperationQueue
     private var session: URLSession!
@@ -51,7 +52,10 @@ final nonisolated class AuthenticatedVideoStreamSource: NSObject, @unchecked Sen
     private var taskIDByLoadingRequest: [ObjectIdentifier: Int] = [:]
     private var isInvalidated = false
 
-    init(configuration: AuthenticatedVideoStreamConfiguration) throws {
+    init(
+        configuration: AuthenticatedVideoStreamConfiguration,
+        contentLengthChanged: @escaping @Sendable (Int64) -> Void = { _ in }
+    ) throws {
         guard var components = URLComponents(
             url: configuration.url,
             resolvingAgainstBaseURL: false
@@ -64,6 +68,7 @@ final nonisolated class AuthenticatedVideoStreamSource: NSObject, @unchecked Sen
         }
 
         self.configuration = configuration
+        self.contentLengthChanged = contentLengthChanged
         assetID = configuration.assetID
         delegateQueue = DispatchQueue(
             label: "io.github.ender-wang.Remmich.video-stream.\(configuration.assetID)"
@@ -218,6 +223,7 @@ final nonisolated class AuthenticatedVideoStreamSource: NSObject, @unchecked Sen
             || response.value(forHTTPHeaderField: "Accept-Ranges")?.lowercased() == "bytes"
         if let totalLength = Self.totalLength(response: response) {
             information.contentLength = totalLength
+            contentLengthChanged(totalLength)
         }
         if let mimeType = response.mimeType,
            let type = UTType(mimeType: mimeType)
