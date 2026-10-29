@@ -634,10 +634,16 @@ struct AssetViewerView: View {
                         session: videoPlaybackSession,
                         isVisible: $videoControlsVisible,
                         showsCloseButton: !showsInfo,
+                        compactLandscape: isLandscape
+                            && UIDevice.current.userInterfaceIdiom == .phone,
                         safeAreaInsets: EdgeInsets(
                             top: max(0, safeAreaInsets.top - selectedMediaRect.minY),
                             leading: max(0, safeAreaInsets.leading - selectedMediaRect.minX),
-                            bottom: 0,
+                            bottom: max(
+                                0,
+                                safeAreaInsets.bottom
+                                    - (pageSize.height - selectedMediaRect.maxY)
+                            ),
                             trailing: max(
                                 0,
                                 selectedMediaRect.maxX
