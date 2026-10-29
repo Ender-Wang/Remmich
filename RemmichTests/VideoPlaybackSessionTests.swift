@@ -67,4 +67,36 @@ struct VideoPlaybackSessionTests {
         #expect(ViewerVideoReadiness.resolved(current: false, reported: true))
         #expect(ViewerVideoReadiness.resolved(current: true, reported: false))
     }
+
+    @Test @MainActor func failedPlaybackSurvivesSuspension() {
+        let session = VideoPlaybackSession(assetID: "video")
+
+        session.markFirstFrameTimedOut(generation: session.generation)
+        session.suspend()
+
+        #expect(session.phase == .failed(.firstFrameTimedOut))
+    }
+
+    @Test @MainActor func interruptedPreparationReturnsToPreparing() async {
+        let session = VideoPlaybackSession(assetID: "video")
+
+        session.suspend()
+        #expect(session.phase == .suspended)
+
+        await session.resumeFromSuspension()
+        #expect(session.phase == .preparing)
+    }
+
+    @Test func retryPolicyRejectsPermanentFailures() {
+        #expect(VideoPlaybackFailure.network(retryable: true).allowsRetry)
+        #expect(!VideoPlaybackFailure.network(retryable: false).allowsRetry)
+        #expect(!VideoPlaybackFailure.authentication.allowsRetry)
+        #expect(!VideoPlaybackFailure.unavailable.allowsRetry)
+        #expect(!VideoPlaybackFailure.unsupportedMedia.allowsRetry)
+        #expect(VideoPlaybackFailure.playbackServiceReset.allowsRetry)
+        #expect(VideoPlaybackFailure.invalidRange.allowsRetry)
+        #expect(VideoPlaybackFailure.audioSession.allowsRetry)
+        #expect(VideoPlaybackFailure.firstFrameTimedOut.allowsRetry)
+        #expect(!VideoPlaybackFailure.unknown.allowsRetry)
+    }
 }

@@ -455,6 +455,12 @@ struct AssetViewerView: View {
             videoFirstFrameReady = false
             chromeVisible = true
         }
+        .onChange(of: videoPlaybackSession?.phase) { _, phase in
+            guard case .failed = phase else { return }
+            withAnimation(chromeAnimation) {
+                chromeVisible = true
+            }
+        }
         .task(id: AssetDetailLoadRequest(
             assetID: session.selectedAssetID,
             includesNeighbors: showsInfo
@@ -518,7 +524,11 @@ struct AssetViewerView: View {
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
-                videoPlaybackSession?.resumeFromSuspension()
+                if let videoPlaybackSession {
+                    Task { @MainActor in
+                        await videoPlaybackSession.resumeFromSuspension()
+                    }
+                }
                 resumeMemoryAutoRotation()
             } else {
                 videoPlaybackSession?.suspend()
@@ -2230,9 +2240,9 @@ struct AssetViewerView: View {
         mediaRect: CGRect,
         showsMediaBackground: Bool
     ) -> some View {
-        if showsMediaBackground, !videoFirstFrameReady {
+        if showsMediaBackground {
             switch session.phase {
-            case .preparing:
+            case .preparing where !videoFirstFrameReady:
                 ProgressView("Preparing Video")
                     .tint(.white)
                     .foregroundStyle(.white)
@@ -2245,19 +2255,21 @@ struct AssetViewerView: View {
                     Text(videoPlaybackFailureMessage(failure))
                         .font(.footnote)
                         .multilineTextAlignment(.center)
-                    Button("Retry") {
-                        Task { @MainActor in
-                            await session.retry(using: media)
+                    if failure.allowsRetry {
+                        Button("Retry") {
+                            Task { @MainActor in
+                                await session.retry(using: media)
+                            }
                         }
+                        .buttonStyle(.borderedProminent)
+                        .accessibilityIdentifier("asset-viewer-video-retry")
                     }
-                    .buttonStyle(.borderedProminent)
-                    .accessibilityIdentifier("asset-viewer-video-retry")
                 }
                 .padding(18)
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
                 .frame(maxWidth: min(320, mediaRect.width - 48))
                 .position(x: mediaRect.midX, y: mediaRect.midY)
-            case .playing, .paused, .seeking, .suspended:
+            case .preparing, .playing, .paused, .seeking, .suspended:
                 EmptyView()
             }
         }

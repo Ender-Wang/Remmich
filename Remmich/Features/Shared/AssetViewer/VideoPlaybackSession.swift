@@ -42,6 +42,17 @@ nonisolated enum VideoPlaybackFailure: Equatable, Sendable {
     case audioSession
     case firstFrameTimedOut
     case unknown
+
+    var allowsRetry: Bool {
+        switch self {
+        case let .network(retryable):
+            retryable
+        case .playbackServiceReset, .invalidRange, .audioSession, .firstFrameTimedOut:
+            true
+        case .authentication, .unavailable, .unsupportedMedia, .unknown:
+            false
+        }
+    }
 }
 
 nonisolated enum VideoPlaybackPhase: Equatable, Sendable {
@@ -80,6 +91,8 @@ final class VideoPlaybackSession {
     private var intendedPlayback = true
     private var savedPosition: Double = 0
     private var contentLengthBytes: Int?
+    private var resumesPreparationAfterSuspension = false
+    private var seekSequence = 0
 
     init(assetID: String) {
         self.assetID = assetID
@@ -98,6 +111,7 @@ final class VideoPlaybackSession {
         resetItem()
         phase = .preparing
         intendedPlayback = true
+        resumesPreparationAfterSuspension = false
 
         do {
             let configuration = try media.videoStreamConfiguration(assetID: assetID)
@@ -137,7 +151,8 @@ final class VideoPlaybackSession {
     func play() async {
         guard !isClosed,
               playerItem != nil,
-              phase != .playing
+              phase != .playing,
+              !phase.isFailed
         else { return }
         intendedPlayback = true
         do {
@@ -154,7 +169,7 @@ final class VideoPlaybackSession {
     }
 
     func pause() {
-        guard !isClosed else { return }
+        guard !isClosed, !phase.isFailed else { return }
         intendedPlayback = false
         audioActivationTask?.cancel()
         audioActivationTask = nil
@@ -168,6 +183,8 @@ final class VideoPlaybackSession {
 
     func seek(to seconds: Double) async {
         guard !isClosed, playerItem != nil, seconds.isFinite else { return }
+        seekSequence += 1
+        let sequence = seekSequence
         let resumePlayback = intendedPlayback
         phase = .seeking(resumePlayback: resumePlayback)
         await player.seek(
@@ -175,7 +192,7 @@ final class VideoPlaybackSession {
             toleranceBefore: .zero,
             toleranceAfter: .zero
         )
-        guard !isClosed else { return }
+        guard !isClosed, sequence == seekSequence else { return }
         savedPosition = max(0, seconds)
         if resumePlayback {
             await play()
@@ -185,7 +202,9 @@ final class VideoPlaybackSession {
     }
 
     func suspend() {
-        guard !isClosed else { return }
+        guard !isClosed, phase != .suspended, !phase.isFailed else { return }
+        resumesPreparationAfterSuspension = phase == .preparing
+        seekSequence += 1
         intendedPlayback = false
         audioActivationTask?.cancel()
         audioActivationTask = nil
@@ -195,8 +214,16 @@ final class VideoPlaybackSession {
         phase = .suspended
     }
 
-    func resumeFromSuspension() {
+    func resumeFromSuspension() async {
         guard !isClosed, phase == .suspended else { return }
+        let resumesPreparation = resumesPreparationAfterSuspension
+        resumesPreparationAfterSuspension = false
+        if resumesPreparation {
+            phase = .preparing
+            intendedPlayback = true
+            await play()
+            return
+        }
         phase = .paused
     }
 
@@ -209,6 +236,7 @@ final class VideoPlaybackSession {
         guard !isClosed else { return }
         isClosed = true
         generation += 1
+        seekSequence += 1
         intendedPlayback = false
         audioActivationTask?.cancel()
         audioActivationTask = nil
@@ -217,8 +245,8 @@ final class VideoPlaybackSession {
         audioSession.deactivate()
     }
 
-    func markFirstFrameTimedOut() {
-        guard !isClosed else { return }
+    func markFirstFrameTimedOut(generation: Int) {
+        guard accepts(generation: generation) else { return }
         if case .failed = phase {
             return
         }
@@ -296,10 +324,15 @@ final class VideoPlaybackSession {
                 forName: .AVPlayerItemFailedToPlayToEndTime,
                 object: item,
                 queue: .main
-            ) { [weak self] _ in
+            ) { [weak self, weak item] notification in
+                let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey]
+                    as? any Error
+                    ?? item?.error
+                    ?? AuthenticatedVideoStreamError.invalidResponse
+                guard let failure = Self.normalizedFailure(for: error) else { return }
                 MainActor.assumeIsolated {
                     self?.fail(
-                        AuthenticatedVideoStreamError.invalidResponse,
+                        failure,
                         generation: generation
                     )
                 }
@@ -315,7 +348,9 @@ final class VideoPlaybackSession {
                     if type == .began {
                         self?.suspend()
                     } else if type == .ended {
-                        self?.resumeFromSuspension()
+                        Task { @MainActor [weak self] in
+                            await self?.resumeFromSuspension()
+                        }
                     }
                 }
             },
@@ -467,7 +502,13 @@ final class VideoPlaybackSession {
     }
 
     private func fail(_ error: any Error, generation: Int) {
-        guard accepts(generation: generation), let failure = Self.normalizedFailure(for: error) else { return }
+        guard let failure = Self.normalizedFailure(for: error) else { return }
+        fail(failure, generation: generation)
+    }
+
+    private func fail(_ failure: VideoPlaybackFailure, generation: Int) {
+        guard accepts(generation: generation), !phase.isFailed else { return }
+        saveCurrentPosition()
         intendedPlayback = false
         audioActivationTask?.cancel()
         audioActivationTask = nil
@@ -500,6 +541,7 @@ final class VideoPlaybackSession {
         streamSource = nil
         bufferState = .empty
         contentLengthBytes = nil
+        seekSequence += 1
     }
 
     private func accepts(generation: Int) -> Bool {
