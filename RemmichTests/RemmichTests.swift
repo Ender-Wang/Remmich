@@ -1386,13 +1386,11 @@ struct RemmichTests {
         )
         let session = AssetViewerSession(route: firstRoute)
 
-        session.setPlaybackPosition(4, for: firstAsset.id)
         session.replaceMemoryRoute(secondRoute)
 
         #expect(session.selectedAssetID == secondAsset.id)
         #expect(session.assets.map(\.id) == [secondAsset.id])
         #expect(session.origin == secondRoute.origin)
-        #expect(session.playbackPosition(for: firstAsset.id) == 0)
     }
 
     @Test func memoryViewerOutsideDismissalPreservesMemoryRowAndNavigationPassThrough() {

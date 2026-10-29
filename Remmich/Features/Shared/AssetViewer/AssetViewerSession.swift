@@ -59,7 +59,6 @@ final class AssetViewerSession {
     private let loadBucket: BucketLoader?
     private var loadedBucketIDs: Set<TimelineBucketID> = []
     private var bucketByAssetID: [String: TimelineBucketID] = [:]
-    private var playbackPositions: [String: Double] = [:]
 
     var isVideoPlayback: Bool {
         selectedAsset?.mediaKind == .video
@@ -124,7 +123,6 @@ final class AssetViewerSession {
         unavailableMessage = nil
         loadedBucketIDs.removeAll()
         bucketByAssetID.removeAll()
-        playbackPositions.removeAll()
     }
 
     @discardableResult
@@ -132,18 +130,6 @@ final class AssetViewerSession {
         guard allowsHorizontalPaging || assetID == selectedAssetID, assets.contains(where: { $0.id == assetID }) else { return false }
         selectedAssetID = assetID
         return true
-    }
-
-    func playbackPosition(for assetID: String) -> Double {
-        playbackPositions[assetID] ?? 0
-    }
-
-    func setPlaybackPosition(_ seconds: Double, for assetID: String) {
-        guard seconds.isFinite, seconds > 0 else {
-            playbackPositions.removeValue(forKey: assetID)
-            return
-        }
-        playbackPositions[assetID] = seconds
     }
 
     func loadNeighborsIfNeeded() async {

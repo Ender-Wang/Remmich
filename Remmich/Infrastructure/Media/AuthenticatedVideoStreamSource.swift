@@ -63,6 +63,8 @@ final nonisolated class AuthenticatedVideoStreamSource: NSObject, @unchecked Sen
     private var contextsByTaskID: [Int: RequestContext] = [:]
     private var taskIDByLoadingRequest: [ObjectIdentifier: Int] = [:]
     private var isInvalidated = false
+    private var startedRequestCount = 0
+    private var deliveredByteCount: Int64 = 0
 
     init(
         configuration: AuthenticatedVideoStreamConfiguration,
@@ -105,18 +107,27 @@ final nonisolated class AuthenticatedVideoStreamSource: NSObject, @unchecked Sen
     }
 
     func invalidate() {
-        let requests: [AVAssetResourceLoadingRequest] = lock.withLock {
-            guard !isInvalidated else { return [] }
+        let result: (
+            requests: [AVAssetResourceLoadingRequest],
+            requestCount: Int,
+            deliveredBytes: Int64
+        )? = lock.withLock {
+            guard !isInvalidated else { return nil }
             isInvalidated = true
             let values = contextsByTaskID.values.map(\.loadingRequest)
             contextsByTaskID.removeAll()
             taskIDByLoadingRequest.removeAll()
-            return values
+            return (values, startedRequestCount, deliveredByteCount)
         }
+        guard let result else { return }
         session.invalidateAndCancel()
-        for request in requests {
+        for request in result.requests {
             request.finishLoading(with: AuthenticatedVideoStreamError.cancelled)
         }
+        let assetPrefix = assetID.prefix(8)
+        Self.logger.debug(
+            "Video stream closed asset=\(assetPrefix, privacy: .private) requests=\(result.requestCount) deliveredBytes=\(result.deliveredBytes) outstanding=\(result.requests.count)"
+        )
     }
 
     deinit {
@@ -267,21 +278,25 @@ final nonisolated class AuthenticatedVideoStreamSource: NSObject, @unchecked Sen
             range: context.requestedRange,
             requestsToEnd: context.requestsToEnd
         ))
-        let accepted = lock.withLock {
-            guard !isInvalidated else { return false }
+        let accepted: (accepted: Bool, logsInitialRange: Bool) = lock.withLock {
+            guard !isInvalidated else { return (false, false) }
+            let logsInitialRange = startedRequestCount == 0
+            startedRequestCount += 1
             contextsByTaskID[task.taskIdentifier] = context
             taskIDByLoadingRequest[ObjectIdentifier(loadingRequest)] = task.taskIdentifier
-            return true
+            return (true, logsInitialRange)
         }
-        guard accepted else {
+        guard accepted.accepted else {
             loadingRequest.finishLoading(with: AuthenticatedVideoStreamError.cancelled)
             return false
         }
 
-        let assetPrefix = assetID.prefix(8)
-        Self.logger.debug(
-            "Video range started asset=\(assetPrefix, privacy: .private) start=\(context.requestedRange.lowerBound) length=\(context.requestedByteCount)"
-        )
+        if accepted.logsInitialRange {
+            let assetPrefix = assetID.prefix(8)
+            Self.logger.debug(
+                "Video stream opened asset=\(assetPrefix, privacy: .private) initialOffset=\(context.requestedRange.lowerBound) initialLength=\(context.requestedByteCount)"
+            )
+        }
         task.resume()
         return true
     }
@@ -456,6 +471,9 @@ extension AuthenticatedVideoStreamSource: URLSessionDataDelegate, URLSessionTask
         let consumed = context.consume(data)
         if !consumed.payload.isEmpty {
             context.loadingRequest.dataRequest?.respond(with: consumed.payload)
+            lock.withLock {
+                deliveredByteCount += Int64(consumed.payload.count)
+            }
         }
         if consumed.isComplete {
             _ = removeContext(for: dataTask.taskIdentifier)

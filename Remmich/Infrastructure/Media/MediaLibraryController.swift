@@ -574,19 +574,6 @@ final class MediaLibraryController {
         )
     }
 
-    func playerItem(assetID: String) async throws -> AVPlayerItem {
-        #if DEBUG
-            if ProcessInfo.processInfo.arguments.contains("-ui-testing-signed-in") {
-                return try AVPlayerItem(url: PreviewMediaFixtures.videoFileURL())
-            }
-        #endif
-        guard let url = downloadURL(assetID: assetID, derivative: .videoPlayback),
-              let downloadService
-        else { throw MediaDownloadService.DownloadError.invalidResponse }
-        let media = try await downloadService.download(from: url, fallbackFilename: "\(assetID).mp4")
-        return AVPlayerItem(url: media.fileURL)
-    }
-
     func livePhotoPlayerItem(assetID: String) async throws -> AVPlayerItem {
         #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("-ui-testing-signed-in") {

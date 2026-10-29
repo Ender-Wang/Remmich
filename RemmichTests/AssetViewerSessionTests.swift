@@ -104,27 +104,6 @@ struct AssetViewerSessionTests {
         #expect(session.selectedAssetID == older.id)
     }
 
-    @Test @MainActor func playbackPositionStaysScopedToItsAssetAndClearsAtStart() {
-        let selected = asset("video-1", at: "2026-10-02T10:00:00Z")
-        let session = AssetViewerSession(route: .init(
-            selectedAsset: selected,
-            initialAssets: [selected],
-            origin: .timeline(
-                bucketID: .init(rawValue: "2026-10-01"),
-                contentName: "Videos"
-            )
-        ))
-
-        session.setPlaybackPosition(42.5, for: selected.id)
-        session.setPlaybackPosition(.nan, for: "video-2")
-
-        #expect(session.playbackPosition(for: selected.id) == 42.5)
-        #expect(session.playbackPosition(for: "video-2") == 0)
-
-        session.setPlaybackPosition(0, for: selected.id)
-        #expect(session.playbackPosition(for: selected.id) == 0)
-    }
-
     @Test func contextPresentationUsesCachedCaptureTimeAndNormalizesLocation() {
         let summary = asset("photo", at: "2026-10-02T10:00:00Z")
         let cached = detail(
