@@ -8,6 +8,7 @@ struct ViewerVideoControls: View {
     let session: VideoPlaybackSession
     @Binding var isVisible: Bool
     let showsCloseButton: Bool
+    let safeAreaInsets: EdgeInsets
     let close: () -> Void
     let visibilityChanged: (Bool) -> Void
     let routePresentationChanged: (Bool) -> Void
@@ -57,7 +58,9 @@ struct ViewerVideoControls: View {
                     }
                 }
                 .padding(.horizontal, 18)
-                .padding(.top, 20)
+                .padding(.top, safeAreaInsets.top + 20)
+                .padding(.leading, safeAreaInsets.leading)
+                .padding(.trailing, safeAreaInsets.trailing)
                 .padding(.bottom, 36)
                 .transition(.opacity)
             }

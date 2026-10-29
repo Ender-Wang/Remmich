@@ -332,6 +332,7 @@ struct AssetViewerView: View {
                     viewerContent(
                         pageSize: fullGeometry.size,
                         viewportOrigin: fullFrame.origin,
+                        safeAreaInsets: safeInsets,
                         viewerRect: viewerRect,
                         requestSize: fullGeometry.size,
                         isLandscape: isLandscape,
@@ -440,7 +441,7 @@ struct AssetViewerView: View {
             .ignoresSafeArea(.container, edges: .all)
         }
         .foregroundStyle(.primary)
-        .statusBarHidden(shouldHideStatusBar)
+        .modifier(AssetViewerStatusBarVisibilityModifier(hidden: shouldHideStatusBar))
         .presentationBackground(.clear)
         .interactiveDismissDisabled(true)
         .toolbar(.hidden, for: .navigationBar)
@@ -549,6 +550,7 @@ struct AssetViewerView: View {
     private func viewerContent(
         pageSize: CGSize,
         viewportOrigin: CGPoint,
+        safeAreaInsets: EdgeInsets,
         viewerRect: CGRect,
         requestSize: CGSize,
         isLandscape: Bool,
@@ -632,6 +634,16 @@ struct AssetViewerView: View {
                         session: videoPlaybackSession,
                         isVisible: $videoControlsVisible,
                         showsCloseButton: !showsInfo,
+                        safeAreaInsets: EdgeInsets(
+                            top: max(0, safeAreaInsets.top - selectedMediaRect.minY),
+                            leading: max(0, safeAreaInsets.leading - selectedMediaRect.minX),
+                            bottom: 0,
+                            trailing: max(
+                                0,
+                                selectedMediaRect.maxX
+                                    - (pageSize.width - safeAreaInsets.trailing)
+                            )
+                        ),
                         close: {
                             pauseVideoForDismissalIfNeeded()
                             completeDragDismissal(
@@ -3458,6 +3470,18 @@ private struct FilmstripPositionRequest: Hashable {
     let selectedAssetID: String
     let selectedIndex: Int?
     let assetCount: Int
+}
+
+private struct AssetViewerStatusBarVisibilityModifier: ViewModifier {
+    let hidden: Bool
+
+    func body(content: Content) -> some View {
+        if #available(iOS 27.0, *) {
+            content.toolbarVisibility(hidden ? .hidden : .visible, for: .statusBar)
+        } else {
+            content.statusBarHidden(hidden)
+        }
+    }
 }
 
 extension View {
