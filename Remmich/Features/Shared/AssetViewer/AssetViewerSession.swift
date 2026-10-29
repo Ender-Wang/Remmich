@@ -48,6 +48,7 @@ final class AssetViewerSession {
     typealias BucketLoader = @MainActor (TimelineBucketID) async -> [TimelineAssetSummary]
 
     private(set) var assets: [TimelineAssetSummary]
+    private(set) var sourceAssets: [TimelineAssetSummary]
     private(set) var isLoadingNeighbor = false
     private(set) var unavailableMessage: String?
     var selectedAssetID: String
@@ -60,6 +61,14 @@ final class AssetViewerSession {
     private var bucketByAssetID: [String: TimelineBucketID] = [:]
     private var playbackPositions: [String: Double] = [:]
 
+    var isVideoPlayback: Bool {
+        selectedAsset?.mediaKind == .video
+    }
+
+    var allowsHorizontalPaging: Bool {
+        !isVideoPlayback
+    }
+
     init(
         route: AssetViewerRoute,
         bucketIDs: [TimelineBucketID] = [],
@@ -67,7 +76,12 @@ final class AssetViewerSession {
     ) {
         origin = route.origin
         selectedAssetID = route.selectedAsset.id
-        assets = Self.orderedUnique(route.initialAssets + [route.selectedAsset])
+        let sourceAssets = Self.orderedUnique(route.initialAssets + [route.selectedAsset])
+        self.sourceAssets = sourceAssets
+        assets = Self.viewerProjection(
+            sourceAssets: sourceAssets,
+            selectedAsset: route.selectedAsset
+        )
         self.bucketIDs = bucketIDs
         self.loadBucket = loadBucket
 
@@ -100,7 +114,11 @@ final class AssetViewerSession {
               case .memory = route.origin
         else { return }
         origin = route.origin
-        assets = Self.orderedUnique(route.initialAssets + [route.selectedAsset])
+        sourceAssets = Self.orderedUnique(route.initialAssets + [route.selectedAsset])
+        assets = Self.viewerProjection(
+            sourceAssets: sourceAssets,
+            selectedAsset: route.selectedAsset
+        )
         selectedAssetID = route.selectedAsset.id
         isLoadingNeighbor = false
         unavailableMessage = nil
@@ -111,7 +129,7 @@ final class AssetViewerSession {
 
     @discardableResult
     func selectImmediately(_ assetID: String) -> Bool {
-        guard assets.contains(where: { $0.id == assetID }) else { return false }
+        guard allowsHorizontalPaging || assetID == selectedAssetID, assets.contains(where: { $0.id == assetID }) else { return false }
         selectedAssetID = assetID
         return true
     }
@@ -169,8 +187,26 @@ final class AssetViewerSession {
             for asset in loaded {
                 bucketByAssetID[asset.id] = bucketID
             }
-            assets = Self.orderedUnique(assets + loaded)
+            sourceAssets = Self.orderedUnique(sourceAssets + loaded)
+            guard let selectedAsset = sourceAssets.first(where: { $0.id == selectedAssetID }) else {
+                return
+            }
+            assets = Self.viewerProjection(
+                sourceAssets: sourceAssets,
+                selectedAsset: selectedAsset
+            )
         }
+    }
+
+    nonisolated static func viewerProjection(
+        sourceAssets: [TimelineAssetSummary],
+        selectedAsset: TimelineAssetSummary
+    ) -> [TimelineAssetSummary] {
+        if selectedAsset.mediaKind == .video {
+            return [selectedAsset]
+        }
+        return orderedUnique(sourceAssets + [selectedAsset])
+            .filter { $0.mediaKind != .video }
     }
 
     nonisolated static func orderedUnique(
