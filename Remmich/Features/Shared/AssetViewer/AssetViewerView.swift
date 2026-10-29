@@ -151,6 +151,7 @@ struct AssetViewerView: View {
                 let infoProgress = isMemoryViewer ? 0 : infoPresentationProgress
                 let safeFrame = safeGeometry.frame(in: .global)
                 let fullFrame = fullGeometry.frame(in: .global)
+                let isLandscape = fullGeometry.size.width > fullGeometry.size.height
                 let safeInsets = resolvedSafeAreaInsets(
                     safeGeometry: safeGeometry,
                     safeFrame: safeFrame,
@@ -217,18 +218,25 @@ struct AssetViewerView: View {
                         memoryRowBottom: memoryRowBottom,
                         isPad: UIDevice.current.userInterfaceIdiom == .pad
                     )
-                    : AssetViewerMediaGeometry.mediaRect(
-                        viewportSize: fullGeometry.size,
-                        safeAreaInsets: uiSafeAreaInsets,
-                        infoProgress: infoProgress,
-                        topChromeHeight: topChromeHeight,
-                        shownInfoBottomInset: shownInfoBottomInset
-                    )
+                    : (session.isVideoPlayback && isLandscape
+                        ? AssetViewerMediaGeometry.landscapeVideoInfoRect(
+                            viewportSize: fullGeometry.size,
+                            safeAreaInsets: uiSafeAreaInsets,
+                            infoProgress: infoProgress,
+                            topChromeHeight: topChromeHeight
+                        )
+                        : AssetViewerMediaGeometry.mediaRect(
+                            viewportSize: fullGeometry.size,
+                            safeAreaInsets: uiSafeAreaInsets,
+                            infoProgress: infoProgress,
+                            topChromeHeight: topChromeHeight,
+                            shownInfoBottomInset: shownInfoBottomInset
+                        ))
                 let viewerRect = dismissalViewerRect ?? fittedViewerRect
                 let selectedMediaRect = selectedMediaRect(
                     in: viewerRect,
                     infoProgress: infoProgress,
-                    isLandscape: fullGeometry.size.width > fullGeometry.size.height
+                    isLandscape: isLandscape
                 )
                 let dismissalImageRect = selectedRenderedImageRect(in: selectedMediaRect)
                 let openingTarget = openingIsActive
@@ -323,7 +331,7 @@ struct AssetViewerView: View {
                         pageSize: fullGeometry.size,
                         viewerRect: viewerRect,
                         requestSize: fullGeometry.size,
-                        isLandscape: fullGeometry.size.width > fullGeometry.size.height,
+                        isLandscape: isLandscape,
                         infoProgress: infoProgress,
                         selectedMediaRect: selectedMediaRect,
                         showsMediaBackground: !isolatesDismissalAsset
@@ -962,6 +970,11 @@ struct AssetViewerView: View {
         mediaRect: CGRect
     ) -> some View {
         let showsFilmstrip = !session.isVideoPlayback
+        let usesLandscapeVideoLayout = session.isVideoPlayback
+            && viewportSize.width > viewportSize.height
+        let actionColumnWidth = usesLandscapeVideoLayout
+            ? mediaRect.width
+            : viewportSize.width
         return VStack(spacing: 0) {
             GeometryReader { geometry in
                 ZStack {
@@ -1028,6 +1041,8 @@ struct AssetViewerView: View {
                 bottomActions
                     .padding(.horizontal, 16)
             }
+            .frame(width: actionColumnWidth)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -2373,6 +2388,25 @@ nonisolated enum AssetViewerMediaGeometry {
         let trailingInset = safeAreaInsets.right * progress
         let topInset = (safeAreaInsets.top + topChromeHeight) * progress
         let bottomInset = (safeAreaInsets.bottom + shownInfoBottomInset) * progress
+        return CGRect(
+            x: leadingInset,
+            y: topInset,
+            width: max(1, viewportSize.width - leadingInset - trailingInset),
+            height: max(1, viewportSize.height - topInset - bottomInset)
+        )
+    }
+
+    static func landscapeVideoInfoRect(
+        viewportSize: CGSize,
+        safeAreaInsets: UIEdgeInsets,
+        infoProgress: CGFloat,
+        topChromeHeight: CGFloat
+    ) -> CGRect {
+        let progress = min(1, max(0, infoProgress))
+        let leadingInset = safeAreaInsets.left * progress
+        let trailingInset = safeAreaInsets.right * progress
+        let topInset = (safeAreaInsets.top + topChromeHeight) * progress
+        let bottomInset = safeAreaInsets.bottom * progress
         return CGRect(
             x: leadingInset,
             y: topInset,

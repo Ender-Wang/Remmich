@@ -1265,6 +1265,27 @@ struct RemmichTests {
         #expect(info == CGRect(x: 0, y: 122, width: 402, height: 650))
     }
 
+    @Test func landscapeVideoInfoGeometryLeavesTheBottomAvailableToTheInfoColumn() {
+        let viewportSize = CGSize(width: 874, height: 402)
+        let safeAreaInsets = UIEdgeInsets(top: 0, left: 62, bottom: 21, right: 62)
+
+        let standard = AssetViewerMediaGeometry.landscapeVideoInfoRect(
+            viewportSize: viewportSize,
+            safeAreaInsets: safeAreaInsets,
+            infoProgress: 0,
+            topChromeHeight: 60
+        )
+        let info = AssetViewerMediaGeometry.landscapeVideoInfoRect(
+            viewportSize: viewportSize,
+            safeAreaInsets: safeAreaInsets,
+            infoProgress: 1,
+            topChromeHeight: 60
+        )
+
+        #expect(standard == CGRect(origin: .zero, size: viewportSize))
+        #expect(info == CGRect(x: 62, y: 60, width: 750, height: 321))
+    }
+
     @Test func viewerInfoFitAnimationIsDisabledOnlyDuringDirectManipulation() {
         #expect(AssetViewerMediaGeometry.animatesFitChanges(infoDragTranslation: 0))
         #expect(!AssetViewerMediaGeometry.animatesFitChanges(infoDragTranslation: -72))
