@@ -811,7 +811,8 @@ struct AssetViewerView: View {
                 animatesFitChanges: animatesFitChanges,
                 showsBackground: showsBackground,
                 usesInsetStage: usesInsetStage,
-                showsVideoPoster: asset.id != session.selectedAssetID || !videoFirstFrameReady,
+                showsVideoPoster: asset.id != session.selectedAssetID || !videoFirstFrameReady
+                    || isDismissalInteractionActive || isDismissing,
                 targetPixels: .init(
                     width: Int(max(1, requestSize.width * displayScale)),
                     height: Int(max(1, requestSize.height * displayScale))
@@ -3361,7 +3362,7 @@ private struct AssetViewerFitPage: View {
                 .frame(width: mediaRect.width, height: mediaRect.height)
                 .position(x: mediaRect.midX, y: mediaRect.midY)
                 // The poster and AVKit surface fit independently during rotation.
-                // Once video is visible, keep its poster from showing through.
+                // Hide the poster beneath ready video, but keep it for return transitions.
                 .opacity(showsVideoPoster ? 1 : 0)
             } else {
                 ZoomableStillImageView(
