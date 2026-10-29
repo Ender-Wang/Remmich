@@ -559,6 +559,21 @@ final class MediaLibraryController {
         return Self.mediaURL(for: descriptor, apiURL: activeAPIURL)
     }
 
+    func videoStreamConfiguration(
+        assetID: String
+    ) throws -> AuthenticatedVideoStreamConfiguration {
+        guard let session,
+              let url = downloadURL(assetID: assetID, derivative: .videoPlayback)
+        else {
+            throw AuthenticatedVideoStreamError.invalidRequest
+        }
+        return AuthenticatedVideoStreamConfiguration(
+            assetID: assetID,
+            url: url,
+            authorization: "Bearer \(session.accessToken)"
+        )
+    }
+
     func playerItem(assetID: String) async throws -> AVPlayerItem {
         #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("-ui-testing-signed-in") {
