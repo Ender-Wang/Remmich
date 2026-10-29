@@ -61,4 +61,10 @@ struct VideoPlaybackSessionTests {
         #expect(VideoPlaybackSession.normalizedFailure(for: decoder) == .unsupportedMedia)
         #expect(VideoPlaybackSession.normalizedFailure(for: offline) == .network(retryable: true))
     }
+
+    @Test func firstFrameReadinessDoesNotRegressDuringControllerRelayout() {
+        #expect(!ViewerVideoReadiness.resolved(current: false, reported: false))
+        #expect(ViewerVideoReadiness.resolved(current: false, reported: true))
+        #expect(ViewerVideoReadiness.resolved(current: true, reported: false))
+    }
 }

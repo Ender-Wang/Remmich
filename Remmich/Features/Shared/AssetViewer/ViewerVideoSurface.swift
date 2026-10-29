@@ -1,6 +1,12 @@
 import AVKit
 import SwiftUI
 
+nonisolated enum ViewerVideoReadiness {
+    static func resolved(current: Bool, reported: Bool) -> Bool {
+        current || reported
+    }
+}
+
 struct ViewerVideoSurface: View {
     let session: VideoPlaybackSession
     let readyForDisplayChanged: (Bool) -> Void

@@ -451,6 +451,10 @@ struct AssetViewerView: View {
             guard let videoPlaybackSession else { return }
             await videoPlaybackSession.prepare(using: media)
         }
+        .onChange(of: videoPlaybackSession?.generation) { _, _ in
+            videoFirstFrameReady = false
+            chromeVisible = true
+        }
         .task(id: AssetDetailLoadRequest(
             assetID: session.selectedAssetID,
             includesNeighbors: showsInfo
@@ -2209,10 +2213,14 @@ struct AssetViewerView: View {
     }
 
     private func videoReadyForDisplayChanged(_ isReady: Bool) {
-        guard isReady != videoFirstFrameReady else { return }
+        let resolved = ViewerVideoReadiness.resolved(
+            current: videoFirstFrameReady,
+            reported: isReady
+        )
+        guard resolved != videoFirstFrameReady else { return }
         withAnimation(chromeAnimation) {
-            videoFirstFrameReady = isReady
-            chromeVisible = showsInfo || !isReady
+            videoFirstFrameReady = resolved
+            chromeVisible = showsInfo || !resolved
         }
     }
 
