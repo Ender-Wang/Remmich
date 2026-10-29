@@ -451,8 +451,8 @@ struct AssetViewerView: View {
             updateViewerPrefetch()
             resetMemoryAutoRotation()
         }
-        .task(id: videoPlaybackSession?.assetID) {
-            guard let videoPlaybackSession else { return }
+        .task(id: openingIsActive ? nil : videoPlaybackSession?.assetID) {
+            guard !openingIsActive, let videoPlaybackSession else { return }
             await videoPlaybackSession.prepare(using: media)
         }
         .onChange(of: videoPlaybackSession?.generation) { _, _ in
@@ -602,7 +602,8 @@ struct AssetViewerView: View {
             .simultaneousGesture(memoryAssetInteractionGesture(mediaRect: selectedMediaRect))
 
             if let videoPlaybackSession,
-               videoPlaybackSession.assetID == session.selectedAssetID
+               videoPlaybackSession.assetID == session.selectedAssetID,
+               !openingIsActive
             {
                 ViewerVideoSurface(
                     session: videoPlaybackSession,
