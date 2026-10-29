@@ -446,14 +446,14 @@ final nonisolated class AuthenticatedVideoStreamSource: NSObject, @unchecked Sen
 }
 
 extension AuthenticatedVideoStreamSource: AVAssetResourceLoaderDelegate {
-    func resourceLoader(
+    nonisolated func resourceLoader(
         _: AVAssetResourceLoader,
         shouldWaitForLoadingOfRequestedResource loadingRequest: AVAssetResourceLoadingRequest
     ) -> Bool {
         start(loadingRequest)
     }
 
-    func resourceLoader(
+    nonisolated func resourceLoader(
         _: AVAssetResourceLoader,
         didCancel loadingRequest: AVAssetResourceLoadingRequest
     ) {
