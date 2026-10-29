@@ -1227,6 +1227,21 @@ struct RemmichTests {
         )
     }
 
+    @Test func viewerVideoPlaybackMetadataDescribesThePreparedFile() {
+        let metadata = AssetViewerVideoPlaybackMetadata(
+            fileSizeBytes: 42_800_000,
+            pixelSize: .init(width: 1920, height: 1080),
+            videoCodec: "H.264",
+            videoBitrate: 8_250_000,
+            audioCodec: "AAC",
+            dynamicRange: .hdr
+        )
+
+        #expect(metadata.fileDescription == "Playback · 42.8 MB")
+        #expect(metadata.displayText == "1,920 × 1,080 px · H.264 · 8.2 Mbps · AAC")
+        #expect(metadata.dynamicRange.rawValue == "HDR")
+    }
+
     @Test func viewerMediaGeometryStartsAtTheFullViewportAndReservesSpaceOnlyForInfo() {
         let viewportSize = CGSize(width: 402, height: 874)
         let safeAreaInsets = UIEdgeInsets(top: 62, left: 0, bottom: 34, right: 0)

@@ -90,11 +90,55 @@ nonisolated struct AssetViewerRenderedImageMetadata: Equatable, Sendable {
     }
 }
 
+nonisolated enum AssetViewerVideoDynamicRange: String, Equatable, Sendable {
+    case sdr = "SDR"
+    case hdr = "HDR"
+    case dolbyVision = "DV"
+}
+
+nonisolated struct AssetViewerVideoPlaybackMetadata: Equatable, Sendable {
+    let fileSizeBytes: Int?
+    let pixelSize: MediaPixelSize
+    let videoCodec: String?
+    let videoBitrate: Double?
+    let audioCodec: String?
+    let dynamicRange: AssetViewerVideoDynamicRange
+
+    var fileDescription: String {
+        guard let fileSizeBytes, fileSizeBytes > 0 else { return "Playback" }
+        return "Playback · \(ByteCountFormatter.string(fromByteCount: Int64(fileSizeBytes), countStyle: .file))"
+    }
+
+    var displayText: String {
+        var components = [
+            "\(pixelSize.width.formatted()) × \(pixelSize.height.formatted()) px",
+        ]
+        if let videoCodec, !videoCodec.isEmpty {
+            components.append(videoCodec)
+        }
+        if let videoBitrate, videoBitrate > 0 {
+            components.append(Self.bitrateDescription(videoBitrate))
+        }
+        if let audioCodec, !audioCodec.isEmpty {
+            components.append(audioCodec)
+        }
+        return components.joined(separator: " · ")
+    }
+
+    private static func bitrateDescription(_ bitsPerSecond: Double) -> String {
+        if bitsPerSecond >= 1_000_000 {
+            return String(format: "%.1f Mbps", bitsPerSecond / 1_000_000)
+        }
+        return String(format: "%.0f kbps", bitsPerSecond / 1000)
+    }
+}
+
 struct AssetViewerInfoView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let state: AssetViewerDetailState
     let renderedImageMetadata: AssetViewerRenderedImageMetadata?
+    let videoPlaybackMetadata: AssetViewerVideoPlaybackMetadata?
     let fullResolutionState: AssetViewerFullResolutionState?
     let anchorsContentToBottom: Bool
     let contentHeightChanged: (CGFloat) -> Void
@@ -180,6 +224,15 @@ struct AssetViewerInfoView: View {
                                 .lineLimit(1)
                                 .truncationMode(.middle)
                                 .layoutPriority(1)
+                            if let videoPlaybackMetadata {
+                                Text(videoPlaybackMetadata.fileDescription)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
+                                    .transition(.opacity)
+                                    .accessibilityIdentifier("asset-viewer-video-playback-file")
+                            }
                             if let fullResolutionState {
                                 fullResolutionButton(for: fullResolutionState)
                             }
@@ -261,7 +314,8 @@ struct AssetViewerInfoView: View {
     }
 
     private var renderedImageMetadataRow: some View {
-        let displayText = renderedImageMetadata?.displayText
+        let displayText = videoPlaybackMetadata?.displayText
+            ?? renderedImageMetadata?.displayText
             ?? AssetViewerRenderedImageMetadata.loadingDisplayText
         return ZStack(alignment: .leading) {
             Text(displayText)
@@ -273,6 +327,7 @@ struct AssetViewerInfoView: View {
                 .transition(.opacity)
                 .accessibilityLabel(
                     renderedImageMetadata == nil
+                        && videoPlaybackMetadata == nil
                         ? "Image details loading"
                         : displayText
                 )
@@ -343,6 +398,9 @@ struct AssetViewerInfoView: View {
     }
 
     private func typeBadge(for detail: AssetDetail) -> String {
+        if isVideo(detail) {
+            return videoPlaybackMetadata?.dynamicRange.rawValue ?? "VIDEO"
+        }
         if let mime = detail.originalMimeType,
            let subtype = mime.split(separator: "/").last
         {
@@ -360,7 +418,9 @@ struct AssetViewerInfoView: View {
         let lens = detail.lensModel?.trimmingCharacters(in: .whitespacesAndNewlines)
         var photoFacts: [String] = []
         if let width = detail.width, let height = detail.height, width > 0, height > 0 {
-            photoFacts.append(String(format: "%.1f MP", Double(width * height) / 1_000_000))
+            if !isVideo(detail) {
+                photoFacts.append(String(format: "%.1f MP", Double(width * height) / 1_000_000))
+            }
             photoFacts.append("\(width.formatted()) × \(height.formatted()) px")
         }
         if let bytes = detail.fileSizeBytes, bytes > 0 {
@@ -371,6 +431,14 @@ struct AssetViewerInfoView: View {
             lens: lens?.isEmpty == false ? lens : nil,
             photo: photoFacts.isEmpty ? nil : photoFacts.joined(separator: " · ")
         )
+    }
+
+    private func isVideo(_ detail: AssetDetail) -> Bool {
+        if detail.originalMimeType?.lowercased().hasPrefix("video/") == true {
+            return true
+        }
+        let pathExtension = (detail.originalFileName as NSString).pathExtension.lowercased()
+        return ["3gp", "avi", "m4v", "mkv", "mov", "mp4", "webm"].contains(pathExtension)
     }
 
     private func exposureFacts(for detail: AssetDetail) -> [(String, String)] {

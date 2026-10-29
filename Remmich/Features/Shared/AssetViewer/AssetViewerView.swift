@@ -37,6 +37,9 @@ struct AssetViewerView: View {
     @State private var cachedDetailMissAssetIDs: Set<String> = []
     @State private var refreshedDetailAssetIDs: Set<String> = []
     @State private var renderedImageMetadataByAssetID: [String: AssetViewerRenderedImageMetadata] = [:]
+    @State private var videoPlaybackSession: VideoPlaybackSession?
+    @State private var videoFirstFrameReady = false
+    @State private var resumesVideoAfterCancelledDismissal = false
     @State private var verticalDragRoute: AssetViewerVerticalDragRoute?
     @State private var fullResolutionRequestIDs: [String: Int] = [:]
     @State private var fullResolutionLoadErrors: [String: String] = [:]
@@ -135,6 +138,9 @@ struct AssetViewerView: View {
         ))
         _pagerPosition = State(initialValue: route.selectedAsset.id)
         _pagerWindowCenterID = State(initialValue: route.selectedAsset.id)
+        _videoPlaybackSession = State(initialValue: route.selectedAsset.mediaKind == .video
+            ? VideoPlaybackSession(assetID: route.selectedAsset.id)
+            : nil)
         _openingIsActive = State(initialValue: opensFromSource)
         _openingProgress = State(initialValue: opensFromSource ? 0 : 1)
     }
@@ -380,8 +386,8 @@ struct AssetViewerView: View {
                     .position(x: safeRect.midX, y: safeRect.midY)
                     .zIndex(1)
                     .opacity((isOpening
-                            ? openingProgress * (chromeVisible ? 1 : infoProgress)
-                            : (isolatesDismissalAsset ? 0 : (chromeVisible ? 1 : infoProgress)))
+                            ? openingProgress * (chromeVisible ? 1 : 0)
+                            : (isolatesDismissalAsset ? 0 : (chromeVisible ? 1 : 0)))
                         * (isMemoryViewer ? memoryContentOpacity * memoryWrapOpacity : 1))
                     .allowsHitTesting(!isolatesDismissalAsset && (chromeVisible || showsInfo))
                     .accessibilityHidden(isolatesDismissalAsset || (!chromeVisible && !showsInfo))
@@ -433,6 +439,10 @@ struct AssetViewerView: View {
             updateViewerPrefetch()
             resetMemoryAutoRotation()
         }
+        .task(id: videoPlaybackSession?.assetID) {
+            guard let videoPlaybackSession else { return }
+            await videoPlaybackSession.prepare(using: media)
+        }
         .task(id: AssetDetailLoadRequest(
             assetID: session.selectedAssetID,
             includesNeighbors: showsInfo
@@ -445,6 +455,9 @@ struct AssetViewerView: View {
             await preloadCachedAssetDetails(pagerWindowAssets.map(\.id))
         }
         .onChange(of: session.selectedAssetID) { _, newAssetID in
+            videoFirstFrameReady = false
+            chromeVisible = true
+            syncVideoPlaybackSession()
             nativeDismissalController.reset()
             nativeDismissalTransitionActive = false
             zoomedAssetID = nil
@@ -467,6 +480,7 @@ struct AssetViewerView: View {
             beginOpeningAnimation()
         }
         .onDisappear {
+            videoPlaybackSession?.close()
             openingTask?.cancel()
             dismissalLandingTask?.cancel()
             dismissalThumbnailRevealTask?.cancel()
@@ -492,8 +506,10 @@ struct AssetViewerView: View {
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
+                videoPlaybackSession?.resumeFromSuspension()
                 resumeMemoryAutoRotation()
             } else {
+                videoPlaybackSession?.suspend()
                 pauseMemoryAutoRotation()
             }
         }
@@ -514,49 +530,86 @@ struct AssetViewerView: View {
         selectedMediaRect: CGRect,
         showsMediaBackground: Bool
     ) -> some View {
-        ScrollView(.horizontal) {
-            LazyHStack(spacing: 0) {
-                ForEach(pagerWindowAssets) { asset in
-                    viewerPage(
-                        asset: asset,
-                        pageSize: pageSize,
-                        viewerRect: viewerRect,
-                        requestSize: requestSize,
-                        isLandscape: isLandscape,
-                        infoProgress: infoProgress,
-                        showsMediaBackground: showsMediaBackground
-                    )
-                    .frame(width: pageSize.width, height: pageSize.height)
-                    .clipped()
-                    .id(asset.id)
+        ZStack {
+            ScrollView(.horizontal) {
+                LazyHStack(spacing: 0) {
+                    ForEach(pagerWindowAssets) { asset in
+                        viewerPage(
+                            asset: asset,
+                            pageSize: pageSize,
+                            viewerRect: viewerRect,
+                            requestSize: requestSize,
+                            isLandscape: isLandscape,
+                            infoProgress: infoProgress,
+                            showsMediaBackground: showsMediaBackground
+                        )
+                        .frame(width: pageSize.width, height: pageSize.height)
+                        .clipped()
+                        .id(asset.id)
+                    }
+                }
+                .scrollTargetLayout()
+            }
+            .scrollIndicators(.hidden)
+            .scrollTargetBehavior(.paging)
+            .scrollPosition(id: $pagerPosition)
+            .scrollDisabled(
+                !session.allowsHorizontalPaging
+                    || zoomedAssetID == session.selectedAssetID
+                    || isDismissalInteractionActive || openingIsActive
+            )
+            .onChange(of: pagerPosition) { _, assetID in
+                schedulePagerSelectionSync(assetID)
+            }
+            .onScrollPhaseChange { _, phase in
+                pagerPhase = phase
+                if phase == .idle {
+                    schedulePagerSelectionSync(pagerPosition)
+                    resumeMemoryAutoRotation()
+                } else {
+                    pagerSelectionTask?.cancel()
+                    pauseMemoryAutoRotation()
                 }
             }
-            .scrollTargetLayout()
-        }
-        .scrollIndicators(.hidden)
-        .scrollTargetBehavior(.paging)
-        .scrollPosition(id: $pagerPosition)
-        .scrollDisabled(
-            zoomedAssetID == session.selectedAssetID
-                || isDismissalInteractionActive || openingIsActive
-        )
-        .onChange(of: pagerPosition) { _, assetID in
-            schedulePagerSelectionSync(assetID)
-        }
-        .onScrollPhaseChange { _, phase in
-            pagerPhase = phase
-            if phase == .idle {
-                schedulePagerSelectionSync(pagerPosition)
-                resumeMemoryAutoRotation()
-            } else {
-                pagerSelectionTask?.cancel()
-                pauseMemoryAutoRotation()
+            .simultaneousGesture(memoryAssetInteractionGesture(mediaRect: selectedMediaRect))
+
+            if let videoPlaybackSession,
+               videoPlaybackSession.assetID == session.selectedAssetID
+            {
+                ViewerVideoSurface(
+                    session: videoPlaybackSession,
+                    readyForDisplayChanged: videoReadyForDisplayChanged
+                )
+                .frame(
+                    width: selectedMediaRect.width,
+                    height: selectedMediaRect.height
+                )
+                .position(
+                    x: selectedMediaRect.midX,
+                    y: selectedMediaRect.midY
+                )
+                .opacity(
+                    videoFirstFrameReady && showsMediaBackground
+                        ? 1 : 0
+                )
+                .animation(
+                    reduceMotion ? nil : .easeInOut(duration: 0.18),
+                    value: videoFirstFrameReady && showsMediaBackground
+                )
+                .allowsHitTesting(
+                    videoFirstFrameReady && showsMediaBackground
+                )
+                .accessibilityHidden(!videoFirstFrameReady || !showsMediaBackground)
+
+                videoPreparationOverlay(
+                    session: videoPlaybackSession,
+                    mediaRect: selectedMediaRect,
+                    showsMediaBackground: showsMediaBackground
+                )
             }
         }
-        .simultaneousGesture(memoryAssetInteractionGesture(mediaRect: selectedMediaRect))
     }
 
-    @ViewBuilder
     private func viewerPage(
         asset: TimelineAssetSummary,
         pageSize: CGSize,
@@ -569,30 +622,45 @@ struct AssetViewerView: View {
         let animatesFitChanges = AssetViewerMediaGeometry.animatesFitChanges(
             infoDragTranslation: infoDragTranslation
         )
-        if isLandscape {
-            let targetInfoWidth = viewerRect.width / 2
-            let infoWidth = targetInfoWidth * infoProgress
-            let mediaRect = CGRect(
+        let targetInfoWidth = viewerRect.width / 2
+        let infoWidth = targetInfoWidth * infoProgress
+        let maxInfoHeight = max(0, viewerRect.height - 220 - infoGap)
+        let selectedInfoContentHeight = infoContentHeight(for: session.selectedAssetID)
+        let targetInfoHeight = min(maxInfoHeight, selectedInfoContentHeight)
+        let infoHeight = targetInfoHeight * infoProgress
+        let gap = infoGap * infoProgress
+        let portraitMediaHeight = max(220, viewerRect.height - infoHeight - gap)
+        let mediaRect = isLandscape
+            ? CGRect(
                 x: viewerRect.minX,
                 y: viewerRect.minY,
                 width: viewerRect.width - infoWidth,
                 height: viewerRect.height
             )
-            ZStack {
-                mediaPage(
-                    asset: asset,
-                    requestSize: requestSize,
-                    mediaRect: mediaRect,
-                    animatesFitChanges: animatesFitChanges,
-                    showsBackground: showsMediaBackground,
-                    usesInsetStage: isMemoryViewer
-                )
-                .frame(width: pageSize.width, height: pageSize.height)
+            : CGRect(
+                x: viewerRect.minX,
+                y: viewerRect.minY,
+                width: viewerRect.width,
+                height: portraitMediaHeight
+            )
 
+        return ZStack {
+            mediaPage(
+                asset: asset,
+                requestSize: requestSize,
+                mediaRect: mediaRect,
+                animatesFitChanges: animatesFitChanges,
+                showsBackground: showsMediaBackground,
+                usesInsetStage: isMemoryViewer
+            )
+            .frame(width: pageSize.width, height: pageSize.height)
+
+            if isLandscape {
                 ZStack(alignment: .leading) {
                     AssetViewerInfoView(
                         state: detailState(for: asset.id),
                         renderedImageMetadata: renderedImageMetadataForInfo(for: asset),
+                        videoPlaybackMetadata: videoPlaybackMetadata(for: asset),
                         fullResolutionState: fullResolutionState(for: asset),
                         anchorsContentToBottom: true,
                         contentHeightChanged: { updateInfoContentHeight($0, for: asset.id) },
@@ -612,38 +680,12 @@ struct AssetViewerView: View {
                 .accessibilityHidden(
                     infoProgress < 0.5 || asset.id != session.selectedAssetID
                 )
-            }
-            .frame(width: pageSize.width, height: pageSize.height)
-            .animation(infoAnimation, value: showsInfo)
-            .accessibilityIdentifier(infoProgress > 0.5 ? "asset-viewer-landscape-split" : "asset-viewer-landscape")
-        } else {
-            let maxInfoHeight = max(0, viewerRect.height - 220 - infoGap)
-            let selectedInfoContentHeight = infoContentHeight(for: session.selectedAssetID)
-            let targetInfoHeight = min(maxInfoHeight, selectedInfoContentHeight)
-            let infoHeight = targetInfoHeight * infoProgress
-            let gap = infoGap * infoProgress
-            let mediaHeight = max(220, viewerRect.height - infoHeight - gap)
-            let mediaRect = CGRect(
-                x: viewerRect.minX,
-                y: viewerRect.minY,
-                width: viewerRect.width,
-                height: mediaHeight
-            )
-            ZStack {
-                mediaPage(
-                    asset: asset,
-                    requestSize: requestSize,
-                    mediaRect: mediaRect,
-                    animatesFitChanges: animatesFitChanges,
-                    showsBackground: showsMediaBackground,
-                    usesInsetStage: isMemoryViewer
-                )
-                .frame(width: pageSize.width, height: pageSize.height)
-
+            } else {
                 ZStack(alignment: .top) {
                     AssetViewerInfoView(
                         state: detailState(for: asset.id),
                         renderedImageMetadata: renderedImageMetadataForInfo(for: asset),
+                        videoPlaybackMetadata: videoPlaybackMetadata(for: asset),
                         fullResolutionState: fullResolutionState(for: asset),
                         anchorsContentToBottom: false,
                         contentHeightChanged: { updateInfoContentHeight($0, for: asset.id) },
@@ -667,10 +709,17 @@ struct AssetViewerView: View {
                     infoProgress < 0.5 || asset.id != session.selectedAssetID
                 )
             }
-            .frame(width: pageSize.width, height: pageSize.height)
-            .animation(infoAnimation, value: showsInfo)
-            .animation(infoAnimation, value: targetInfoHeight)
         }
+        .frame(width: pageSize.width, height: pageSize.height)
+        .animation(infoAnimation, value: showsInfo)
+        .animation(infoAnimation, value: targetInfoHeight)
+        .accessibilityIdentifier(
+            isLandscape
+                ? (infoProgress > 0.5
+                    ? "asset-viewer-landscape-split"
+                    : "asset-viewer-landscape")
+                : "asset-viewer-portrait"
+        )
     }
 
     private func mediaPage(
@@ -686,7 +735,6 @@ struct AssetViewerView: View {
                 asset: asset,
                 media: media,
                 isSelected: asset.id == session.selectedAssetID,
-                dismissesInfo: showsInfo,
                 mediaRect: mediaRect,
                 pageSize: requestSize,
                 animatesFitChanges: animatesFitChanges,
@@ -710,8 +758,6 @@ struct AssetViewerView: View {
                         fullResolutionLoadErrors.removeValue(forKey: asset.id)
                     }
                 },
-                resumePosition: { session.playbackPosition(for: asset.id) },
-                savePosition: { session.setPlaybackPosition($0, for: asset.id) },
                 zoomChanged: { isZoomed in
                     guard asset.id == session.selectedAssetID else { return }
                     zoomedAssetID = isZoomed ? asset.id : nil
@@ -915,7 +961,8 @@ struct AssetViewerView: View {
         viewportOrigin: CGPoint,
         mediaRect: CGRect
     ) -> some View {
-        VStack(spacing: 0) {
+        let showsFilmstrip = !session.isVideoPlayback
+        return VStack(spacing: 0) {
             GeometryReader { geometry in
                 ZStack {
                     HStack {
@@ -964,17 +1011,19 @@ struct AssetViewerView: View {
             Spacer()
 
             VStack(spacing: 16) {
-                AssetViewerFilmstrip(
-                    assets: session.assets,
-                    selectedAssetID: session.selectedAssetID,
-                    media: media,
-                    select: { assetID in
-                        pagerPosition = assetID
-                    }
-                )
-                .opacity(1 - infoProgress)
-                .allowsHitTesting(infoProgress < 0.5)
-                .accessibilityHidden(infoProgress >= 0.5)
+                if showsFilmstrip {
+                    AssetViewerFilmstrip(
+                        assets: session.assets,
+                        selectedAssetID: session.selectedAssetID,
+                        media: media,
+                        select: { assetID in
+                            selectPagerAsset(assetID)
+                        }
+                    )
+                    .opacity(1 - infoProgress)
+                    .allowsHitTesting(infoProgress < 0.5)
+                    .accessibilityHidden(infoProgress >= 0.5)
+                }
 
                 bottomActions
                     .padding(.horizontal, 16)
@@ -1095,6 +1144,7 @@ struct AssetViewerView: View {
         pauseMemoryAutoRotation()
         withAnimation(reduceMotion ? nil : .smooth(duration: 0.36)) {
             pagerPosition = session.assets[targetIndex].id
+            selectPagerAsset(session.assets[targetIndex].id, updatesPosition: false)
         }
     }
 
@@ -1200,6 +1250,7 @@ struct AssetViewerView: View {
         if session.assets.indices.contains(nextIndex) {
             withAnimation(.smooth(duration: 0.36)) {
                 pagerPosition = session.assets[nextIndex].id
+                selectPagerAsset(session.assets[nextIndex].id, updatesPosition: false)
             }
         } else {
             beginMemoryWrap()
@@ -1407,6 +1458,7 @@ struct AssetViewerView: View {
                         || (isMemoryViewer && value.translation.height < 0))
                 if drivesDismissal {
                     guard !reduceMotion else { return }
+                    pauseVideoForDismissalIfNeeded()
                     if nativeDismissalController.isActive {
                         updateNativeDismissal(
                             translation: value.translation,
@@ -1702,6 +1754,7 @@ struct AssetViewerView: View {
             livePhotoMotionByteCounts.removeAll()
         }
         updateViewerPrefetch()
+        syncVideoPlaybackSession()
         resetMemoryAutoRotation()
         guard !originalAssets.isEmpty else { return }
         Task { @MainActor in
@@ -1881,6 +1934,7 @@ struct AssetViewerView: View {
                           !isDismissing
                     else { return }
                     nativeDismissalController.reset()
+                    resumeVideoAfterCancelledDismissalIfNeeded()
                     resumeMemoryAutoRotation()
                 }
             }
@@ -1892,6 +1946,7 @@ struct AssetViewerView: View {
             dismissalBackdropOpacity = 1
         }
         dismissalViewerRect = nil
+        resumeVideoAfterCancelledDismissalIfNeeded()
         returningLivePhotoBadgeChanged(nil)
         dismissalThumbnailRevealTask?.cancel()
         dismissalThumbnailRevealTask = Task { @MainActor in
@@ -1984,6 +2039,18 @@ struct AssetViewerView: View {
         }
     }
 
+    private func selectPagerAsset(
+        _ assetID: String,
+        updatesPosition: Bool = true
+    ) {
+        if updatesPosition {
+            pagerPosition = assetID
+        }
+        guard session.selectImmediately(assetID) else { return }
+        recenterPagerWindowIfNeeded(on: assetID)
+        scheduleNeighborLoading(for: assetID)
+    }
+
     private var pagerWindowAssets: ArraySlice<TimelineAssetSummary> {
         let centerIndex = session.assets.firstIndex(where: { $0.id == pagerWindowCenterID })
             ?? session.selectedIndex
@@ -2055,6 +2122,63 @@ struct AssetViewerView: View {
         return metadata.includingMotion(byteCount: livePhotoMotionByteCounts[asset.id])
     }
 
+    private func videoPlaybackMetadata(
+        for asset: TimelineAssetSummary
+    ) -> AssetViewerVideoPlaybackMetadata? {
+        guard asset.id == videoPlaybackSession?.assetID,
+              let metadata = videoPlaybackSession?.metadata
+        else { return nil }
+        let dynamicRange: AssetViewerVideoDynamicRange = switch metadata.dynamicRange {
+        case .sdr: .sdr
+        case .hdr: .hdr
+        case .dolbyVision: .dolbyVision
+        }
+        return AssetViewerVideoPlaybackMetadata(
+            fileSizeBytes: metadata.fileSizeBytes,
+            pixelSize: metadata.pixelSize,
+            videoCodec: metadata.videoCodec,
+            videoBitrate: metadata.videoBitrate,
+            audioCodec: metadata.audioCodec,
+            dynamicRange: dynamicRange
+        )
+    }
+
+    private func syncVideoPlaybackSession() {
+        guard let selectedAsset = session.selectedAsset,
+              selectedAsset.mediaKind == .video
+        else {
+            videoPlaybackSession?.close()
+            videoPlaybackSession = nil
+            videoFirstFrameReady = false
+            resumesVideoAfterCancelledDismissal = false
+            return
+        }
+        guard videoPlaybackSession?.assetID != selectedAsset.id else { return }
+        videoPlaybackSession?.close()
+        videoFirstFrameReady = false
+        resumesVideoAfterCancelledDismissal = false
+        videoPlaybackSession = VideoPlaybackSession(assetID: selectedAsset.id)
+    }
+
+    private func pauseVideoForDismissalIfNeeded() {
+        guard !resumesVideoAfterCancelledDismissal,
+              let videoPlaybackSession,
+              videoPlaybackSession.phase == .playing
+        else { return }
+        resumesVideoAfterCancelledDismissal = true
+        videoPlaybackSession.pause()
+    }
+
+    private func resumeVideoAfterCancelledDismissalIfNeeded() {
+        guard resumesVideoAfterCancelledDismissal,
+              let videoPlaybackSession
+        else { return }
+        resumesVideoAfterCancelledDismissal = false
+        Task { @MainActor in
+            await videoPlaybackSession.play()
+        }
+    }
+
     private func requestFullResolution(for assetID: String) {
         fullResolutionLoadErrors.removeValue(forKey: assetID)
         fullResolutionRequestIDs[assetID, default: 0] += 1
@@ -2069,20 +2193,65 @@ struct AssetViewerView: View {
         }
     }
 
+    private func videoReadyForDisplayChanged(_ isReady: Bool) {
+        guard isReady != videoFirstFrameReady else { return }
+        withAnimation(chromeAnimation) {
+            videoFirstFrameReady = isReady
+            chromeVisible = showsInfo || !isReady
+        }
+    }
+
+    @ViewBuilder
+    private func videoPreparationOverlay(
+        session: VideoPlaybackSession,
+        mediaRect: CGRect,
+        showsMediaBackground: Bool
+    ) -> some View {
+        if showsMediaBackground, !videoFirstFrameReady {
+            switch session.phase {
+            case .preparing:
+                ProgressView("Preparing Video")
+                    .tint(.white)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 18)
+                    .frame(height: 48)
+                    .background(.regularMaterial, in: Capsule())
+                    .position(x: mediaRect.midX, y: mediaRect.midY)
+            case .failed:
+                VStack(spacing: 10) {
+                    Text("This video is currently unavailable.")
+                        .font(.footnote)
+                        .multilineTextAlignment(.center)
+                    Button("Retry") {
+                        Task { @MainActor in
+                            await session.retry(using: media)
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .accessibilityIdentifier("asset-viewer-video-retry")
+                }
+                .padding(18)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+                .frame(maxWidth: min(320, mediaRect.width - 48))
+                .position(x: mediaRect.midX, y: mediaRect.midY)
+            case .playing, .paused, .seeking, .suspended:
+                EmptyView()
+            }
+        }
+    }
+
     private func setInfoVisible(_ visible: Bool) {
         guard visible != showsInfo else { return }
         withAnimation(infoAnimation) {
-            chromeVisible = true
+            chromeVisible = visible || !videoFirstFrameReady
             infoDragTranslation = 0
             showsInfo = visible
         }
     }
 
     private func settleInfoGesture(visible: Bool) {
-        if visible {
-            chromeVisible = true
-        }
         withAnimation(infoAnimation) {
+            chromeVisible = visible || !videoFirstFrameReady
             infoDragTranslation = 0
             showsInfo = visible
         }
@@ -3005,7 +3174,6 @@ private struct AssetViewerFitPage: View {
     let asset: TimelineAssetSummary
     let media: MediaLibraryController
     let isSelected: Bool
-    let dismissesInfo: Bool
     let mediaRect: CGRect
     let pageSize: CGSize
     let animatesFitChanges: Bool
@@ -3015,8 +3183,6 @@ private struct AssetViewerFitPage: View {
     let fullResolutionRequestID: Int?
     let renderedImageMetadataChanged: (AssetViewerRenderedImageMetadata) -> Void
     let fullResolutionLoadFailed: (String?) -> Void
-    let resumePosition: () -> Double
-    let savePosition: (Double) -> Void
     let zoomChanged: (Bool) -> Void
     let livePhotoPressChanged: (Bool) -> Void
     let toggleChrome: () -> Void
@@ -3028,14 +3194,16 @@ private struct AssetViewerFitPage: View {
                     .opacity(showsBackground ? 1 : 0)
             }
             if asset.mediaKind == .video {
-                NativeVideoPlayerView(
-                    asset: asset,
+                ImmichThumbnail(
+                    descriptor: .init(
+                        assetID: asset.id,
+                        updatedAt: asset.thumbnailRevision,
+                        derivative: .preview,
+                        targetPixels: targetPixels
+                    ),
                     media: media,
-                    targetPixels: targetPixels,
-                    isSelected: isSelected,
-                    showsPlaybackChrome: showsBackground,
-                    resumePosition: resumePosition,
-                    savePosition: savePosition
+                    contentMode: .fit,
+                    showsBackground: false
                 )
                 .frame(width: mediaRect.width, height: mediaRect.height)
                 .position(x: mediaRect.midX, y: mediaRect.midY)
@@ -3057,14 +3225,6 @@ private struct AssetViewerFitPage: View {
                     toggleChrome: toggleChrome
                 )
                 .frame(width: pageSize.width, height: pageSize.height)
-            }
-            if dismissesInfo, asset.mediaKind == .video {
-                Color.clear
-                    .contentShape(.rect)
-                    .frame(width: mediaRect.width, height: mediaRect.height)
-                    .position(x: mediaRect.midX, y: mediaRect.midY)
-                    .onTapGesture(perform: toggleChrome)
-                    .accessibilityHidden(true)
             }
         }
         .frame(width: pageSize.width, height: pageSize.height)
