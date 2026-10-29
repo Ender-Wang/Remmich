@@ -44,6 +44,77 @@ nonisolated struct AuthenticatedVideoResponsePlan: Equatable {
     let expectedByteCount: Int64?
 }
 
+/// The time window is authoritative; average byte rate only sizes individual reads.
+nonisolated struct VideoStreamBufferPolicy {
+    static let targetSeconds = 10.0
+    static let resumeSeconds = 5.0
+    var durationSeconds = 0.0
+    private(set) var secondsAhead = 0.0
+    private(set) var isThrottled = false
+
+    mutating func update(duration: Double, ahead: Double) {
+        durationSeconds = duration.isFinite && duration > 0 ? duration : 0
+        secondsAhead = ahead.isFinite ? max(0, ahead) : 0
+        if secondsAhead >= Self.targetSeconds {
+            isThrottled = true
+        } else if secondsAhead <= Self.resumeSeconds {
+            isThrottled = false
+        }
+    }
+
+    func chunkBytes(contentLength: Int64?) -> Int64 {
+        guard let contentLength, contentLength > 0, durationSeconds > 0 else { return 65536 }
+        let seconds = min(2, max(0.25, Self.targetSeconds - secondsAhead))
+        let estimate = Double(contentLength) / durationSeconds * seconds
+        return Int64(min(2_097_152, max(1, estimate.rounded(.up))))
+    }
+}
+
+/// Tracks the AVFoundation request independently from its HTTP subrequests.
+nonisolated struct VideoStreamRequestProgress {
+    let requestedRange: Range<Int64>
+    private(set) var offset: Int64
+    private var resourceEnd: Int64?
+    private(set) var chunkRange: Range<Int64> = 0 ..< 0
+    private var chunkExpectedBytes: Int64 = 0
+    private var chunkDeliveredBytes: Int64 = 0
+
+    init(requestedRange: Range<Int64>) {
+        self.requestedRange = requestedRange
+        offset = requestedRange.lowerBound
+    }
+
+    mutating func beginChunk(maxBytes: Int64) -> Range<Int64>? {
+        let end = min(requestedRange.upperBound, resourceEnd ?? Int64.max)
+        guard offset < end, maxBytes > 0 else { return nil }
+        let length = min(maxBytes, end - offset)
+        chunkRange = offset ..< (offset + length)
+        chunkExpectedBytes = length
+        chunkDeliveredBytes = 0
+        return chunkRange
+    }
+
+    mutating func configure(_ plan: AuthenticatedVideoResponsePlan) {
+        resourceEnd = plan.contentLength
+        chunkExpectedBytes = plan.expectedByteCount ?? 0
+    }
+
+    var chunkComplete: Bool {
+        chunkDeliveredBytes >= chunkExpectedBytes
+    }
+
+    var requestComplete: Bool {
+        offset >= min(requestedRange.upperBound, resourceEnd ?? Int64.max)
+    }
+
+    mutating func consume(byteCount: Int64) -> Int64 {
+        let count = min(max(0, byteCount), max(0, chunkExpectedBytes - chunkDeliveredBytes))
+        offset += count
+        chunkDeliveredBytes += count
+        return count
+    }
+}
+
 final nonisolated class AuthenticatedVideoStreamSource: NSObject, @unchecked Sendable {
     private static let logger = Logger(
         subsystem: "io.github.ender-wang.Remmich",
@@ -61,6 +132,11 @@ final nonisolated class AuthenticatedVideoStreamSource: NSObject, @unchecked Sen
     private var session: URLSession!
     private let lock = NSLock()
     private var contextsByTaskID: [Int: RequestContext] = [:]
+    private var loadingContexts: [ObjectIdentifier: RequestContext] = [:]
+    private var nextRequestSequence = 0
+    private var contentLength: Int64?
+    private var bufferPolicy = VideoStreamBufferPolicy()
+    private var pumpScheduled = false
     private var taskIDByLoadingRequest: [ObjectIdentifier: Int] = [:]
     private var isInvalidated = false
     private var startedRequestCount = 0
@@ -68,7 +144,8 @@ final nonisolated class AuthenticatedVideoStreamSource: NSObject, @unchecked Sen
 
     init(
         configuration: AuthenticatedVideoStreamConfiguration,
-        contentLengthChanged: @escaping @Sendable (Int64) -> Void = { _ in }
+        contentLengthChanged: @escaping @Sendable (Int64) -> Void = { _ in },
+        sessionConfiguration: URLSessionConfiguration = .ephemeral
     ) throws {
         guard var components = URLComponents(
             url: configuration.url,
@@ -94,7 +171,6 @@ final nonisolated class AuthenticatedVideoStreamSource: NSObject, @unchecked Sen
         asset = AVURLAsset(url: assetURL)
         super.init()
 
-        let sessionConfiguration = URLSessionConfiguration.ephemeral
         sessionConfiguration.requestCachePolicy = .reloadIgnoringLocalCacheData
         sessionConfiguration.urlCache = nil
         sessionConfiguration.waitsForConnectivity = true
@@ -114,7 +190,8 @@ final nonisolated class AuthenticatedVideoStreamSource: NSObject, @unchecked Sen
         )? = lock.withLock {
             guard !isInvalidated else { return nil }
             isInvalidated = true
-            let values = Array(contextsByTaskID.values)
+            let values = Array(loadingContexts.values)
+            loadingContexts.removeAll()
             contextsByTaskID.removeAll()
             taskIDByLoadingRequest.removeAll()
             return (values, startedRequestCount, deliveredByteCount)
@@ -136,16 +213,13 @@ final nonisolated class AuthenticatedVideoStreamSource: NSObject, @unchecked Sen
 
     static func request(
         configuration: AuthenticatedVideoStreamConfiguration,
-        range: Range<Int64>?,
-        requestsToEnd: Bool = false
+        range: Range<Int64>?
     ) -> URLRequest {
         var request = URLRequest(url: configuration.url)
         request.setValue(configuration.authorization, forHTTPHeaderField: "Authorization")
         request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
         if let range, !range.isEmpty {
-            let value = requestsToEnd
-                ? "bytes=\(range.lowerBound)-"
-                : "bytes=\(range.lowerBound)-\(range.upperBound - 1)"
+            let value = "bytes=\(range.lowerBound)-\(range.upperBound - 1)"
             request.setValue(value, forHTTPHeaderField: "Range")
         }
         return request
@@ -257,15 +331,14 @@ final nonisolated class AuthenticatedVideoStreamSource: NSObject, @unchecked Sen
             let upperBound = offset.addingReportingOverflow(requestedLength)
             context = RequestContext(
                 loadingRequest: loadingRequest,
-                requestedRange: offset ..< (upperBound.overflow ? Int64.max : upperBound.partialValue),
-                requestsToEnd: dataRequest.requestsAllDataToEndOfResource,
+                requestedRange: offset ..< (dataRequest.requestsAllDataToEndOfResource || upperBound.overflow
+                    ? Int64.max : upperBound.partialValue),
                 sendsData: true
             )
         } else if loadingRequest.contentInformationRequest != nil {
             context = RequestContext(
                 loadingRequest: loadingRequest,
                 requestedRange: 0 ..< 2,
-                requestsToEnd: false,
                 sendsData: false
             )
         } else {
@@ -273,46 +346,87 @@ final nonisolated class AuthenticatedVideoStreamSource: NSObject, @unchecked Sen
             return false
         }
 
-        let accepted: (task: URLSessionDataTask, logsInitialRange: Bool)? = lock.withLock {
-            guard !isInvalidated else { return nil }
-            let task = session.dataTask(with: Self.request(
-                configuration: configuration,
-                range: context.requestedRange,
-                requestsToEnd: context.requestsToEnd
-            ))
-            let logsInitialRange = startedRequestCount == 0
-            startedRequestCount += 1
-            contextsByTaskID[task.taskIdentifier] = context
-            taskIDByLoadingRequest[ObjectIdentifier(loadingRequest)] = task.taskIdentifier
-            return (task, logsInitialRange)
+        let accepted = lock.withLock {
+            guard !isInvalidated else { return false }
+            nextRequestSequence += 1
+            context.sequence = nextRequestSequence
+            loadingContexts[ObjectIdentifier(loadingRequest)] = context
+            return true
         }
-        guard let accepted else {
-            loadingRequest.finishLoading(with: AuthenticatedVideoStreamError.cancelled)
+        guard accepted else {
+            context.finish(with: AuthenticatedVideoStreamError.cancelled)
             return false
         }
-
-        if accepted.logsInitialRange {
-            let assetPrefix = assetID.prefix(8)
-            Self.logger.debug(
-                "Video stream opened asset=\(assetPrefix, privacy: .private) initialOffset=\(context.requestedRange.lowerBound) initialLength=\(context.requestedByteCount)"
-            )
-        }
-        accepted.task.resume()
+        schedulePump()
         return true
     }
 
+    /// Called for both loaded-range changes and advancing playhead time, including seeks.
+    func updateBuffering(duration: Double, secondsAhead: Double) {
+        lock.withLock { bufferPolicy.update(duration: duration, ahead: secondsAhead) }
+        schedulePump()
+    }
+
+    private func schedulePump() {
+        let shouldSchedule = lock.withLock {
+            guard !isInvalidated, !pumpScheduled else { return false }
+            pumpScheduled = true
+            return true
+        }
+        guard shouldSchedule else { return }
+        // Let AVFoundation publish playable ranges before admitting another bounded read.
+        delegateQueue.asyncAfter(deadline: .now() + .milliseconds(20)) { [weak self] in self?.pump() }
+    }
+
+    private func pump() {
+        let task: URLSessionDataTask? = lock.withLock {
+            pumpScheduled = false
+            guard !isInvalidated, contextsByTaskID.isEmpty else { return nil }
+            func isMetadata(_ context: RequestContext) -> Bool {
+                context.requestedByteCount <= 262_144 || !context.sendsData
+                    || contentLength.map { context.nextOffset >= max(0, $0 - 262_144) } == true
+            }
+            let candidates = loadingContexts.values.sorted {
+                let first = isMetadata($0), second = isMetadata($1)
+                return first != second ? first : $0.sequence < $1.sequence
+            }
+            for context in candidates {
+                // Small finite probes and EOF metadata remain serviceable while media is paced.
+                let metadata = isMetadata(context)
+                guard metadata || !bufferPolicy.isThrottled else { continue }
+                let count = metadata ? Int64(65536) : bufferPolicy.chunkBytes(contentLength: contentLength)
+                guard let range = context.beginChunk(maxBytes: count) else { continue }
+                let task = session.dataTask(with: Self.request(configuration: configuration, range: range))
+                contextsByTaskID[task.taskIdentifier] = context
+                taskIDByLoadingRequest[ObjectIdentifier(context.loadingRequest)] = task.taskIdentifier
+                startedRequestCount += 1
+                return task
+            }
+            return nil
+        }
+        task?.resume()
+    }
+
     private func cancel(_ loadingRequest: AVAssetResourceLoadingRequest) {
-        let taskID = lock.withLock {
-            taskIDByLoadingRequest.removeValue(forKey: ObjectIdentifier(loadingRequest))
+        let result = lock.withLock {
+            let key = ObjectIdentifier(loadingRequest)
+            let context = loadingContexts.removeValue(forKey: key)
+            let taskID = taskIDByLoadingRequest.removeValue(forKey: key)
+            if let taskID {
+                contextsByTaskID.removeValue(forKey: taskID)
+            }
+            return (context, taskID)
         }
-        guard let taskID else { return }
-        let context = lock.withLock {
-            contextsByTaskID.removeValue(forKey: taskID)
+        result.0?.abandon()
+        if let taskID = result.1 {
+            session.getAllTasks { tasks in tasks.first { $0.taskIdentifier == taskID }?.cancel() }
         }
-        context?.abandon()
-        session.getAllTasks { tasks in
-            tasks.first { $0.taskIdentifier == taskID }?.cancel()
-        }
+        schedulePump()
+    }
+
+    private func finish(_ context: RequestContext, error: (any Error)? = nil) {
+        lock.withLock { _ = loadingContexts.removeValue(forKey: ObjectIdentifier(context.loadingRequest)) }
+        context.finish(with: error)
     }
 
     private func context(for taskID: Int) -> RequestContext? {
@@ -352,75 +466,68 @@ final nonisolated class AuthenticatedVideoStreamSource: NSObject, @unchecked Sen
     private final class RequestContext: @unchecked Sendable {
         let loadingRequest: AVAssetResourceLoadingRequest
         let requestedRange: Range<Int64>
-        let requestsToEnd: Bool
         let sendsData: Bool
+        var sequence = 0 // Assigned once under the source lock before publication.
         private let lock = NSLock()
-        private var expectedByteCount: Int64?
-        private var deliveredByteCount: Int64 = 0
+        private var progress: VideoStreamRequestProgress
         private var isFinished = false
 
         var requestedByteCount: Int64 {
             requestedRange.upperBound - requestedRange.lowerBound
         }
 
-        init(
-            loadingRequest: AVAssetResourceLoadingRequest,
-            requestedRange: Range<Int64>,
-            requestsToEnd: Bool,
-            sendsData: Bool
-        ) {
-            self.loadingRequest = loadingRequest
-            self.requestedRange = requestedRange
-            self.requestsToEnd = requestsToEnd
-            self.sendsData = sendsData
+        var nextOffset: Int64 {
+            lock.withLock { progress.offset }
         }
 
-        func configure(
-            expectedByteCount: Int64?,
-            applyResponse: (AVAssetResourceLoadingRequest) -> Void
-        ) -> Bool {
+        var activeChunk: Range<Int64> {
+            lock.withLock { progress.chunkRange }
+        }
+
+        init(loadingRequest: AVAssetResourceLoadingRequest, requestedRange: Range<Int64>, sendsData: Bool) {
+            self.loadingRequest = loadingRequest
+            self.requestedRange = requestedRange
+            self.sendsData = sendsData
+            progress = VideoStreamRequestProgress(requestedRange: requestedRange)
+        }
+
+        func beginChunk(maxBytes: Int64) -> Range<Int64>? {
             lock.withLock {
-                guard !isFinished else { return false }
-                self.expectedByteCount = expectedByteCount
+                guard !isFinished else { return nil }
+                return progress.beginChunk(maxBytes: maxBytes)
+            }
+        }
+
+        func configure(plan: AuthenticatedVideoResponsePlan, applyResponse: (AVAssetResourceLoadingRequest) -> Void) -> Bool {
+            lock.withLock {
+                guard !isFinished, plan.expectedByteCount != nil else { return false }
+                progress.configure(plan)
                 applyResponse(loadingRequest)
                 return true
             }
         }
 
-        func respond(with data: Data) -> (deliveredByteCount: Int64, isComplete: Bool) {
-            let result: (deliveredByteCount: Int64, isComplete: Bool) = lock.withLock {
-                guard !isFinished else { return (0, false) }
-                guard let expectedByteCount else {
-                    deliveredByteCount += Int64(data.count)
-                    loadingRequest.dataRequest?.respond(with: data)
-                    return (Int64(data.count), false)
+        func respond(with data: Data) -> (deliveredByteCount: Int64, isChunkComplete: Bool, isComplete: Bool) {
+            let result = lock.withLock { () -> (Int64, Bool, Bool) in
+                guard !isFinished else { return (0, false, false) }
+                let count = progress.consume(byteCount: Int64(data.count))
+                if count > 0 {
+                    loadingRequest.dataRequest?.respond(with: count == Int64(data.count) ? data : Data(data.prefix(Int(count))))
                 }
-                let remaining = max(0, expectedByteCount - deliveredByteCount)
-                let acceptedCount = min(Int64(data.count), remaining)
-                let payload = acceptedCount == Int64(data.count)
-                    ? data
-                    : Data(data.prefix(Int(acceptedCount)))
-                deliveredByteCount += acceptedCount
-                if !payload.isEmpty {
-                    loadingRequest.dataRequest?.respond(with: payload)
-                }
-                let isComplete = deliveredByteCount >= expectedByteCount
-                if isComplete {
+                let complete = progress.requestComplete
+                if complete {
                     isFinished = true
                 }
-                return (acceptedCount, isComplete)
+                return (count, progress.chunkComplete, complete)
             }
-            if result.isComplete {
+            if result.2 {
                 loadingRequest.finishLoading()
             }
             return result
         }
 
         func receivedExpectedBytes() -> Bool {
-            lock.withLock {
-                guard let expectedByteCount else { return true }
-                return deliveredByteCount >= expectedByteCount
-            }
+            lock.withLock { progress.chunkComplete }
         }
 
         func finish(with error: (any Error)? = nil) {
@@ -438,9 +545,7 @@ final nonisolated class AuthenticatedVideoStreamSource: NSObject, @unchecked Sen
         }
 
         func abandon() {
-            lock.withLock {
-                isFinished = true
-            }
+            lock.withLock { isFinished = true }
         }
     }
 }
@@ -479,19 +584,25 @@ extension AuthenticatedVideoStreamSource: URLSessionDataDelegate, URLSessionTask
         do {
             plan = try Self.responsePlan(
                 response: response,
-                requestedOffset: context.requestedRange.lowerBound,
-                requestedLength: context.requestedByteCount,
-                requestsToEnd: context.requestsToEnd
+                requestedOffset: context.activeChunk.lowerBound,
+                requestedLength: Int64(context.activeChunk.count),
+                requestsToEnd: false
             )
         } catch {
             _ = removeContext(for: dataTask.taskIdentifier)
-            context.finish(with: error)
+            finish(context, error: error)
+            schedulePump()
             completionHandler(.cancel)
             return
         }
 
+        lock.withLock {
+            if let length = plan.contentLength {
+                contentLength = length
+            }
+        }
         guard context.configure(
-            expectedByteCount: plan.expectedByteCount,
+            plan: plan,
             applyResponse: { [self] in apply(response: response, to: $0) }
         ) else {
             completionHandler(.cancel)
@@ -499,7 +610,8 @@ extension AuthenticatedVideoStreamSource: URLSessionDataDelegate, URLSessionTask
         }
         if !context.sendsData {
             _ = removeContext(for: dataTask.taskIdentifier)
-            context.finish()
+            finish(context)
+            schedulePump()
             completionHandler(.cancel)
             return
         }
@@ -520,9 +632,13 @@ extension AuthenticatedVideoStreamSource: URLSessionDataDelegate, URLSessionTask
                 deliveredByteCount += consumed.deliveredByteCount
             }
         }
-        if consumed.isComplete {
+        if consumed.isChunkComplete {
             _ = removeContext(for: dataTask.taskIdentifier)
+            if consumed.isComplete {
+                finish(context)
+            }
             dataTask.cancel()
+            schedulePump()
         }
     }
 
@@ -534,14 +650,12 @@ extension AuthenticatedVideoStreamSource: URLSessionDataDelegate, URLSessionTask
         guard let context = removeContext(for: task.taskIdentifier) else { return }
         if let error {
             let normalized = (error as NSError).code == NSURLErrorCancelled
-                ? AuthenticatedVideoStreamError.cancelled
-                : error
-            context.finish(with: normalized)
+                ? AuthenticatedVideoStreamError.cancelled : error
+            finish(context, error: normalized)
         } else if !context.receivedExpectedBytes() {
-            context.finish(with: AuthenticatedVideoStreamError.invalidResponse)
-        } else {
-            context.finish()
+            finish(context, error: AuthenticatedVideoStreamError.invalidResponse)
         }
+        schedulePump()
     }
 
     nonisolated func urlSession(
