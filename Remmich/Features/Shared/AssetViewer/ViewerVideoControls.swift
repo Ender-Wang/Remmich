@@ -7,6 +7,8 @@ struct ViewerVideoControls: View {
 
     let session: VideoPlaybackSession
     @Binding var isVisible: Bool
+    let showsCloseButton: Bool
+    let close: () -> Void
     let visibilityChanged: (Bool) -> Void
     let routePresentationChanged: (Bool) -> Void
 
@@ -23,6 +25,22 @@ struct ViewerVideoControls: View {
             if isVisible {
                 VStack(spacing: 0) {
                     HStack {
+                        if showsCloseButton {
+                            Button(action: close) {
+                                Image(systemName: "xmark")
+                                    .font(.title2.weight(.semibold))
+                                    .frame(width: 44, height: 44)
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.white)
+                            .glassEffect(.regular.interactive(), in: Circle())
+                            .accessibilityLabel("Close")
+                            .accessibilityIdentifier("asset-viewer-video-close")
+                        } else {
+                            Color.clear
+                                .frame(width: 44, height: 44)
+                        }
+
                         Spacer()
                         ViewerVideoRoutePicker(
                             presentationChanged: routePresentationDidChange
@@ -269,12 +287,12 @@ private struct ViewerVideoBufferScrubber: View {
 
             ZStack(alignment: .leading) {
                 Capsule()
-                    .fill(.white.opacity(0.08))
+                    .fill(.white.opacity(0.14))
                     .frame(height: 6)
                     .glassEffect(.regular, in: Capsule())
 
                 Capsule()
-                    .fill(.white.opacity(0.42))
+                    .fill(.white.opacity(0.46))
                     .frame(width: width * bufferedFraction)
                     .frame(height: 6)
 
@@ -282,6 +300,7 @@ private struct ViewerVideoBufferScrubber: View {
                     player: player,
                     value: positionSeconds,
                     upperBound: durationSeconds,
+                    holdsDisplayedValue: scrubbedSeconds != nil,
                     valueChanged: { scrubbedSeconds = $0 },
                     editingChanged: { editing in
                         scrubbingChanged(editing)
@@ -305,6 +324,7 @@ private struct ViewerVideoNativeScrubber: UIViewRepresentable {
     let player: AVPlayer
     let value: Double
     let upperBound: Double
+    let holdsDisplayedValue: Bool
     let valueChanged: (Double) -> Void
     let editingChanged: (Bool) -> Void
 
@@ -321,6 +341,12 @@ private struct ViewerVideoNativeScrubber: UIViewRepresentable {
         slider.minimumValue = 0
         slider.minimumTrackTintColor = .white
         slider.maximumTrackTintColor = .clear
+        let thumbImage = UIImage(
+            systemName: "circle.fill",
+            withConfiguration: UIImage.SymbolConfiguration(pointSize: 14)
+        )?.withTintColor(.white, renderingMode: .alwaysOriginal)
+        slider.setThumbImage(thumbImage, for: .normal)
+        slider.setThumbImage(thumbImage, for: .highlighted)
         slider.addTarget(
             context.coordinator,
             action: #selector(Coordinator.valueDidChange(_:)),
@@ -344,6 +370,7 @@ private struct ViewerVideoNativeScrubber: UIViewRepresentable {
         context.coordinator.player = player
         context.coordinator.valueChanged = valueChanged
         context.coordinator.editingChanged = editingChanged
+        context.coordinator.holdsDisplayedValue = holdsDisplayedValue
         slider.maximumValue = Float(max(0.001, upperBound))
         guard !context.coordinator.isEditing else { return }
         slider.value = Float(min(max(0, value), max(0, upperBound)))
@@ -360,6 +387,7 @@ private struct ViewerVideoNativeScrubber: UIViewRepresentable {
         weak var player: AVPlayer?
         var valueChanged: (Double) -> Void
         var editingChanged: (Bool) -> Void
+        var holdsDisplayedValue = false
         private(set) var isEditing = false
         private weak var slider: UISlider?
         private var displayLink: CADisplayLink?
@@ -391,7 +419,7 @@ private struct ViewerVideoNativeScrubber: UIViewRepresentable {
         }
 
         @objc private func updateFromPlayer() {
-            guard !isEditing, let slider, let player else { return }
+            guard !isEditing, !holdsDisplayedValue, let slider, let player else { return }
             let seconds = player.currentTime().seconds
             guard seconds.isFinite else { return }
             slider.value = Float(min(max(0, seconds), Double(slider.maximumValue)))

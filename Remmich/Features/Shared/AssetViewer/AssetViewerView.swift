@@ -331,6 +331,7 @@ struct AssetViewerView: View {
                     }
                     viewerContent(
                         pageSize: fullGeometry.size,
+                        viewportOrigin: fullFrame.origin,
                         viewerRect: viewerRect,
                         requestSize: fullGeometry.size,
                         isLandscape: isLandscape,
@@ -547,6 +548,7 @@ struct AssetViewerView: View {
 
     private func viewerContent(
         pageSize: CGSize,
+        viewportOrigin: CGPoint,
         viewerRect: CGRect,
         requestSize: CGSize,
         isLandscape: Bool,
@@ -629,6 +631,15 @@ struct AssetViewerView: View {
                     ViewerVideoControls(
                         session: videoPlaybackSession,
                         isVisible: $videoControlsVisible,
+                        showsCloseButton: !showsInfo,
+                        close: {
+                            pauseVideoForDismissalIfNeeded()
+                            completeDragDismissal(
+                                viewportSize: pageSize,
+                                viewportOrigin: viewportOrigin,
+                                mediaRect: selectedMediaRect
+                            )
+                        },
                         visibilityChanged: videoControlVisibilityChanged,
                         routePresentationChanged: videoRoutePresentationChanged
                     )
@@ -2020,9 +2031,13 @@ struct AssetViewerView: View {
     }
 
     private var shouldHideStatusBar: Bool {
-        !videoRoutePickerPresented
-            && !isLandingDismissal
-            && (isDismissalInteractionActive || isDismissing || (!chromeVisible && !showsInfo))
+        guard !videoRoutePickerPresented, !isLandingDismissal else { return false }
+        if session.isVideoPlayback, videoFirstFrameReady, !showsInfo,
+           !isDismissalInteractionActive, !isDismissing
+        {
+            return !videoControlsVisible
+        }
+        return isDismissalInteractionActive || isDismissing || (!chromeVisible && !showsInfo)
     }
 
     private func resolvedSafeAreaInsets(
@@ -2260,14 +2275,15 @@ struct AssetViewerView: View {
         }
     }
 
-    private func videoControlVisibilityChanged(_ visible: Bool) {
-        guard !showsInfo else { return }
+    private func videoControlVisibilityChanged(_: Bool) {
+        guard !showsInfo, chromeVisible else { return }
         withAnimation(chromeAnimation) {
-            chromeVisible = visible
+            chromeVisible = false
         }
     }
 
     private func videoRoutePresentationChanged(_ presented: Bool) {
+        guard presented != videoRoutePickerPresented else { return }
         withAnimation(reduceMotion ? nil : .easeOut(duration: presented ? 0.12 : 0.24)) {
             videoRoutePickerPresented = presented
         }

@@ -108,6 +108,7 @@ final class VideoPlaybackSession {
     private var contentLengthBytes: Int?
     private var resumesPreparationAfterSuspension = false
     private var seekSequence = 0
+    private var lastLoggedBufferSummary: String?
 
     init(assetID: String) {
         self.assetID = assetID
@@ -475,7 +476,32 @@ final class VideoPlaybackSession {
             isFull: playerItem.isPlaybackBufferFull,
             isLikelyToKeepUp: playerItem.isPlaybackLikelyToKeepUp
         )
+        logBufferStateIfChanged(
+            currentSeconds: currentSeconds,
+            secondsAhead: secondsAhead,
+            playerItem: playerItem
+        )
         updateTimelineState(currentSeconds: currentSeconds, generation: generation)
+    }
+
+    private func logBufferStateIfChanged(
+        currentSeconds: Double,
+        secondsAhead: Double,
+        playerItem: AVPlayerItem
+    ) {
+        let aheadBucket = Int(max(0, secondsAhead).rounded(.down)) / 5 * 5
+        let summary = [
+            String(aheadBucket),
+            playerItem.isPlaybackBufferEmpty ? "empty" : "available",
+            playerItem.isPlaybackBufferFull ? "full" : "open",
+            playerItem.isPlaybackLikelyToKeepUp ? "keep-up" : "waiting",
+        ].joined(separator: "|")
+        guard summary != lastLoggedBufferSummary else { return }
+        lastLoggedBufferSummary = summary
+        let assetPrefix = assetID.prefix(8)
+        Self.logger.info(
+            "Video buffer asset=\(assetPrefix, privacy: .private) position=\(currentSeconds, privacy: .public)s ahead=\(secondsAhead, privacy: .public)s empty=\(playerItem.isPlaybackBufferEmpty, privacy: .public) full=\(playerItem.isPlaybackBufferFull, privacy: .public) keepUp=\(playerItem.isPlaybackLikelyToKeepUp, privacy: .public)"
+        )
     }
 
     private func updateTimelineState(currentSeconds: Double, generation: Int) {
@@ -595,6 +621,7 @@ final class VideoPlaybackSession {
         streamSource = nil
         bufferState = .empty
         timelineState = .empty
+        lastLoggedBufferSummary = nil
         contentLengthBytes = nil
         seekSequence += 1
     }

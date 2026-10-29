@@ -1,5 +1,4 @@
 import AVKit
-import QuartzCore
 import SwiftUI
 
 nonisolated enum ViewerVideoReadiness {
@@ -107,32 +106,14 @@ private final class ViewerVideoContainerViewController: UIViewController {
         playerController.view.clipsToBounds = true
 
         addChild(playerController)
+        playerController.view.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(playerController.view)
+        NSLayoutConstraint.activate([
+            playerController.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            playerController.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            playerController.view.topAnchor.constraint(equalTo: view.topAnchor),
+            playerController.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
         playerController.didMove(toParent: self)
-        layoutPlayerWithoutImplicitAnimations()
-    }
-
-    override func viewDidLayoutSubviews() {
-        super.viewDidLayoutSubviews()
-        layoutPlayerWithoutImplicitAnimations()
-    }
-
-    override func viewWillTransition(
-        to size: CGSize,
-        with coordinator: any UIViewControllerTransitionCoordinator
-    ) {
-        super.viewWillTransition(to: size, with: coordinator)
-        coordinator.animate { [weak self] _ in
-            self?.layoutPlayerWithoutImplicitAnimations()
-        } completion: { [weak self] _ in
-            self?.layoutPlayerWithoutImplicitAnimations()
-        }
-    }
-
-    private func layoutPlayerWithoutImplicitAnimations() {
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        playerController.view.frame = view.bounds
-        CATransaction.commit()
     }
 }
