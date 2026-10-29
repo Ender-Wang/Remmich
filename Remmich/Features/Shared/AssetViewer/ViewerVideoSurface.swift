@@ -92,15 +92,12 @@ private struct ViewerVideoControllerHost: UIViewControllerRepresentable {
 private final class ViewerVideoContainerViewController: UIViewController {
     let playerController = AVPlayerViewController()
 
-    private var rotationGeneration = 0
-    private var restoresPlaybackControlsAfterRotation = false
-
     override func loadView() {
         view = UIView()
         view.backgroundColor = .clear
         view.clipsToBounds = true
 
-        playerController.showsPlaybackControls = true
+        playerController.showsPlaybackControls = false
         playerController.videoGravity = .resizeAspect
         playerController.entersFullScreenWhenPlaybackBegins = false
         playerController.exitsFullScreenWhenPlaybackEnds = false
@@ -124,31 +121,11 @@ private final class ViewerVideoContainerViewController: UIViewController {
         to size: CGSize,
         with coordinator: any UIViewControllerTransitionCoordinator
     ) {
-        rotationGeneration += 1
-        let generation = rotationGeneration
-        let hidesPlaybackControls = playerController.showsPlaybackControls
-        restoresPlaybackControlsAfterRotation = restoresPlaybackControlsAfterRotation
-            || hidesPlaybackControls
-
-        if hidesPlaybackControls {
-            UIView.performWithoutAnimation {
-                playerController.showsPlaybackControls = false
-                playerController.view.layoutIfNeeded()
-            }
-        }
-
         super.viewWillTransition(to: size, with: coordinator)
         coordinator.animate { [weak self] _ in
             self?.layoutPlayerWithoutImplicitAnimations()
         } completion: { [weak self] _ in
-            guard let self, rotationGeneration == generation else { return }
-            layoutPlayerWithoutImplicitAnimations()
-            guard restoresPlaybackControlsAfterRotation else { return }
-            UIView.performWithoutAnimation {
-                playerController.showsPlaybackControls = true
-                playerController.view.layoutIfNeeded()
-            }
-            restoresPlaybackControlsAfterRotation = false
+            self?.layoutPlayerWithoutImplicitAnimations()
         }
     }
 

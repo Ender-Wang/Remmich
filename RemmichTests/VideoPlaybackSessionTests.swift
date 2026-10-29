@@ -31,6 +31,26 @@ struct VideoPlaybackSessionTests {
             timeRanges: [NSValue(timeRange: range)],
             currentSeconds: 3
         ) == 0)
+        #expect(VideoPlaybackSession.bufferedSecondsAhead(
+            timeRanges: [NSValue(timeRange: range)],
+            currentSeconds: .nan
+        ) == 0)
+    }
+
+    @Test func bufferedEndUsesTheRangeContainingThePlayhead() {
+        let earlier = CMTimeRange(
+            start: CMTime(seconds: 0, preferredTimescale: 600),
+            duration: CMTime(seconds: 4, preferredTimescale: 600)
+        )
+        let active = CMTimeRange(
+            start: CMTime(seconds: 8, preferredTimescale: 600),
+            duration: CMTime(seconds: 10, preferredTimescale: 600)
+        )
+
+        #expect(VideoPlaybackSession.bufferedEndSeconds(
+            timeRanges: [NSValue(timeRange: earlier), NSValue(timeRange: active)],
+            currentSeconds: 12
+        ) == 18)
     }
 
     @Test func transportFailuresKeepTheirUserRelevantCategory() {

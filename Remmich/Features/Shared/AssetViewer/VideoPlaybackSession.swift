@@ -32,6 +32,18 @@ nonisolated struct VideoPlaybackBufferState: Equatable, Sendable {
     )
 }
 
+nonisolated struct VideoPlaybackTimelineState: Equatable, Sendable {
+    let positionSeconds: Double
+    let durationSeconds: Double
+    let bufferedUntilSeconds: Double
+
+    static let empty = VideoPlaybackTimelineState(
+        positionSeconds: 0,
+        durationSeconds: 0,
+        bufferedUntilSeconds: 0
+    )
+}
+
 nonisolated enum VideoPlaybackFailure: Equatable, Sendable {
     case authentication
     case unavailable
@@ -78,6 +90,7 @@ final class VideoPlaybackSession {
     private(set) var phase: VideoPlaybackPhase = .preparing
     private(set) var metadata: VideoPlaybackMetadata?
     private(set) var bufferState = VideoPlaybackBufferState.empty
+    private(set) var timelineState = VideoPlaybackTimelineState.empty
     private(set) var generation = 0
     private(set) var isClosed = false
 
@@ -86,6 +99,7 @@ final class VideoPlaybackSession {
     private var playerItem: AVPlayerItem?
     private var observations: [NSKeyValueObservation] = []
     private var notificationTokens: [NSObjectProtocol] = []
+    private var periodicTimeObserver: Any?
     private var metadataTask: Task<Void, Never>?
     private var audioActivationTask: Task<Void, Never>?
     private var intendedPlayback = true
@@ -134,6 +148,7 @@ final class VideoPlaybackSession {
             playerItem = item
             installObservers(for: item, generation: preparationGeneration)
             player.replaceCurrentItem(with: item)
+            installPeriodicTimeObserver(generation: preparationGeneration)
             metadataTask = Task { @MainActor [weak self] in
                 await self?.loadMetadata(
                     from: item.asset,
@@ -357,6 +372,20 @@ final class VideoPlaybackSession {
         ]
     }
 
+    private func installPeriodicTimeObserver(generation: Int) {
+        periodicTimeObserver = player.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
+            queue: .main
+        ) { [weak self] time in
+            Task { @MainActor [weak self] in
+                self?.updateTimelineState(
+                    currentSeconds: time.seconds,
+                    generation: generation
+                )
+            }
+        }
+    }
+
     private func handleTimeControlStatus(
         _ status: AVPlayer.TimeControlStatus,
         generation: Int
@@ -444,6 +473,22 @@ final class VideoPlaybackSession {
             isEmpty: playerItem.isPlaybackBufferEmpty,
             isFull: playerItem.isPlaybackBufferFull,
             isLikelyToKeepUp: playerItem.isPlaybackLikelyToKeepUp
+        )
+        updateTimelineState(currentSeconds: currentSeconds, generation: generation)
+    }
+
+    private func updateTimelineState(currentSeconds: Double, generation: Int) {
+        guard accepts(generation: generation), let playerItem else { return }
+        let position = currentSeconds.isFinite ? max(0, currentSeconds) : 0
+        let duration = playerItem.duration.seconds
+        let resolvedDuration = duration.isFinite ? max(0, duration) : 0
+        timelineState = VideoPlaybackTimelineState(
+            positionSeconds: min(position, resolvedDuration > 0 ? resolvedDuration : position),
+            durationSeconds: resolvedDuration,
+            bufferedUntilSeconds: Self.bufferedEndSeconds(
+                timeRanges: playerItem.loadedTimeRanges,
+                currentSeconds: position
+            )
         )
     }
 
@@ -534,12 +579,17 @@ final class VideoPlaybackSession {
             NotificationCenter.default.removeObserver(token)
         }
         notificationTokens.removeAll()
+        if let periodicTimeObserver {
+            player.removeTimeObserver(periodicTimeObserver)
+            self.periodicTimeObserver = nil
+        }
         player.pause()
         player.replaceCurrentItem(with: nil)
         playerItem = nil
         streamSource?.invalidate()
         streamSource = nil
         bufferState = .empty
+        timelineState = .empty
         contentLengthBytes = nil
         seekSequence += 1
     }
@@ -616,7 +666,18 @@ final class VideoPlaybackSession {
         currentSeconds: Double
     ) -> Double {
         guard currentSeconds.isFinite else { return 0 }
-        return timeRanges.reduce(0) { result, value in
+        return max(0, bufferedEndSeconds(
+            timeRanges: timeRanges,
+            currentSeconds: currentSeconds
+        ) - currentSeconds)
+    }
+
+    nonisolated static func bufferedEndSeconds(
+        timeRanges: [NSValue],
+        currentSeconds: Double
+    ) -> Double {
+        guard currentSeconds.isFinite else { return 0 }
+        return timeRanges.reduce(currentSeconds) { result, value in
             let range = value.timeRangeValue
             let start = range.start.seconds
             let end = CMTimeRangeGetEnd(range).seconds
@@ -624,7 +685,7 @@ final class VideoPlaybackSession {
                   currentSeconds >= start,
                   currentSeconds <= end
             else { return result }
-            return max(result, end - currentSeconds)
+            return max(result, end)
         }
     }
 

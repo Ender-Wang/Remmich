@@ -39,6 +39,8 @@ struct AssetViewerView: View {
     @State private var renderedImageMetadataByAssetID: [String: AssetViewerRenderedImageMetadata] = [:]
     @State private var videoPlaybackSession: VideoPlaybackSession?
     @State private var videoFirstFrameReady = false
+    @State private var videoControlsVisible = true
+    @State private var videoRoutePickerPresented = false
     @State private var resumesVideoAfterCancelledDismissal = false
     @State private var verticalDragRoute: AssetViewerVerticalDragRoute?
     @State private var fullResolutionRequestIDs: [String: Int] = [:]
@@ -619,9 +621,26 @@ struct AssetViewerView: View {
                     value: videoFirstFrameReady && showsMediaBackground
                 )
                 .allowsHitTesting(
-                    videoFirstFrameReady && showsMediaBackground
+                    false
                 )
                 .accessibilityHidden(!videoFirstFrameReady || !showsMediaBackground)
+
+                if videoFirstFrameReady, showsMediaBackground {
+                    ViewerVideoControls(
+                        session: videoPlaybackSession,
+                        isVisible: $videoControlsVisible,
+                        visibilityChanged: videoControlVisibilityChanged,
+                        routePresentationChanged: videoRoutePresentationChanged
+                    )
+                    .frame(
+                        width: selectedMediaRect.width,
+                        height: selectedMediaRect.height
+                    )
+                    .position(
+                        x: selectedMediaRect.midX,
+                        y: selectedMediaRect.midY
+                    )
+                }
 
                 videoPreparationOverlay(
                     session: videoPlaybackSession,
@@ -2001,7 +2020,8 @@ struct AssetViewerView: View {
     }
 
     private var shouldHideStatusBar: Bool {
-        !isLandingDismissal
+        !videoRoutePickerPresented
+            && !isLandingDismissal
             && (isDismissalInteractionActive || isDismissing || (!chromeVisible && !showsInfo))
     }
 
@@ -2179,12 +2199,16 @@ struct AssetViewerView: View {
             videoPlaybackSession?.close()
             videoPlaybackSession = nil
             videoFirstFrameReady = false
+            videoControlsVisible = true
+            videoRoutePickerPresented = false
             resumesVideoAfterCancelledDismissal = false
             return
         }
         guard videoPlaybackSession?.assetID != selectedAsset.id else { return }
         videoPlaybackSession?.close()
         videoFirstFrameReady = false
+        videoControlsVisible = true
+        videoRoutePickerPresented = false
         resumesVideoAfterCancelledDismissal = false
         videoPlaybackSession = VideoPlaybackSession(assetID: selectedAsset.id)
     }
@@ -2230,7 +2254,21 @@ struct AssetViewerView: View {
         guard resolved != videoFirstFrameReady else { return }
         withAnimation(chromeAnimation) {
             videoFirstFrameReady = resolved
+            videoControlsVisible = resolved
             chromeVisible = showsInfo || !resolved
+        }
+    }
+
+    private func videoControlVisibilityChanged(_ visible: Bool) {
+        guard !showsInfo else { return }
+        withAnimation(chromeAnimation) {
+            chromeVisible = visible
+        }
+    }
+
+    private func videoRoutePresentationChanged(_ presented: Bool) {
+        withAnimation(reduceMotion ? nil : .easeOut(duration: presented ? 0.12 : 0.24)) {
+            videoRoutePickerPresented = presented
         }
     }
 
