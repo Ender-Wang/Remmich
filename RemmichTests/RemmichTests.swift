@@ -1231,6 +1231,7 @@ struct RemmichTests {
         let metadata = AssetViewerVideoPlaybackMetadata(
             fileSizeBytes: 42_800_000,
             pixelSize: .init(width: 1920, height: 1080),
+            frameRate: 29.97,
             videoCodec: "H.264",
             videoBitrate: 8_250_000,
             audioCodec: "AAC",
@@ -1238,7 +1239,7 @@ struct RemmichTests {
         )
 
         #expect(metadata.fileDescription == "Playback · 42.8 MB")
-        #expect(metadata.displayText == "1,920 × 1,080 px · H.264 · 8.2 Mbps · AAC")
+        #expect(metadata.displayText == "1,920 × 1,080 px · 29.97 fps · H.264 · 8.2 Mbps · AAC")
         #expect(metadata.dynamicRange.rawValue == "HDR")
     }
 

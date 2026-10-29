@@ -12,6 +12,7 @@ nonisolated enum VideoPlaybackDynamicRange: String, Equatable, Sendable {
 nonisolated struct VideoPlaybackMetadata: Equatable, Sendable {
     var fileSizeBytes: Int?
     let pixelSize: MediaPixelSize
+    let frameRate: Double?
     let videoCodec: String?
     let videoBitrate: Double?
     let audioCodec: String?
@@ -514,6 +515,7 @@ final class VideoPlaybackSession {
             let naturalSize = try await videoTrack.load(.naturalSize)
             let transform = try await videoTrack.load(.preferredTransform)
             let estimatedDataRate = try await videoTrack.load(.estimatedDataRate)
+            let nominalFrameRate = try await videoTrack.load(.nominalFrameRate)
             let videoFourCC = await Self.codecFourCC(for: videoTrack)
             let transformedSize = naturalSize.applying(transform)
             let resolvedAudioCodec: String? = if let audioTrack = audioTrackList.first {
@@ -531,6 +533,9 @@ final class VideoPlaybackSession {
                     width: Int(abs(transformedSize.width.rounded())),
                     height: Int(abs(transformedSize.height.rounded()))
                 ),
+                frameRate: nominalFrameRate.isFinite && nominalFrameRate > 0
+                    ? Double(nominalFrameRate)
+                    : nil,
                 videoCodec: Self.codecName(for: videoFourCC),
                 videoBitrate: Double(estimatedDataRate),
                 audioCodec: resolvedAudioCodec,

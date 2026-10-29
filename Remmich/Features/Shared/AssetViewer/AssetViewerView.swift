@@ -2185,6 +2185,7 @@ struct AssetViewerView: View {
         return AssetViewerVideoPlaybackMetadata(
             fileSizeBytes: metadata.fileSizeBytes,
             pixelSize: metadata.pixelSize,
+            frameRate: metadata.frameRate,
             videoCodec: metadata.videoCodec,
             videoBitrate: metadata.videoBitrate,
             audioCodec: metadata.audioCodec,

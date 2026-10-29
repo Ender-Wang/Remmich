@@ -99,6 +99,7 @@ nonisolated enum AssetViewerVideoDynamicRange: String, Equatable, Sendable {
 nonisolated struct AssetViewerVideoPlaybackMetadata: Equatable, Sendable {
     let fileSizeBytes: Int?
     let pixelSize: MediaPixelSize
+    let frameRate: Double?
     let videoCodec: String?
     let videoBitrate: Double?
     let audioCodec: String?
@@ -113,6 +114,9 @@ nonisolated struct AssetViewerVideoPlaybackMetadata: Equatable, Sendable {
         var components = [
             "\(pixelSize.width.formatted()) × \(pixelSize.height.formatted()) px",
         ]
+        if let frameRate, frameRate.isFinite, frameRate > 0 {
+            components.append(Self.frameRateDescription(frameRate))
+        }
         if let videoCodec, !videoCodec.isEmpty {
             components.append(videoCodec)
         }
@@ -130,6 +134,14 @@ nonisolated struct AssetViewerVideoPlaybackMetadata: Equatable, Sendable {
             return String(format: "%.1f Mbps", bitsPerSecond / 1_000_000)
         }
         return String(format: "%.0f kbps", bitsPerSecond / 1000)
+    }
+
+    private static func frameRateDescription(_ framesPerSecond: Double) -> String {
+        let rounded = framesPerSecond.rounded()
+        if abs(framesPerSecond - rounded) < 0.01 {
+            return "\(Int(rounded)) fps"
+        }
+        return "\(framesPerSecond.formatted(.number.precision(.fractionLength(0 ... 2)))) fps"
     }
 }
 
