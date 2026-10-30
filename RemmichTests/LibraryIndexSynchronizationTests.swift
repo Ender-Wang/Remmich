@@ -4,6 +4,78 @@ import Testing
 
 @Suite(.serialized)
 struct LibraryIndexSynchronizationTests {
+    @Test @MainActor func queuedCacheCanBePausedAndDoesNotResumeWhenConditionsRecover() {
+        let defaults = UserDefaults.standard
+        let keys = ["library-index-thumbnail-warming", "library-index-thumbnail-warming-paused"]
+        let original = keys.map { defaults.object(forKey: $0) }
+        defer { for (key, value) in zip(keys, original) {
+            defaults.set(value, forKey: key)
+        } }
+        var conditions = LibraryCacheResourceConditions(lowPowerMode: true, thermalState: .nominal)
+        let controller = LibraryIndexController(source: IndexSource(buckets: [:]), resourceConditions: { conditions })
+        controller.setThumbnailWarmingEnabled(true)
+        #expect(controller.thumbnailWarmingStatus == .waiting)
+        #expect(controller.thumbnailWarmingWaitingReason == .lowPowerMode)
+        controller.pauseThumbnailCache()
+        #expect(controller.thumbnailWarmingStatus == .paused)
+        #expect(controller.thumbnailWarmingEnabled)
+        conditions.lowPowerMode = false
+        controller.resourceConditionsChanged(isAppActive: true)
+        #expect(controller.thumbnailWarmingStatus == .paused)
+        controller.syncThumbnailCache()
+        #expect(!controller.thumbnailWarmingPaused)
+        #expect(controller.thumbnailWarmingStatus == .waiting)
+        #expect(controller.thumbnailWarmingWaitingReason == .session)
+    }
+
+    @Test @MainActor func thermalWaitRequiresAnActiveAppBeforeRetrying() {
+        let defaults = UserDefaults.standard
+        let keys = ["library-index-thumbnail-warming", "library-index-thumbnail-warming-paused"]
+        let original = keys.map { defaults.object(forKey: $0) }
+        defer { for (key, value) in zip(keys, original) {
+            defaults.set(value, forKey: key)
+        } }
+        var conditions = LibraryCacheResourceConditions(lowPowerMode: false, thermalState: .critical)
+        let controller = LibraryIndexController(source: IndexSource(buckets: [:]), resourceConditions: { conditions })
+        controller.setThumbnailWarmingEnabled(true)
+        #expect(controller.thumbnailWarmingWaitingReason == .thermalCritical)
+        #expect(controller.thumbnailWarmingThermalState == .critical)
+        conditions.thermalState = .nominal
+        controller.resourceConditionsChanged(isAppActive: false)
+        #expect(controller.thumbnailWarmingWaitingReason == .thermalCritical)
+        controller.resourceConditionsChanged(isAppActive: true)
+        #expect(controller.thumbnailWarmingWaitingReason == .session)
+        #expect(controller.thumbnailWarmingThermalState == nil)
+    }
+
+    @Test @MainActor func cachedBootstrapPreservesTheUsersPausedCachePreference() async throws {
+        let defaults = UserDefaults.standard
+        let keys = ["library-index-thumbnail-warming", "library-index-thumbnail-warming-paused"]
+        let original = keys.map { defaults.object(forKey: $0) }
+        defer { for (key, value) in zip(keys, original) {
+            defaults.set(value, forKey: key)
+        } }
+        defaults.set(true, forKey: keys[0])
+        defaults.set(true, forKey: keys[1])
+        let fixture = try IndexFixture()
+        defer { fixture.cleanup() }
+        let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        let source = IndexSource(buckets: ["2026-10-01": [Self.asset(id: "one", bucket: "2026-10-01")]])
+        _ = try await LibraryIndexSynchronizer(source: source, store: store).fullSyncAndVerify(scope: Self.scope)
+        try await store.setPaused(true, scope: Self.scope)
+        let controller = LibraryIndexController(source: source, store: store)
+        _ = await controller.bootstrap(session: .fixture)
+        #expect(controller.thumbnailWarmingStatus == .paused)
+        #expect(controller.thumbnailWarmingPaused)
+        #expect(controller.status == .paused)
+        controller.start(session: .fixture, endpoint: AccountSession.fixture.apiURL)
+        #expect(controller.status == .paused)
+        controller.resume()
+        try await Self.waitUntilUpToDate(controller)
+        #expect(controller.thumbnailWarmingStatus == .paused)
+        controller.suspend()
+    }
+
     @Test func progressPercentageKeepsIncompleteCountsBelowOneHundred() {
         #expect(
             AccountSettingsView.progressPercentage(completed: 26845, total: 26846)

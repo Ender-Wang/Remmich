@@ -43,7 +43,11 @@ struct RootView: View {
         .task { await controller.start() }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
-                Task { await controller.handleForegroundTransition() }
+                AppIconController.shared.refresh()
+                Task {
+                    await controller.handleForegroundTransition()
+                    controller.libraryIndex.resourceConditionsChanged(isAppActive: scenePhase == .active)
+                }
             } else if phase == .background {
                 controller.handleBackgroundTransition()
             }
@@ -52,6 +56,12 @@ struct RootView: View {
             for: UIApplication.didReceiveMemoryWarningNotification
         )) { _ in
             controller.handleMemoryPressure()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: ProcessInfo.thermalStateDidChangeNotification)) { _ in
+            controller.libraryIndex.resourceConditionsChanged(isAppActive: scenePhase == .active)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .NSProcessInfoPowerStateDidChange)) { _ in
+            controller.libraryIndex.resourceConditionsChanged(isAppActive: scenePhase == .active)
         }
     }
 }
