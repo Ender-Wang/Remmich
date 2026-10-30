@@ -163,7 +163,7 @@ struct AssetViewerInfoView: View {
                 Group {
                     switch state {
                     case .idle, .loading:
-                        ProgressView("Loading information…")
+                        RemmichLoadingView(label: "Loading asset information")
                             .tint(.primary)
                             .frame(maxWidth: .infinity, minHeight: 220)
                     case let .loaded(detail):

@@ -477,7 +477,7 @@ private struct PhotosLibraryGroupedCatalogView: View {
                 ScrollView {
                     LazyVStack(spacing: TimelineRangeMosaicPlanner.spacing) {
                         if catalog.entries.isEmpty, !store.bucketSummaries.isEmpty {
-                            ProgressView("Preparing date groups…")
+                            RemmichLoadingView(label: "Preparing date groups")
                                 .frame(maxWidth: .infinity, minHeight: 160)
                                 .accessibilityIdentifier("timeline-grouped-catalog-loading")
                         }
@@ -626,7 +626,7 @@ private struct PhotosOlderGroupedCatalogLoader: View {
             requestLoad()
         } label: {
             if isLoading {
-                ProgressView()
+                RemmichLoadingView(label: "Loading older date groups", size: 32)
             } else {
                 Label(
                     "Load older \(level == .day ? "days" : "weeks")",
@@ -750,11 +750,13 @@ struct PhotosRangeAssetsView: View {
     var body: some View {
         Group {
             if isLoading {
-                ProgressView(
-                    bucketIDs.count > 1
-                        ? "Loading \(loadedBucketCount) of \(bucketIDs.count)…"
-                        : "Loading items…"
-                )
+                VStack(spacing: 12) {
+                    RemmichLoadingView(label: "Loading items")
+                    if bucketIDs.count > 1 {
+                        Text("\(loadedBucketCount) of \(bucketIDs.count) date groups")
+                            .font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
+                    }
+                }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if loadFailed {
                 ErrorStateView(title: "Couldn’t Load \(route.navigationTitle)") {

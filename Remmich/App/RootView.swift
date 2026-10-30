@@ -14,13 +14,15 @@ struct RootView: View {
             case .signedOut:
                 OnboardingView(controller: controller)
             case .checking:
-                ProgressView("Checking server…")
+                RemmichLoadingView(label: "Checking server")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             case let .credentials(server):
                 OnboardingView(controller: controller, server: server)
             case let .signingIn(server):
                 OnboardingView(controller: controller, server: server, isSigningIn: true)
             case .signingOut:
-                ProgressView("Signing out…")
+                RemmichLoadingView(label: "Signing out")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             case let .signedIn(session):
                 AppShellView(
                     session: session,

@@ -9,13 +9,9 @@ enum FixtureContentState: Equatable {
 
 struct LoadingStateView: View {
     var body: some View {
-        VStack(spacing: 12) {
-            ProgressView()
-            Text("Loading your library…")
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .accessibilityIdentifier("loading-state")
+        RemmichLoadingView()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .accessibilityIdentifier("loading-state")
     }
 }
 

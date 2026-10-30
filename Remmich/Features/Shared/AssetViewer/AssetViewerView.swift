@@ -2319,12 +2319,9 @@ struct AssetViewerView: View {
         if showsMediaBackground {
             switch session.phase {
             case .preparing where !videoFirstFrameReady:
-                ProgressView("Preparing Video")
-                    .tint(.white)
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 18)
-                    .frame(height: 48)
-                    .background(.regularMaterial, in: Capsule())
+                RemmichLoadingView(label: "Preparing video", size: 48)
+                    .padding(8)
+                    .background(.regularMaterial, in: .rect(cornerRadius: DesignMetrics.defaultCornerRadius))
                     .position(x: mediaRect.midX, y: mediaRect.midY)
             case let .failed(failure):
                 VStack(spacing: 10) {
