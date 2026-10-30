@@ -120,10 +120,14 @@ struct AccountSettingsView: View {
     @State private var libraryIndexClock = Date()
     @State private var selectedPage = SettingsPage.home
     @State private var pageHistory: [SettingsPage] = []
+    @State private var cardFrames: [SettingsPage: CGRect] = [:]
+    @State private var expandedCard: SettingsPage?
+    @State private var cardExpansion: CGFloat = 0
     @State private var pageOpacity = 1.0
     @State private var isPageTransitioning = false
     @State private var pageTransition: Task<Void, Never>?
     @State private var brandFrame = CGRect.zero
+    @State private var brandFrames: [SettingsPage: CGRect] = [:]
 
     private var appIcons: AppIconController {
         .shared
@@ -168,7 +172,7 @@ struct AccountSettingsView: View {
 
     var body: some View {
         GeometryReader { geometry in
-            let landscapeHome = isLandscape(geometry.size) && selectedPage == .home
+            let landscapeHome = isLandscape(geometry.size) && (selectedPage == .home || expandedCard != nil)
             VStack(spacing: 0) {
                 HStack {
                     Text(accountDisplayName.isEmpty ? session.userEmail : accountDisplayName)
@@ -189,32 +193,53 @@ struct AccountSettingsView: View {
                 .padding(.vertical, 12)
 
                 GeometryReader { contentGeometry in
+                    let topInset: CGFloat = landscapeHome ? 68 : 0
+                    let destination = CGRect(x: 24, y: topInset, width: max(1, contentGeometry.size.width - 48),
+                                             height: max(1, contentGeometry.size.height - topInset - 24))
+                    let source = expandedCard.flatMap { cardFrames[$0] } ?? destination
                     ZStack(alignment: .topLeading) {
                         ScrollView {
-                            Group {
-                                if selectedPage == .home {
-                                    profileHome(size: contentGeometry.size)
-                                } else {
-                                    VStack(alignment: .leading, spacing: 14) {
-                                        subpageHeader
-                                        pageContent
-                                    }
-                                }
-                            }
-                            .id(selectedPage)
-                            .transition(.modifier(active: ProfilePageReveal(progress: 0), identity: ProfilePageReveal(progress: 1)))
-                            .padding(.horizontal, 24)
-                            .padding(.bottom, 24)
-                            .frame(maxWidth: .infinity)
+                            profileHome(size: contentGeometry.size)
+                                .padding(.horizontal, 24)
+                                .padding(.vertical, isLandscape(contentGeometry.size) ? 12 : 0)
+                                .padding(.bottom, isLandscape(contentGeometry.size) ? 0 : 24)
                         }
-                        .opacity(pageOpacity)
-                        .allowsHitTesting(!isPageTransitioning)
-                        .accessibilityIdentifier("profile-page-\(selectedPage.rawValue)")
+                        .opacity(expandedCard != nil ? 1 - cardExpansion : (selectedPage == .home ? pageOpacity : 0))
+                        .allowsHitTesting(selectedPage == .home && !isPageTransitioning)
+                        .accessibilityHidden(selectedPage != .home)
+
+                        if expandedCard != nil {
+                            let frame = source.interpolated(to: destination, progress: cardExpansion)
+                            Color.clear
+                                .frame(width: frame.width, height: frame.height)
+                                .glassEffect(.regular, in: .rect(cornerRadius: DesignMetrics.defaultCornerRadius))
+                                .position(x: frame.midX, y: frame.midY)
+                                .allowsHitTesting(false)
+                        }
+
+                        if selectedPage != .home {
+                            ScrollView {
+                                VStack(alignment: .leading, spacing: 14) {
+                                    subpageHeader
+                                    pageContent
+                                }
+                                .id(selectedPage)
+                                .padding(.horizontal, 24)
+                                .padding(.top, topInset)
+                                .padding(.bottom, 24)
+                                .frame(maxWidth: .infinity)
+                            }
+                            .modifier(ProfilePageReveal(progress: expandedCard == nil ? 1 : cardExpansion,
+                                                        sourceFrame: source, destinationFrame: destination))
+                            .opacity(pageOpacity)
+                            .allowsHitTesting(!isPageTransitioning)
+                            .accessibilityIdentifier("profile-page-\(selectedPage.rawValue)")
+                        }
 
                         sharedBrand(stacked: isLandscape(contentGeometry.size))
                             .frame(width: max(1, min(brandFrame.width, 360)), height: isLandscape(contentGeometry.size) ? max(1, brandFrame.height) : brandHeight)
                             .position(x: brandFrame.midX, y: brandFrame.midY)
-                            .opacity(showsBrand && brandFrame != .zero ? 1 : 0)
+                            .opacity(brandFrame == .zero ? 0 : (expandedCard != nil ? max(0, 1 - cardExpansion * 2) : (showsBrand ? 1 : 0)))
                             .allowsHitTesting(showsBrand && !isPageTransitioning)
                             .accessibilityHidden(!showsBrand)
                     }
@@ -304,6 +329,10 @@ struct AccountSettingsView: View {
                 }
             }
         )) { Button("OK", role: .cancel) {} } message: { Text(appIcons.errorMessage ?? "") }
+        .onChange(of: selectedPage) {
+            guard showsBrand, let frame = brandFrames[selectedPage] else { return }
+            withAnimation(reduceMotion ? nil : .smooth(duration: 0.4)) { brandFrame = frame }
+        }
         .onDisappear { pageTransition?.cancel() }
         .task { appIcons.refresh(); libraryIndex.refreshStoredAccounts() }
         .task(id: updatesLibraryIndexClock) {
@@ -334,7 +363,7 @@ struct AccountSettingsView: View {
         return ProfileHomeLayout(availableSize: CGSize(width: max(0, size.width - 48), height: max(0, size.height - 24)),
                                  landscape: landscape, minimumBrandHeight: max(132, brandHeight))
         {
-            brandSlot
+            brandSlot(for: .home)
             profileCards(compact: landscape, height: max(140, size.height - 24))
             versionFooter
         }
@@ -383,13 +412,20 @@ struct AccountSettingsView: View {
         .glassEffect(.regular.interactive(), in: .rect(cornerRadius: DesignMetrics.defaultCornerRadius))
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("profile-open-\(page.rawValue)")
+        .onGeometryChange(for: CGRect.self) { proxy in
+            proxy.frame(in: .named("profile-content"))
+        } action: { frame in
+            cardFrames[page] = frame
+        }
     }
 
-    private var brandSlot: some View {
+    private func brandSlot(for page: SettingsPage) -> some View {
         Color.clear
             .onGeometryChange(for: CGRect.self) { proxy in
                 proxy.frame(in: .named("profile-content"))
             } action: { frame in
+                brandFrames[page] = frame
+                guard selectedPage == page || (page == .home && expandedCard != nil) else { return }
                 if brandFrame != .zero, !reduceMotion, isPageTransitioning || brandFrame.size != frame.size {
                     withAnimation(.smooth(duration: 0.4)) { brandFrame = frame }
                 } else {
@@ -429,13 +465,18 @@ struct AccountSettingsView: View {
     }
 
     private var versionFooter: some View {
-        Text("Remmich · \(appVersion) (\(appBuild))\(Self.buildRevision.map { " · " + $0 } ?? "") & Immich Server · \(session.serverVersion.description)")
-            .font(.caption2)
-            .foregroundStyle(.secondary)
-            .multilineTextAlignment(.center)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 8)
-            .accessibilityIdentifier("profile-versions")
+        VStack(spacing: 3) {
+            Text("Remmich · \(appVersion) (\(appBuild))\(Self.buildRevision.map { " · " + $0 } ?? "")")
+            Text("Immich Server · \(session.serverVersion.description)")
+        }
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+        .multilineTextAlignment(.center)
+        .lineLimit(1)
+        .minimumScaleFactor(0.65)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
+        .accessibilityIdentifier("profile-versions")
     }
 
     private var subpageHeader: some View {
@@ -470,7 +511,7 @@ struct AccountSettingsView: View {
 
     private var iconPage: some View {
         VStack(alignment: .leading, spacing: 18) {
-            brandSlot.frame(height: max(132, brandHeight))
+            brandSlot(for: .appearance).frame(height: max(132, brandHeight))
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10),
                                      count: dynamicTypeSize.isAccessibilitySize ? 1 : 3), spacing: 10)
             {
@@ -504,14 +545,41 @@ struct AccountSettingsView: View {
     }
 
     private func navigateBack() {
-        guard let page = pageHistory.popLast() else { return }
-        transition(to: page, returning: true)
+        guard !isPageTransitioning, let page = pageHistory.popLast() else { return }
+        if page == .home, expandedCard != nil {
+            isPageTransitioning = true
+            withAnimation(reduceMotion ? nil : .snappy(duration: 0.24, extraBounce: 0.08), completionCriteria: .logicallyComplete) {
+                cardExpansion = 0
+            } completion: {
+                selectedPage = .home
+                expandedCard = nil
+                isPageTransitioning = false
+            }
+        } else {
+            transition(to: page, returning: true)
+        }
     }
 
     private func navigate(to page: SettingsPage) {
-        guard page != selectedPage else { return }
+        guard !isPageTransitioning, page != selectedPage else { return }
         pageHistory.append(selectedPage)
-        transition(to: page, returning: false)
+        if selectedPage == .home, page != .appearance, cardFrames[page] != nil {
+            expandedCard = page
+            selectedPage = page
+            cardExpansion = 0
+            isPageTransitioning = true
+            pageTransition = Task {
+                do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
+                guard !Task.isCancelled else { return }
+                withAnimation(reduceMotion ? nil : .snappy(duration: 0.30, extraBounce: 0.14), completionCriteria: .logicallyComplete) {
+                    cardExpansion = 1
+                } completion: {
+                    isPageTransitioning = false
+                }
+            }
+        } else {
+            transition(to: page, returning: false)
+        }
     }
 
     private func transition(to page: SettingsPage, returning: Bool) {
@@ -541,7 +609,7 @@ struct AccountSettingsView: View {
         VStack(alignment: .leading, spacing: 0) {
             sectionCaption("PROFILE")
             profileValueRow("Name", value: accountDisplayName, symbol: "person.crop.circle")
-            profileValueRow("Email", value: session.userEmail, symbol: "envelope", stackedValue: true)
+            profileValueRow("Email", value: session.userEmail, symbol: "envelope")
             sectionCaption("SERVER").padding(.top, 24)
             Button { navigate(to: .connection) } label: {
                 profileValueRow("Connection", value: connectionSummary, symbol: "network", showsChevron: true)
@@ -568,27 +636,22 @@ struct AccountSettingsView: View {
             .foregroundStyle(.secondary).padding(.bottom, 10)
     }
 
-    private func profileValueRow(_ title: String, value: String, symbol: String? = nil, showsChevron: Bool = false, stackedValue: Bool = false) -> some View {
+    private func profileValueRow(_ title: String, value: String, symbol: String? = nil, showsChevron: Bool = false) -> some View {
         VStack(spacing: 0) {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 if let symbol {
                     Image(systemName: symbol).foregroundStyle(.secondary).frame(width: 20)
                 }
-                Text(title).foregroundStyle(.primary)
+                Text(title).foregroundStyle(.primary).fixedSize(horizontal: true, vertical: false)
                 Spacer(minLength: 8)
-                if !stackedValue {
-                    Text(value).foregroundStyle(.secondary).multilineTextAlignment(.trailing)
-                        .textSelection(.enabled).allowsHitTesting(!showsChevron)
-                }
+                Text(value).foregroundStyle(.secondary).multilineTextAlignment(.trailing)
+                    .lineLimit(1).minimumScaleFactor(0.7).layoutPriority(1)
+                    .textSelection(.enabled).allowsHitTesting(!showsChevron)
                 if showsChevron {
                     Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
                 }
             }
             .font(.subheadline).frame(minHeight: 50).padding(.vertical, 2)
-            if stackedValue {
-                Text(value).font(.subheadline).foregroundStyle(.secondary).textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 32).padding(.bottom, 14)
-            }
             Divider().opacity(0.45)
         }
     }
@@ -1585,8 +1648,19 @@ struct AccountSettingsView: View {
     }
 }
 
+private extension CGRect {
+    func interpolated(to destination: CGRect, progress: CGFloat) -> CGRect {
+        CGRect(x: minX + (destination.minX - minX) * progress,
+               y: minY + (destination.minY - minY) * progress,
+               width: width + (destination.width - width) * progress,
+               height: height + (destination.height - height) * progress)
+    }
+}
+
 private struct ProfilePageReveal: AnimatableModifier {
     var progress: CGFloat
+    let sourceFrame: CGRect
+    let destinationFrame: CGRect
 
     var animatableData: CGFloat {
         get { progress }
@@ -1594,15 +1668,13 @@ private struct ProfilePageReveal: AnimatableModifier {
     }
 
     func body(content: Content) -> some View {
+        let frame = sourceFrame.interpolated(to: destinationFrame, progress: progress)
         content
             .opacity(min(1, max(0, (progress - 0.12) / 0.5)))
-            .mask {
-                GeometryReader { geometry in
-                    RoundedRectangle(cornerRadius: 22 + (DesignMetrics.defaultCornerRadius - 22) * progress)
-                        .frame(width: 44 + (geometry.size.width - 44) * progress,
-                               height: 44 + (geometry.size.height - 44) * progress)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                }
+            .mask(alignment: .topLeading) {
+                RoundedRectangle(cornerRadius: DesignMetrics.defaultCornerRadius)
+                    .frame(width: max(0, frame.width), height: max(0, frame.height))
+                    .offset(x: frame.minX, y: frame.minY)
             }
     }
 }
