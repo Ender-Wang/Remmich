@@ -98,6 +98,14 @@ flowchart TD
     Residency --> Nuke
     Timeline --> Memories[Optional independent memory lane]
     Active --> Preferences[Local presentation preferences]
+    Active --> ProfileSettings[Redesigned profile in the account panel]
+    ProfileSettings --> AccountSettings[Account and Connection]
+    ProfileSettings --> IndexSettings[Timeline index: sync, pause, resume, retry, rebuild]
+    ProfileSettings --> CacheSettings[Offline cache: progress, queued work, maintenance, retained accounts]
+    CacheSettings --> ResourceWait[Pause for temperature or Low Power Mode; respect user pause]
+    ProfileSettings -->|Hold the animated logo| IconPicker[Spiral, Spaced, Mosaic]
+    IconPicker --> SystemIcon[iOS-confirmed app icon selection]
+    SystemIcon --> Branding[Shared animated brand and loading indicators]
     Preferences --> Browser
     Media --> Download[Authenticated streaming temporary-file downloads]
     Download --> Player[Local AVKit playback item]
@@ -106,6 +114,14 @@ flowchart TD
     Active -->|Logout cancels in-flight routing| Purge
     Purge --> Onboarding
 ```
+
+# Profile and app icons
+
+The profile panel groups Account, Connection, Index, and Cache & Storage while retaining the avatar's expanding glass presentation. Index and cache pages show live statistics, elapsed/remaining time, last sync, failure diagnostics, and state-appropriate Sync, Pause, Resume, and Retry controls. Cache maintenance and retained-account deletion preserve their confirmation dialogs and affect local data only.
+
+Touch and hold the large profile logo to choose Spiral, Spaced, or Mosaic as the actual iOS app icon; VoiceOver exposes the same action. Selection follows the system's confirmed icon, including after foregrounding, and failures leave the prior choice intact. The shared logo continues animating between the profile home and icon picker while surrounding content fades. Reduce Motion uses the original static composition. Backgrounded and hidden branding pauses its animation.
+
+Native brand layers are generated from the committed Icon Composer SVGs with `python3 Scripts/generate-brand-artwork.py` (requires `rsvg-convert`, supplied by librsvg). The generated images preserve the SVG shadow, multiply-fill, and reflection layers; only component transforms animate at runtime.
 
 # Development
 
