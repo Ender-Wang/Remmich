@@ -2,13 +2,14 @@ import SwiftUI
 import UIKit
 
 struct AccountSettingsView: View {
-    private enum SettingsPage: String, CaseIterable, Identifiable {
+    private enum SettingsPage: String {
+        case home = "Profile"
         case account = "Account"
-        case library = "Index & Cache"
-
-        var id: Self {
-            self
-        }
+        case connection = "Connection"
+        case index = "Index"
+        case cache = "Cache & Storage"
+        case cacheMaintenance = "Cache maintenance"
+        case appearance = "App icon"
     }
 
     private struct StatusNote {
@@ -87,13 +88,6 @@ struct AccountSettingsView: View {
         }
     }
 
-    private enum StatusNoteLayout {
-        static let spacing: CGFloat = 4
-        static let settledElapsedWidth: CGFloat = 60
-        static let activeElapsedWidth: CGFloat = 96
-        static let lastSyncWidth: CGFloat = 120
-    }
-
     private enum SettingsIconLayout {
         static let size: CGFloat = 16
         static let frame: CGFloat = 20
@@ -103,6 +97,7 @@ struct AccountSettingsView: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     let session: AccountSession
     let activeRoute: ActiveConnectionRoute?
@@ -124,7 +119,24 @@ struct AccountSettingsView: View {
     @State private var showsThumbnailRebuildConfirmation = false
     @State private var showsThumbnailClearConfirmation = false
     @State private var libraryIndexClock = Date()
-    @State private var selectedPage = SettingsPage.account
+    @State private var selectedPage = SettingsPage.home
+    @State private var pageOpacity = 1.0
+    @State private var isPageTransitioning = false
+    @State private var pageTransition: Task<Void, Never>?
+    @State private var brandFrame = CGRect.zero
+
+    private var appIcons: AppIconController {
+        .shared
+    }
+
+    private var showsBrand: Bool {
+        selectedPage == .home || selectedPage == .appearance
+    }
+
+    private var brandHeight: CGFloat {
+        dynamicTypeSize.isAccessibilitySize ? 160 : 92
+    }
+
     @State private var copiedIndexFailureDiagnostics = false
     @State private var copiedThumbnailFailureDiagnostics = false
 
@@ -155,59 +167,57 @@ struct AccountSettingsView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("Remmich")
-                    .font(.title.bold())
-                Spacer()
-                if !showsCloseControl, !accountDisplayName.isEmpty {
-                    Text(accountDisplayName)
-                        .font(.headline.weight(.semibold))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .frame(maxWidth: accountNameMaxWidth, alignment: .trailing)
-                        .padding(.trailing, 48)
-                        .accessibilityLabel("Immich account \(accountDisplayName)")
+        GeometryReader { geometry in
+            VStack(spacing: 0) {
+                HStack {
+                    Text(accountDisplayName.isEmpty ? session.userEmail : accountDisplayName)
+                        .font(.title2.bold())
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityIdentifier("profile-account-name")
+                    if showsCloseControl {
+                        settingsActionButton("Close", systemImage: "xmark", action: closePanel)
+                    } else {
+                        Color.clear.frame(width: 44, height: 44)
+                    }
                 }
-                if showsCloseControl {
-                    settingsActionButton("Close", systemImage: "xmark", action: closePanel)
+                .frame(minHeight: 44)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 12)
+
+                GeometryReader { contentGeometry in
+                    ZStack(alignment: .topLeading) {
+                        ScrollView {
+                            Group {
+                                if selectedPage == .home {
+                                    profileHome(size: contentGeometry.size)
+                                } else {
+                                    VStack(alignment: .leading, spacing: 18) {
+                                        subpageHeader
+                                        pageContent
+                                    }
+                                }
+                            }
+                            .padding(.horizontal, 24)
+                            .padding(.bottom, 24)
+                            .frame(maxWidth: .infinity)
+                        }
+                        .opacity(pageOpacity)
+                        .allowsHitTesting(!isPageTransitioning)
+                        .accessibilityIdentifier("profile-page-\(selectedPage.rawValue)")
+
+                        sharedBrand
+                            .frame(width: max(1, min(brandFrame.width, 320)), height: brandHeight)
+                            .position(x: brandFrame.midX, y: brandFrame.midY)
+                            .opacity(showsBrand && brandFrame != .zero ? 1 : 0)
+                            .allowsHitTesting(showsBrand && !isPageTransitioning)
+                            .accessibilityHidden(!showsBrand)
+                    }
+                    .coordinateSpace(name: "profile-content")
+                    .clipped()
                 }
             }
-            .frame(minHeight: 44)
-            .padding(.horizontal, 24)
-            .padding(.vertical, 12)
-
-            Picker("Settings Page", selection: pickerSelection) {
-                ForEach(SettingsPage.allCases) { page in
-                    Text(page.rawValue)
-                        .fontWeight(.bold)
-                        .tag(page)
-                }
-            }
-            .pickerStyle(.segmented)
-            .font(.body.weight(.bold))
-            .labelsHidden()
-            .padding(.horizontal, 24)
-            .padding(.bottom, 16)
-            .accessibilityIdentifier("settings-page-picker")
-
-            TabView(selection: $selectedPage) {
-                ScrollView {
-                    accountPage
-                        .padding(.horizontal, 24)
-                        .padding(.bottom, 24)
-                }
-                .tag(SettingsPage.account)
-
-                ScrollView {
-                    libraryPage
-                        .padding(.horizontal, 24)
-                        .padding(.bottom, 24)
-                }
-                .tag(SettingsPage.library)
-            }
-            .tabViewStyle(.page(indexDisplayMode: .never))
-            .accessibilityIdentifier("account-settings-pages")
+            .frame(width: geometry.size.width, height: geometry.size.height)
         }
         .modifier(AccountSettingsGlassBackground(enabled: drawsGlassBackground))
         .accessibilityElement(children: .contain)
@@ -280,7 +290,16 @@ struct AccountSettingsView: View {
         } message: {
             Text("This removes cached timeline thumbnails and asset Info, and turns off automatic caching. It does not change the Immich server or the timeline index.")
         }
-        .task { libraryIndex.refreshStoredAccounts() }
+        .alert("Couldn’t Change App Icon", isPresented: Binding(
+            get: { appIcons.errorMessage != nil },
+            set: {
+                if !$0 {
+                    appIcons.errorMessage = nil
+                }
+            }
+        )) { Button("OK", role: .cancel) {} } message: { Text(appIcons.errorMessage ?? "") }
+        .onDisappear { pageTransition?.cancel() }
+        .task { appIcons.refresh(); libraryIndex.refreshStoredAccounts() }
         .task(id: updatesLibraryIndexClock) {
             guard updatesLibraryIndexClock else {
                 libraryIndexClock = Date()
@@ -300,29 +319,206 @@ struct AccountSettingsView: View {
         session.name.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private var accountNameMaxWidth: CGFloat {
-        UIDevice.current.userInterfaceIdiom == .pad ? 220 : 140
+    private func profileHome(size: CGSize) -> some View {
+        VStack(spacing: 24) {
+            if size.width > 540, size.height < 430, !dynamicTypeSize.isAccessibilitySize {
+                HStack(spacing: 22) {
+                    brandSlot.frame(maxWidth: .infinity, minHeight: 132)
+                    profileCards.frame(maxWidth: .infinity)
+                }
+                .frame(maxHeight: .infinity)
+            } else {
+                brandSlot.frame(minHeight: max(132, brandHeight), maxHeight: .infinity)
+                profileCards
+            }
+            versionFooter
+        }
+        .frame(minHeight: max(0, size.height - 24))
     }
 
-    private var pickerSelection: Binding<SettingsPage> {
-        Binding(
-            get: { selectedPage },
-            set: { page in
-                if reduceMotion {
-                    selectedPage = page
+    private var profileCards: some View {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12),
+                                 count: dynamicTypeSize.isAccessibilitySize ? 1 : 2), spacing: 12)
+        {
+            profileCard(.account, symbol: "person.crop.circle", color: Color(red: 30 / 255, green: 131 / 255, blue: 247 / 255),
+                        detail: "Profile & session")
+            profileCard(.connection, symbol: "network", color: Color(red: 24 / 255, green: 194 / 255, blue: 73 / 255),
+                        detail: "\(activeRoute?.kind.rawValue.capitalized ?? "No route") · \(routeStatusLabel)")
+            profileCard(.index, symbol: "list.bullet.rectangle", color: Color(red: 1, green: 180 / 255, blue: 0),
+                        detail: "\(libraryIndex.indexedAssetCount.formatted()) assets\n\(indexStatusPresentation.accessibilityValue)")
+            profileCard(.cache, symbol: "externaldrive", color: Color(red: 237 / 255, green: 121 / 255, blue: 181 / 255),
+                        detail: thumbnailCacheStatusAccessibilityValue)
+        }
+    }
+
+    private func profileCard(_ page: SettingsPage, symbol: String, color: Color, detail: String) -> some View {
+        Button { navigate(to: page) } label: {
+            VStack(alignment: .leading, spacing: 8) {
+                Image(systemName: symbol)
+                    .font(.system(size: 24, weight: .medium))
+                    .foregroundStyle(color)
+                    .frame(height: 28, alignment: .top)
+                    .padding(.bottom, 4)
+                Text(page.rawValue).font(.headline)
+                Text(detail).font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, minHeight: 112, alignment: .topLeading)
+            .padding(16)
+            .background(.white.opacity(0.08), in: .rect(cornerRadius: DesignMetrics.defaultCornerRadius))
+            .overlay {
+                RoundedRectangle(cornerRadius: DesignMetrics.defaultCornerRadius)
+                    .strokeBorder(.white.opacity(0.4), lineWidth: 1)
+            }
+            .contentShape(.rect(cornerRadius: DesignMetrics.defaultCornerRadius))
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("profile-open-\(page.rawValue)")
+    }
+
+    private var brandSlot: some View {
+        Color.clear
+            .onGeometryChange(for: CGRect.self) { proxy in
+                proxy.frame(in: .named("profile-content"))
+            } action: { frame in
+                if isPageTransitioning, !reduceMotion {
+                    withAnimation(.easeInOut(duration: 0.18)) { brandFrame = frame }
                 } else {
-                    withAnimation(.snappy(duration: 0.25, extraBounce: 0)) {
-                        selectedPage = page
-                    }
+                    brandFrame = frame
                 }
             }
-        )
+            .accessibilityHidden(true)
+    }
+
+    private var sharedBrand: some View {
+        HStack(spacing: 16) {
+            RemmichLogoView(icon: appIcons.selectedIcon ?? .spiral, isAnimating: showsBrand)
+                .frame(width: 120, height: 120)
+                .frame(width: 92, height: 92)
+                .contentShape(Rectangle())
+                .onLongPressGesture(minimumDuration: 0.6) {
+                    if selectedPage == .home {
+                        navigate(to: .appearance)
+                    }
+                }
+                .accessibilityLabel(selectedPage == .home ? "Change app icon" : "Remmich logo")
+                .accessibilityHint(selectedPage == .home ? "Touch and hold to choose an app icon" : "")
+                .accessibilityAction(named: "Change app icon") { navigate(to: .appearance) }
+            VStack(spacing: 4) {
+                Text("Remmich").font(.title.bold()).lineLimit(1).minimumScaleFactor(0.8)
+                Text("Your **Re**adonly I**mmich** library")
+                    .font(.caption)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity)
+        }
+    }
+
+    private var versionFooter: some View {
+        Text("Remmich · \(appVersion) (\(appBuild)) & Immich Server · v\(session.serverVersion.description)")
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .accessibilityIdentifier("profile-versions")
+    }
+
+    private var subpageHeader: some View {
+        HStack(spacing: 12) {
+            Button { navigate(to: selectedPage == .cacheMaintenance ? .cache : .home) } label: {
+                Image(systemName: "chevron.left").frame(width: 44, height: 44)
+            }
+            .buttonStyle(.glass)
+            .buttonBorderShape(.circle)
+            .accessibilityLabel("Back")
+            .accessibilityIdentifier("profile-back")
+            Text(selectedPage.rawValue).font(.title3.bold())
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .padding(.top, 6)
+    }
+
+    @ViewBuilder
+    private var pageContent: some View {
+        switch selectedPage {
+        case .home: EmptyView()
+        case .account: accountPage
+        case .connection: connectionSection
+        case .index: indexPage
+        case .cache: cachePage
+        case .cacheMaintenance: cacheMaintenancePage
+        case .appearance: iconPage
+        }
+    }
+
+    private var iconPage: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            brandSlot.frame(height: max(132, brandHeight))
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10),
+                                     count: dynamicTypeSize.isAccessibilitySize ? 1 : 3), spacing: 10)
+            {
+                ForEach(RemmichAppIcon.allCases) { icon in
+                    Button {
+                        Task { await appIcons.select(icon) }
+                    } label: {
+                        VStack(spacing: 8) {
+                            RemmichLogoView(icon: icon, isAnimating: false).frame(width: 76, height: 76)
+                            Text(icon.rawValue).font(.caption.weight(.semibold))
+                            Image(systemName: appIcons.selectedIcon == icon ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(appIcons.selectedIcon == icon ? Color.accentColor : .secondary)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(.white.opacity(0.1), in: .rect(cornerRadius: DesignMetrics.defaultCornerRadius))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(appIcons.isChanging || !appIcons.isSupported)
+                    .accessibilityLabel("\(icon.rawValue) app icon")
+                    .accessibilityValue(appIcons.selectedIcon == icon ? "Selected" : "")
+                    .accessibilityIdentifier("app-icon-\(icon.rawValue)")
+                }
+            }
+            if appIcons.isChanging {
+                Label("Changing app icon…", systemImage: "hourglass").font(.footnote).foregroundStyle(.secondary)
+            } else if !appIcons.isSupported {
+                Text("App icon changes aren’t available on this device.").font(.footnote).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func navigate(to page: SettingsPage) {
+        guard page != selectedPage else { return }
+        pageTransition?.cancel()
+        let fades = !reduceMotion && (page == .appearance || selectedPage == .appearance)
+        guard fades else {
+            selectedPage = page
+            pageOpacity = 1
+            isPageTransitioning = false
+            return
+        }
+        isPageTransitioning = true
+        pageTransition = Task {
+            withAnimation(.easeOut(duration: 0.12)) { pageOpacity = 0 }
+            do { try await Task.sleep(for: .milliseconds(120)) } catch { return }
+            guard !Task.isCancelled else { return }
+            selectedPage = page
+            withAnimation(.easeIn(duration: 0.18)) { pageOpacity = 1 }
+            do { try await Task.sleep(for: .milliseconds(180)) } catch { return }
+            isPageTransitioning = false
+        }
     }
 
     private var accountPage: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 18) {
-                settingsValue("User", systemImage: "person.crop.circle", value: session.userEmail)
+                settingsValue("Name", systemImage: "person.crop.circle", value: accountDisplayName)
+                settingsValue("Email", systemImage: "envelope", value: session.userEmail)
+                settingsValue("App build", systemImage: "app.badge", value: "\(appVersion) (\(appBuild))\(Self.buildRevision.map { " · " + $0 } ?? "")")
                 settingsValue(
                     "Server",
                     systemImage: "server.rack",
@@ -335,8 +531,6 @@ struct AccountSettingsView: View {
                 )
             }
 
-            connectionSection
-                .padding(.top, 28)
             accountFooter
         }
     }
@@ -377,15 +571,9 @@ struct AccountSettingsView: View {
         }
     }
 
-    private var libraryPage: some View {
-        VStack(alignment: .leading, spacing: 28) {
-            libraryIndexSection
-        }
-    }
-
     private var updatesLibraryIndexClock: Bool {
-        selectedPage == .library
-            && (libraryIndex.status == .indexing || libraryIndex.thumbnailWarmingStatus == .warming)
+        (selectedPage == .index && libraryIndex.status == .indexing)
+            || (selectedPage == .cache && libraryIndex.thumbnailWarmingStatus == .warming)
     }
 
     private func closePanel() {
@@ -468,165 +656,134 @@ struct AccountSettingsView: View {
         }
     }
 
-    private var libraryIndexSection: some View {
+    private var indexPage: some View {
         VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 8) {
-                indexStatus
-                ProgressView(value: displayedIndexFractionCompleted)
-                    .animation(
-                        reduceMotion ? nil : .smooth(duration: 0.22),
-                        value: displayedIndexFractionCompleted
-                    )
-                    .accessibilityLabel("Library indexing progress")
-                    .accessibilityValue("\(libraryIndexProgressText). \(libraryIndexMediaBreakdown)")
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(libraryIndexProgressText)
-                    Text(
-                        "\(libraryIndex.indexedAssetCount.formatted()) indexed · \(ByteCountFormatter.string(fromByteCount: libraryIndex.storageReport.metadataBytes, countStyle: .file))"
-                    )
-                    if let libraryIndexDatabaseSizeEstimate {
-                        Text(libraryIndexDatabaseSizeEstimate)
-                    }
-                    Text(libraryIndexMediaBreakdown)
-                }
-                .font(.footnote.monospacedDigit())
+            indexStatus
+            Text(indexStatusPresentation.accessibilityValue).font(.headline)
+            if case let .failed(message) = libraryIndex.status {
+                Text(message).font(.footnote).foregroundStyle(.red).textSelection(.enabled)
             }
-            VStack(alignment: .leading, spacing: 0) {
-                settingsTripleActionRow {
-                    settingsActionButton(
-                        "Sync Now",
-                        systemImage: "arrow.triangle.2.circlepath"
-                    ) { libraryIndex.syncNow() }
-                } center: {
-                    ZStack {
-                        switch libraryIndex.status {
-                        case .failed:
-                            settingsActionButton("Retry", systemImage: "arrow.clockwise") {
-                                libraryIndex.retry()
-                            }
-                            .transition(.opacity)
-                        case .paused:
-                            settingsActionButton("Resume", systemImage: "play.fill") {
-                                libraryIndex.resume()
-                            }
-                            .transition(.opacity)
-                        case .indexing:
-                            settingsActionButton("Pause", systemImage: "pause.fill") {
-                                libraryIndex.pause()
-                            }
-                            .transition(.opacity)
-                        case .idle, .upToDate:
-                            EmptyView()
-                        }
-                    }
-                    .frame(height: 44)
-                    .animation(
-                        reduceMotion ? nil : .snappy(duration: 0.22, extraBounce: 0),
-                        value: libraryIndex.status
-                    )
-                } trailing: {
-                    settingsActionButton("Rebuild", systemImage: "arrow.counterclockwise.circle") {
-                        libraryIndex.fullSyncAndVerify()
-                    }
+            ProgressView(value: displayedIndexFractionCompleted)
+                .accessibilityLabel("Library indexing progress")
+                .accessibilityValue("\(libraryIndexProgressText). \(libraryIndexMediaBreakdown)")
+            VStack(alignment: .leading, spacing: 6) {
+                Text(libraryIndexProgressText)
+                Text(libraryIndexMediaBreakdown)
+                Text("Index storage · \(ByteCountFormatter.string(fromByteCount: libraryIndex.storageReport.metadataBytes, countStyle: .file))")
+                if let libraryIndexDatabaseSizeEstimate {
+                    Text(libraryIndexDatabaseSizeEstimate)
                 }
+            }
+            .font(.footnote.monospacedDigit())
+            settingsActionButton(indexPhase.action.title, systemImage: indexPhase.action.symbol) {
+                switch indexPhase.action {
+                case .sync: libraryIndex.syncNow()
+                case .pause: libraryIndex.pause()
+                case .resume: libraryIndex.resume()
+                case .retry: libraryIndex.retry()
+                }
+            }
+            Divider().padding(.vertical, 8)
+            Button { libraryIndex.fullSyncAndVerify() } label: {
+                Label("Rebuild index", systemImage: "arrow.counterclockwise.circle")
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+            .disabled(libraryIndex.status == .indexing)
+            Text("This rebuilds local metadata. Offline cached files remain separate.")
+                .font(.footnote).foregroundStyle(.secondary)
+        }
+    }
 
-                Color.clear
-                    .frame(height: 44)
-                Divider()
-                Color.clear
-                    .frame(height: 36)
-
-                VStack(alignment: .leading, spacing: 8) {
-                    thumbnailCacheStatus
-                    ProgressView(value: displayedThumbnailFractionCompleted)
-                        .animation(
-                            reduceMotion ? nil : .smooth(duration: 0.22),
-                            value: displayedThumbnailFractionCompleted
-                        )
-                        .accessibilityLabel("Offline thumbnail and metadata caching progress")
-                        .accessibilityValue(thumbnailWarmingProgressText)
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(thumbnailWarmingProgressText)
-                        Text(thumbnailCacheInventory)
-                        if let thumbnailCacheSizeEstimate {
-                            Text(thumbnailCacheSizeEstimate)
-                        }
-                    }
-                    .font(.footnote.monospacedDigit())
+    private var cachePage: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            thumbnailCacheStatus
+            Text(thumbnailCacheStatusAccessibilityValue).font(.headline)
+            if case let .failed(message) = libraryIndex.thumbnailWarmingStatus {
+                Text(message).font(.footnote).foregroundStyle(.red).textSelection(.enabled)
+            }
+            ProgressView(value: displayedThumbnailFractionCompleted)
+                .accessibilityLabel("Offline thumbnail and metadata caching progress")
+                .accessibilityValue(thumbnailWarmingProgressText)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(thumbnailWarmingProgressText)
+                Text(thumbnailCacheInventory)
+                if let thumbnailCacheSizeEstimate {
+                    Text(thumbnailCacheSizeEstimate)
                 }
             }
-            Toggle(
-                isOn: Binding(
-                    get: { libraryIndex.thumbnailWarmingEnabled },
-                    set: { libraryIndex.setThumbnailWarmingEnabled($0) }
-                )
-            ) {
-                Text("Auto-cache Thumbnails & Info")
-                    .bold()
-            }
-            settingsTripleActionRow {
-                settingsActionButton("Sync Now", systemImage: "arrow.triangle.2.circlepath") {
+            .font(.footnote.monospacedDigit())
+            settingsActionButton(cachePhase.action.title, systemImage: cachePhase.action.symbol) {
+                if cachePhase.action == .pause {
+                    libraryIndex.pauseThumbnailCache()
+                } else {
                     libraryIndex.syncThumbnailCache()
                 }
-                .disabled(libraryIndex.thumbnailWarmingStatus == .warming)
-            } center: {
-                ZStack {
-                    if libraryIndex.thumbnailWarmingStatus == .warming {
-                        settingsActionButton("Pause", systemImage: "pause.fill") {
-                            libraryIndex.pauseThumbnailCache()
-                        }
-                        .transition(.opacity)
-                    } else {
-                        settingsActionButton(
-                            "Rebuild",
-                            systemImage: "arrow.counterclockwise.circle"
-                        ) {
-                            showsThumbnailRebuildConfirmation = true
-                        }
-                        .transition(.opacity)
-                    }
-                }
-                .frame(height: 44)
-                .animation(
-                    reduceMotion ? nil : .snappy(duration: 0.22, extraBounce: 0),
-                    value: libraryIndex.thumbnailWarmingStatus
-                )
-            } trailing: {
-                settingsActionButton("Clear", systemImage: "trash", role: .destructive) {
-                    showsThumbnailClearConfirmation = true
-                }
+            }
+            Toggle("Auto-cache Thumbnails & Info", isOn: Binding(
+                get: { libraryIndex.thumbnailWarmingEnabled },
+                set: { libraryIndex.setThumbnailWarmingEnabled($0) }
+            ))
+            Divider().padding(.vertical, 8)
+            Button { navigate(to: .cacheMaintenance) } label: {
+                HStack { Label("Cache maintenance", systemImage: "externaldrive"); Spacer(); Image(systemName: "chevron.right") }
+                    .frame(minHeight: 44)
+            }
+            .buttonStyle(.plain)
+            retainedAccountSection
+        }
+    }
+
+    private var cacheMaintenancePage: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            settingsActionButton("Rebuild Offline Cache", systemImage: "arrow.counterclockwise.circle") {
+                showsThumbnailRebuildConfirmation = true
+            }
+            .disabled(libraryIndex.thumbnailWarmingStatus == .warming)
+            settingsActionButton("Clear Offline Cache", systemImage: "trash", role: .destructive) {
+                showsThumbnailClearConfirmation = true
             }
             Text("The timeline index remains available when cached thumbnails and asset Info are cleared.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-            if !retainedAccounts.isEmpty {
-                Divider()
-                settingsIconLabel(
-                    "Stored Account Data",
-                    systemImage: "person.2.crop.square.stack",
-                    weight: .bold
-                )
-                .font(.subheadline.weight(.bold))
-                ForEach(retainedAccounts) { account in
-                    VStack(alignment: .leading, spacing: 6) {
-                        settingsIconLabel(
-                            Self.accountLabel(account),
-                            systemImage: "person.crop.circle"
-                        )
-                        .font(.subheadline)
-                        Text(
-                            "\(account.indexedAssetCount.formatted()) indexed assets · \(account.derivativeCount.formatted()) cached files · \(ByteCountFormatter.string(fromByteCount: account.derivativeBytes, countStyle: .file))"
-                        )
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        settingsActionRow {
-                            settingsActionButton("Delete Local Data", systemImage: "trash", role: .destructive) {
-                                pendingAccountDeletion = account
-                            }
-                        }
+                .font(.footnote).foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private var retainedAccountSection: some View {
+        if !retainedAccounts.isEmpty {
+            Divider()
+            Text("Stored Account Data").font(.headline)
+            ForEach(retainedAccounts) { account in
+                VStack(alignment: .leading, spacing: 6) {
+                    settingsIconLabel(Self.accountLabel(account), systemImage: "person.crop.circle")
+                    Text("\(account.indexedAssetCount.formatted()) indexed assets · \(account.derivativeCount.formatted()) cached files · \(ByteCountFormatter.string(fromByteCount: account.derivativeBytes, countStyle: .file))")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    settingsActionButton("Delete Local Data", systemImage: "trash", role: .destructive) {
+                        pendingAccountDeletion = account
                     }
                 }
             }
+        }
+    }
+
+    private var indexPhase: SyncWorkPhase {
+        switch libraryIndex.status {
+        case .idle: .off
+        case .indexing: .running
+        case .paused: .paused
+        case .upToDate: .upToDate
+        case .failed: .failed
+        }
+    }
+
+    private var cachePhase: SyncWorkPhase {
+        switch libraryIndex.thumbnailWarmingStatus {
+        case .off: .off
+        case .waiting: .waiting
+        case .warming: .running
+        case .paused: .paused
+        case .upToDate: .upToDate
+        case .failed: .failed
         }
     }
 
@@ -694,6 +851,7 @@ struct AccountSettingsView: View {
         .buttonStyle(.glass)
         .buttonBorderShape(.capsule)
         .controlSize(.regular)
+        .frame(minHeight: 44)
         .foregroundStyle(role == .destructive ? Color.red : Color.primary)
     }
 
@@ -709,10 +867,9 @@ struct AccountSettingsView: View {
                 .accessibilityHidden(true)
             Text(title)
                 .multilineTextAlignment(.center)
-                .fixedSize(horizontal: true, vertical: false)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .font(.caption.weight(.semibold))
-        .lineLimit(1)
     }
 
     private func settingsActionRow(
@@ -723,35 +880,6 @@ struct AccountSettingsView: View {
             content()
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
-    }
-
-    private func settingsPairedActionRow(
-        @ViewBuilder leading: () -> some View,
-        @ViewBuilder trailing: () -> some View
-    ) -> some View {
-        HStack(spacing: 12) {
-            leading()
-                .frame(maxWidth: .infinity, alignment: .center)
-            trailing()
-                .frame(maxWidth: .infinity, alignment: .center)
-        }
-        .frame(maxWidth: .infinity, alignment: .center)
-    }
-
-    private func settingsTripleActionRow(
-        @ViewBuilder leading: () -> some View,
-        @ViewBuilder center: () -> some View,
-        @ViewBuilder trailing: () -> some View
-    ) -> some View {
-        HStack(spacing: 8) {
-            leading()
-                .frame(maxWidth: .infinity, alignment: .center)
-            center()
-                .frame(maxWidth: .infinity, alignment: .center)
-            trailing()
-                .frame(maxWidth: .infinity, alignment: .center)
-        }
-        .frame(maxWidth: .infinity, alignment: .center)
     }
 
     private func performSignOut(deleteLocalData: Bool) {
@@ -884,10 +1012,8 @@ struct AccountSettingsView: View {
     }
 
     private var thumbnailCacheStatusAccessibilityValue: String {
-        guard libraryIndex.thumbnailWarmingThermalState != nil else {
-            return thumbnailCacheStatusPresentation.accessibilityValue
-        }
-        return "\(thumbnailCacheStatusPresentation.accessibilityValue), waiting for device temperature to decrease"
+        libraryIndex.thumbnailWarmingWaitingReason?.message
+            ?? thumbnailCacheStatusPresentation.accessibilityValue
     }
 
     private var thumbnailCacheStatusPresentation: StatusPresentation {
@@ -998,15 +1124,9 @@ struct AccountSettingsView: View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label)
                 .bold()
-            HStack(spacing: StatusNoteLayout.spacing) {
-                elapsedStatusNote(note)
-                statusNoteItem(
-                    note.lastSync,
-                    systemImage: "calendar.badge.clock",
-                    accessibilityLabel: "Last sync",
-                    accessibilityValue: note.lastSyncAccessibilityValue,
-                    width: StatusNoteLayout.lastSyncWidth
-                )
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) { statusNotes(note) }
+                VStack(alignment: .leading, spacing: 4) { statusNotes(note) }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -1014,6 +1134,13 @@ struct AccountSettingsView: View {
             reduceMotion ? nil : .snappy(duration: 0.26, extraBounce: 0.02),
             value: note.showsRemaining
         )
+    }
+
+    @ViewBuilder
+    private func statusNotes(_ note: StatusNote) -> some View {
+        elapsedStatusNote(note)
+        statusNoteItem(note.lastSync, systemImage: "calendar.badge.clock", accessibilityLabel: "Last sync",
+                       accessibilityValue: note.lastSyncAccessibilityValue)
     }
 
     private func elapsedStatusNote(_ note: StatusNote) -> some View {
@@ -1033,13 +1160,6 @@ struct AccountSettingsView: View {
         .monospacedDigit()
         .lineLimit(1)
         .fixedSize(horizontal: true, vertical: false)
-        .frame(
-            width: note.showsRemaining
-                ? StatusNoteLayout.activeElapsedWidth
-                : StatusNoteLayout.settledElapsedWidth,
-            alignment: .leading
-        )
-        .clipped()
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Elapsed")
         .accessibilityValue(note.elapsedAccessibilityValue)
@@ -1049,8 +1169,7 @@ struct AccountSettingsView: View {
         _ text: String,
         systemImage: String,
         accessibilityLabel: String,
-        accessibilityValue: String,
-        width: CGFloat
+        accessibilityValue: String
     ) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 5) {
             Image(systemName: systemImage)
@@ -1065,8 +1184,7 @@ struct AccountSettingsView: View {
         .font(.caption)
         .foregroundStyle(.secondary)
         .monospacedDigit()
-        .frame(width: width, alignment: .leading)
-        .clipped()
+        .fixedSize(horizontal: true, vertical: false)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityLabel)
         .accessibilityValue(accessibilityValue)
@@ -1297,16 +1415,17 @@ struct AccountSettingsView: View {
     }
 
     private var appBuild: String {
-        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "Unknown"
-        guard let buildInfoURL = Bundle.main.url(forResource: "RemmichBuildInfo", withExtension: "plist"),
-              let buildInfo = NSDictionary(contentsOf: buildInfoURL),
-              let revision = buildInfo["GitCommit"] as? String,
-              revision != "unknown"
-        else {
-            return build
-        }
-        return "\(build) (\(revision))"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "Unknown"
     }
+
+    private static let buildRevision: String? = {
+        guard let url = Bundle.main.url(forResource: "RemmichBuildInfo", withExtension: "plist"),
+              let data = try? Data(contentsOf: url),
+              let info = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: String],
+              let revision = info["GitCommit"], revision != "unknown"
+        else { return nil }
+        return revision
+    }()
 
     private var ssidEntitlementEnabled: Bool {
         Bundle.main.object(forInfoDictionaryKey: "RemmichSSIDEntitlementEnabled") as? Bool == true
