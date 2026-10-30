@@ -8,7 +8,6 @@ struct AccountSettingsView: View {
         case connection = "Connection"
         case index = "Index"
         case cache = "Cache & Storage"
-        case cacheMaintenance = "Cache maintenance"
         case appearance = "App icon"
     }
 
@@ -120,6 +119,7 @@ struct AccountSettingsView: View {
     @State private var showsThumbnailClearConfirmation = false
     @State private var libraryIndexClock = Date()
     @State private var selectedPage = SettingsPage.home
+    @State private var pageHistory: [SettingsPage] = []
     @State private var pageOpacity = 1.0
     @State private var isPageTransitioning = false
     @State private var pageTransition: Task<Void, Never>?
@@ -168,6 +168,7 @@ struct AccountSettingsView: View {
 
     var body: some View {
         GeometryReader { geometry in
+            let landscapeHome = isLandscape(geometry.size) && selectedPage == .home
             VStack(spacing: 0) {
                 HStack {
                     Text(accountDisplayName.isEmpty ? session.userEmail : accountDisplayName)
@@ -182,6 +183,8 @@ struct AccountSettingsView: View {
                     }
                 }
                 .frame(minHeight: 44)
+                .frame(maxWidth: landscapeHome ? geometry.size.width * 0.43 : nil)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 24)
                 .padding(.vertical, 12)
 
@@ -198,6 +201,8 @@ struct AccountSettingsView: View {
                                     }
                                 }
                             }
+                            .id(selectedPage)
+                            .transition(.modifier(active: ProfilePageReveal(progress: 0), identity: ProfilePageReveal(progress: 1)))
                             .padding(.horizontal, 24)
                             .padding(.bottom, 24)
                             .frame(maxWidth: .infinity)
@@ -206,8 +211,8 @@ struct AccountSettingsView: View {
                         .allowsHitTesting(!isPageTransitioning)
                         .accessibilityIdentifier("profile-page-\(selectedPage.rawValue)")
 
-                        sharedBrand
-                            .frame(width: max(1, min(brandFrame.width, 320)), height: brandHeight)
+                        sharedBrand(stacked: isLandscape(contentGeometry.size))
+                            .frame(width: max(1, min(brandFrame.width, 360)), height: isLandscape(contentGeometry.size) ? max(1, brandFrame.height) : brandHeight)
                             .position(x: brandFrame.midX, y: brandFrame.midY)
                             .opacity(showsBrand && brandFrame != .zero ? 1 : 0)
                             .allowsHitTesting(showsBrand && !isPageTransitioning)
@@ -216,6 +221,7 @@ struct AccountSettingsView: View {
                     .coordinateSpace(name: "profile-content")
                     .clipped()
                 }
+                .padding(.top, landscapeHome ? -68 : 0)
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
         }
@@ -288,7 +294,7 @@ struct AccountSettingsView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This removes cached timeline thumbnails and asset Info, and turns off automatic caching. It does not change the Immich server or the timeline index.")
+            Text("This removes cached timeline thumbnails and metadata, and turns off automatic caching. It does not change the Immich server or the timeline index.")
         }
         .alert("Couldn’t Change App Icon", isPresented: Binding(
             get: { appIcons.errorMessage != nil },
@@ -319,60 +325,62 @@ struct AccountSettingsView: View {
         session.name.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private func isLandscape(_ size: CGSize) -> Bool {
+        size.width > 540 && size.height < 430 && !dynamicTypeSize.isAccessibilitySize
+    }
+
     private func profileHome(size: CGSize) -> some View {
-        VStack(spacing: 24) {
-            if size.width > 540, size.height < 430, !dynamicTypeSize.isAccessibilitySize {
-                HStack(spacing: 22) {
-                    brandSlot.frame(maxWidth: .infinity, minHeight: 132)
-                    profileCards.frame(maxWidth: .infinity)
-                }
-                .frame(maxHeight: .infinity)
-            } else {
-                brandSlot.frame(minHeight: max(132, brandHeight), maxHeight: .infinity)
-                profileCards
-            }
+        let landscape = isLandscape(size)
+        return ProfileHomeLayout(availableSize: CGSize(width: max(0, size.width - 48), height: max(0, size.height - 24)),
+                                 landscape: landscape, minimumBrandHeight: max(132, brandHeight))
+        {
+            brandSlot
+            profileCards(compact: landscape, height: max(140, size.height - 24))
             versionFooter
         }
-        .frame(minHeight: max(0, size.height - 24))
+        .animation(reduceMotion ? nil : .smooth(duration: 0.4), value: size)
     }
 
-    private var profileCards: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12),
-                                 count: dynamicTypeSize.isAccessibilitySize ? 1 : 2), spacing: 12)
+    private func profileCards(compact: Bool, height: CGFloat) -> some View {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: compact ? 10 : 12),
+                                 count: dynamicTypeSize.isAccessibilitySize ? 1 : 2), spacing: compact ? 10 : 12)
         {
-            profileCard(.account, symbol: "person.crop.circle", color: Color(red: 30 / 255, green: 131 / 255, blue: 247 / 255),
-                        detail: "Profile & session")
-            profileCard(.connection, symbol: "network", color: Color(red: 24 / 255, green: 194 / 255, blue: 73 / 255),
-                        detail: "\(activeRoute?.kind.rawValue.capitalized ?? "No route") · \(routeStatusLabel)")
-            profileCard(.index, symbol: "list.bullet.rectangle", color: Color(red: 1, green: 180 / 255, blue: 0),
-                        detail: "\(libraryIndex.indexedAssetCount.formatted()) assets\n\(indexStatusPresentation.accessibilityValue)")
-            profileCard(.cache, symbol: "externaldrive", color: Color(red: 237 / 255, green: 121 / 255, blue: 181 / 255),
-                        detail: thumbnailCacheStatusAccessibilityValue)
+            profileCard(.account, symbol: "person.crop.circle", color: Self.accountColor,
+                        detail: "Profile & session", compact: compact, height: height)
+            profileCard(.connection, symbol: "network", color: Self.connectionColor,
+                        detail: "\(activeRoute?.kind.rawValue.capitalized ?? "No route") · \(routeStatusLabel)", compact: compact, height: height)
+            profileCard(.index, symbol: "list.bullet.rectangle", color: Self.indexColor,
+                        detail: "\(libraryIndex.indexedAssetCount.formatted()) assets · \(indexStatusPresentation.accessibilityValue)", compact: compact, height: height)
+            profileCard(.cache, symbol: "externaldrive", color: Self.cacheColor,
+                        detail: thumbnailCacheStatusAccessibilityValue, compact: compact, height: height)
         }
     }
 
-    private func profileCard(_ page: SettingsPage, symbol: String, color: Color, detail: String) -> some View {
+    private static let accountColor = Color(red: 30 / 255, green: 131 / 255, blue: 247 / 255)
+    private static let connectionColor = Color(red: 24 / 255, green: 194 / 255, blue: 73 / 255)
+    private static let indexColor = Color(red: 1, green: 180 / 255, blue: 0)
+    private static let cacheColor = Color(red: 237 / 255, green: 121 / 255, blue: 181 / 255)
+
+    private func profileCard(_ page: SettingsPage, symbol: String, color: Color, detail: String, compact: Bool, height: CGFloat) -> some View {
         Button { navigate(to: page) } label: {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: compact ? 4 : 8) {
                 Image(systemName: symbol)
-                    .font(.system(size: 24, weight: .medium))
+                    .font(.system(size: compact ? 19 : 24, weight: .medium))
                     .foregroundStyle(color)
-                    .frame(height: 28, alignment: .top)
-                    .padding(.bottom, 4)
-                Text(page.rawValue).font(.headline)
-                Text(detail).font(.caption).foregroundStyle(.secondary)
+                Text(page.rawValue).font(compact ? .subheadline.bold() : .headline)
+                    .padding(.trailing, compact && page == .connection ? 32 : 0)
+                Text(detail).font(compact ? .caption2 : .caption).foregroundStyle(.secondary)
+                    .lineLimit(compact ? 2 : nil)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .frame(maxWidth: .infinity, minHeight: 112, alignment: .topLeading)
-            .padding(16)
-            .background(.white.opacity(0.08), in: .rect(cornerRadius: DesignMetrics.defaultCornerRadius))
-            .overlay {
-                RoundedRectangle(cornerRadius: DesignMetrics.defaultCornerRadius)
-                    .strokeBorder(.white.opacity(0.4), lineWidth: 1)
-            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .padding(compact ? 10 : 16)
+            .frame(height: compact ? (height - 10) / 2 : nil)
+            .frame(minHeight: compact ? nil : 144)
             .contentShape(.rect(cornerRadius: DesignMetrics.defaultCornerRadius))
         }
         .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: DesignMetrics.defaultCornerRadius))
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("profile-open-\(page.rawValue)")
     }
@@ -382,8 +390,8 @@ struct AccountSettingsView: View {
             .onGeometryChange(for: CGRect.self) { proxy in
                 proxy.frame(in: .named("profile-content"))
             } action: { frame in
-                if isPageTransitioning, !reduceMotion {
-                    withAnimation(.easeInOut(duration: 0.18)) { brandFrame = frame }
+                if brandFrame != .zero, !reduceMotion, isPageTransitioning || brandFrame.size != frame.size {
+                    withAnimation(.smooth(duration: 0.4)) { brandFrame = frame }
                 } else {
                     brandFrame = frame
                 }
@@ -391,11 +399,13 @@ struct AccountSettingsView: View {
             .accessibilityHidden(true)
     }
 
-    private var sharedBrand: some View {
-        HStack(spacing: 16) {
+    private func sharedBrand(stacked: Bool) -> some View {
+        let layout = stacked ? AnyLayout(VStackLayout(spacing: 2)) : AnyLayout(HStackLayout(spacing: 12))
+        let logoSize: CGFloat = stacked ? min(72, max(40, brandFrame.height - 76)) : 92
+        return layout {
             RemmichLogoView(icon: appIcons.selectedIcon ?? .spiral, isAnimating: showsBrand)
-                .frame(width: 120, height: 120)
-                .frame(width: 92, height: 92)
+                .frame(width: logoSize * 120 / 92, height: logoSize * 120 / 92)
+                .frame(width: logoSize, height: logoSize)
                 .contentShape(Rectangle())
                 .onLongPressGesture(minimumDuration: 0.6) {
                     if selectedPage == .home {
@@ -406,18 +416,20 @@ struct AccountSettingsView: View {
                 .accessibilityHint(selectedPage == .home ? "Touch and hold to choose an app icon" : "")
                 .accessibilityAction(named: "Change app icon") { navigate(to: .appearance) }
             VStack(spacing: 4) {
-                Text("Remmich").font(.title.bold()).lineLimit(1).minimumScaleFactor(0.8)
-                Text("Your **Re**adonly I**mmich** library")
-                    .font(.caption)
+                Text("Remmich").font(stacked ? .title2.bold() : .title.bold()).lineLimit(1).minimumScaleFactor(0.8)
+                Text("Your \(Text("Re").fontWeight(.heavy))adonly I\(Text("mmich").fontWeight(.heavy)) Library")
+                    .fontWeight(.medium)
+                    .font(.system(.callout, design: .rounded))
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: .infinity)
         }
+        .animation(reduceMotion ? nil : .smooth(duration: 0.4), value: stacked)
     }
 
     private var versionFooter: some View {
-        Text("Remmich · \(appVersion) (\(appBuild)) & Immich Server · \(session.serverVersion.description)")
+        Text("Remmich · \(appVersion) (\(appBuild))\(Self.buildRevision.map { " · " + $0 } ?? "") & Immich Server · \(session.serverVersion.description)")
             .font(.caption2)
             .foregroundStyle(.secondary)
             .multilineTextAlignment(.center)
@@ -428,12 +440,11 @@ struct AccountSettingsView: View {
 
     private var subpageHeader: some View {
         HStack(spacing: 12) {
-            Button { navigate(to: selectedPage == .cacheMaintenance ? .cache : .home) } label: {
-                Image(systemName: "chevron.left").frame(width: 44, height: 44)
+            Button { navigateBack() } label: {
+                Image(systemName: "chevron.left").frame(width: 44, height: 44).contentShape(Circle())
             }
-            .buttonStyle(.plain)
-            .background(.white.opacity(0.1), in: Circle())
-            .overlay { Circle().strokeBorder(.white.opacity(0.25)) }
+            .buttonStyle(.glass)
+            .buttonBorderShape(.circle)
             .accessibilityLabel("Back")
             .accessibilityIdentifier("profile-back")
             Text(selectedPage.rawValue).font(.title3.bold())
@@ -441,11 +452,7 @@ struct AccountSettingsView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(.white.opacity(0.12), in: .rect(cornerRadius: DesignMetrics.defaultCornerRadius))
-        .overlay {
-            RoundedRectangle(cornerRadius: DesignMetrics.defaultCornerRadius)
-                .strokeBorder(.white.opacity(0.28))
-        }
+        .glassEffect(.regular, in: .rect(cornerRadius: DesignMetrics.defaultCornerRadius))
         .padding(.top, 6)
     }
 
@@ -457,7 +464,6 @@ struct AccountSettingsView: View {
         case .connection: connectionSection
         case .index: indexPage
         case .cache: cachePage
-        case .cacheMaintenance: cacheMaintenancePage
         case .appearance: iconPage
         }
     }
@@ -497,24 +503,36 @@ struct AccountSettingsView: View {
         }
     }
 
+    private func navigateBack() {
+        guard let page = pageHistory.popLast() else { return }
+        transition(to: page, returning: true)
+    }
+
     private func navigate(to page: SettingsPage) {
         guard page != selectedPage else { return }
+        pageHistory.append(selectedPage)
+        transition(to: page, returning: false)
+    }
+
+    private func transition(to page: SettingsPage, returning: Bool) {
         pageTransition?.cancel()
         let fades = !reduceMotion && (page == .appearance || selectedPage == .appearance)
         guard fades else {
-            selectedPage = page
-            pageOpacity = 1
-            isPageTransitioning = false
+            withAnimation(reduceMotion ? nil : .snappy(duration: returning ? 0.24 : 0.30, extraBounce: returning ? 0.08 : 0.14)) {
+                selectedPage = page
+                pageOpacity = 1
+                isPageTransitioning = false
+            }
             return
         }
         isPageTransitioning = true
         pageTransition = Task {
-            withAnimation(.easeOut(duration: 0.12)) { pageOpacity = 0 }
-            do { try await Task.sleep(for: .milliseconds(120)) } catch { return }
+            withAnimation(.easeInOut(duration: 0.20)) { pageOpacity = 0 }
+            do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
             guard !Task.isCancelled else { return }
             selectedPage = page
-            withAnimation(.easeIn(duration: 0.18)) { pageOpacity = 1 }
-            do { try await Task.sleep(for: .milliseconds(180)) } catch { return }
+            withAnimation(.easeInOut(duration: 0.36)) { pageOpacity = 1 }
+            do { try await Task.sleep(for: .milliseconds(400)) } catch { return }
             isPageTransitioning = false
         }
     }
@@ -523,7 +541,7 @@ struct AccountSettingsView: View {
         VStack(alignment: .leading, spacing: 0) {
             sectionCaption("PROFILE")
             profileValueRow("Name", value: accountDisplayName, symbol: "person.crop.circle")
-            profileValueRow("Email", value: session.userEmail, symbol: "envelope")
+            profileValueRow("Email", value: session.userEmail, symbol: "envelope", stackedValue: true)
             sectionCaption("SERVER").padding(.top, 24)
             Button { navigate(to: .connection) } label: {
                 profileValueRow("Connection", value: connectionSummary, symbol: "network", showsChevron: true)
@@ -536,6 +554,7 @@ struct AccountSettingsView: View {
             settingsActionButton("Sign Out…", systemImage: "rectangle.portrait.and.arrow.right", role: .destructive) {
                 showsSignOutChoices = true
             }
+            .frame(maxWidth: .infinity, alignment: .center)
         }
     }
 
@@ -549,7 +568,7 @@ struct AccountSettingsView: View {
             .foregroundStyle(.secondary).padding(.bottom, 10)
     }
 
-    private func profileValueRow(_ title: String, value: String, symbol: String? = nil, showsChevron: Bool = false) -> some View {
+    private func profileValueRow(_ title: String, value: String, symbol: String? = nil, showsChevron: Bool = false, stackedValue: Bool = false) -> some View {
         VStack(spacing: 0) {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 if let symbol {
@@ -557,13 +576,19 @@ struct AccountSettingsView: View {
                 }
                 Text(title).foregroundStyle(.primary)
                 Spacer(minLength: 8)
-                Text(value).foregroundStyle(.secondary).multilineTextAlignment(.trailing)
-                    .textSelection(.enabled).allowsHitTesting(!showsChevron)
+                if !stackedValue {
+                    Text(value).foregroundStyle(.secondary).multilineTextAlignment(.trailing)
+                        .textSelection(.enabled).allowsHitTesting(!showsChevron)
+                }
                 if showsChevron {
                     Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
                 }
             }
             .font(.subheadline).frame(minHeight: 50).padding(.vertical, 2)
+            if stackedValue {
+                Text(value).font(.subheadline).foregroundStyle(.secondary).textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 32).padding(.bottom, 14)
+            }
             Divider().opacity(0.45)
         }
     }
@@ -604,20 +629,8 @@ struct AccountSettingsView: View {
 
     private var connectionSection: some View {
         VStack(alignment: .leading, spacing: 20) {
-            HStack(spacing: 7) {
-                Image(systemName: routeStatus == .connected ? "circle.fill" : "network")
-                    .font(.system(size: 7))
-                Text("\(routeStatusLabel)\(activeRoute.map { " via " + $0.kind.rawValue.capitalized } ?? "")")
-            }
-            .font(.footnote).foregroundStyle(routeStatus == .connected ? Color.green : .secondary)
             if routeStatus != .connected {
-                Text(routeStatusDetail).font(.footnote).foregroundStyle(.secondary)
-            }
-            if let endpoint = activeRoute?.endpoint {
-                Text(endpoint.absoluteString)
-                    .font(.footnote).foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
+                Text("\(routeStatusLabel). \(routeStatusDetail)").font(.footnote).foregroundStyle(.secondary)
             }
             if ssidEntitlementEnabled {
                 connectionField("Preferred Wi-Fi name") {
@@ -625,14 +638,15 @@ struct AccountSettingsView: View {
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
                 }
             }
-            connectionField("Local address") {
-                TextField("Local server address", text: $localAddress)
+            connectionField("Local address", connected: isConnectedAddress(localAddress)) {
+                TextField("Local server address", text: $localAddress, axis: .vertical)
+                    .lineLimit(1 ... 5)
                     .textContentType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
             }
-            connectionField("External addresses") {
+            connectionField("External addresses", connected: externalAddresses.components(separatedBy: .newlines).contains(where: isConnectedAddress)) {
                 TextField("One address per line", text: $externalAddresses, axis: .vertical)
                     .textContentType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-                    .lineLimit(2 ... 5)
+                    .lineLimit(1 ... 5)
             }
             Button { validateAndSaveProfile() } label: {
                 if isSaving {
@@ -642,15 +656,26 @@ struct AccountSettingsView: View {
                 }
             }
             .buttonStyle(.glass).buttonBorderShape(.capsule).disabled(isSaving)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .trailing)
         }
     }
 
-    private func connectionField(_ label: String, @ViewBuilder content: () -> some View) -> some View {
+    private func isConnectedAddress(_ address: String) -> Bool {
+        guard routeStatus == .connected, let endpoint = activeRoute?.endpoint else { return false }
+        return URL(string: address.trimmingCharacters(in: .whitespacesAndNewlines)) == endpoint
+    }
+
+    private func connectionField(_ label: String, connected: Bool = false, @ViewBuilder content: () -> some View) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(label).font(.footnote).foregroundStyle(.secondary)
+            HStack {
+                Text(label).foregroundStyle(.secondary)
+                if connected {
+                    Label("Connected", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                }
+            }.font(.footnote)
             content().font(.subheadline).padding(12).frame(maxWidth: .infinity, alignment: .leading)
                 .background(.white.opacity(0.08), in: .rect(cornerRadius: DesignMetrics.defaultCornerRadius))
-                .overlay { RoundedRectangle(cornerRadius: DesignMetrics.defaultCornerRadius).strokeBorder(.white.opacity(0.25)) }
+                .overlay { RoundedRectangle(cornerRadius: DesignMetrics.defaultCornerRadius).strokeBorder(connected ? Color.green : .white.opacity(0.25), lineWidth: connected ? 2 : 1) }
         }
     }
 
@@ -660,7 +685,7 @@ struct AccountSettingsView: View {
             VStack(alignment: .leading, spacing: 10) {
                 syncHeading(indexStatusPresentation, active: libraryIndex.status == .indexing,
                             diagnostics: libraryIndex.indexFailureDiagnostics)
-                progressMeter(displayedIndexFractionCompleted, label: "Library indexing progress", value: libraryIndexProgressText)
+                progressMeter(displayedIndexFractionCompleted, tint: Self.indexColor, label: "Library indexing progress", value: libraryIndexProgressText)
                 progressCaption(
                     percentage: Self.progressPercentage(completed: displayedIndexCompletedCount, total: displayedIndexTotalCount),
                     count: "\(displayedIndexCompletedCount.formatted()) / \(displayedIndexTotalCount.formatted()) indexed"
@@ -671,15 +696,13 @@ struct AccountSettingsView: View {
                     statistic("Videos", libraryIndex.indexedVideoCount.formatted())
                     statistic("Index storage", ByteCountFormatter.string(fromByteCount: libraryIndex.storageReport.metadataBytes, countStyle: .file))
                     if let estimate = libraryIndexDatabaseSizeEstimate {
-                        statistic("Estimated storage / 10K assets", estimate.replacingOccurrences(of: " / 10K assets", with: ""))
+                        statistic("Estimated index storage / 10K assets", estimate.replacingOccurrences(of: " / 10K assets", with: ""))
                     }
                     if let elapsed = libraryIndex.elapsed(at: libraryIndexClock) {
-                        statistic("Elapsed", Self.duration(elapsed))
+                        statistic("Elapsed time", Self.duration(elapsed))
                     }
-                    if libraryIndex.status == .indexing, let remaining = libraryIndex.estimatedRemaining(at: libraryIndexClock) {
-                        statistic("Estimated remaining", Self.duration(remaining))
-                    }
-                    statistic("Last sync", libraryIndex.lastUpdatedAt?.formatted(date: .abbreviated, time: .shortened) ?? "—")
+                    statistic("Estimated time remaining", libraryIndex.status == .indexing ? libraryIndex.estimatedRemaining(at: libraryIndexClock).map(Self.duration) ?? "—" : "—")
+                    statistic("Last synced", Self.syncedDate(libraryIndex.lastUpdatedAt))
                 }
                 if case let .failed(message) = libraryIndex.status {
                     Text(message).font(.footnote).foregroundStyle(.red).textSelection(.enabled)
@@ -707,34 +730,30 @@ struct AccountSettingsView: View {
 
     private var cachePage: some View {
         VStack(alignment: .leading, spacing: 0) {
-            sectionCaption("OFFLINE THUMBNAILS & INFO")
+            sectionCaption("OFFLINE THUMBNAILS & METADATA")
             VStack(alignment: .leading, spacing: 10) {
                 syncHeading(thumbnailCacheStatusPresentation, active: libraryIndex.thumbnailWarmingStatus == .warming,
                             diagnostics: libraryIndex.thumbnailFailureDiagnostics)
                 if let reason = libraryIndex.thumbnailWarmingWaitingReason {
                     Text(reason.message).font(.footnote).foregroundStyle(.secondary)
                 }
-                progressMeter(displayedThumbnailFractionCompleted, label: "Offline caching progress", value: thumbnailWarmingProgressText)
+                progressMeter(displayedThumbnailFractionCompleted, tint: Self.cacheColor, label: "Offline caching progress", value: thumbnailWarmingProgressText)
                 progressCaption(
                     percentage: Self.progressPercentage(completed: displayedThumbnailCompletedCount, total: displayedThumbnailTotalCount),
                     count: "\(displayedThumbnailCompletedCount.formatted()) / \(displayedThumbnailTotalCount.formatted()) cached"
                 )
                 VStack(spacing: 0) {
-                    statistic("Thumbnails", cacheThumbnailCount.formatted())
-                    statistic("Metadata records", (libraryIndex.thumbnailWarmingEligibleCount > 0 ? libraryIndex.thumbnailWarmingMetadataCount : 0).formatted())
+                    statistic("Cached thumbnails", cacheThumbnailCount.formatted())
+                    statistic("Cached metadata records", (libraryIndex.thumbnailWarmingEligibleCount > 0 ? libraryIndex.thumbnailWarmingMetadataCount : 0).formatted())
                     statistic("Cached storage", ByteCountFormatter.string(fromByteCount: cacheByteCount, countStyle: .file))
                     if let estimate = thumbnailCacheSizeEstimate {
-                        statistic("Estimated storage / 10K assets", estimate.replacingOccurrences(of: " / 10K assets", with: ""))
+                        statistic("Estimated cache storage / 10K assets", estimate.replacingOccurrences(of: " / 10K assets", with: ""))
                     }
                     if let elapsed = libraryIndex.thumbnailWarmingElapsed(at: libraryIndexClock) {
-                        statistic("Elapsed", Self.duration(elapsed))
+                        statistic("Elapsed time", Self.duration(elapsed))
                     }
-                    if libraryIndex.thumbnailWarmingStatus == .warming,
-                       let remaining = libraryIndex.thumbnailWarmingEstimatedRemaining(at: libraryIndexClock)
-                    {
-                        statistic("Estimated remaining", Self.duration(remaining))
-                    }
-                    statistic("Last sync", libraryIndex.thumbnailWarmingLastUpdatedAt?.formatted(date: .abbreviated, time: .shortened) ?? "—")
+                    statistic("Estimated time remaining", libraryIndex.thumbnailWarmingStatus == .warming ? libraryIndex.thumbnailWarmingEstimatedRemaining(at: libraryIndexClock).map(Self.duration) ?? "—" : "—")
+                    statistic("Last synced", Self.syncedDate(libraryIndex.thumbnailWarmingLastUpdatedAt))
                 }
                 if case let .failed(message) = libraryIndex.thumbnailWarmingStatus {
                     Text(message).font(.footnote).foregroundStyle(.red).textSelection(.enabled)
@@ -752,24 +771,21 @@ struct AccountSettingsView: View {
             Toggle(isOn: Binding(
                 get: { libraryIndex.thumbnailWarmingEnabled }, set: { libraryIndex.setThumbnailWarmingEnabled($0) }
             )) {
-                Label("Auto-cache thumbnails & info", systemImage: "externaldrive")
+                Label("Auto-cache thumbnails & metadata", systemImage: "externaldrive")
                     .font(.subheadline)
             }
             .frame(minHeight: 50)
             Divider()
-            Button { navigate(to: .cacheMaintenance) } label: {
-                actionRow("Cache maintenance", symbol: "externaldrive", showsChevron: true)
-            }
-            .buttonStyle(.plain)
+            cacheMaintenanceActions
             retainedAccountSection
         }
     }
 
-    private func progressMeter(_ fraction: Double, label: String, value: String) -> some View {
+    private func progressMeter(_ fraction: Double, tint: Color, label: String, value: String) -> some View {
         GeometryReader { geometry in
             ZStack(alignment: .leading) {
                 Capsule().fill(.secondary.opacity(0.17))
-                Capsule().fill(Color(red: 54 / 255, green: 143 / 255, blue: 113 / 255))
+                Capsule().fill(tint)
                     .frame(width: geometry.size.width * fraction)
             }
         }
@@ -827,15 +843,16 @@ struct AccountSettingsView: View {
             if let diagnostics {
                 Button { UIPasteboard.general.string = diagnostics } label: { Image(systemName: "doc.on.doc").frame(width: 44, height: 44) }
                     .buttonStyle(.plain).accessibilityLabel("Copy failure diagnostics")
-            } else if active {
-                AnimatedStatusIcon(systemImage: presentation.systemImage, tint: presentation.tint, isActive: true).frame(width: 24, height: 24)
             }
+            AnimatedStatusIcon(systemImage: presentation.systemImage, tint: presentation.tint, isActive: active)
+                .frame(width: 28, height: 44)
         }
+        .frame(minHeight: 44)
     }
 
-    private var cacheMaintenancePage: some View {
+    private var cacheMaintenanceActions: some View {
         VStack(alignment: .leading, spacing: 0) {
-            sectionCaption("CACHED THUMBNAILS & INFO")
+            sectionCaption("CACHE MAINTENANCE").padding(.top, 24)
             Button {
                 showsThumbnailRebuildConfirmation = true
             } label: {
@@ -851,10 +868,9 @@ struct AccountSettingsView: View {
             }
             .buttonStyle(.plain)
             Divider()
-            Text("The timeline index remains available when cached thumbnails and asset Info are cleared.")
+            Text("The timeline index remains available when cached thumbnails and metadata are cleared.")
                 .font(.caption).foregroundStyle(.secondary)
                 .padding(.top, 12)
-            retainedAccountSection
         }
     }
 
@@ -1440,6 +1456,18 @@ struct AccountSettingsView: View {
         return "~\(ByteCountFormatter.string(fromByteCount: bytesPerTenThousand, countStyle: .file)) / 10K assets"
     }
 
+    private static func syncedDate(_ date: Date?) -> String {
+        guard let date else { return "—" }
+        let time = date.formatted(.dateTime.hour().minute())
+        if Calendar.current.isDateInToday(date) {
+            return "Today, \(time)"
+        }
+        if Calendar.current.isDateInYesterday(date) {
+            return "Yesterday, \(time)"
+        }
+        return date.formatted(.dateTime.month(.abbreviated).day().year()) + " at " + time
+    }
+
     private static func duration(_ seconds: TimeInterval) -> String {
         let formatter = DateComponentsFormatter()
         formatter.allowedUnits = seconds >= 3600 ? [.hour, .minute] : seconds >= 60 ? [.minute, .second] : [.second]
@@ -1554,6 +1582,67 @@ struct AccountSettingsView: View {
         } else {
             "Remmich saves these addresses as switching candidates, then tries the local address first and the external addresses in order. No Wi-Fi name is required."
         }
+    }
+}
+
+private struct ProfilePageReveal: AnimatableModifier {
+    var progress: CGFloat
+
+    var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(min(1, max(0, (progress - 0.12) / 0.5)))
+            .mask {
+                GeometryReader { geometry in
+                    RoundedRectangle(cornerRadius: 22 + (DesignMetrics.defaultCornerRadius - 22) * progress)
+                        .frame(width: 44 + (geometry.size.width - 44) * progress,
+                               height: 44 + (geometry.size.height - 44) * progress)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                }
+            }
+    }
+}
+
+private struct ProfileHomeLayout: Layout {
+    let availableSize: CGSize
+    let landscape: Bool
+    let minimumBrandHeight: CGFloat
+
+    func sizeThatFits(proposal _: ProposedViewSize, subviews: Subviews, cache _: inout ()) -> CGSize {
+        let frames = frames(subviews)
+        return CGSize(width: availableSize.width, height: frames.map(\.maxY).max() ?? availableSize.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal _: ProposedViewSize, subviews: Subviews, cache _: inout ()) {
+        for (view, frame) in zip(subviews, frames(subviews)) {
+            view.place(at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY),
+                       anchor: .topLeading, proposal: ProposedViewSize(frame.size))
+        }
+    }
+
+    private func frames(_ subviews: Subviews) -> [CGRect] {
+        guard subviews.count == 3 else { return [] }
+        let width = availableSize.width
+        let height = availableSize.height
+        if landscape {
+            let leftWidth = (width - 22) * 0.43
+            let rightWidth = width - leftWidth - 22
+            let footer = subviews[2].sizeThatFits(.init(width: leftWidth, height: nil))
+            let brandHeight = max(90, height - 52 - footer.height - 4)
+            return [CGRect(x: 0, y: 52, width: leftWidth, height: brandHeight),
+                    CGRect(x: leftWidth + 22, y: 0, width: rightWidth, height: height),
+                    CGRect(x: 0, y: 52 + brandHeight + 4, width: leftWidth, height: footer.height)]
+        }
+        let cards = subviews[1].sizeThatFits(.init(width: width, height: nil))
+        let footer = subviews[2].sizeThatFits(.init(width: width, height: nil))
+        let brandHeight = max(minimumBrandHeight, height - cards.height - footer.height - 48)
+        return [CGRect(x: 0, y: 0, width: width, height: brandHeight),
+                CGRect(x: 0, y: brandHeight + 24, width: width, height: cards.height),
+                CGRect(x: 0, y: brandHeight + 24 + cards.height + 24, width: width, height: footer.height)]
     }
 }
 
