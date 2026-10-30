@@ -192,7 +192,7 @@ struct AccountSettingsView: View {
                                 if selectedPage == .home {
                                     profileHome(size: contentGeometry.size)
                                 } else {
-                                    VStack(alignment: .leading, spacing: 18) {
+                                    VStack(alignment: .leading, spacing: 14) {
                                         subpageHeader
                                         pageContent
                                     }
@@ -417,7 +417,7 @@ struct AccountSettingsView: View {
     }
 
     private var versionFooter: some View {
-        Text("Remmich · \(appVersion) (\(appBuild)) & Immich Server · v\(session.serverVersion.description)")
+        Text("Remmich · \(appVersion) (\(appBuild)) & Immich Server · \(session.serverVersion.description)")
             .font(.caption2)
             .foregroundStyle(.secondary)
             .multilineTextAlignment(.center)
@@ -431,8 +431,9 @@ struct AccountSettingsView: View {
             Button { navigate(to: selectedPage == .cacheMaintenance ? .cache : .home) } label: {
                 Image(systemName: "chevron.left").frame(width: 44, height: 44)
             }
-            .buttonStyle(.glass)
-            .buttonBorderShape(.circle)
+            .buttonStyle(.plain)
+            .background(.white.opacity(0.1), in: Circle())
+            .overlay { Circle().strokeBorder(.white.opacity(0.25)) }
             .accessibilityLabel("Back")
             .accessibilityIdentifier("profile-back")
             Text(selectedPage.rawValue).font(.title3.bold())
@@ -440,6 +441,11 @@ struct AccountSettingsView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
+        .background(.white.opacity(0.12), in: .rect(cornerRadius: DesignMetrics.defaultCornerRadius))
+        .overlay {
+            RoundedRectangle(cornerRadius: DesignMetrics.defaultCornerRadius)
+                .strokeBorder(.white.opacity(0.28))
+        }
         .padding(.top, 6)
     }
 
@@ -515,60 +521,60 @@ struct AccountSettingsView: View {
 
     private var accountPage: some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 18) {
-                settingsValue("Name", systemImage: "person.crop.circle", value: accountDisplayName)
-                settingsValue("Email", systemImage: "envelope", value: session.userEmail)
-                settingsValue("App build", systemImage: "app.badge", value: "\(appVersion) (\(appBuild))\(Self.buildRevision.map { " · " + $0 } ?? "")")
-                settingsValue(
-                    "Server",
-                    systemImage: "server.rack",
-                    value: activeRoute?.endpoint.absoluteString ?? routeStatusLabel
-                )
-                settingsValue(
-                    "Immich version",
-                    systemImage: "info.circle",
-                    value: session.serverVersion.description
-                )
+            sectionCaption("PROFILE")
+            profileValueRow("Name", value: accountDisplayName, symbol: "person.crop.circle")
+            profileValueRow("Email", value: session.userEmail, symbol: "envelope")
+            sectionCaption("SERVER").padding(.top, 24)
+            Button { navigate(to: .connection) } label: {
+                profileValueRow("Connection", value: connectionSummary, symbol: "network", showsChevron: true)
             }
-
-            accountFooter
+            .buttonStyle(.plain)
+            sectionCaption("SESSION").padding(.top, 24)
+            Text("Your Immich server data stays unchanged.")
+                .font(.footnote).foregroundStyle(.secondary)
+                .padding(.bottom, 8)
+            settingsActionButton("Sign Out…", systemImage: "rectangle.portrait.and.arrow.right", role: .destructive) {
+                showsSignOutChoices = true
+            }
         }
     }
 
-    private var accountFooter: some View {
+    private var connectionSummary: String {
+        guard let activeRoute else { return routeStatusLabel }
+        return "\(activeRoute.kind.rawValue.capitalized) · \(routeStatusLabel)"
+    }
+
+    private func sectionCaption(_ title: String) -> some View {
+        Text(title).font(.caption2.weight(.semibold)).tracking(1.1)
+            .foregroundStyle(.secondary).padding(.bottom, 10)
+    }
+
+    private func profileValueRow(_ title: String, value: String, symbol: String? = nil, showsChevron: Bool = false) -> some View {
         VStack(spacing: 0) {
-            Divider()
-                .padding(.vertical, 22)
-
-            HStack(alignment: .center, spacing: 12) {
-                HStack(alignment: .top, spacing: 6) {
-                    Image(systemName: "lock.shield")
-                        .frame(height: 16)
-                        .accessibilityHidden(true)
-                    Text("Remmich never changes data on your Immich server.")
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                if let symbol {
+                    Image(systemName: symbol).foregroundStyle(.secondary).frame(width: 20)
                 }
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                settingsActionButton(
-                    "Sign Out",
-                    systemImage: "rectangle.portrait.and.arrow.right",
-                    role: .destructive
-                ) {
-                    showsSignOutChoices = true
+                Text(title).foregroundStyle(.primary)
+                Spacer(minLength: 8)
+                Text(value).foregroundStyle(.secondary).multilineTextAlignment(.trailing)
+                    .textSelection(.enabled).allowsHitTesting(!showsChevron)
+                if showsChevron {
+                    Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
                 }
             }
-
-            Text("Remmich \(appVersion) · build \(appBuild)")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .center)
-                .multilineTextAlignment(.center)
-                .padding(.top, 18)
+            .font(.subheadline).frame(minHeight: 50).padding(.vertical, 2)
+            Divider().opacity(0.45)
         }
+    }
+
+    private func statistic(_ title: String, _ value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 14) {
+            Text(title).foregroundStyle(.secondary)
+            Spacer(minLength: 4)
+            Text(value).fontWeight(.medium).multilineTextAlignment(.trailing).textSelection(.enabled)
+        }
+        .font(.footnote).monospacedDigit().padding(.vertical, 4)
     }
 
     private var updatesLibraryIndexClock: Bool {
@@ -597,171 +603,282 @@ struct AccountSettingsView: View {
     }
 
     private var connectionSection: some View {
-        accountSection("Connection") {
-            settingsValue(
-                "Route",
-                systemImage: "arrow.triangle.branch",
-                value: activeRoute?.kind.rawValue.capitalized ?? "None"
-            )
-            settingsValue("Status", systemImage: "dot.radiowaves.left.and.right", value: routeStatusLabel)
-            if routeStatus != .connected {
-                Text(routeStatusDetail)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 20) {
+            HStack(spacing: 7) {
+                Image(systemName: routeStatus == .connected ? "circle.fill" : "network")
+                    .font(.system(size: 7))
+                Text("\(routeStatusLabel)\(activeRoute.map { " via " + $0.kind.rawValue.capitalized } ?? "")")
             }
-
-            Divider()
-
-            settingsIconLabel("Connection Profile", systemImage: "slider.horizontal.3", weight: .bold)
-                .font(.subheadline.weight(.bold))
+            .font(.footnote).foregroundStyle(routeStatus == .connected ? Color.green : .secondary)
+            if routeStatus != .connected {
+                Text(routeStatusDetail).font(.footnote).foregroundStyle(.secondary)
+            }
+            if let endpoint = activeRoute?.endpoint {
+                Text(endpoint.absoluteString)
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if ssidEntitlementEnabled {
-                settingsField(systemImage: "wifi") {
-                    TextField("Preferred Wi-Fi name", text: $profile.preferredSSID)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
+                connectionField("Preferred Wi-Fi name") {
+                    TextField("Wi-Fi name", text: $profile.preferredSSID)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
                 }
             }
-            settingsField(systemImage: "network") {
+            connectionField("Local address") {
                 TextField("Local server address", text: $localAddress)
-                    .textContentType(.URL)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
+                    .textContentType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
             }
-            settingsField(systemImage: "globe") {
-                TextField("External addresses, one per line", text: $externalAddresses, axis: .vertical)
-                    .textContentType(.URL)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
+            connectionField("External addresses") {
+                TextField("One address per line", text: $externalAddresses, axis: .vertical)
+                    .textContentType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
                     .lineLimit(2 ... 5)
             }
-            settingsActionRow {
-                Button {
-                    validateAndSaveProfile()
-                } label: {
-                    if isSaving {
-                        ProgressView()
-                    } else {
-                        settingsActionLabel("Save Connection Profile", systemImage: "checkmark")
-                    }
+            Button { validateAndSaveProfile() } label: {
+                if isSaving {
+                    ProgressView().frame(minWidth: 110, minHeight: 28)
+                } else {
+                    Text("Save connection").font(.caption.weight(.semibold)).frame(minHeight: 28)
                 }
-                .buttonStyle(.glass)
-                .buttonBorderShape(.capsule)
-                .controlSize(.regular)
-                .foregroundStyle(.primary)
-                .disabled(isSaving)
             }
-            Text(connectionProfileHelp)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+            .buttonStyle(.glass).buttonBorderShape(.capsule).disabled(isSaving)
+        }
+    }
+
+    private func connectionField(_ label: String, @ViewBuilder content: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(label).font(.footnote).foregroundStyle(.secondary)
+            content().font(.subheadline).padding(12).frame(maxWidth: .infinity, alignment: .leading)
+                .background(.white.opacity(0.08), in: .rect(cornerRadius: DesignMetrics.defaultCornerRadius))
+                .overlay { RoundedRectangle(cornerRadius: DesignMetrics.defaultCornerRadius).strokeBorder(.white.opacity(0.25)) }
         }
     }
 
     private var indexPage: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            indexStatus
-            Text(indexStatusPresentation.accessibilityValue).font(.headline)
-            if case let .failed(message) = libraryIndex.status {
-                Text(message).font(.footnote).foregroundStyle(.red).textSelection(.enabled)
-            }
-            ProgressView(value: displayedIndexFractionCompleted)
-                .accessibilityLabel("Library indexing progress")
-                .accessibilityValue("\(libraryIndexProgressText). \(libraryIndexMediaBreakdown)")
-            VStack(alignment: .leading, spacing: 6) {
-                Text(libraryIndexProgressText)
-                Text(libraryIndexMediaBreakdown)
-                Text("Index storage · \(ByteCountFormatter.string(fromByteCount: libraryIndex.storageReport.metadataBytes, countStyle: .file))")
-                if let libraryIndexDatabaseSizeEstimate {
-                    Text(libraryIndexDatabaseSizeEstimate)
+        VStack(alignment: .leading, spacing: 0) {
+            sectionCaption("TIMELINE INDEX")
+            VStack(alignment: .leading, spacing: 10) {
+                syncHeading(indexStatusPresentation, active: libraryIndex.status == .indexing,
+                            diagnostics: libraryIndex.indexFailureDiagnostics)
+                progressMeter(displayedIndexFractionCompleted, label: "Library indexing progress", value: libraryIndexProgressText)
+                progressCaption(
+                    percentage: Self.progressPercentage(completed: displayedIndexCompletedCount, total: displayedIndexTotalCount),
+                    count: "\(displayedIndexCompletedCount.formatted()) / \(displayedIndexTotalCount.formatted()) indexed"
+                )
+                VStack(spacing: 0) {
+                    statistic("Indexed assets", libraryIndex.indexedAssetCount.formatted())
+                    statistic("Photos", libraryIndex.indexedPhotoCount.formatted())
+                    statistic("Videos", libraryIndex.indexedVideoCount.formatted())
+                    statistic("Index storage", ByteCountFormatter.string(fromByteCount: libraryIndex.storageReport.metadataBytes, countStyle: .file))
+                    if let estimate = libraryIndexDatabaseSizeEstimate {
+                        statistic("Estimated storage / 10K assets", estimate.replacingOccurrences(of: " / 10K assets", with: ""))
+                    }
+                    if let elapsed = libraryIndex.elapsed(at: libraryIndexClock) {
+                        statistic("Elapsed", Self.duration(elapsed))
+                    }
+                    if libraryIndex.status == .indexing, let remaining = libraryIndex.estimatedRemaining(at: libraryIndexClock) {
+                        statistic("Estimated remaining", Self.duration(remaining))
+                    }
+                    statistic("Last sync", libraryIndex.lastUpdatedAt?.formatted(date: .abbreviated, time: .shortened) ?? "—")
+                }
+                if case let .failed(message) = libraryIndex.status {
+                    Text(message).font(.footnote).foregroundStyle(.red).textSelection(.enabled)
+                }
+                summaryActionButton(indexPhase.action.title) {
+                    switch indexPhase.action {
+                    case .sync: libraryIndex.syncNow()
+                    case .pause: libraryIndex.pause()
+                    case .resume: libraryIndex.resume()
+                    case .retry: libraryIndex.retry()
+                    }
                 }
             }
-            .font(.footnote.monospacedDigit())
-            settingsActionButton(indexPhase.action.title, systemImage: indexPhase.action.symbol) {
-                switch indexPhase.action {
-                case .sync: libraryIndex.syncNow()
-                case .pause: libraryIndex.pause()
-                case .resume: libraryIndex.resume()
-                case .retry: libraryIndex.retry()
-                }
-            }
-            Divider().padding(.vertical, 8)
+            .padding(.bottom, 18)
+            Divider()
             Button { libraryIndex.fullSyncAndVerify() } label: {
-                Label("Rebuild index", systemImage: "arrow.counterclockwise.circle")
-                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                actionRow("Rebuild index", symbol: "arrow.triangle.2.circlepath")
             }
-            .buttonStyle(.plain)
-            .disabled(libraryIndex.status == .indexing)
+            .buttonStyle(.plain).disabled(libraryIndex.status == .indexing)
             Text("This rebuilds local metadata. Offline cached files remain separate.")
-                .font(.footnote).foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(.secondary)
+                .padding(.bottom, 8)
         }
     }
 
     private var cachePage: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            thumbnailCacheStatus
-            Text(thumbnailCacheStatusAccessibilityValue).font(.headline)
-            if case let .failed(message) = libraryIndex.thumbnailWarmingStatus {
-                Text(message).font(.footnote).foregroundStyle(.red).textSelection(.enabled)
-            }
-            ProgressView(value: displayedThumbnailFractionCompleted)
-                .accessibilityLabel("Offline thumbnail and metadata caching progress")
-                .accessibilityValue(thumbnailWarmingProgressText)
-            VStack(alignment: .leading, spacing: 6) {
-                Text(thumbnailWarmingProgressText)
-                Text(thumbnailCacheInventory)
-                if let thumbnailCacheSizeEstimate {
-                    Text(thumbnailCacheSizeEstimate)
+        VStack(alignment: .leading, spacing: 0) {
+            sectionCaption("OFFLINE THUMBNAILS & INFO")
+            VStack(alignment: .leading, spacing: 10) {
+                syncHeading(thumbnailCacheStatusPresentation, active: libraryIndex.thumbnailWarmingStatus == .warming,
+                            diagnostics: libraryIndex.thumbnailFailureDiagnostics)
+                if let reason = libraryIndex.thumbnailWarmingWaitingReason {
+                    Text(reason.message).font(.footnote).foregroundStyle(.secondary)
+                }
+                progressMeter(displayedThumbnailFractionCompleted, label: "Offline caching progress", value: thumbnailWarmingProgressText)
+                progressCaption(
+                    percentage: Self.progressPercentage(completed: displayedThumbnailCompletedCount, total: displayedThumbnailTotalCount),
+                    count: "\(displayedThumbnailCompletedCount.formatted()) / \(displayedThumbnailTotalCount.formatted()) cached"
+                )
+                VStack(spacing: 0) {
+                    statistic("Thumbnails", cacheThumbnailCount.formatted())
+                    statistic("Metadata records", (libraryIndex.thumbnailWarmingEligibleCount > 0 ? libraryIndex.thumbnailWarmingMetadataCount : 0).formatted())
+                    statistic("Cached storage", ByteCountFormatter.string(fromByteCount: cacheByteCount, countStyle: .file))
+                    if let estimate = thumbnailCacheSizeEstimate {
+                        statistic("Estimated storage / 10K assets", estimate.replacingOccurrences(of: " / 10K assets", with: ""))
+                    }
+                    if let elapsed = libraryIndex.thumbnailWarmingElapsed(at: libraryIndexClock) {
+                        statistic("Elapsed", Self.duration(elapsed))
+                    }
+                    if libraryIndex.thumbnailWarmingStatus == .warming,
+                       let remaining = libraryIndex.thumbnailWarmingEstimatedRemaining(at: libraryIndexClock)
+                    {
+                        statistic("Estimated remaining", Self.duration(remaining))
+                    }
+                    statistic("Last sync", libraryIndex.thumbnailWarmingLastUpdatedAt?.formatted(date: .abbreviated, time: .shortened) ?? "—")
+                }
+                if case let .failed(message) = libraryIndex.thumbnailWarmingStatus {
+                    Text(message).font(.footnote).foregroundStyle(.red).textSelection(.enabled)
+                }
+                summaryActionButton(cachePhase.action.title) {
+                    if cachePhase.action == .pause {
+                        libraryIndex.pauseThumbnailCache()
+                    } else {
+                        libraryIndex.syncThumbnailCache()
+                    }
                 }
             }
-            .font(.footnote.monospacedDigit())
-            settingsActionButton(cachePhase.action.title, systemImage: cachePhase.action.symbol) {
-                if cachePhase.action == .pause {
-                    libraryIndex.pauseThumbnailCache()
-                } else {
-                    libraryIndex.syncThumbnailCache()
-                }
+            .padding(.bottom, 18)
+            Divider()
+            Toggle(isOn: Binding(
+                get: { libraryIndex.thumbnailWarmingEnabled }, set: { libraryIndex.setThumbnailWarmingEnabled($0) }
+            )) {
+                Label("Auto-cache thumbnails & info", systemImage: "externaldrive")
+                    .font(.subheadline)
             }
-            Toggle("Auto-cache Thumbnails & Info", isOn: Binding(
-                get: { libraryIndex.thumbnailWarmingEnabled },
-                set: { libraryIndex.setThumbnailWarmingEnabled($0) }
-            ))
-            Divider().padding(.vertical, 8)
+            .frame(minHeight: 50)
+            Divider()
             Button { navigate(to: .cacheMaintenance) } label: {
-                HStack { Label("Cache maintenance", systemImage: "externaldrive"); Spacer(); Image(systemName: "chevron.right") }
-                    .frame(minHeight: 44)
+                actionRow("Cache maintenance", symbol: "externaldrive", showsChevron: true)
             }
             .buttonStyle(.plain)
             retainedAccountSection
         }
     }
 
+    private func progressMeter(_ fraction: Double, label: String, value: String) -> some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .leading) {
+                Capsule().fill(.secondary.opacity(0.17))
+                Capsule().fill(Color(red: 54 / 255, green: 143 / 255, blue: 113 / 255))
+                    .frame(width: geometry.size.width * fraction)
+            }
+        }
+        .frame(height: 4)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
+        .accessibilityValue(value)
+    }
+
+    private func progressCaption(percentage: String, count: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text("\(percentage)%").fontWeight(.semibold)
+            Spacer(minLength: 4)
+            Text(count).multilineTextAlignment(.trailing)
+        }
+        .font(.caption).monospacedDigit()
+    }
+
+    private func summaryActionButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) { Text(title).font(.caption.weight(.semibold)).frame(minHeight: 28) }
+            .buttonStyle(.glass)
+            .buttonBorderShape(.capsule)
+            .frame(minHeight: 44)
+    }
+
+    private func actionRow(_ title: String, symbol: String, showsChevron: Bool = false) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: symbol).frame(width: 20).foregroundStyle(.secondary)
+            Text(title)
+            Spacer(minLength: 4)
+            if showsChevron {
+                Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+            }
+        }
+        .font(.subheadline)
+        .frame(minHeight: 50)
+        .contentShape(Rectangle())
+    }
+
+    private var cacheThumbnailCount: Int {
+        libraryIndex.thumbnailWarmingEligibleCount > 0 ? libraryIndex.thumbnailWarmingThumbnailCount : libraryIndex.storageReport.derivativeCount
+    }
+
+    private var cacheByteCount: Int64 {
+        libraryIndex.thumbnailWarmingEligibleCount > 0 ? libraryIndex.thumbnailWarmingCachedBytes : libraryIndex.storageReport.derivativeBytes
+    }
+
+    private func syncHeading(_ presentation: StatusPresentation, active: Bool, diagnostics: String?, title: String? = nil) -> some View {
+        HStack(spacing: 8) {
+            Text(title ?? presentation.accessibilityValue).font(.title3.weight(.semibold))
+            Spacer(minLength: 4)
+            if libraryIndex.thumbnailWarmingThermalState != nil, selectedPage == .cache {
+                Image(systemName: "thermometer.high").foregroundStyle(thumbnailCacheThermalWarningTint)
+            }
+            if let diagnostics {
+                Button { UIPasteboard.general.string = diagnostics } label: { Image(systemName: "doc.on.doc").frame(width: 44, height: 44) }
+                    .buttonStyle(.plain).accessibilityLabel("Copy failure diagnostics")
+            } else if active {
+                AnimatedStatusIcon(systemImage: presentation.systemImage, tint: presentation.tint, isActive: true).frame(width: 24, height: 24)
+            }
+        }
+    }
+
     private var cacheMaintenancePage: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            settingsActionButton("Rebuild Offline Cache", systemImage: "arrow.counterclockwise.circle") {
+        VStack(alignment: .leading, spacing: 0) {
+            sectionCaption("CACHED THUMBNAILS & INFO")
+            Button {
                 showsThumbnailRebuildConfirmation = true
+            } label: {
+                actionRow("Rebuild cache", symbol: "arrow.triangle.2.circlepath")
             }
+            .buttonStyle(.plain)
             .disabled(libraryIndex.thumbnailWarmingStatus == .warming)
-            settingsActionButton("Clear Offline Cache", systemImage: "trash", role: .destructive) {
+            Divider()
+            Button(role: .destructive) {
                 showsThumbnailClearConfirmation = true
+            } label: {
+                actionRow("Clear cached files…", symbol: "trash")
             }
+            .buttonStyle(.plain)
+            Divider()
             Text("The timeline index remains available when cached thumbnails and asset Info are cleared.")
-                .font(.footnote).foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(.secondary)
+                .padding(.top, 12)
+            retainedAccountSection
         }
     }
 
     @ViewBuilder
     private var retainedAccountSection: some View {
         if !retainedAccounts.isEmpty {
-            Divider()
-            Text("Stored Account Data").font(.headline)
+            sectionCaption("STORED ACCOUNT DATA").padding(.top, 24)
             ForEach(retainedAccounts) { account in
-                VStack(alignment: .leading, spacing: 6) {
-                    settingsIconLabel(Self.accountLabel(account), systemImage: "person.crop.circle")
-                    Text("\(account.indexedAssetCount.formatted()) indexed assets · \(account.derivativeCount.formatted()) cached files · \(ByteCountFormatter.string(fromByteCount: account.derivativeBytes, countStyle: .file))")
-                        .font(.footnote).foregroundStyle(.secondary)
-                    settingsActionButton("Delete Local Data", systemImage: "trash", role: .destructive) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(Self.accountLabel(account)).font(.subheadline.weight(.semibold))
+                    statistic("Indexed assets", account.indexedAssetCount.formatted())
+                    statistic("Cached files", account.derivativeCount.formatted())
+                    statistic("Cached storage", ByteCountFormatter.string(fromByteCount: account.derivativeBytes, countStyle: .file))
+                    Button(role: .destructive) {
                         pendingAccountDeletion = account
+                    } label: {
+                        Text("Delete local data…").font(.caption.weight(.semibold)).frame(minHeight: 28)
                     }
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.capsule)
+                    .frame(minHeight: 44)
                 }
+                .padding(.vertical, 12)
+                Divider()
             }
         }
     }
