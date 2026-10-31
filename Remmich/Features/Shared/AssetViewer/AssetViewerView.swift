@@ -2371,11 +2371,6 @@ struct AssetViewerView: View {
     ) -> some View {
         if showsMediaBackground {
             switch session.phase {
-            case .preparing where !videoFirstFrameReady:
-                RemmichLoadingView(label: "Preparing video", size: 48)
-                    .padding(8)
-                    .background(.regularMaterial, in: .rect(cornerRadius: DesignMetrics.defaultCornerRadius))
-                    .position(x: mediaRect.midX, y: mediaRect.midY)
             case let .failed(failure):
                 VStack(spacing: 10) {
                     Text(videoPlaybackFailureMessage(failure))
@@ -2396,7 +2391,12 @@ struct AssetViewerView: View {
                 .frame(maxWidth: min(320, mediaRect.width - 48))
                 .position(x: mediaRect.midX, y: mediaRect.midY)
             case .preparing, .playing, .paused, .seeking, .suspended:
-                EmptyView()
+                if ViewerVideoReadiness.showsLoading(isReadyForDisplay: videoFirstFrameReady,
+                                                     hasFailed: false)
+                {
+                    RemmichLoadingView(label: "Preparing video")
+                        .position(x: mediaRect.midX, y: mediaRect.midY)
+                }
             }
         }
     }

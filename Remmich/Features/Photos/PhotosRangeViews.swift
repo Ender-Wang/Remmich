@@ -626,7 +626,7 @@ private struct PhotosOlderGroupedCatalogLoader: View {
             requestLoad()
         } label: {
             if isLoading {
-                RemmichLoadingView(label: "Loading older date groups", size: 32)
+                RemmichLoadingView(label: "Loading older date groups")
             } else {
                 Label(
                     "Load older \(level == .day ? "days" : "weeks")",
@@ -636,7 +636,7 @@ private struct PhotosOlderGroupedCatalogLoader: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
-        .frame(maxWidth: .infinity, minHeight: 52)
+        .frame(maxWidth: .infinity, minHeight: DesignMetrics.brandLogoSlotSize)
         .accessibilityIdentifier("timeline-load-older-\(level == .day ? "days" : "weeks")")
         .onScrollVisibilityChange(threshold: 0.01) { visible in
             isVisible = visible

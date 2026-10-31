@@ -6,25 +6,28 @@ struct RemmichLogoView: View {
     let icon: RemmichAppIcon
     var isAnimating = true
     var preservesAnimationPoseWhenPaused = false
+    /// Loading placeholders share an epoch so replacing one placeholder cannot restart the motion.
+    var animationEpoch: TimeInterval?
 
-    @State private var artwork: RemmichBrandArtwork?
-    @State private var shuffle: MosaicShuffleTimeline?
-    @State private var accumulated: TimeInterval = 0
-    @State private var resumedAt: Date?
+    @State private var animationClock = RemmichLogoAnimationClock()
+    @State private var isMounted = false
 
     private var shouldAnimate: Bool {
-        isAnimating && !reduceMotion && scenePhase == .active
+        isMounted && isAnimating && !reduceMotion && scenePhase == .active
     }
 
     var body: some View {
-        let currentArtwork = artwork
-        let currentShuffle = shuffle
-        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !shouldAnimate)) { timeline in
+        let currentArtwork = RemmichBrandArtwork.load(icon)
+        let currentShuffle = icon == .mosaic ? currentArtwork.map(MosaicShuffleTimeline.init) : nil
+        let clock = animationClock
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !shouldAnimate)) { _ in
             Canvas { context, size in
                 guard let artwork = currentArtwork else {
                     return
                 }
-                let elapsed = reduceMotion ? 0 : accumulated + (resumedAt.map { timeline.date.timeIntervalSince($0) } ?? 0)
+                let now = ProcessInfo.processInfo.systemUptime
+                let elapsed = reduceMotion ? 0 : animationEpoch.map { max(0, now - $0) }
+                    ?? clock.elapsed(compositionID: icon.rawValue, at: now)
                 let positions = currentShuffle?.positions(at: elapsed) ?? []
                 context.scaleBy(x: size.width / 1024, y: size.height / 1024)
                 for index in artwork.tiles.indices {
@@ -43,44 +46,37 @@ struct RemmichLogoView: View {
             }
         }
         .accessibilityLabel("Remmich \(icon.rawValue) logo")
-        .task(id: icon) {
-            artwork = RemmichBrandArtwork.load(icon)
-            shuffle = icon == .mosaic ? artwork.map(MosaicShuffleTimeline.init) : nil
-            accumulated = 0
-            resumedAt = shouldAnimate ? Date() : nil
-        }
+        .onChange(of: icon) { _, _ in updateClock(isRunning: shouldAnimate) }
         .onChange(of: shouldAnimate) { _, active in
-            if active {
-                resumedAt = Date()
-            } else if let start = resumedAt {
-                accumulated += Date().timeIntervalSince(start)
-                resumedAt = nil
-            }
+            updateClock(isRunning: active)
         }
         .onDisappear {
-            if let start = resumedAt {
-                accumulated += Date().timeIntervalSince(start)
-            }
-            resumedAt = nil
+            updateClock(isRunning: false)
+            isMounted = false
         }
         .onAppear {
-            if shouldAnimate {
-                resumedAt = Date()
-            }
+            isMounted = true
+            updateClock(isRunning: shouldAnimate)
         }
+    }
+
+    private func updateClock(isRunning: Bool) {
+        animationClock.update(compositionID: icon.rawValue, isRunning: isRunning,
+                              at: ProcessInfo.processInfo.systemUptime)
     }
 }
 
 struct RemmichLoadingView: View {
+    private static let animationEpoch = ProcessInfo.processInfo.systemUptime
     var label = "Loading library"
-    var size: CGFloat = 64
     private var icons: AppIconController {
         .shared
     }
 
     var body: some View {
-        RemmichLogoView(icon: icons.selectedIcon ?? .spiral)
-            .frame(width: size, height: size)
+        RemmichLogoView(icon: icons.selectedIcon ?? .spiral, animationEpoch: Self.animationEpoch)
+            .frame(width: DesignMetrics.brandLogoCanvasSize, height: DesignMetrics.brandLogoCanvasSize)
+            .frame(width: DesignMetrics.brandLogoSlotSize, height: DesignMetrics.brandLogoSlotSize)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(label)
             .accessibilityAddTraits(.updatesFrequently)
