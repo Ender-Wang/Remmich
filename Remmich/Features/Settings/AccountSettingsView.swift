@@ -522,7 +522,7 @@ struct AccountSettingsView: View {
                 .frame(width: logoSize * 120 / 92, height: logoSize * 120 / 92)
                 .frame(width: logoSize, height: logoSize)
                 .contentShape(Rectangle())
-                .onLongPressGesture(minimumDuration: 0.6) {
+                .onLongPressGesture {
                     if selectedPage == .home {
                         navigate(to: .appearance)
                     }
