@@ -516,7 +516,9 @@ struct AccountSettingsView: View {
         let layout = stacked ? AnyLayout(VStackLayout(spacing: 2)) : AnyLayout(HStackLayout(spacing: 12))
         let logoSize: CGFloat = stacked ? min(72, max(40, brandFrame.height - 76)) : 92
         return layout {
-            RemmichLogoView(icon: appIcons.selectedIcon ?? .spiral, isAnimating: showsBrand)
+            RemmichLogoView(icon: appIcons.selectedIcon ?? .spiral,
+                            isAnimating: showsBrand || (expandedCard != nil && isPageTransitioning),
+                            preservesAnimationPoseWhenPaused: true)
                 .frame(width: logoSize * 120 / 92, height: logoSize * 120 / 92)
                 .frame(width: logoSize, height: logoSize)
                 .contentShape(Rectangle())

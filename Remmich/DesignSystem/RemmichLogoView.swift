@@ -5,6 +5,7 @@ struct RemmichLogoView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let icon: RemmichAppIcon
     var isAnimating = true
+    var preservesAnimationPoseWhenPaused = false
 
     @State private var artwork: RemmichBrandArtwork?
     @State private var shuffle: MosaicShuffleTimeline?
@@ -29,7 +30,7 @@ struct RemmichLogoView: View {
                 for index in artwork.tiles.indices {
                     let tile = artwork.tiles[index]
                     var card = context
-                    if isAnimating, !reduceMotion {
+                    if isAnimating || preservesAnimationPoseWhenPaused, !reduceMotion {
                         card.concatenate(RemmichLogoMotion.transform(icon: icon, artwork: artwork, tile: index,
                                                                      elapsed: elapsed, shuffle: positions))
                     }
