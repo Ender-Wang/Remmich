@@ -92,8 +92,9 @@ private final class ViewerVideoContainerViewController: UIViewController {
     let playerController = AVPlayerViewController()
 
     override func loadView() {
+        overrideUserInterfaceStyle = .dark
         view = UIView()
-        view.backgroundColor = .clear
+        view.backgroundColor = .black
         view.clipsToBounds = true
 
         playerController.showsPlaybackControls = false
@@ -102,7 +103,7 @@ private final class ViewerVideoContainerViewController: UIViewController {
         playerController.exitsFullScreenWhenPlaybackEnds = false
         playerController.allowsPictureInPicturePlayback = false
         playerController.updatesNowPlayingInfoCenter = false
-        playerController.view.backgroundColor = .clear
+        playerController.view.backgroundColor = .black
         playerController.view.clipsToBounds = true
 
         addChild(playerController)

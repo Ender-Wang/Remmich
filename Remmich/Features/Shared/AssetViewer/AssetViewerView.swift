@@ -662,6 +662,7 @@ struct AssetViewerView: View {
                         visibilityChanged: videoControlVisibilityChanged,
                         routePresentationChanged: videoRoutePresentationChanged
                     )
+                    .environment(\.colorScheme, .dark)
                     .frame(
                         width: selectedMediaRect.width,
                         height: selectedMediaRect.height
@@ -677,6 +678,7 @@ struct AssetViewerView: View {
                     mediaRect: selectedMediaRect,
                     showsMediaBackground: showsMediaBackground
                 )
+                .environment(\.colorScheme, .dark)
             }
         }
     }
@@ -3340,7 +3342,12 @@ private struct AssetViewerFitPage: View {
 
     var body: some View {
         ZStack {
-            if !usesInsetStage {
+            if asset.mediaKind == .video {
+                Color.black
+                    .frame(width: mediaRect.width, height: mediaRect.height)
+                    .position(x: mediaRect.midX, y: mediaRect.midY)
+                    .opacity(showsBackground ? 1 : 0)
+            } else if !usesInsetStage {
                 Color(uiColor: .systemBackground)
                     .opacity(showsBackground ? 1 : 0)
             }
