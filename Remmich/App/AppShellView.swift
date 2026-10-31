@@ -358,18 +358,20 @@ struct AppShellView: View {
     }
 
     private var pageSwipeEnabled: Bool {
-        guard !viewerPresented,
-              !libraryAccountPresented
-        else { return false }
-
-        switch tabSelectionState.selection {
-        case .photos: return photosPath.isEmpty
-        case .videos: return videosPath.isEmpty
-        case .albums: return albumsPath.isEmpty
-        case .library: return libraryPath.isEmpty
-        case .search: return searchPath.isEmpty
-        case .weeks, .months, .years: return true
+        let hasNavigationDestination: Bool = switch tabSelectionState.selection {
+        case .photos: !photosPath.isEmpty
+        case .videos: !videosPath.isEmpty
+        case .albums: !albumsPath.isEmpty
+        case .library: !libraryPath.isEmpty
+        case .search: !searchPath.isEmpty
+        case .weeks, .months, .years: false
         }
+        return RootPageSwipePolicy.allowsPaging(
+            viewerPresented: viewerPresented,
+            hasNavigationDestination: hasNavigationDestination,
+            librarySelected: tabSelectionState.selection == .library,
+            libraryAccountPresented: libraryAccountPresented
+        )
     }
 
     private var groupedMediaStore: PhotosTimelineStore {
