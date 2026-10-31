@@ -21,14 +21,16 @@ struct RemmichLogoView: View {
         let currentShuffle = icon == .mosaic ? currentArtwork.map(MosaicShuffleTimeline.init) : nil
         let clock = animationClock
         TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !shouldAnimate)) { _ in
+            // Capture changing frame inputs here so SwiftUI invalidates the Canvas every tick.
+            // Reading the clock only inside its renderer leaves an otherwise unchanged Canvas cached.
+            let now = ProcessInfo.processInfo.systemUptime
+            let elapsed = reduceMotion ? 0 : animationEpoch.map { max(0, now - $0) }
+                ?? clock.elapsed(compositionID: icon.rawValue, at: now)
+            let positions = currentShuffle?.positions(at: elapsed) ?? []
             Canvas { context, size in
                 guard let artwork = currentArtwork else {
                     return
                 }
-                let now = ProcessInfo.processInfo.systemUptime
-                let elapsed = reduceMotion ? 0 : animationEpoch.map { max(0, now - $0) }
-                    ?? clock.elapsed(compositionID: icon.rawValue, at: now)
-                let positions = currentShuffle?.positions(at: elapsed) ?? []
                 context.scaleBy(x: size.width / 1024, y: size.height / 1024)
                 for index in artwork.tiles.indices {
                     let tile = artwork.tiles[index]
