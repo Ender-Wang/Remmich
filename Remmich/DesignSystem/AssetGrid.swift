@@ -212,6 +212,9 @@ struct TimelineAssetGrid: View {
                         }
                     }
                 }
+                .frame(height: TimelineGridOrder.contentHeight(
+                    itemCount: assets.count, columns: columnCount, width: availableWidth, spacing: itemSpacing
+                ), alignment: .top)
             } else {
                 Color.clear.frame(height: 1)
             }
@@ -228,6 +231,13 @@ private struct TimelineGridDisplaySlot: Identifiable {
 }
 
 nonisolated enum TimelineGridOrder {
+    static func contentHeight(itemCount: Int, columns: Int, width: CGFloat, spacing: CGFloat) -> CGFloat {
+        guard itemCount > 0, columns > 0, width > 0 else { return 0 }
+        let rows = (itemCount + columns - 1) / columns
+        let side = max(0, (width - CGFloat(columns - 1) * spacing) / CGFloat(columns))
+        return CGFloat(rows) * side + CGFloat(max(0, rows - 1)) * spacing
+    }
+
     static func timelineColumnCount(
         availableSize: CGSize,
         minimumLandscapeColumnWidth: CGFloat,

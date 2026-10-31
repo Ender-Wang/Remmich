@@ -473,6 +473,11 @@ private struct PhotosLibraryGroupedCatalogView: View {
                 spacing: edgeInset,
                 hasBottomNavigation: isPhone
             )
+            let entries = catalog.entries
+            let blocks = TimelineRangeMosaicPlanner.blocks(keys: entries.map(\.stableKey), layout: mosaicLayout)
+            let blockWidth = max(0, geometry.size.width - edgeInset * 2)
+            let measuredHeight = TimelineRangeMosaicPlanner.contentHeight(blocks, width: blockWidth)
+                + bottomContentInset + (blocks.isEmpty ? 0 : TimelineRangeMosaicPlanner.spacing)
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: TimelineRangeMosaicPlanner.spacing) {
@@ -500,11 +505,6 @@ private struct PhotosLibraryGroupedCatalogView: View {
                                 }
                             }
                         }
-                        let entries = catalog.entries
-                        let blocks = TimelineRangeMosaicPlanner.blocks(
-                            keys: entries.map(\.stableKey),
-                            layout: mosaicLayout
-                        )
                         ForEach(blocks, id: \.seed) { block in
                             let items = Array(entries[block.range])
                             TimelineRangeMosaicBlock(
@@ -520,12 +520,16 @@ private struct PhotosLibraryGroupedCatalogView: View {
                                 card(for: entry, motion: motion)
                                     .id(entry.stableKey)
                             }
+                            .frame(height: TimelineRangeMosaicPlanner.blockHeight(block, width: blockWidth))
                         }
                         Color.clear
                             .frame(height: bottomContentInset)
                             .id(PhotosRangeScrollAnchor.bottom)
                             .accessibilityIdentifier("timeline-range-bottom-spacer")
                     }
+                    // Once indexed metadata is complete, lazy row realization
+                    // must not change the native scroll extent.
+                    .frame(height: catalog.hasMoreOlderHistory ? nil : measuredHeight, alignment: .top)
                     .padding(.horizontal, edgeInset)
                     .padding(.top, edgeInset)
                     .scrollTargetLayout()
@@ -1134,6 +1138,17 @@ nonisolated struct TimelineRangeMosaicBlockPlan: Equatable, Sendable {
 nonisolated enum TimelineRangeMosaicPlanner {
     static let spacing: CGFloat = 8
 
+    static func blockHeight(_ block: TimelineRangeMosaicBlockPlan, width: CGFloat) -> CGFloat {
+        let rows = max(1, block.placements.map { $0.row + $0.rowSpan }.max() ?? 1)
+        // Match TimelineRangeMosaicBlock's aspect ratio, including partial blocks.
+        return max(0, width) * CGFloat(rows) / CGFloat(block.layout.columns)
+    }
+
+    static func contentHeight(_ blocks: [TimelineRangeMosaicBlockPlan], width: CGFloat) -> CGFloat {
+        blocks.reduce(0) { $0 + blockHeight($1, width: width) }
+            + CGFloat(max(0, blocks.count - 1)) * spacing
+    }
+
     static func stableSeed(_ key: String) -> UInt64 {
         key.utf8.reduce(14_695_981_039_346_656_037) { value, byte in
             (value ^ UInt64(byte)) &* 1_099_511_628_211
@@ -1605,6 +1620,9 @@ private struct PhotosRangeCardGrid<Item: Identifiable, Content: View>: View wher
                 viewportSize: geometry.size
             )
             let blocks = TimelineRangeMosaicPlanner.blocks(keys: keys, layout: mosaicLayout)
+            let blockWidth = max(0, geometry.size.width - edgeInset * 2)
+            let measuredHeight = blocks.isEmpty ? 0
+                : TimelineRangeMosaicPlanner.contentHeight(blocks, width: blockWidth) + bottomContentInset
 
             let scrollView = ScrollViewReader { proxy in
                 ScrollView {
@@ -1621,6 +1639,7 @@ private struct PhotosRangeCardGrid<Item: Identifiable, Content: View>: View wher
                                     content(item, motion, didSettleInitialViewport)
                                         .id(item.id)
                                 }
+                                .frame(height: TimelineRangeMosaicPlanner.blockHeight(block, width: blockWidth))
                                 if blockIndex == blocks.indices.last {
                                     Color.clear
                                         .frame(height: bottomContentInset)
@@ -1632,6 +1651,7 @@ private struct PhotosRangeCardGrid<Item: Identifiable, Content: View>: View wher
                         }
                     }
                     .frame(maxWidth: .infinity)
+                    .frame(height: measuredHeight, alignment: .top)
                     .padding(.horizontal, edgeInset)
                     .padding(.top, edgeInset)
                     .scrollTargetLayout()

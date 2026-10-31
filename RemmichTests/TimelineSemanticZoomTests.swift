@@ -491,7 +491,13 @@ struct TimelineSemanticZoomTests {
         let collection = try #require(controller.view.subviews.compactMap { $0 as? UICollectionView }.first)
         let dataSource = try #require(collection.dataSource as? UICollectionViewDiffableDataSource<Int, String>)
         collection.delegate = nil
-        collection.contentOffset.y = 300
+        // The window now retains its position in the full timeline. Exercise
+        // growth near its oldest cells rather than assuming a local Y origin.
+        let firstAssetPath = try #require((0 ..< collection.numberOfItems(inSection: 0)).map {
+            IndexPath(item: $0, section: 0)
+        }.first { dataSource.itemIdentifier(for: $0)?.hasPrefix("header:") == false })
+        let firstAsset = try #require(collection.collectionViewLayout.layoutAttributesForItem(at: firstAssetPath))
+        collection.contentOffset.y = firstAsset.frame.minY + 300
         collection.layoutIfNeeded()
         let before = Dictionary(uniqueKeysWithValues: collection.indexPathsForVisibleItems.compactMap { path -> (String, (CGRect, UICollectionViewCell))? in
             guard let id = dataSource.itemIdentifier(for: path), !id.hasPrefix("header:"),

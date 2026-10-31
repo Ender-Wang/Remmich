@@ -393,6 +393,38 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
     private var revision: UInt64?
     private var scale: TimelineSemanticScale = .square
     private var projection: TimelineSemanticProjection?
+    private var completeProjections: [TimelineSemanticScale: CompleteProjection] = [:]
+
+    private struct CompleteProjection {
+        let projection: TimelineSemanticProjection
+        let verticalItems: [Int]
+
+        init(_ projection: TimelineSemanticProjection) {
+            self.projection = projection
+            let indexes = projection.items.indices.filter { !projection.items[$0].isHeader }
+            verticalItems = projection.scale.isAssets ? indexes : indexes.sorted {
+                projection.items[$0].frame.midY < projection.items[$1].frame.midY
+            }
+        }
+
+        func nearest(to y: CGFloat) -> TimelineSemanticProjection.Item? {
+            guard !verticalItems.isEmpty else { return nil }
+            var low = 0
+            var high = verticalItems.count
+            while low < high {
+                let middle = (low + high) / 2
+                if projection.items[verticalItems[middle]].frame.midY < y {
+                    low = middle + 1
+                } else {
+                    high = middle
+                }
+            }
+            return [max(0, low - 1), min(low, verticalItems.count - 1)].map {
+                projection.items[verticalItems[$0]]
+            }.min { abs($0.frame.midY - y) < abs($1.frame.midY - y) }
+        }
+    }
+
     private let layout = TimelineSemanticCollectionLayout()
     private var collection: UICollectionView!
     private var dataSource: UICollectionViewDiffableDataSource<Int, String>!
@@ -513,6 +545,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         gesture = nil
         completePresentationCleanup()
         lastSize = view.bounds.size
+        completeProjections.removeAll()
         guard let catalog else { return }
         let asset = focus.map(representativeIndex) ?? max(0, catalog.assets.count - 1)
         let next = makeProjection(scale: scale, focus: asset)
@@ -525,6 +558,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
 
     private func rebuildForAppearance() {
         guard catalog != nil, lastSize.width > 0 else { return }
+        completeProjections.removeAll()
         interrupted()
         let focus = focusedItem(at: CGPoint(x: collection.bounds.midX, y: collection.bounds.midY))
         let asset = focus.map(representativeIndex) ?? max(0, catalog!.assets.count - 1)
@@ -564,11 +598,17 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         let latest = projection == nil || isAtLatest
         let wasAtTop = collection.contentOffset.y <= -collection.contentInset.top + 1
         let needsCatalog = revision != value.revision
+        if needsCatalog {
+            completeProjections.removeAll()
+        }
         catalog = value.catalog
         revision = value.revision
         let needsScale = scale != value.scale
         scale = value.scale
         let bottomInsetChanged = abs(collection.contentInset.bottom - value.bottomClearance) > 0.5
+        if bottomInsetChanged {
+            completeProjections.removeAll()
+        }
         let topInsetChanged = abs(collection.contentInset.top - value.topClearance) > 0.5
         let pinnedInset = value.pinnedHeaderTopClearance ?? value.topClearance
         let pinnedInsetChanged = abs(layout.pinnedHeaderTopInset - pinnedInset) > 0.5
@@ -644,10 +684,32 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
     private func makeProjection(scale: TimelineSemanticScale, focus: Int, range: Range<Int>? = nil) -> TimelineSemanticProjection {
         let interval = Self.signposter.beginInterval("ProjectionBuild", id: Self.signposter.makeSignpostID())
         defer { Self.signposter.endInterval("ProjectionBuild", interval) }
-        return TimelineSemanticProjection.build(catalog: catalog!, scale: scale, focusAssetIndex: focus, size: lastSize,
-                                                isPhone: traitCollection.userInterfaceIdiom == .phone,
-                                                dark: traitCollection.userInterfaceStyle == .dark, requestedRange: range)
-            .bottomAligned(minimumHeight: max(0, collection.bounds.height - collection.contentInset.bottom))
+        return completeProjection(at: scale).window(
+            catalog: catalog!, focusAssetIndex: focus, size: lastSize,
+            isPhone: traitCollection.userInterfaceIdiom == .phone, requestedRange: range
+        )
+    }
+
+    private func completeProjection(at scale: TimelineSemanticScale) -> TimelineSemanticProjection {
+        if let cached = completeProjections[scale] {
+            return cached.projection
+        }
+        let complete = TimelineSemanticProjection.complete(
+            catalog: catalog!, scale: scale, size: lastSize,
+            isPhone: traitCollection.userInterfaceIdiom == .phone,
+            dark: traitCollection.userInterfaceStyle == .dark
+        ).bottomAligned(minimumHeight: max(0, collection.bounds.height - collection.contentInset.bottom))
+        // Keep the active and neighboring scales warm without retaining every
+        // full-library asset layout after traversing the zoom ladder.
+        if completeProjections.count >= 3,
+           let furthest = completeProjections.keys.max(by: {
+               abs($0.rawValue - self.scale.rawValue) < abs($1.rawValue - self.scale.rawValue)
+           })
+        {
+            completeProjections.removeValue(forKey: furthest)
+        }
+        completeProjections[scale] = CompleteProjection(complete)
+        return complete
     }
 
     private func offset(for next: TimelineSemanticProjection, focus: Int, viewportY: CGFloat?, latest: Bool) -> CGFloat {
@@ -1465,6 +1527,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         transitionHostingControllerCursor = 0
         deferredInput = nil
         input = nil
+        completeProjections.removeAll()
         collection?.visibleCells.forEach { ($0 as? TimelineSemanticCollectionCell)?.clearContent() }
     }
 
@@ -1739,6 +1802,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
 
     @objc private func receivedMemoryWarning() {
         interrupted()
+        completeProjections.removeAll()
         cancelTransitionChromeWarmup(resetCache: true)
         transitionHostingControllers = []
         transitionHostingControllerPool = []
@@ -1774,8 +1838,27 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
 
     private func expandWindowIfNeeded() {
         guard !isExpanding, let projection, let catalog else { return }
-        let older = collection.contentOffset.y < collection.bounds.height
-        let newer = layout.height - collection.bounds.maxY < collection.bounds.height
+        let cells = projection.items.filter { !$0.isHeader }
+        guard let firstY = cells.map(\.frame.minY).min(), let lastY = cells.map(\.frame.maxY).max() else { return }
+        let viewport = collection.bounds
+        let older = viewport.minY - firstY < viewport.height
+        let newer = lastY - viewport.maxY < viewport.height
+        // Native indicator dragging can jump beyond the materialized window.
+        // Rebuild around the destination using metadata, preserving that offset.
+        if !cells.contains(where: { $0.frame.intersects(viewport) }) {
+            let maximum = max(0, layout.height - viewport.height + collection.contentInset.bottom)
+            guard viewport.minY >= -collection.contentInset.top, viewport.minY <= maximum else { return }
+            _ = completeProjection(at: scale)
+            guard let focus = completeProjections[scale]?.nearest(to: viewport.midY) else { return }
+            isExpanding = true
+            let asset = representativeIndex(focus)
+            install(makeProjection(scale: scale, focus: asset), focusing: asset,
+                    viewportY: focus.frame.midY - collection.contentOffset.y, latest: false)
+            olderExpansionRearmOffset = nil
+            newerExpansionRearmOffset = nil
+            isExpanding = false
+            return
+        }
         let expandOlder = older && projection.nodeRange.lowerBound > 0
             && olderExpansionRearmOffset.map { collection.contentOffset.y <= $0 } != false
         let expandNewer = newer && projection.nodeRange.upperBound < catalog.count(at: scale)

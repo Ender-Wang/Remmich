@@ -45,6 +45,7 @@ For now, follow [Build and run](CONTRIBUTING.md#build-and-run) to build from sou
 - Photos and date cards move and resize with the gesture, keeping your place as you zoom between individual photos and yearly overviews.
 - Browse date cards with large cover images; tap one to open that period directly, then return to your place in the timeline.
 - Browse separate Photos and Videos timelines, with refresh, retry, and scroll-position restoration.
+- Native scroll indicators track the full known timeline while thumbnails load as you browse.
 
 ### 📸 Photos and memories
 

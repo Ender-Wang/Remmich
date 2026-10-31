@@ -163,7 +163,8 @@ nonisolated struct TimelineSemanticProjection: Sendable {
         }, height: height + padding)
     }
 
-    /// Only the requested local window is laid out. No global content Y exists.
+    /// Measure metadata for the full timeline, then materialize a bounded cell
+    /// window. Native scroll geometry must not depend on which cells exist.
     static func build(
         catalog: TimelineSemanticCatalog,
         scale: TimelineSemanticScale,
@@ -173,14 +174,56 @@ nonisolated struct TimelineSemanticProjection: Sendable {
         dark: Bool,
         requestedRange: Range<Int>? = nil
     ) -> Self {
+        complete(catalog: catalog, scale: scale, size: size, isPhone: isPhone, dark: dark)
+            .window(catalog: catalog, focusAssetIndex: focusAssetIndex, size: size,
+                    isPhone: isPhone, requestedRange: requestedRange)
+    }
+
+    func window(catalog: TimelineSemanticCatalog, focusAssetIndex: Int, size: CGSize,
+                isPhone: Bool, requestedRange: Range<Int>? = nil) -> Self
+    {
+        let count = catalog.count(at: scale)
+        guard count > 0, !items.isEmpty else { return self }
+        let focus = catalog.index(containing: focusAssetIndex, scale: scale) ?? count - 1
+        let radius = scale.isAssets ? 180 : 26
+        let requested = requestedRange ?? max(0, focus - radius) ..< min(count, focus + radius + 1)
+        let lower = max(0, min(count - 1, requested.lowerBound))
+        var range = lower ..< min(count, max(lower + 1, requested.upperBound))
+        if scale.isAssets {
+            let spacing: CGFloat = scale == .natural ? 8 : 2
+            let columns = TimelineGridOrder.timelineColumnCount(
+                availableSize: size, minimumLandscapeColumnWidth: isPhone ? 88 : 120, spacing: spacing
+            )
+            let firstDay = catalog.groups[.day]![catalog.index(containing: range.lowerBound, scale: .day)!]
+            let lastDay = catalog.groups[.day]![catalog.index(containing: range.upperBound - 1, scale: .day)!]
+            let lowerRows = (firstDay.assets.upperBound - range.lowerBound + columns - 1) / columns
+            let upperRows = (lastDay.assets.upperBound - range.upperBound) / columns
+            range = max(firstDay.assets.lowerBound, firstDay.assets.upperBound - lowerRows * columns)
+                ..< min(lastDay.assets.upperBound, lastDay.assets.upperBound - upperRows * columns)
+        } else {
+            let plans = catalog.mosaicBlocks(at: scale, layout: .resolved(viewportSize: size))
+            let blocks = plans.filter { $0.range.overlaps(range) }
+            if let first = blocks.first, let last = blocks.last {
+                range = first.range.lowerBound ..< last.range.upperBound
+            }
+        }
+        return Self(scale: scale, nodeRange: range, items: items.filter {
+            $0.isHeader ? $0.assetRange.overlaps(range) : range.contains($0.nodeIndex)
+        }, height: height)
+    }
+
+    /// Geometry only: no cells, image requests, or decoded images are created.
+    /// The collection controller caches this across window shifts.
+    static func complete(catalog: TimelineSemanticCatalog, scale: TimelineSemanticScale,
+                         size: CGSize, isPhone: Bool, dark: Bool) -> Self
+    {
         let count = catalog.count(at: scale)
         guard count > 0, size.width > 0 else {
             return Self(scale: scale, nodeRange: 0 ..< 0, items: [], height: 0)
         }
-        let focus = catalog.index(containing: focusAssetIndex, scale: scale) ?? count - 1
-        let radius = scale.isAssets ? 180 : 26
-        var range = requestedRange ?? max(0, focus - radius) ..< min(count, focus + radius + 1)
+        let range = 0 ..< count
         var items: [Item] = []
+        items.reserveCapacity(count + (scale.isAssets ? catalog.count(at: .day) : 0))
         var y = topPadding
         let assetSpacing: CGFloat = scale == .natural ? 8 : 2
         if scale.isAssets {
@@ -189,14 +232,6 @@ nonisolated struct TimelineSemanticProjection: Sendable {
                 minimumLandscapeColumnWidth: isPhone ? 88 : 120,
                 spacing: assetSpacing
             )
-            // Align window boundaries to complete rows of the real day, so
-            // adding either continuation cannot rearrange existing columns.
-            let firstDay = catalog.groups[.day]![catalog.index(containing: range.lowerBound, scale: .day)!]
-            let lastDay = catalog.groups[.day]![catalog.index(containing: range.upperBound - 1, scale: .day)!]
-            let lowerRows = (firstDay.assets.upperBound - range.lowerBound + columns - 1) / columns
-            let upperRows = (lastDay.assets.upperBound - range.upperBound) / columns
-            range = max(firstDay.assets.lowerBound, firstDay.assets.upperBound - lowerRows * columns)
-                ..< min(lastDay.assets.upperBound, lastDay.assets.upperBound - upperRows * columns)
             let baseSide = (size.width - CGFloat(columns - 1) * assetSpacing) / CGFloat(columns)
             let progress: CGFloat = scale == .natural ? 1 : 0
             let inset = TimelineGridMetrics.horizontalInset(
@@ -231,10 +266,8 @@ nonisolated struct TimelineSemanticProjection: Sendable {
             let inset = TimelineRangeGridLayout.edgeInset(isPhone: isPhone)
             let spacing = TimelineRangeMosaicPlanner.spacing
             let side = (size.width - inset * 2 - CGFloat(layout.columns - 1) * spacing) / CGFloat(layout.columns)
-            // Build membership plans only; geometry is calculated for intersecting blocks.
             let plans = catalog.mosaicBlocks(at: scale, layout: layout)
-            let selected = plans.filter { $0.range.overlaps(range) }
-            for block in selected {
+            for block in plans {
                 for placement in block.placements {
                     let index = block.range.lowerBound + placement.itemIndex
                     let frame = CGRect(
@@ -249,8 +282,7 @@ nonisolated struct TimelineSemanticProjection: Sendable {
                 let rows = block.placements.map { $0.row + $0.rowSpan }.max() ?? 1
                 y += CGFloat(rows) * (side + spacing)
             }
-            let actual = selected.first!.range.lowerBound ..< selected.last!.range.upperBound
-            return Self(scale: scale, nodeRange: actual, items: items, height: y + bottomPadding - spacing)
+            return Self(scale: scale, nodeRange: range, items: items, height: y + bottomPadding - spacing)
         }
         return Self(scale: scale, nodeRange: range, items: items, height: y + bottomPadding - assetSpacing)
     }
