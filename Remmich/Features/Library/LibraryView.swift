@@ -104,6 +104,11 @@ struct LibraryView: View {
 
         return Color.clear
             .frame(width: width, height: height)
+            .background {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(.regularMaterial)
+                    .opacity(accountExpansion)
+            }
             .glassEffect(.regular, in: .rect(cornerRadius: cornerRadius))
             .padding(.top, animatedTopPadding)
             .padding(.trailing, animatedTrailingPadding)
@@ -141,7 +146,8 @@ struct LibraryView: View {
     }
 
     private func panelWidth(in geometry: GeometryProxy) -> CGFloat {
-        min(max(avatarSize, geometry.size.width - horizontalPadding * 2), 620)
+        let available = max(avatarSize, geometry.size.width - horizontalPadding * 2)
+        return geometry.size.width > geometry.size.height && geometry.size.height < 440 ? available : min(available, 620)
     }
 
     private func panelHeight(in geometry: GeometryProxy) -> CGFloat {
