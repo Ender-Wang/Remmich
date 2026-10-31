@@ -123,6 +123,11 @@ struct AccountSettingsView: View {
     @State private var cardFrames: [SettingsPage: CGRect] = [:]
     @State private var expandedCard: SettingsPage?
     @State private var cardExpansion: CGFloat = 0
+    @State private var homeScrollPosition = ScrollPosition(edge: .top)
+    @State private var homeScrollOffset: CGFloat = 0
+    @State private var homeScrollExtent: CGFloat = 0
+    @State private var cardDragStartOffset: CGFloat?
+    @State private var cardDragEndedAt = Date.distantPast
     @State private var pageOpacity = 1.0
     @State private var isPageTransitioning = false
     @State private var pageTransition: Task<Void, Never>?
@@ -196,7 +201,6 @@ struct AccountSettingsView: View {
                     let topInset: CGFloat = landscapeHome ? 68 : 0
                     let destination = CGRect(x: 0, y: topInset, width: max(1, contentGeometry.size.width),
                                              height: max(1, contentGeometry.size.height - topInset))
-                    let source = expandedCard.flatMap { cardFrames[$0] } ?? destination
                     ZStack(alignment: .topLeading) {
                         ScrollView {
                             profileHome(size: contentGeometry.size)
@@ -204,37 +208,31 @@ struct AccountSettingsView: View {
                                 .padding(.vertical, isLandscape(contentGeometry.size) ? 12 : 0)
                                 .padding(.bottom, isLandscape(contentGeometry.size) ? 0 : 24)
                         }
+                        .scrollPosition($homeScrollPosition)
+                        .onScrollGeometryChange(for: CGPoint.self) { geometry in
+                            CGPoint(x: max(0, geometry.contentSize.height - geometry.containerSize.height),
+                                    y: max(0, geometry.contentOffset.y + geometry.contentInsets.top))
+                        } action: { _, value in
+                            homeScrollExtent = value.x
+                            homeScrollOffset = value.y
+                        }
                         .opacity(expandedCard != nil ? 1 - cardExpansion : (selectedPage == .home ? pageOpacity : 0))
                         .allowsHitTesting(selectedPage == .home && !isPageTransitioning)
                         .accessibilityHidden(selectedPage != .home)
 
-                        if expandedCard != nil, isPageTransitioning, !reduceMotion {
-                            let frame = source.interpolated(to: destination, progress: cardExpansion)
-                            Color.clear
-                                .frame(width: frame.width, height: frame.height)
-                                .glassEffect(.regular, in: .rect(cornerRadius: DesignMetrics.defaultCornerRadius))
-                                .position(x: frame.midX, y: frame.midY)
-                                .opacity(1 - cardExpansion)
-                                .allowsHitTesting(false)
+                        ForEach(Self.cardPages, id: \.self) { page in
+                            if let source = cardFrames[page] {
+                                expandingCard(page, source: source, destination: destination,
+                                              compact: isLandscape(contentGeometry.size))
+                            }
                         }
 
-                        if selectedPage != .home {
-                            ScrollView {
-                                VStack(alignment: .leading, spacing: 14) {
-                                    subpageHeader
-                                    pageContent
-                                }
-                                .id(selectedPage)
-                                .padding(.horizontal, 24)
-                                .padding(.top, topInset)
-                                .padding(.bottom, 24)
-                                .frame(maxWidth: .infinity)
-                            }
-                            .modifier(ProfilePageReveal(progress: expandedCard == nil ? 1 : cardExpansion,
-                                                        sourceFrame: source, destinationFrame: destination))
-                            .opacity(pageOpacity)
-                            .allowsHitTesting(!isPageTransitioning)
-                            .accessibilityIdentifier("profile-page-\(selectedPage.rawValue)")
+                        if selectedPage != .home, expandedCard == nil {
+                            subpageBody
+                                .frame(width: destination.width, height: destination.height)
+                                .offset(x: destination.minX, y: destination.minY)
+                                .opacity(pageOpacity)
+                                .allowsHitTesting(!isPageTransitioning)
                         }
 
                         sharedBrand(stacked: isLandscape(contentGeometry.size))
@@ -371,56 +369,131 @@ struct AccountSettingsView: View {
         .animation(reduceMotion ? nil : .smooth(duration: 0.4), value: size)
     }
 
-    private func profileCards(compact: Bool, height: CGFloat) -> some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: compact ? 10 : 12),
-                                 count: dynamicTypeSize.isAccessibilitySize ? 1 : 2), spacing: compact ? 10 : 12)
-        {
-            profileCard(.account, symbol: "person.crop.circle", color: Self.accountColor,
-                        detail: "Profile & session", compact: compact, height: height)
-            profileCard(.connection, symbol: "network", color: Self.connectionColor,
-                        detail: "\(activeRoute?.kind.rawValue.capitalized ?? "No route") · \(routeStatusLabel)", compact: compact, height: height)
-            profileCard(.index, symbol: "list.bullet.rectangle", color: Self.indexColor,
-                        detail: "\(libraryIndex.indexedAssetCount.formatted()) assets · \(indexStatusPresentation.accessibilityValue)", compact: compact, height: height)
-            profileCard(.cache, symbol: "externaldrive", color: Self.cacheColor,
-                        detail: thumbnailCacheStatusAccessibilityValue, compact: compact, height: height)
-        }
-    }
-
+    private static let cardPages: [SettingsPage] = [.account, .connection, .index, .cache]
     private static let accountColor = Color(red: 30 / 255, green: 131 / 255, blue: 247 / 255)
     private static let connectionColor = Color(red: 24 / 255, green: 194 / 255, blue: 73 / 255)
     private static let indexColor = Color(red: 1, green: 180 / 255, blue: 0)
     private static let cacheColor = Color(red: 237 / 255, green: 121 / 255, blue: 181 / 255)
 
-    private func profileCard(_ page: SettingsPage, symbol: String, color: Color, detail: String, compact: Bool, height: CGFloat) -> some View {
-        Button { navigate(to: page) } label: {
-            VStack(alignment: .leading, spacing: compact ? 4 : 8) {
-                Image(systemName: symbol)
-                    .font(.system(size: compact ? 19 : 24, weight: .medium))
-                    .foregroundStyle(color)
-                Text(page.rawValue).font(compact ? .subheadline.bold() : .headline)
-                    .padding(.trailing, compact && page == .connection ? 32 : 0)
-                Text(detail).font(compact ? .caption2 : .caption).foregroundStyle(.secondary)
-                    .lineLimit(compact ? 2 : nil)
-                    .fixedSize(horizontal: false, vertical: true)
+    private func cardPresentation(_ page: SettingsPage) -> (symbol: String, color: Color, detail: String) {
+        switch page {
+        case .account: ("person.crop.circle", Self.accountColor, "Profile & session")
+        case .connection: ("network", Self.connectionColor, "\(activeRoute?.kind.rawValue.capitalized ?? "No route") · \(routeStatusLabel)")
+        case .index: ("list.bullet.rectangle", Self.indexColor, "\(libraryIndex.indexedAssetCount.formatted()) assets · \(indexStatusPresentation.accessibilityValue)")
+        case .cache: ("externaldrive", Self.cacheColor, thumbnailCacheStatusAccessibilityValue)
+        case .home, .appearance: ("", .clear, "")
+        }
+    }
+
+    private func profileCards(compact: Bool, height: CGFloat) -> some View {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: compact ? 10 : 12),
+                                 count: dynamicTypeSize.isAccessibilitySize ? 1 : 2), spacing: compact ? 10 : 12)
+        {
+            ForEach(Self.cardPages, id: \.self) { page in
+                // Measure layout slots only. Each visible card lives once in the shared layer.
+                profileCardLabel(page, compact: compact)
+                    .frame(height: compact ? (height - 10) / 2 : nil)
+                    .frame(minHeight: compact ? nil : 144)
+                    .hidden()
+                    .accessibilityHidden(true)
+                    .onGeometryChange(for: CGRect.self) { proxy in
+                        proxy.frame(in: .named("profile-content"))
+                    } action: { frame in
+                        cardFrames[page] = frame
+                    }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .padding(compact ? 10 : 16)
-            .frame(height: compact ? (height - 10) / 2 : nil)
-            .frame(minHeight: compact ? nil : 144)
-            .contentShape(.rect(cornerRadius: DesignMetrics.defaultCornerRadius))
         }
-        .buttonStyle(.plain)
-        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: DesignMetrics.defaultCornerRadius))
-        // Hand the source surface to the moving glass, then restore it after collapse.
-        .opacity(expandedCard == page ? 0 : 1)
-        .animation(nil, value: expandedCard)
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("profile-open-\(page.rawValue)")
-        .onGeometryChange(for: CGRect.self) { proxy in
-            proxy.frame(in: .named("profile-content"))
-        } action: { frame in
-            cardFrames[page] = frame
+    }
+
+    private func profileCardLabel(_ page: SettingsPage, compact: Bool) -> some View {
+        let presentation = cardPresentation(page)
+        return VStack(alignment: .leading, spacing: compact ? 4 : 8) {
+            Image(systemName: presentation.symbol)
+                .font(.system(size: compact ? 19 : 24, weight: .medium))
+                .foregroundStyle(presentation.color)
+            Text(page.rawValue).font(compact ? .subheadline.bold() : .headline)
+                .padding(.trailing, compact && page == .connection ? 32 : 0)
+            Text(presentation.detail).font(compact ? .caption2 : .caption).foregroundStyle(.secondary)
+                .lineLimit(compact ? 2 : nil)
+                .fixedSize(horizontal: false, vertical: true)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(compact ? 10 : 16)
+    }
+
+    private func expandingCard(_ page: SettingsPage, source: CGRect, destination: CGRect, compact: Bool) -> some View {
+        let selected = expandedCard == page
+        let progress = selected ? cardExpansion : 0
+        let frame = source.interpolated(to: destination, progress: progress)
+        return ZStack(alignment: .topLeading) {
+            Button { navigate(to: page) } label: {
+                ZStack(alignment: .topLeading) {
+                    // One surface grows with the card and blends into the outer panel.
+                    Color.clear
+                        .frame(width: max(1, frame.width), height: max(1, frame.height))
+                        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: DesignMetrics.defaultCornerRadius))
+                    profileCardLabel(page, compact: compact)
+                        .frame(width: source.width, height: source.height)
+                }
+                .frame(width: max(1, frame.width), height: max(1, frame.height), alignment: .topLeading)
+                .contentShape(.rect(cornerRadius: DesignMetrics.defaultCornerRadius))
+            }
+            .buttonStyle(.plain)
+            .simultaneousGesture(homeCardScrollGesture)
+            .opacity(1 - progress)
+            .allowsHitTesting(selectedPage == .home && !isPageTransitioning)
+            .accessibilityHidden(selectedPage != .home)
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("profile-open-\(page.rawValue)")
+
+            if selected {
+                subpageBody
+                    .frame(width: destination.width, height: destination.height)
+                    .opacity(pageOpacity * min(1, max(0, (progress - 0.12) / 0.5)))
+                    .allowsHitTesting(!isPageTransitioning)
+                    .accessibilityHidden(isPageTransitioning)
+            }
+        }
+        .frame(width: max(1, frame.width), height: max(1, frame.height), alignment: .topLeading)
+        .clipShape(.rect(cornerRadius: DesignMetrics.defaultCornerRadius))
+        .position(x: frame.midX, y: frame.midY)
+        .opacity(selected ? 1 : (expandedCard != nil ? 1 - cardExpansion : (selectedPage == .home ? pageOpacity : 0)))
+        .zIndex(selected ? 1 : 0)
+    }
+
+    private var homeCardScrollGesture: some Gesture {
+        DragGesture(minimumDistance: 10)
+            .onChanged { value in
+                guard selectedPage == .home, !isPageTransitioning else { return }
+                if cardDragStartOffset == nil {
+                    cardDragStartOffset = homeScrollOffset
+                }
+                let target = (cardDragStartOffset ?? 0) - value.translation.height
+                homeScrollPosition.scrollTo(y: min(homeScrollExtent, max(0, target)))
+            }
+            .onEnded { value in
+                guard let start = cardDragStartOffset else { return }
+                cardDragStartOffset = nil
+                cardDragEndedAt = Date()
+                let target = min(homeScrollExtent, max(0, start - value.predictedEndTranslation.height))
+                withAnimation(reduceMotion ? nil : .smooth(duration: 0.25)) {
+                    homeScrollPosition.scrollTo(y: target)
+                }
+            }
+    }
+
+    private var subpageBody: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                subpageHeader
+                pageContent
+            }
+            .id(selectedPage)
+            .padding(.horizontal, 24)
+            .padding(.bottom, 24)
+            .frame(maxWidth: .infinity)
+        }
+        .accessibilityIdentifier("profile-page-\(selectedPage.rawValue)")
     }
 
     private func brandSlot(for page: SettingsPage) -> some View {
@@ -566,6 +639,9 @@ struct AccountSettingsView: View {
 
     private func navigate(to page: SettingsPage) {
         guard !isPageTransitioning, page != selectedPage else { return }
+        if selectedPage == .home, Date().timeIntervalSince(cardDragEndedAt) < 0.25 {
+            return
+        }
         pageHistory.append(selectedPage)
         if selectedPage == .home, page != .appearance, cardFrames[page] != nil {
             expandedCard = page
@@ -1666,28 +1742,6 @@ private extension CGRect {
                y: minY + (destination.minY - minY) * progress,
                width: width + (destination.width - width) * progress,
                height: height + (destination.height - height) * progress)
-    }
-}
-
-private struct ProfilePageReveal: AnimatableModifier {
-    var progress: CGFloat
-    let sourceFrame: CGRect
-    let destinationFrame: CGRect
-
-    var animatableData: CGFloat {
-        get { progress }
-        set { progress = newValue }
-    }
-
-    func body(content: Content) -> some View {
-        let frame = sourceFrame.interpolated(to: destinationFrame, progress: progress)
-        content
-            .opacity(min(1, max(0, (progress - 0.12) / 0.5)))
-            .mask(alignment: .topLeading) {
-                RoundedRectangle(cornerRadius: DesignMetrics.defaultCornerRadius)
-                    .frame(width: max(0, frame.width), height: max(0, frame.height))
-                    .offset(x: frame.minX, y: frame.minY)
-            }
     }
 }
 
