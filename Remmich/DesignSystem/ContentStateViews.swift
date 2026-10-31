@@ -13,9 +13,15 @@ struct LoadingStateView: View {
     var detail: String?
 
     var body: some View {
-        RemmichLoadingOverlay(isLoading: isLoading, label: label, detail: detail)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .accessibilityIdentifier("loading-state")
+        GeometryReader { geometry in
+            // A newly mounted hosting controller can propose zero bounds before
+            // UIKit lays it out. Do not fade in a logo centered on that origin.
+            let hasLayout = geometry.size.width > 0 && geometry.size.height > 0
+            RemmichLoadingOverlay(isLoading: isLoading && hasLayout, label: label, detail: detail)
+                .frame(width: geometry.size.width, height: geometry.size.height)
+                .clipped()
+        }
+        .accessibilityIdentifier("loading-state")
     }
 }
 

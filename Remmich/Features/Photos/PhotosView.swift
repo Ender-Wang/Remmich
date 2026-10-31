@@ -361,6 +361,7 @@ struct PhotosView: View {
     var rootAccessibilityID = "photos-root"
     let compactChromeChanged: (Bool) -> Void
     var viewerVisibilityChanged: (Bool) -> Void = { _ in }
+    var loadingVisibilityChanged: ((Bool) -> Void)?
     var tabSelectionState: NativeTabSelectionState?
     var tabDestination: NativeTabDestination = .photos
     let showAccount: () -> Void
@@ -408,6 +409,7 @@ struct PhotosView: View {
         rootAccessibilityID: String = "photos-root",
         compactChromeChanged: @escaping (Bool) -> Void,
         viewerVisibilityChanged: @escaping (Bool) -> Void = { _ in },
+        loadingVisibilityChanged: ((Bool) -> Void)? = nil,
         tabSelectionState: NativeTabSelectionState? = nil,
         tabDestination: NativeTabDestination = .photos,
         showAccount: @escaping () -> Void
@@ -426,6 +428,7 @@ struct PhotosView: View {
         self.rootAccessibilityID = rootAccessibilityID
         self.compactChromeChanged = compactChromeChanged
         self.viewerVisibilityChanged = viewerVisibilityChanged
+        self.loadingVisibilityChanged = loadingVisibilityChanged
         self.tabSelectionState = tabSelectionState
         self.tabDestination = tabDestination
         self.showAccount = showAccount
@@ -452,7 +455,12 @@ struct PhotosView: View {
             }
         }
         .overlay {
-            LoadingStateView(isLoading: isTimelineContentLoading)
+            if loadingVisibilityChanged == nil {
+                LoadingStateView(isLoading: isTimelineContentLoading)
+            }
+        }
+        .onChange(of: isTimelineContentLoading, initial: true) { _, loading in
+            loadingVisibilityChanged?(loading)
         }
         .navigationTitle(navigationTitle)
         .navigationBarTitleDisplayMode(.inline)

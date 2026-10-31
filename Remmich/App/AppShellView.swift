@@ -18,6 +18,7 @@ struct AppShellView: View {
     let libraryIndex: LibraryIndexController
     let saveProfile: (ConnectionProfileDraft) async -> ConnectionProfileSaveResult
     let signOut: (Bool) async -> Void
+    var primaryContentLoadingChanged: ((Bool) -> Void)?
 
     @State private var tabSelectionState = NativeTabSelectionState()
     @State private var tabContentActivationState = NativeTabContentActivationState()
@@ -44,6 +45,8 @@ struct AppShellView: View {
     @State private var searchPath = NavigationPath()
     @State private var showsAccount = false
     @State private var viewerPresented = false
+    @State private var photosContentLoading = true
+    @State private var videosContentLoading = true
 
     var body: some View {
         @Bindable var navigation = tabSelectionState
@@ -103,6 +106,7 @@ struct AppShellView: View {
                                 }
                             },
                             viewerVisibilityChanged: setViewerPresented,
+                            loadingVisibilityChanged: primaryContentLoadingChanged == nil ? nil : { photosContentLoading = $0 },
                             tabSelectionState: tabSelectionState,
                             tabDestination: .photos,
                             showAccount: showAccount
@@ -137,6 +141,7 @@ struct AppShellView: View {
                                 }
                             },
                             viewerVisibilityChanged: setViewerPresented,
+                            loadingVisibilityChanged: primaryContentLoadingChanged == nil ? nil : { videosContentLoading = $0 },
                             tabSelectionState: tabSelectionState,
                             tabDestination: .videos,
                             showAccount: showAccount
@@ -262,6 +267,9 @@ struct AppShellView: View {
         .ignoresSafeArea(.container, edges: .all)
         .environment(\.accountAvatarMedia, media)
         .onAppear { media.logShellPresented() }
+        .onChange(of: isPrimaryContentLoading, initial: true) { _, loading in
+            primaryContentLoadingChanged?(loading)
+        }
         .overlay(alignment: .topLeading) {
             #if DEBUG
                 if ProcessInfo.processInfo.arguments.contains("-ui-testing-range-library") {
@@ -372,6 +380,15 @@ struct AppShellView: View {
             librarySelected: tabSelectionState.selection == .library,
             libraryAccountPresented: libraryAccountPresented
         )
+    }
+
+    private var isPrimaryContentLoading: Bool {
+        guard !viewerPresented, !showsAccount else { return false }
+        switch tabSelectionState.selection {
+        case .photos: return photosPath.isEmpty && photosContentLoading
+        case .videos: return videosPath.isEmpty && videosContentLoading
+        default: return false
+        }
     }
 
     private var groupedMediaStore: PhotosTimelineStore {

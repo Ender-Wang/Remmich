@@ -107,8 +107,9 @@ struct RemmichLoadingOverlay: View {
                 Text(detail).font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
             }
         }
-        .opacity(isVisible ? 1 : 0)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: isVisible)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2)) { content in
+            content.opacity(isVisible ? 1 : 0)
+        }
         .allowsHitTesting(false)
         .accessibilityHidden(!isVisible)
         .onAppear { isMounted = true }

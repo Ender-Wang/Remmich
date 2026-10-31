@@ -5,6 +5,7 @@ struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var controller = AppSessionController()
     @State private var presentation = PhotosPresentationState()
+    @State private var primaryContentLoading = true
 
     var body: some View {
         ZStack {
@@ -34,7 +35,8 @@ struct RootView: View {
                     media: controller.media,
                     libraryIndex: controller.libraryIndex,
                     saveProfile: controller.saveConnectionProfile,
-                    signOut: controller.signOut
+                    signOut: controller.signOut,
+                    primaryContentLoadingChanged: { primaryContentLoading = $0 }
                 )
             case let .failed(message, server):
                 OnboardingView(controller: controller, server: server, errorMessage: message)
@@ -44,6 +46,11 @@ struct RootView: View {
             LoadingStateView(isLoading: loadingLabel != nil, label: loadingLabel ?? "Loading library")
         }
         .task { await controller.start() }
+        .onChange(of: isSignedIn) { _, signedIn in
+            if !signedIn {
+                primaryContentLoading = true
+            }
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 AppIconController.shared.refresh()
@@ -73,8 +80,16 @@ struct RootView: View {
         case .loading: "Loading library"
         case .checking: "Checking server"
         case .signingOut: "Signing out"
+        case .signedIn: primaryContentLoading ? "Loading library" : nil
         default: nil
         }
+    }
+
+    private var isSignedIn: Bool {
+        if case .signedIn = controller.state {
+            return true
+        }
+        return false
     }
 }
 
