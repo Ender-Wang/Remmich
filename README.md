@@ -110,6 +110,25 @@ Remmich does not upload, edit, archive, favorite, or delete Immich assets. Saved
 
 Future Save, Share, and Download actions will operate on local copies. They will not change the Immich server's library.
 
+## Dependencies
+
+Remmich connects to [Immich](https://github.com/immich-app/immich) through the local [ImmichAPI package](Packages/ImmichAPI), generated from Immich's OpenAPI schema.
+
+| Library | Resolved version | Purpose |
+| --- | --- | --- |
+| [Nuke / NukeUI](https://github.com/kean/Nuke) | 13.0.6 | Image loading, caching, prefetching, and SwiftUI image views |
+| [Swift OpenAPI Runtime](https://github.com/apple/swift-openapi-runtime) | 1.12.1 | Runtime support for the generated API client |
+| [Swift OpenAPI URLSession](https://github.com/apple/swift-openapi-urlsession) | 1.3.1 | URLSession transport for API requests |
+| [Swift HTTP Types](https://github.com/apple/swift-http-types) | 1.8.0 | HTTP request, response, and header types |
+
+Build and development tools:
+
+- [Swift OpenAPI Generator](https://github.com/apple/swift-openapi-generator) **1.13.1** generates the client during the build.
+- [SwiftFormat](https://github.com/nicklockwood/SwiftFormat) **0.64.1**, pinned in [.swiftformat-version](.swiftformat-version), checks source formatting.
+- Artwork regeneration uses **Python 3** and **librsvg's `rsvg-convert`**; see [Schema and artwork updates](CONTRIBUTING.md#schema-and-artwork-updates).
+
+Swift packages resolve through Xcode. The [app lockfile](Remmich.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved) and [API package lockfile](Packages/ImmichAPI/Package.resolved) record the complete resolved dependency graph, including transitive packages. SwiftUI, UIKit, AVKit/AVFoundation, and SQLite are provided by the operating system.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, architecture, the source layout, key implementation patterns, testing, and schema/artwork generation.
