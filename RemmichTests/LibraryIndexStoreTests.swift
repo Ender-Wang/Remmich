@@ -4,6 +4,27 @@ import Testing
 
 @Suite(.serialized)
 struct LibraryIndexStoreTests {
+    @Test func syncTimestampsPreservePersistedUnixSeconds() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        let scope = Self.scope(userID: "fractional-sync-time")
+        try await store.prepare(scope: scope)
+        let generation = try await store.beginGeneration(scope: scope)
+        _ = try await store.acceptGeneration(
+            generation, watermark: nil, historicalCursor: nil, expectedAssetCount: 0, scope: scope
+        )
+        // A reference-epoch ULP at this date is smaller than a Unix-epoch ULP.
+        let timestamp = Date(timeIntervalSinceReferenceDate: Double(800_000_000).nextUp)
+        try await store.setLastIndexSyncAt(timestamp, scope: scope)
+        try await store.setLastCacheSyncAt(timestamp, scope: scope)
+        let snapshot = try #require(try await store.snapshot(scope: scope))
+        let indexTimestamp = try #require(snapshot.syncState.lastIndexSyncAt)
+        let cacheTimestamp = try #require(snapshot.syncState.lastCacheSyncAt)
+        #expect(indexTimestamp.timeIntervalSince1970 == timestamp.timeIntervalSince1970)
+        #expect(cacheTimestamp.timeIntervalSince1970 == timestamp.timeIntervalSince1970)
+    }
+
     @Test func migratesAndReadsOnlyAcceptedGeneration() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }

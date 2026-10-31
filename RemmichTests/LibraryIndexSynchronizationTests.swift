@@ -594,10 +594,11 @@ struct LibraryIndexSynchronizationTests {
         controller.start(session: .fixture, endpoint: AccountSession.fixture.apiURL)
         try await Self.waitUntilUpToDate(controller)
         let firstLastUpdatedAt = try #require(controller.lastUpdatedAt)
-        #expect(
-            try await store.snapshot(scope: Self.scope)?.syncState.lastIndexSyncAt
-                == firstLastUpdatedAt
-        )
+        let firstSnapshot = try #require(try await store.snapshot(scope: Self.scope))
+        let persistedIndexSyncAt = try #require(firstSnapshot.syncState.lastIndexSyncAt)
+        // SQLite stores Unix seconds. Converting Date's reference epoch to that
+        // representation can round sub-microsecond bits, so compare stored values.
+        #expect(persistedIndexSyncAt.timeIntervalSince1970 == firstLastUpdatedAt.timeIntervalSince1970)
         #expect(publicationStatuses == [.indexing])
         let firstStartedAt = try #require(controller.startedAt)
         let firstElapsed = try #require(controller.elapsed)
