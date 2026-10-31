@@ -22,7 +22,18 @@ struct ViewerVideoControls: View {
         ZStack {
             Color.clear
                 .contentShape(Rectangle())
-                .onTapGesture(perform: toggleVisibility)
+                .gesture(
+                    TapGesture(count: 2)
+                        .exclusively(before: TapGesture(count: 1))
+                        .onEnded { gesture in
+                            switch gesture {
+                            case .first:
+                                togglePlayback()
+                            case .second:
+                                toggleVisibility()
+                            }
+                        }
+                )
 
             if isVisible {
                 VStack(spacing: 0) {

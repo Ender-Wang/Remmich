@@ -56,6 +56,7 @@ For now, follow [Build and run](CONTRIBUTING.md#build-and-run) to build from sou
 
 - Open the selected video in AVKit using authenticated HTTP byte-range streaming.
 - Play, pause, and seek in portrait and landscape layouts, with visible buffering status.
+- Double-tap the video to play or pause; single-tap to show or hide playback controls.
 - See an animated loading logo from the opening transition until the first video frame. It fades in during preparation and fades out when playback is ready.
 
 ### 👆 Navigation and appearance
