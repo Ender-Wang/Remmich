@@ -379,6 +379,20 @@ struct AssetViewerView: View {
                             * (isMemoryViewer ? memoryContentOpacity * memoryWrapOpacity : 1)
                     )
 
+                    // Show loading feedback throughout opening. Keep the lightweight overlay
+                    // outside the poster's opening crop/scale and the deferred AVKit mount.
+                    if let videoPlaybackSession,
+                       videoPlaybackSession.assetID == session.selectedAssetID
+                    {
+                        videoPreparationOverlay(
+                            session: videoPlaybackSession,
+                            mediaRect: selectedMediaRect,
+                            isVisible: !isDismissalInteractionActive && !isDismissing && !usesNativeDismissal
+                        )
+                        .environment(\.colorScheme, .dark)
+                        .opacity(isMemoryViewer ? memoryContentOpacity * memoryWrapOpacity : 1)
+                    }
+
                     AssetViewerNativeDismissalSurface(
                         controller: nativeDismissalController
                     )
@@ -679,13 +693,6 @@ struct AssetViewerView: View {
                         y: selectedMediaRect.midY
                     )
                 }
-
-                videoPreparationOverlay(
-                    session: videoPlaybackSession,
-                    mediaRect: selectedMediaRect,
-                    showsMediaBackground: showsMediaBackground
-                )
-                .environment(\.colorScheme, .dark)
             }
         }
     }
@@ -2367,11 +2374,15 @@ struct AssetViewerView: View {
     private func videoPreparationOverlay(
         session: VideoPlaybackSession,
         mediaRect: CGRect,
-        showsMediaBackground: Bool
+        isVisible: Bool
     ) -> some View {
-        if showsMediaBackground {
-            switch session.phase {
-            case let .failed(failure):
+        if isVisible {
+            let hasFailed = if case .failed = session.phase {
+                true
+            } else {
+                false
+            }
+            if case let .failed(failure) = session.phase {
                 VStack(spacing: 10) {
                     Text(videoPlaybackFailureMessage(failure))
                         .font(.footnote)
@@ -2390,14 +2401,13 @@ struct AssetViewerView: View {
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
                 .frame(maxWidth: min(320, mediaRect.width - 48))
                 .position(x: mediaRect.midX, y: mediaRect.midY)
-            case .preparing, .playing, .paused, .seeking, .suspended:
-                if ViewerVideoReadiness.showsLoading(isReadyForDisplay: videoFirstFrameReady,
-                                                     hasFailed: false)
-                {
-                    RemmichLoadingView(label: "Preparing video")
-                        .position(x: mediaRect.midX, y: mediaRect.midY)
-                }
             }
+            RemmichLoadingOverlay(
+                isLoading: ViewerVideoReadiness.showsLoading(isReadyForDisplay: videoFirstFrameReady,
+                                                             hasFailed: hasFailed),
+                label: "Preparing video"
+            )
+            .position(x: mediaRect.midX, y: mediaRect.midY)
         }
     }
 

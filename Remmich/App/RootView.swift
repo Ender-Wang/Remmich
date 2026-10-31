@@ -7,22 +7,20 @@ struct RootView: View {
     @State private var presentation = PhotosPresentationState()
 
     var body: some View {
-        Group {
+        ZStack {
             switch controller.state {
             case .loading:
                 RestoringAppShellView()
             case .signedOut:
                 OnboardingView(controller: controller)
             case .checking:
-                RemmichLoadingView(label: "Checking server")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                Color.clear
             case let .credentials(server):
                 OnboardingView(controller: controller, server: server)
             case let .signingIn(server):
                 OnboardingView(controller: controller, server: server, isSigningIn: true)
             case .signingOut:
-                RemmichLoadingView(label: "Signing out")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                Color.clear
             case let .signedIn(session):
                 AppShellView(
                     session: session,
@@ -41,6 +39,9 @@ struct RootView: View {
             case let .failed(message, server):
                 OnboardingView(controller: controller, server: server, errorMessage: message)
             }
+        }
+        .overlay {
+            LoadingStateView(isLoading: loadingLabel != nil, label: loadingLabel ?? "Loading library")
         }
         .task { await controller.start() }
         .onChange(of: scenePhase) { _, phase in
@@ -64,6 +65,15 @@ struct RootView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .NSProcessInfoPowerStateDidChange)) { _ in
             controller.libraryIndex.resourceConditionsChanged(isAppActive: scenePhase == .active)
+        }
+    }
+
+    private var loadingLabel: String? {
+        switch controller.state {
+        case .loading: "Loading library"
+        case .checking: "Checking server"
+        case .signingOut: "Signing out"
+        default: nil
         }
     }
 }
@@ -110,7 +120,7 @@ private struct RestoringAppShellView: View {
     private func loadingTab(title: String) -> AnyView {
         AnyView(
             NavigationStack {
-                LoadingStateView()
+                Color.clear
                     .navigationTitle(title)
                     .navigationBarTitleDisplayMode(.inline)
             }

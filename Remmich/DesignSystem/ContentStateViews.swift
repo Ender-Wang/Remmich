@@ -8,8 +8,12 @@ enum FixtureContentState: Equatable {
 }
 
 struct LoadingStateView: View {
+    var isLoading = true
+    var label = "Loading library"
+    var detail: String?
+
     var body: some View {
-        RemmichLoadingView()
+        RemmichLoadingOverlay(isLoading: isLoading, label: label, detail: detail)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .accessibilityIdentifier("loading-state")
     }

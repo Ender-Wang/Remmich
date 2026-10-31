@@ -160,12 +160,10 @@ struct AssetViewerInfoView: View {
     var body: some View {
         GeometryReader { geometry in
             ScrollView {
-                Group {
+                ZStack(alignment: .top) {
                     switch state {
                     case .idle, .loading:
-                        RemmichLoadingView(label: "Loading asset information")
-                            .tint(.primary)
-                            .frame(maxWidth: .infinity, minHeight: 220)
+                        Color.clear.frame(minHeight: 220)
                     case let .loaded(detail):
                         details(detail)
                     case let .failed(message):
@@ -179,6 +177,10 @@ struct AssetViewerInfoView: View {
                         }
                         .frame(maxWidth: .infinity, minHeight: 260)
                     }
+                }
+                .overlay(alignment: .top) {
+                    RemmichLoadingOverlay(isLoading: isLoading, label: "Loading asset information")
+                        .frame(maxWidth: .infinity, minHeight: 220)
                 }
                 .padding(.horizontal, 16)
                 .background {
@@ -201,6 +203,13 @@ struct AssetViewerInfoView: View {
         .background(Color(uiColor: .systemBackground))
         .foregroundStyle(.primary)
         .accessibilityIdentifier("asset-viewer-info-panel")
+    }
+
+    private var isLoading: Bool {
+        switch state {
+        case .idle, .loading: true
+        case .loaded, .failed: false
+        }
     }
 
     private func details(_ detail: AssetDetail) -> some View {

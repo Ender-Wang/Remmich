@@ -69,16 +69,47 @@ struct RemmichLogoView: View {
 struct RemmichLoadingView: View {
     private static let animationEpoch = ProcessInfo.processInfo.systemUptime
     var label = "Loading library"
+    var isAnimating = true
     private var icons: AppIconController {
         .shared
     }
 
     var body: some View {
-        RemmichLogoView(icon: icons.selectedIcon ?? .spiral, animationEpoch: Self.animationEpoch)
+        RemmichLogoView(icon: icons.selectedIcon ?? .spiral, isAnimating: isAnimating,
+                        preservesAnimationPoseWhenPaused: true, animationEpoch: Self.animationEpoch)
             .frame(width: DesignMetrics.brandLogoCanvasSize, height: DesignMetrics.brandLogoCanvasSize)
             .frame(width: DesignMetrics.brandLogoSlotSize, height: DesignMetrics.brandLogoSlotSize)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(label)
             .accessibilityAddTraits(.updatesFrequently)
+    }
+}
+
+/// Keep this overlay mounted across the loading/content handoff so removal can fade without
+/// delaying content, creating another logo, or scheduling a delayed dismissal task.
+struct RemmichLoadingOverlay: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isMounted = false
+    let isLoading: Bool
+    var label = "Loading library"
+    var detail: String?
+
+    private var isVisible: Bool {
+        isMounted && isLoading
+    }
+
+    var body: some View {
+        VStack(spacing: 12) {
+            RemmichLoadingView(label: label, isAnimating: isVisible)
+            if let detail {
+                Text(detail).font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
+            }
+        }
+        .opacity(isVisible ? 1 : 0)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: isVisible)
+        .allowsHitTesting(false)
+        .accessibilityHidden(!isVisible)
+        .onAppear { isMounted = true }
+        .onDisappear { isMounted = false }
     }
 }

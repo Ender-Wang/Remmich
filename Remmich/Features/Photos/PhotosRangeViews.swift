@@ -476,11 +476,6 @@ private struct PhotosLibraryGroupedCatalogView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: TimelineRangeMosaicPlanner.spacing) {
-                        if catalog.entries.isEmpty, !store.bucketSummaries.isEmpty {
-                            RemmichLoadingView(label: "Preparing date groups")
-                                .frame(maxWidth: .infinity, minHeight: 160)
-                                .accessibilityIdentifier("timeline-grouped-catalog-loading")
-                        }
                         if catalog.hasMoreOlderHistory {
                             PhotosOlderGroupedCatalogLoader(
                                 level: level
@@ -534,6 +529,12 @@ private struct PhotosLibraryGroupedCatalogView: View {
                     .padding(.horizontal, edgeInset)
                     .padding(.top, edgeInset)
                     .scrollTargetLayout()
+                }
+                .overlay(alignment: .top) {
+                    RemmichLoadingOverlay(isLoading: catalog.entries.isEmpty && !store.bucketSummaries.isEmpty,
+                                          label: "Preparing date groups")
+                        .frame(maxWidth: .infinity, minHeight: 160)
+                        .accessibilityIdentifier("timeline-grouped-catalog-loading")
                 }
                 .defaultScrollAnchor(.bottom)
                 .onScrollPhaseChange { _, phase in
@@ -625,18 +626,18 @@ private struct PhotosOlderGroupedCatalogLoader: View {
         Button {
             requestLoad()
         } label: {
-            if isLoading {
-                RemmichLoadingView(label: "Loading older date groups")
-            } else {
-                Label(
-                    "Load older \(level == .day ? "days" : "weeks")",
-                    systemImage: "arrow.up"
-                )
-            }
+            Label(
+                "Load older \(level == .day ? "days" : "weeks")",
+                systemImage: "arrow.up"
+            )
+            .opacity(isLoading ? 0 : 1)
         }
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
         .frame(maxWidth: .infinity, minHeight: DesignMetrics.brandLogoSlotSize)
+        .overlay {
+            RemmichLoadingOverlay(isLoading: isLoading, label: "Loading older date groups")
+        }
         .accessibilityIdentifier("timeline-load-older-\(level == .day ? "days" : "weeks")")
         .onScrollVisibilityChange(threshold: 0.01) { visible in
             isVisible = visible
@@ -748,16 +749,9 @@ struct PhotosRangeAssetsView: View {
     @State private var layoutRestoreTask: Task<Void, Never>?
 
     var body: some View {
-        Group {
+        ZStack {
             if isLoading {
-                VStack(spacing: 12) {
-                    RemmichLoadingView(label: "Loading items")
-                    if bucketIDs.count > 1 {
-                        Text("\(loadedBucketCount) of \(bucketIDs.count) date groups")
-                            .font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                Color.clear
             } else if loadFailed {
                 ErrorStateView(title: "Couldn’t Load \(route.navigationTitle)") {
                     loadRequest &+= 1
@@ -767,6 +761,10 @@ struct PhotosRangeAssetsView: View {
             } else {
                 assetGrid
             }
+        }
+        .overlay {
+            LoadingStateView(isLoading: isLoading, label: "Loading items",
+                             detail: bucketIDs.count > 1 ? "\(loadedBucketCount) of \(bucketIDs.count) date groups" : nil)
         }
         .task(id: LoadKey(route: route, request: loadRequest)) {
             await loadAssets()

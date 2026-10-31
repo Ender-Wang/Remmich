@@ -432,10 +432,10 @@ struct PhotosView: View {
     }
 
     var body: some View {
-        Group {
+        ZStack {
             switch store.loadState {
             case .idle, .loading:
-                LoadingStateView()
+                Color.clear
             case .empty:
                 EmptyStateView(
                     title: "No \(contentName)",
@@ -450,6 +450,9 @@ struct PhotosView: View {
             case .loaded:
                 rangePresentation
             }
+        }
+        .overlay {
+            LoadingStateView(isLoading: isTimelineContentLoading)
         }
         .navigationTitle(navigationTitle)
         .navigationBarTitleDisplayMode(.inline)
@@ -779,7 +782,7 @@ struct PhotosView: View {
                         }
                     )
                 } else {
-                    LoadingStateView()
+                    Color.clear
                 }
             }
             .overlay {
@@ -790,7 +793,7 @@ struct PhotosView: View {
                     case .failed:
                         Button("Retry loading timeline") { Task { await store.loadOlderSemanticPage() } }
                     case .idle, .loading, .loaded:
-                        LoadingStateView()
+                        EmptyView()
                     }
                 }
             }
@@ -808,6 +811,21 @@ struct PhotosView: View {
             } else if case let .failed(message) = store.semanticHistoryState {
                 TimelineRefreshError(message: message) { Task { await store.loadOlderSemanticPage() } }
             }
+        }
+    }
+
+    private var isTimelineContentLoading: Bool {
+        switch store.loadState {
+        case .idle, .loading: return true
+        case .empty, .failed: return false
+        case .loaded: break
+        }
+        guard navigationPath.isEmpty else { return false }
+        guard let semanticCatalog else { return true }
+        guard semanticCatalog.assets.isEmpty else { return false }
+        switch store.semanticHistoryState {
+        case .idle, .loading, .loaded: return true
+        case .empty, .failed: return false
         }
     }
 
