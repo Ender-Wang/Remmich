@@ -123,6 +123,8 @@ struct AccountSettingsView: View {
     @State private var cardFrames: [SettingsPage: CGRect] = [:]
     @State private var expandedCard: SettingsPage?
     @State private var cardExpansion: CGFloat = 0
+    @State private var edgeBackTracksCard = false
+    @State private var edgeBackOffset: CGFloat = 0
     @State private var homeScrollPosition = ScrollPosition(edge: .top)
     @State private var homeScrollOffset: CGFloat = 0
     @State private var homeScrollExtent: CGFloat = 0
@@ -249,6 +251,7 @@ struct AccountSettingsView: View {
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
         }
+        .nativeEdgeBack(active: selectedPage != .home, canBegin: !isPageTransitioning, priority: 300, event: profileEdgeBack)
         .modifier(AccountSettingsGlassBackground(enabled: drawsGlassBackground))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("account-settings")
@@ -493,6 +496,7 @@ struct AccountSettingsView: View {
             .padding(.bottom, 24)
             .frame(maxWidth: .infinity)
         }
+        .offset(x: edgeBackOffset)
         .accessibilityIdentifier("profile-page-\(selectedPage.rawValue)")
     }
 
@@ -620,6 +624,42 @@ struct AccountSettingsView: View {
                 Label("Changing app icon…", systemImage: "hourglass").font(.footnote).foregroundStyle(.secondary)
             } else if !appIcons.isSupported {
                 Text("App icon changes aren’t available on this device.").font(.footnote).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func profileEdgeBack(_ event: NativeEdgeBackEvent) {
+        switch event.phase {
+        case .began:
+            edgeBackTracksCard = pageHistory.last == .home && expandedCard != nil
+            isPageTransitioning = true
+        case .changed:
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                if edgeBackTracksCard, !reduceMotion {
+                    cardExpansion = 1 - event.progress
+                } else {
+                    pageOpacity = 1 - event.progress * 0.4
+                    edgeBackOffset = reduceMotion ? 0 : event.progress * 100
+                }
+            }
+        case .ended:
+            if event.completed {
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    pageOpacity = 1
+                    edgeBackOffset = 0
+                    isPageTransitioning = false
+                }
+                navigateBack()
+            } else {
+                withAnimation(reduceMotion ? nil : .snappy(duration: 0.24), completionCriteria: .logicallyComplete) {
+                    cardExpansion = expandedCard == nil ? 0 : 1
+                    pageOpacity = 1
+                    edgeBackOffset = 0
+                } completion: { isPageTransitioning = false }
             }
         }
     }

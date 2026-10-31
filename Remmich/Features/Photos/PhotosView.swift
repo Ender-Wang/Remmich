@@ -453,6 +453,7 @@ struct PhotosView: View {
         }
         .navigationTitle(navigationTitle)
         .navigationBarTitleDisplayMode(.inline)
+        .nativeEdgeBackAction(active: viewerRoute == nil && (!navigationPath.isEmpty || libraryRange != .all), action: navigateBack)
         .fullScreenCover(item: fullScreenViewerRoute) { route in
             assetViewer(route: route, opensFromSource: true)
         }

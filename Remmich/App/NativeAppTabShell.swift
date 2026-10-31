@@ -164,6 +164,16 @@ enum NativeTabLayout {
 
 enum NativeTabPageGesturePolicy {
     static func blocksRootPaging(startingAt touchedView: UIView?) -> Bool {
+        var responder: UIResponder? = touchedView
+        while let current = responder {
+            if let controller = current as? UIViewController,
+               let navigation = controller.navigationController,
+               navigation.viewControllers.count > 1
+            {
+                return true
+            }
+            responder = current.next
+        }
         var candidate = touchedView
         while let view = candidate {
             if let scrollView = view as? UIScrollView,

@@ -64,6 +64,7 @@ struct OnboardingView: View {
                 Text("HTTP does not protect your password or photos in transit. Continue only on a network you trust.")
             }
         }
+        .nativeEdgeBackAction(active: server != nil, canBegin: !isSigningIn) { controller.resetOnboarding() }
     }
 
     private var serverSection: some View {

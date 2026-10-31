@@ -425,6 +425,12 @@ struct AssetViewerView: View {
                         mediaRect: selectedMediaRect
                     )
                 )
+                .nativeEdgeBack(canBegin: !openingIsActive && !isDismissing && !isDismissalInteractionActive
+                    && zoomedAssetID == nil && !videoRoutePickerPresented, priority: 400)
+                { event in
+                    viewerEdgeBack(event, viewportSize: fullRect.size, viewportOrigin: fullFrame.origin,
+                                   viewerRect: viewerRect, mediaRect: selectedMediaRect)
+                }
                 .onChange(of: dismissalRequest) {
                     guard isMemoryViewer else { return }
                     completeDragDismissal(
@@ -531,6 +537,7 @@ struct AssetViewerView: View {
                 if let videoPlaybackSession {
                     Task { @MainActor in
                         await videoPlaybackSession.resumeFromSuspension()
+                        resumeVideoAfterCancelledDismissalIfNeeded()
                     }
                 }
                 resumeMemoryAutoRotation()
@@ -1260,6 +1267,7 @@ struct AssetViewerView: View {
     private var memoryAutoRotationCanRun: Bool {
         memoryAutoRotationEnabled
             && scenePhase == .active
+            && UIApplication.shared.applicationState == .active
             && !memoryAssetPressActive
             && pagerPhase == .idle
             && pagerPosition == session.selectedAssetID
@@ -1504,6 +1512,47 @@ struct AssetViewerView: View {
         .buttonStyle(.plain)
         .accessibilityLabel(label)
         .accessibilityIdentifier(identifier)
+    }
+
+    private func viewerEdgeBack(_ event: NativeEdgeBackEvent, viewportSize: CGSize, viewportOrigin: CGPoint,
+                                viewerRect: CGRect, mediaRect: CGRect)
+    {
+        switch event.phase {
+        case .began:
+            pauseMemoryAutoRotation()
+            pauseVideoForDismissalIfNeeded()
+            guard !reduceMotion else { return }
+            if let asset = session.selectedAsset {
+                beginReturningTimelineTransition(for: asset)
+            }
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                dismissalViewerRect = viewerRect
+                dismissalDragStartLocation = CGPoint(x: 0,
+                                                     y: mediaRect.midY)
+                dismissalDragTranslation = CGSize(width: 0, height: 0.01)
+                infoDragTranslation = 0
+            }
+        case .changed:
+            guard !reduceMotion else { return }
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                dismissalDragTranslation = CGSize(width: event.progress * viewportSize.width * 0.35,
+                                                  height: max(0.01, event.progress * min(320, viewportSize.height * 0.35)))
+                dismissalBackdropOpacity = 1 - event.progress
+            }
+        case .ended:
+            if event.completed {
+                completeDragDismissal(viewportSize: viewportSize, viewportOrigin: viewportOrigin, mediaRect: mediaRect)
+            } else if reduceMotion {
+                resumeVideoAfterCancelledDismissalIfNeeded()
+                resumeMemoryAutoRotation()
+            } else {
+                cancelDismissalInteraction()
+            }
+        }
     }
 
     private func verticalViewerGesture(
@@ -2265,8 +2314,10 @@ struct AssetViewerView: View {
         guard resumesVideoAfterCancelledDismissal,
               let videoPlaybackSession
         else { return }
-        resumesVideoAfterCancelledDismissal = false
         Task { @MainActor in
+            guard resumesVideoAfterCancelledDismissal, scenePhase == .active,
+                  UIApplication.shared.applicationState == .active else { return }
+            resumesVideoAfterCancelledDismissal = false
             await videoPlaybackSession.play()
         }
     }

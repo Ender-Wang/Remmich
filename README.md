@@ -125,6 +125,12 @@ Touch and hold the large profile logo using the system-default long press (curre
 
 Native brand layers are generated from the committed Icon Composer SVGs with `python3 Scripts/generate-brand-artwork.py` (requires `rsvg-convert`, supplied by librsvg). The generated images preserve the SVG shadow, multiply-fill, and reflection layers; only component transforms animate at runtime.
 
+# Left-edge Back
+
+Swipe inward from the left screen edge to go Back one level or dismiss the topmost app-owned presentation. This includes navigation details, timeline ranges, profile pages/panels, and photo/video/memory viewers. Back follows the current page's history; a root screen has no Back action and tabs do not become a history stack.
+
+UIKit's standard interactive navigation pop is retained where available. Custom panels/viewers use UIKit screen-edge recognition to drive their existing reverse/dismissal transitions, including cancellation. Hidden/custom navigation bars have a public UIKit interactive-pop fallback. Interior swipes still page media or root tabs; zoomed media, active transitions/sign-in, text input, and scrubbers retain their gesture ownership. System prompts and pickers keep their own dismissal behavior. Right-edge Back is deferred.
+
 # Development
 
 Refresh the pinned schema from a sibling Immich checkout without embedding a developer path:

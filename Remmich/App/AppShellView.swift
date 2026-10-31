@@ -258,6 +258,7 @@ struct AppShellView: View {
                 }
             )
         )
+        .nativeEdgeBackRoot()
         .ignoresSafeArea(.container, edges: .all)
         .environment(\.accountAvatarMedia, media)
         .onAppear { media.logShellPresented() }
@@ -289,6 +290,7 @@ struct AppShellView: View {
                             signOut: signOut,
                             close: { showsAccount = false }
                         )
+                        .nativeEdgeBackAction(active: true, priority: 200) { showsAccount = false }
                         .frame(
                             width: min(geometry.size.width - 32, 620),
                             height: UIDevice.current.userInterfaceIdiom == .pad

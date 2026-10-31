@@ -66,6 +66,22 @@ struct LibraryView: View {
                     .zIndex(3)
             }
         }
+        .nativeEdgeBack(active: accountContentMounted, canBegin: accountPresented && accountExpansion == 1, priority: 200) { event in
+            switch event.phase {
+            case .began: break
+            case .changed:
+                guard !reduceMotion else { return }
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) { accountExpansion = 1 - event.progress }
+            case .ended:
+                if event.completed {
+                    setAccountPresented(false)
+                } else {
+                    withAnimation(reduceMotion ? nil : .snappy(duration: 0.24)) { accountExpansion = 1 }
+                }
+            }
+        }
         .toolbar(.hidden, for: .navigationBar)
         .navigationDestination(for: FixtureCollection.self) { collection in
             CollectionDetailView(collection: collection)
