@@ -194,8 +194,8 @@ struct AccountSettingsView: View {
 
                 GeometryReader { contentGeometry in
                     let topInset: CGFloat = landscapeHome ? 68 : 0
-                    let destination = CGRect(x: 24, y: topInset, width: max(1, contentGeometry.size.width - 48),
-                                             height: max(1, contentGeometry.size.height - topInset - 24))
+                    let destination = CGRect(x: 0, y: topInset, width: max(1, contentGeometry.size.width),
+                                             height: max(1, contentGeometry.size.height - topInset))
                     let source = expandedCard.flatMap { cardFrames[$0] } ?? destination
                     ZStack(alignment: .topLeading) {
                         ScrollView {
@@ -208,12 +208,13 @@ struct AccountSettingsView: View {
                         .allowsHitTesting(selectedPage == .home && !isPageTransitioning)
                         .accessibilityHidden(selectedPage != .home)
 
-                        if expandedCard != nil {
+                        if expandedCard != nil, isPageTransitioning, !reduceMotion {
                             let frame = source.interpolated(to: destination, progress: cardExpansion)
                             Color.clear
                                 .frame(width: frame.width, height: frame.height)
                                 .glassEffect(.regular, in: .rect(cornerRadius: DesignMetrics.defaultCornerRadius))
                                 .position(x: frame.midX, y: frame.midY)
+                                .opacity(1 - cardExpansion)
                                 .allowsHitTesting(false)
                         }
 
