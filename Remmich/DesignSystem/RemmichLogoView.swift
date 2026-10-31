@@ -16,11 +16,15 @@ struct RemmichLogoView: View {
     }
 
     var body: some View {
+        let currentArtwork = artwork
+        let currentShuffle = shuffle
         TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !shouldAnimate)) { timeline in
             Canvas { context, size in
-                guard let artwork else { return }
+                guard let artwork = currentArtwork else {
+                    return
+                }
                 let elapsed = reduceMotion ? 0 : accumulated + (resumedAt.map { timeline.date.timeIntervalSince($0) } ?? 0)
-                let positions = shuffle?.positions(at: elapsed) ?? []
+                let positions = currentShuffle?.positions(at: elapsed) ?? []
                 context.scaleBy(x: size.width / 1024, y: size.height / 1024)
                 for index in artwork.tiles.indices {
                     let tile = artwork.tiles[index]
@@ -31,7 +35,8 @@ struct RemmichLogoView: View {
                     }
                     for layer in tile.layers {
                         card.blendMode = layer.multiply ? .multiply : .normal
-                        card.draw(card.resolve(Image(layer.image).renderingMode(.original)), in: tile.frame)
+                        let image = card.resolve(Image(layer.image).renderingMode(.original))
+                        card.draw(image, in: tile.frame)
                     }
                 }
             }
