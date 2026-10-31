@@ -411,6 +411,9 @@ struct AccountSettingsView: View {
         }
         .buttonStyle(.plain)
         .glassEffect(.regular.interactive(), in: .rect(cornerRadius: DesignMetrics.defaultCornerRadius))
+        // Hand the source surface to the moving glass, then restore it after collapse.
+        .opacity(expandedCard == page ? 0 : 1)
+        .animation(nil, value: expandedCard)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("profile-open-\(page.rawValue)")
         .onGeometryChange(for: CGRect.self) { proxy in
@@ -645,9 +648,15 @@ struct AccountSettingsView: View {
                 }
                 Text(title).foregroundStyle(.primary).fixedSize(horizontal: true, vertical: false)
                 Spacer(minLength: 8)
-                Text(value).foregroundStyle(.secondary).multilineTextAlignment(.trailing)
-                    .lineLimit(1).minimumScaleFactor(0.7).layoutPriority(1)
-                    .textSelection(.enabled).allowsHitTesting(!showsChevron)
+                Group {
+                    if showsChevron {
+                        Text(value)
+                    } else {
+                        Text(value).textSelection(.enabled)
+                    }
+                }
+                .foregroundStyle(.secondary).multilineTextAlignment(.trailing)
+                .lineLimit(1).minimumScaleFactor(0.7).layoutPriority(1)
                 if showsChevron {
                     Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
                 }
@@ -655,6 +664,8 @@ struct AccountSettingsView: View {
             .font(.subheadline).frame(minHeight: 50).padding(.vertical, 2)
             Divider().opacity(0.45)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
     }
 
     private func statistic(_ title: String, _ value: String) -> some View {
