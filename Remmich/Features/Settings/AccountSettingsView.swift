@@ -568,6 +568,7 @@ struct AccountSettingsView: View {
             .accessibilityLabel("Back")
             .accessibilityIdentifier("profile-back")
             Text(selectedPage.rawValue).font(.title3.bold())
+                .foregroundStyle(Self.cardPages.contains(selectedPage) ? cardPresentation(selectedPage).color : Color.primary)
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 10)
