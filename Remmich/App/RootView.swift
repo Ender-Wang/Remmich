@@ -12,14 +12,8 @@ struct RootView: View {
             switch controller.state {
             case .loading:
                 RestoringAppShellView()
-            case .signedOut:
+            case .signedOut, .checking, .credentials, .signingIn, .failed:
                 OnboardingView(controller: controller)
-            case .checking:
-                Color.clear
-            case let .credentials(server):
-                OnboardingView(controller: controller, server: server)
-            case let .signingIn(server):
-                OnboardingView(controller: controller, server: server, isSigningIn: true)
             case .signingOut:
                 Color.clear
             case .signedIn where !controller.foregroundResourcesReady:
@@ -40,8 +34,6 @@ struct RootView: View {
                     signOut: controller.signOut,
                     primaryContentLoadingChanged: { primaryContentLoading = $0 }
                 )
-            case let .failed(message, server):
-                OnboardingView(controller: controller, server: server, errorMessage: message)
             }
         }
         .overlay {
@@ -90,7 +82,6 @@ struct RootView: View {
     private var loadingLabel: String? {
         switch controller.state {
         case .loading: "Loading library"
-        case .checking: "Checking server"
         case .signingOut: "Signing out"
         case .signedIn: primaryContentLoading ? "Loading library" : nil
         default: nil

@@ -50,6 +50,10 @@ The generated API client is wrapped by [ImmichServiceAdapter](Remmich/Infrastruc
 
 The timeline index and paired thumbnail/Info cache are local, account-scoped stores. Video playback uses [AuthenticatedVideoStreamSource](Remmich/Infrastructure/Media/AuthenticatedVideoStreamSource.swift) with one viewer-owned [VideoPlaybackSession](Remmich/Features/Shared/AssetViewer/VideoPlaybackSession.swift). It streams the selected video; persistent original downloads and export actions remain planned work.
 
+### Landing and sign-in
+
+[OnboardingView](Remmich/Features/Onboarding/OnboardingView.swift) uses the profile's animated branding, green connection and blue account accents, and a native glass form. An adaptive layout keeps branding above the form in portrait and beside it in landscape, with scrolling for the keyboard and larger text. [RootView](Remmich/App/RootView.swift) keeps a single onboarding view across server checking, credentials, sign-in progress, and failure so field values and logo motion survive those transitions. Checking uses that mounted branding rather than a second full-screen loader. Server validation, HTTP confirmation, credential storage, and successful library preparation remain owned by `AppSessionController`; OAuth remains unsupported.
+
 ### Asset capture times
 
 [TimelineAssetSummary](Remmich/Domain/Timeline/TimelineModels.swift) keeps the original capture instant separate from `captureLocalDate`, which applies Immich's per-asset `localOffsetHours`. Displays, accessibility labels, date groups, and date-only titles use the capture-local calendar. Ordering follows capture-local day, then the original instant within that day, preserving chronology when daylight saving repeats an hour. The offset is rounded to whole seconds when applied to avoid float representation noise at midnight boundaries.
