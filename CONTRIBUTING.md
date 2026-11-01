@@ -68,6 +68,12 @@ Device checks are performed by the maintainer during normal use. Reported issues
 
 [ScopedAssetTransitionRuntime](Remmich/Features/Shared/AssetViewer/ScopedAssetTransitionRuntime.swift) keeps weak UIKit probes for visible thumbnail geometry and revision-checked source images. Opening captures the tapped rectangle and reuses the displayed thumbnail before presentation; returning resolves the selected asset's current rectangle and aspect ratio. Unavailable cells retain the existing fallback. [ScopedDayTransitionTests](RemmichTests/ScopedDayTransitionTests.swift) checks newest-asset entry and stable opening/return positions across Day, Week, Month, and Year layouts. [ScopedAssetTransitionTests](RemmichTests/ScopedAssetTransitionTests.swift) covers geometry, clipping, cell reuse, weak image ownership, and immediate image handoff.
 
+### Timeline overlays during viewer transitions
+
+[TimelineAssetOverlay](Remmich/DesignSystem/TimelineAssetOverlay.swift) shares the Live Photo/360/stack badges and video-duration label between thumbnail cells and the viewer's opening surface. The opening overlay follows the image frame and fades with the expansion progress while retaining its text size. On return, both Live Photo badges and video durations participate in source visibility; a local value-bound fade survives the UIKit hosting boundary. Semantic-pinch transitions and memory-panel opening retain their existing paths.
+
+[TimelineAssetOverlayTests](RemmichTests/TimelineAssetOverlayTests.swift) checks opening opacity and hidden/revealed return states for Live Photos and videos, with an ordinary-photo control. All five rendering cases passed in the macOS harness, and the iOS app/test bundle compiled. The maintainer confirmed the reported opening/return regression resolved on device.
+
 ### Filmstrip layout
 
 `AssetViewerFilmstrip`, in [AssetViewerView](Remmich/Features/Shared/AssetViewer/AssetViewerView.swift), centers the complete thumbnail row when it fits the viewport. The row has at least the viewport's width, and fitting content skips selected-item scroll requests. Overflowing content scrolls to the selected stable ID; viewport width is part of the positioning request so resizing also updates the selection's position. [FilmstripAlignmentTests](RemmichTests/FilmstripAlignmentTests.swift) covers fitting rows, selection changes, overflowing content, and resizing using the hosted scroll view.
