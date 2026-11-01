@@ -60,6 +60,7 @@ For now, follow [Build and run](CONTRIBUTING.md#build-and-run) to build from sou
 - Double-tap the video to play or pause; single-tap to show or hide playback controls.
 - Continue a playing video in native Picture in Picture when you go Home, with automatic PiP enabled in iOS.
 - See an animated loading logo from the opening transition until the first video frame. It fades in during preparation and fades out when playback is ready.
+- The player area stays black during opening and playback in both themes; surrounding app chrome and Info follow the app theme.
 
 ### 👆 Navigation and appearance
 

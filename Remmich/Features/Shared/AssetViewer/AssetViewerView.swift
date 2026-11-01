@@ -292,7 +292,7 @@ struct AssetViewerView: View {
                 }
                 ZStack {
                     if !isMemoryViewer {
-                        Color(uiColor: .systemBackground)
+                        AssetViewerBackdrop(videoRect: session.isVideoPlayback ? selectedMediaRect : nil)
                             .opacity(usesNativeDismissal
                                 ? 0
                                 : (isOpening ? openingProgress : dismissalBackdropOpacity))
@@ -3385,6 +3385,24 @@ private struct AssetViewerMemoryProgress: View {
             return CGFloat(currentProgress)
         }
         return 0
+    }
+}
+
+struct AssetViewerBackdrop: View {
+    let videoRect: CGRect?
+
+    var body: some View {
+        ZStack {
+            Color(uiColor: .systemBackground)
+            if let videoRect {
+                Color.black
+                    .frame(width: videoRect.width, height: videoRect.height)
+                    .position(x: videoRect.midX, y: videoRect.midY)
+            }
+        }
+        // Fade one backdrop with an already-black player region. The poster
+        // is separately cropped/transformed, and AVKit mounts after opening.
+        .compositingGroup()
     }
 }
 
