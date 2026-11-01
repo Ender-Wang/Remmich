@@ -1282,7 +1282,12 @@ struct PhotosView: View {
             viewerSourceTarget = nil
             viewerSourceImage = nil
         }
-        hiddenLivePhotoBadgeAssetID = nil
+        if case .memory = route.origin {
+            hiddenLivePhotoBadgeAssetID = nil
+        } else {
+            hiddenLivePhotoBadgeAssetID = TimelineAssetOverlay.isVisible(for: route.selectedAsset)
+                ? route.selectedAsset.id : nil
+        }
         hiddenReturningThumbnailAssetID = nil
         viewerChromeReleaseTask?.cancel()
         viewerChromeReleaseTask = nil

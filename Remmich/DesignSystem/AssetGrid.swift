@@ -639,19 +639,16 @@ struct TimelineAssetThumbnail: View {
                     }
                 }
                 .overlay {
-                    if asset.livePhotoVideoID != nil
-                        || asset.projectionType != nil
-                        || (asset.stack?.assetCount ?? 0) > 1
-                    {
+                    if TimelineAssetOverlay.isVisible(for: asset) {
                         GeometryReader { overlayGeometry in
                             let thumbnailRect = TimelineThumbnailGeometry.renderedImageRect(
                                 in: overlayGeometry.size,
                                 aspectRatio: asset.aspectRatio,
                                 naturalAspectProgress: progress
                             )
-                            TimelineAssetBadgeOverlay(
+                            TimelineAssetOverlay(
                                 asset: asset,
-                                hiddenLivePhotoBadgeAssetID: hiddenLivePhotoBadgeAssetID
+                                isHidden: hiddenLivePhotoBadgeAssetID == asset.id
                             )
                             .frame(
                                 width: thumbnailRect.width,
@@ -659,28 +656,6 @@ struct TimelineAssetThumbnail: View {
                                 alignment: .bottomLeading
                             )
                             .position(x: thumbnailRect.midX, y: thumbnailRect.midY)
-                        }
-                    }
-                }
-                .overlay {
-                    if asset.mediaKind == .video {
-                        GeometryReader { overlayGeometry in
-                            let thumbnailRect = TimelineThumbnailGeometry.renderedImageRect(
-                                in: overlayGeometry.size,
-                                aspectRatio: asset.aspectRatio,
-                                naturalAspectProgress: progress
-                            )
-                            Text(Self.duration(asset.durationMilliseconds))
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(.white)
-                                .padding(.bottom, 3)
-                                .frame(
-                                    width: thumbnailRect.width,
-                                    height: thumbnailRect.height,
-                                    alignment: .bottom
-                                )
-                                .position(x: thumbnailRect.midX, y: thumbnailRect.midY)
-                                .shadow(radius: 3)
                         }
                     }
                 }
@@ -730,46 +705,8 @@ struct TimelineAssetThumbnail: View {
         return values.joined(separator: ", ")
     }
 
-    private static func duration(_ milliseconds: Int?) -> String {
-        guard let milliseconds else { return "" }
-        let seconds = max(0, milliseconds / 1000)
-        return String(format: "%d:%02d", seconds / 60, seconds % 60)
-    }
-
     private static func targetPixels(for points: CGFloat, scale: CGFloat) -> Int {
         min(2048, max(1, Int((points * scale).rounded(.up))))
-    }
-}
-
-struct TimelineAssetBadgeOverlay: View {
-    let asset: TimelineAssetSummary
-    var hiddenLivePhotoBadgeAssetID: String?
-
-    static func isVisible(for asset: TimelineAssetSummary) -> Bool {
-        asset.livePhotoVideoID != nil
-            || asset.projectionType != nil
-            || (asset.stack?.assetCount ?? 0) > 1
-    }
-
-    var body: some View {
-        HStack(spacing: 5) {
-            if asset.livePhotoVideoID != nil {
-                Image(systemName: "livephoto")
-                    .opacity(hiddenLivePhotoBadgeAssetID == asset.id ? 0 : 1)
-            }
-            if asset.projectionType != nil {
-                Image(systemName: "view.360")
-            }
-            if let stack = asset.stack, stack.assetCount > 1 {
-                Label("\(stack.assetCount)", systemImage: "square.stack.3d.up.fill")
-            }
-        }
-        .font(.caption2.weight(.semibold))
-        .foregroundStyle(.white)
-        .padding([.leading, .bottom], 3)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-        .shadow(radius: 3)
-        .allowsHitTesting(false)
     }
 }
 

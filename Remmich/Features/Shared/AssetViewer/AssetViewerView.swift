@@ -387,6 +387,18 @@ struct AssetViewerView: View {
                             * (isMemoryViewer ? memoryContentOpacity * memoryWrapOpacity : 1)
                     )
 
+                    if isOpening, !isMemoryViewer, !reduceMotion,
+                       let asset = session.selectedAsset,
+                       TimelineAssetOverlay.isVisible(for: asset), let openingTarget
+                    {
+                        AssetViewerOpeningAssetOverlay(
+                            asset: asset,
+                            sourceRect: openingTarget.imageFrame.offsetBy(dx: -fullFrame.minX, dy: -fullFrame.minY),
+                            destinationRect: dismissalImageRect,
+                            progress: openingProgress
+                        )
+                    }
+
                     // Show loading feedback throughout opening. Keep the lightweight overlay
                     // outside the poster's opening crop/scale and the deferred AVKit mount.
                     if let videoPlaybackSession,
@@ -1809,7 +1821,7 @@ struct AssetViewerView: View {
     private func beginReturningTimelineTransition(for asset: TimelineAssetSummary) {
         dismissalThumbnailRevealTask?.cancel()
         returningTimelineThumbnailChanged(asset.id)
-        if asset.livePhotoVideoID != nil {
+        if TimelineAssetOverlay.isVisible(for: asset) {
             returningLivePhotoBadgeChanged(asset.id)
         }
     }
