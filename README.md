@@ -50,6 +50,7 @@ For now, follow [Build and run](CONTRIBUTING.md#build-and-run) to build from sou
 ### 📸 Photos and memories
 
 - View photos with zoom, Live Photo motion playback, and detailed asset information.
+- Pick a photo from the filmstrip; short rows stay centered, and longer rows follow your selection.
 - Revisit memories above both the Photos and Videos timelines.
 - Swipe through memory items and continue to the previous or next memory in the viewer.
 

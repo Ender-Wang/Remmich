@@ -3479,7 +3479,7 @@ private struct AssetViewerFitPage: View {
     }
 }
 
-private struct AssetViewerFilmstrip: View {
+struct AssetViewerFilmstrip: View {
     @Environment(\.displayScale) private var displayScale
     @Environment(\.colorScheme) private var colorScheme
 
@@ -3491,74 +3491,85 @@ private struct AssetViewerFilmstrip: View {
     let select: (String) -> Void
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView(.horizontal) {
-                LazyHStack(spacing: 4) {
-                    ForEach(assets) { asset in
-                        Button {
-                            select(asset.id)
-                        } label: {
-                            ImmichThumbnail(
-                                descriptor: .init(
-                                    assetID: asset.id,
-                                    updatedAt: asset.thumbnailRevision,
-                                    derivative: .thumbnail,
-                                    targetPixels: .init(
-                                        width: Int(44 * displayScale),
-                                        height: Int(44 * displayScale)
-                                    )
-                                ),
-                                media: media,
-                                contentMode: .fill
-                            )
-                            .frame(width: 40, height: 44)
-                            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                    .stroke(
-                                        asset.id == selectedAssetID ? selectionStroke : .clear,
-                                        lineWidth: 2
-                                    )
+        GeometryReader { geometry in
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal) {
+                    LazyHStack(spacing: 4) {
+                        ForEach(assets) { asset in
+                            Button {
+                                select(asset.id)
+                            } label: {
+                                ImmichThumbnail(
+                                    descriptor: .init(
+                                        assetID: asset.id,
+                                        updatedAt: asset.thumbnailRevision,
+                                        derivative: .thumbnail,
+                                        targetPixels: .init(
+                                            width: Int(44 * displayScale),
+                                            height: Int(44 * displayScale)
+                                        )
+                                    ),
+                                    media: media,
+                                    contentMode: .fill
+                                )
+                                .frame(width: 40, height: 44)
+                                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                        .stroke(
+                                            asset.id == selectedAssetID ? selectionStroke : .clear,
+                                            lineWidth: 2
+                                        )
+                                }
                             }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(TimelineCaptureDateFormatting.string(
+                                from: asset.capturedAt,
+                                dateStyle: .medium,
+                                timeStyle: .short
+                            ))
+                            .accessibilityAddTraits(asset.id == selectedAssetID ? .isSelected : [])
+                            .accessibilityIdentifier("asset-viewer-filmstrip-\(asset.id)")
+                            .id(asset.id)
                         }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(TimelineCaptureDateFormatting.string(
-                            from: asset.capturedAt,
-                            dateStyle: .medium,
-                            timeStyle: .short
-                        ))
-                        .accessibilityAddTraits(asset.id == selectedAssetID ? .isSelected : [])
-                        .accessibilityIdentifier("asset-viewer-filmstrip-\(asset.id)")
-                        .id(asset.id)
                     }
+                    .padding(.horizontal, 16)
+                    .frame(minWidth: geometry.size.width, alignment: .center)
                 }
-                .padding(.horizontal, 16)
-            }
-            .scrollIndicators(.hidden)
-            .frame(height: 52)
-            .task(id: positionRequest) {
-                await Task.yield()
-                guard !Task.isCancelled,
-                      assets.contains(where: { $0.id == selectedAssetID })
-                else { return }
+                .scrollIndicators(.hidden)
+                .task(id: positionRequest(viewportWidth: geometry.size.width)) {
+                    // A fitting row is positioned as a whole. scrollTo would
+                    // apply another offset for the selected thumbnail.
+                    guard contentWidth > geometry.size.width else { return }
+                    await Task.yield()
+                    guard !Task.isCancelled,
+                          assets.contains(where: { $0.id == selectedAssetID })
+                    else { return }
 
-                if hasPositionedSelection {
-                    withAnimation(.snappy(duration: 0.2)) {
+                    if hasPositionedSelection {
+                        withAnimation(.snappy(duration: 0.2)) {
+                            proxy.scrollTo(selectedAssetID, anchor: .center)
+                        }
+                    } else {
                         proxy.scrollTo(selectedAssetID, anchor: .center)
+                        hasPositionedSelection = true
                     }
-                } else {
-                    proxy.scrollTo(selectedAssetID, anchor: .center)
-                    hasPositionedSelection = true
                 }
             }
         }
+        .frame(height: 52)
     }
 
-    private var positionRequest: FilmstripPositionRequest {
+    private var contentWidth: CGFloat {
+        CGFloat(assets.count) * 40 + CGFloat(max(0, assets.count - 1)) * 4 + 32
+    }
+
+    private func positionRequest(viewportWidth: CGFloat) -> FilmstripPositionRequest {
         FilmstripPositionRequest(
             selectedAssetID: selectedAssetID,
             selectedIndex: assets.firstIndex { $0.id == selectedAssetID },
-            assetCount: assets.count
+            assetCount: assets.count,
+            viewportWidth: viewportWidth
         )
     }
 
@@ -3571,6 +3582,7 @@ private struct FilmstripPositionRequest: Hashable {
     let selectedAssetID: String
     let selectedIndex: Int?
     let assetCount: Int
+    let viewportWidth: CGFloat
 }
 
 private struct AssetViewerStatusBarVisibilityModifier: ViewModifier {
