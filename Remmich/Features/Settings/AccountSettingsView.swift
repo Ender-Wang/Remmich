@@ -410,12 +410,25 @@ struct AccountSettingsView: View {
 
     private func profileCardLabel(_ page: SettingsPage, compact: Bool) -> some View {
         let presentation = cardPresentation(page)
+        let inset: CGFloat = compact ? 10 : 16
         return VStack(alignment: .leading, spacing: compact ? 4 : 8) {
             Image(systemName: presentation.symbol)
                 .font(.system(size: compact ? 19 : 24, weight: .medium))
                 .foregroundStyle(presentation.color)
-            Text(page.rawValue).font(compact ? .subheadline.bold() : .headline)
-                .padding(.trailing, compact && page == .connection ? 32 : 0)
+                .padding(.horizontal, inset)
+            ViewThatFits(in: .horizontal) {
+                Text(page.rawValue)
+                    .fixedSize()
+                    .padding(.horizontal, inset)
+                // Long titles may use the card's side insets before wrapping.
+                Text(page.rawValue)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.horizontal, 2)
+            }
+            .font(compact ? .subheadline.bold() : .headline)
+            .padding(.trailing, compact && page == .connection ? 32 : 0)
+            .frame(maxWidth: .infinity, alignment: .leading)
             VStack(alignment: .leading, spacing: 0) {
                 Text(presentation.detail)
                 if page == .index {
@@ -425,9 +438,10 @@ struct AccountSettingsView: View {
             .font(compact ? .caption2 : .caption).foregroundStyle(.secondary)
             .lineLimit(compact ? 2 : nil)
             .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, inset)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .padding(compact ? 10 : 16)
+        .padding(.vertical, inset)
     }
 
     private func expandingCard(_ page: SettingsPage, source: CGRect, destination: CGRect, compact: Bool) -> some View {
