@@ -16,6 +16,11 @@ nonisolated struct LibraryIndexSyncResult: Sendable {
     let expectedAssetCount: Int
     let hasMoreHistory: Bool
     let cleanup: LibraryIndexGenerationCleanup
+    var hasPendingBucketChanges = false
+
+    var isComplete: Bool {
+        !hasMoreHistory && !hasPendingBucketChanges
+    }
 }
 
 nonisolated struct LibraryIndexProgress: Sendable {
@@ -38,6 +43,7 @@ actor LibraryIndexSynchronizer {
 
     func synchronizeRecent(
         scope: MediaAccountScope,
+        recentOnly: Bool = false,
         progress: (@Sendable (LibraryIndexProgress) async -> Void)? = nil
     ) async throws -> LibraryIndexSyncResult {
         let snapshot = try await store.snapshot(scope: scope)
@@ -45,6 +51,7 @@ actor LibraryIndexSynchronizer {
             scope: scope,
             mode: snapshot == nil ? .recent : .incremental,
             fullReconciliation: false,
+            recentOnly: recentOnly,
             progress: progress
         )
     }
@@ -77,6 +84,7 @@ actor LibraryIndexSynchronizer {
         scope: MediaAccountScope,
         mode: LibraryIndexSyncMode,
         fullReconciliation: Bool,
+        recentOnly: Bool = false,
         progress: (@Sendable (LibraryIndexProgress) async -> Void)?
     ) async throws -> LibraryIndexSyncResult {
         try await store.prepare(scope: scope)
@@ -107,7 +115,8 @@ actor LibraryIndexSynchronizer {
                 summaries: summaries,
                 previous: previous,
                 mode: mode,
-                fullReconciliation: fullReconciliation
+                fullReconciliation: fullReconciliation,
+                recentOnly: recentOnly
             )
             try Task.checkCancellation()
 
@@ -145,6 +154,10 @@ actor LibraryIndexSynchronizer {
                 previous: fullReconciliation ? nil : previous,
                 replacing: replacements
             )
+            let stagedCounts = Dictionary(grouping: stagedAssets, by: \.bucketKey).mapValues(\.count)
+            let hasPendingBucketChanges = recentOnly && summaries.contains {
+                stagedCounts[$0.id.rawValue, default: 0] != $0.assetCount
+            }
             try await store.replace(
                 groups: LibraryIndexCatalogBuilder.build(from: stagedAssets),
                 generation: generation,
@@ -169,7 +182,8 @@ actor LibraryIndexSynchronizer {
                 indexedVideoCount: stagedAssets.count { $0.kind == .video },
                 expectedAssetCount: expectedCount,
                 hasMoreHistory: nextCursor != nil,
-                cleanup: cleanup
+                cleanup: cleanup,
+                hasPendingBucketChanges: hasPendingBucketChanges
             )
         } catch {
             if !(error is CancellationError) {
@@ -183,8 +197,12 @@ actor LibraryIndexSynchronizer {
         summaries: [TimelineBucketSummary],
         previous: LibraryIndexSnapshot?,
         mode: LibraryIndexSyncMode,
-        fullReconciliation: Bool
+        fullReconciliation: Bool,
+        recentOnly: Bool
     ) -> [TimelineBucketSummary] {
+        if recentOnly {
+            return Array(summaries.prefix(batchSize))
+        }
         guard !fullReconciliation else { return summaries }
         switch mode {
         case .recent:

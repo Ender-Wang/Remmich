@@ -9,6 +9,8 @@ import SwiftUI
 
 @main
 struct RemmichApp: App {
+    @UIApplicationDelegateAdaptor(RemmichAppDelegate.self) private var appDelegate
+
     var body: some Scene {
         WindowGroup {
             ContentView()

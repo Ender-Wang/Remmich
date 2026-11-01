@@ -3,7 +3,7 @@ import UIKit
 
 struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
-    @State private var controller = AppSessionController()
+    @State private var controller = LibraryBackgroundSyncCoordinator.shared.controller
     @State private var presentation = PhotosPresentationState()
     @State private var primaryContentLoading = true
 
@@ -22,6 +22,8 @@ struct RootView: View {
                 OnboardingView(controller: controller, server: server, isSigningIn: true)
             case .signingOut:
                 Color.clear
+            case .signedIn where !controller.foregroundResourcesReady:
+                RestoringAppShellView()
             case let .signedIn(session):
                 AppShellView(
                     session: session,
@@ -45,10 +47,19 @@ struct RootView: View {
         .overlay {
             LoadingStateView(isLoading: loadingLabel != nil, label: loadingLabel ?? "Loading library")
         }
-        .task { await controller.start() }
+        .task {
+            guard scenePhase == .active else { return }
+            await controller.start()
+            LibraryBackgroundSyncCoordinator.shared.scheduleNextSync()
+        }
         .onChange(of: isSignedIn) { _, signedIn in
             if !signedIn {
                 primaryContentLoading = true
+                if case .signedOut = controller.state {
+                    LibraryBackgroundSyncCoordinator.shared.cancel()
+                }
+            } else {
+                LibraryBackgroundSyncCoordinator.shared.scheduleNextSync()
             }
         }
         .onChange(of: scenePhase) { _, phase in
@@ -57,9 +68,10 @@ struct RootView: View {
                 Task {
                     await controller.handleForegroundTransition()
                     controller.libraryIndex.resourceConditionsChanged(isAppActive: scenePhase == .active)
+                    LibraryBackgroundSyncCoordinator.shared.scheduleNextSync()
                 }
             } else if phase == .background {
-                controller.handleBackgroundTransition()
+                LibraryBackgroundSyncCoordinator.shared.enteredBackground()
             }
         }
         .onReceive(NotificationCenter.default.publisher(

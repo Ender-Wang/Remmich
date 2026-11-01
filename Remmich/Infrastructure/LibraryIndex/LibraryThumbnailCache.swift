@@ -115,6 +115,7 @@ actor LibraryThumbnailCache {
         accessToken: String,
         progress: (@Sendable (WarmProgress) async -> Void)? = nil
     ) async throws -> WarmProgress {
+        try Task.checkCancellation()
         let directory = rootURL
             .appending(path: scope.cacheNamespace, directoryHint: .isDirectory)
             .appending(path: MediaDerivative.thumbnail.rawValue, directoryHint: .isDirectory)
@@ -134,6 +135,7 @@ actor LibraryThumbnailCache {
         } else {
             try await store.cachedAssetDetailIDs(scope: scope)
         }
+        try Task.checkCancellation()
         let pending = assets.filter {
             !existingKeys.contains("\($0.id)|\($0.updatedAt.ISO8601Format())")
                 || !metadataIDs.contains($0.id)
@@ -154,6 +156,7 @@ actor LibraryThumbnailCache {
             failures: []
         )
         await progress?(currentProgress)
+        try Task.checkCancellation()
         lastProgressAt = Date()
 
         try await withThrowingTaskGroup(of: AssetCacheResult.self) { group in
@@ -222,6 +225,7 @@ actor LibraryThumbnailCache {
                 }
             }
         }
+        try Task.checkCancellation()
         return currentProgress
     }
 

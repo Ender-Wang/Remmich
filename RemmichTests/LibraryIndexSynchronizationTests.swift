@@ -4,6 +4,268 @@ import Testing
 
 @Suite(.serialized)
 struct LibraryIndexSynchronizationTests {
+    @Test @MainActor func invalidatedIndexRunCannotRestoreOldAccountThumbnailRegistrations() async throws {
+        let fixture = try IndexFixture()
+        let suite = "BackgroundSync-\(UUID().uuidString)"
+        let preferences = try #require(UserDefaults(suiteName: suite))
+        defer { fixture.cleanup(); preferences.removePersistentDomain(forName: suite) }
+        let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        let asset = Self.asset(id: "one", bucket: "2026-10-01")
+        let source = IndexSource(buckets: ["2026-10-01": [asset]])
+        _ = try await LibraryIndexSynchronizer(source: source, store: store).fullSyncAndVerify(scope: Self.scope)
+        let snapshot = try #require(try await store.snapshot(scope: Self.scope))
+        let record = try #require(snapshot.assets.first)
+        let directory = fixture.cacheURL.appending(path: Self.scope.cacheNamespace).appending(path: "thumbnail")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data([1]).write(to: directory.appending(path: "one.jpg"))
+        try await store.upsert(derivatives: [.init(assetID: asset.id, derivative: .thumbnail, pixelSize: nil,
+                                                   sourceRevision: record.updatedAt.ISO8601Format(),
+                                                   relativeFileKey: "thumbnail/one.jpg", byteCount: 1, digest: "fixture",
+                                                   isVerified: true, lastAccessedAt: .now, completedAt: .now)], scope: Self.scope)
+        let media = MediaLibraryController()
+        let controller = LibraryIndexController(source: source, store: store, media: media,
+                                                cacheRootURL: fixture.cacheURL, preferences: preferences)
+        var invalidated = false
+        controller.acceptedBootstrapDidChange = { [weak controller] _ in
+            invalidated = true
+            controller?.clearSession()
+            media.clearAll()
+        }
+        controller.start(session: .fixture, endpoint: AccountSession.fixture.apiURL)
+        #expect(await controller.finishBackgroundSync() == false)
+        #expect(invalidated)
+        #expect(controller.indexedAssetCount == 0)
+        #expect(controller.thumbnailWarmingCachedCount == 0)
+        #expect(media.viewerThumbnailFallbackByteCount(for: asset) == nil)
+    }
+
+    @Test func quickRefreshDoesNotDeclareUnrefreshedOlderChangesComplete() async throws {
+        let fixture = try IndexFixture()
+        defer { fixture.cleanup() }
+        let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        var buckets = [
+            "2026-10-01": [Self.asset(id: "recent-one", bucket: "2026-10-01")],
+            "2026-09-01": [Self.asset(id: "recent-two", bucket: "2026-09-01")],
+            "2026-08-01": [Self.asset(id: "a1", bucket: "2026-08-01"), Self.asset(id: "a2", bucket: "2026-08-01")],
+            "2026-07-01": [Self.asset(id: "b1", bucket: "2026-07-01"), Self.asset(id: "b2", bucket: "2026-07-01")],
+        ]
+        let source = IndexSource(buckets: buckets)
+        let synchronizer = LibraryIndexSynchronizer(source: source, store: store)
+        _ = try await synchronizer.fullSyncAndVerify(scope: Self.scope)
+        buckets["2026-08-01"]?.append(Self.asset(id: "a3", bucket: "2026-08-01"))
+        buckets["2026-07-01"] = [Self.asset(id: "b1", bucket: "2026-07-01")]
+        await source.replaceBuckets(with: buckets)
+        let result = try await synchronizer.synchronizeRecent(scope: Self.scope, recentOnly: true)
+        // Total counts still match, but the two older buckets need processing.
+        #expect(result.indexedAssetCount == result.expectedAssetCount)
+        #expect(result.hasPendingBucketChanges)
+        #expect(!result.isComplete)
+    }
+
+    @Test @MainActor func shortRefreshLeavesHistoryAndThumbnailWorkForProcessing() async throws {
+        let fixture = try IndexFixture()
+        let suite = "BackgroundSync-\(UUID().uuidString)"
+        let preferences = try #require(UserDefaults(suiteName: suite))
+        defer { fixture.cleanup(); preferences.removePersistentDomain(forName: suite) }
+        preferences.set(true, forKey: "library-index-thumbnail-warming")
+        let buckets = ["2026-10-01", "2026-09-01", "2026-08-01", "2026-07-01"]
+        let source = IndexSource(buckets: Dictionary(uniqueKeysWithValues: buckets.map {
+            ($0, [Self.asset(id: $0, bucket: $0)])
+        }))
+        let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        let details = AssetDetailFixtureSource()
+        let controller = LibraryIndexController(source: source, store: store, assetDetails: details,
+                                                cacheRootURL: fixture.cacheURL, preferences: preferences)
+        controller.setBackgroundRefreshOnly(true)
+        controller.start(session: .fixture, endpoint: AccountSession.fixture.apiURL, automatic: true)
+        #expect(await controller.finishBackgroundSync(kind: .refresh))
+        #expect(await source.summaryRequestCount == 1)
+        let snapshot = try #require(try await store.snapshot(scope: Self.scope))
+        #expect(snapshot.assets.count == 2)
+        #expect(snapshot.syncState.historicalCursor != nil)
+        #expect(controller.status == .idle)
+        #expect(!controller.hasActiveSyncWork)
+        #expect(controller.thumbnailWarmingStatus != .warming)
+        #expect(await details.requestedIDs.isEmpty)
+        #expect(preferences.object(forKey: "library-index-last-success-\(Self.scope.cacheNamespace)") == nil)
+
+        // A subsequent quick pass must not treat every unindexed month as a
+        // changed bucket and turn into a full historical reconciliation.
+        controller.start(session: .fixture, endpoint: AccountSession.fixture.apiURL, automatic: true)
+        #expect(await controller.finishBackgroundSync(kind: .refresh))
+        let refreshed = try #require(try await store.snapshot(scope: Self.scope))
+        #expect(refreshed.assets.count == 2)
+        #expect(await source.summaryRequestCount == 2)
+
+        controller.setBackgroundRefreshOnly(false)
+        controller.setThumbnailWarmingEnabled(false)
+        controller.start(session: .fixture, endpoint: AccountSession.fixture.apiURL)
+        #expect(await controller.finishBackgroundSync())
+        let completed = try #require(try await store.snapshot(scope: Self.scope))
+        #expect(completed.assets.count == 4)
+        #expect(completed.syncState.historicalCursor == nil)
+        controller.suspend()
+    }
+
+    @Test @MainActor func shortRefreshDoesNotWarmMissingThumbnailsWhenIndexIsFresh() async throws {
+        let fixture = try IndexFixture()
+        let suite = "BackgroundSync-\(UUID().uuidString)"
+        let preferences = try #require(UserDefaults(suiteName: suite))
+        defer { fixture.cleanup(); preferences.removePersistentDomain(forName: suite) }
+        preferences.set(true, forKey: "library-index-thumbnail-warming")
+        preferences.set(Date(), forKey: "library-index-last-success-\(Self.scope.cacheNamespace)")
+        let source = IndexSource(buckets: ["2026-10-01": [Self.asset(id: "one", bucket: "2026-10-01")]])
+        let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        _ = try await LibraryIndexSynchronizer(source: source, store: store).fullSyncAndVerify(scope: Self.scope)
+        let controller = LibraryIndexController(source: source, store: store,
+                                                cacheRootURL: fixture.cacheURL, preferences: preferences)
+        controller.setBackgroundRefreshOnly(true)
+        try await controller.restoreBackgroundState(session: .fixture, includeCacheState: false)
+        controller.start(session: .fixture, endpoint: AccountSession.fixture.apiURL, automatic: true)
+        #expect(await controller.finishBackgroundSync(kind: .refresh))
+        #expect(!controller.hasActiveSyncWork)
+        #expect(await source.summaryRequestCount == 1)
+        controller.suspend()
+    }
+
+    @Test @MainActor func cancelledCacheCheckCannotReportSuccessWithAnEmptyQueue() async throws {
+        let fixture = try IndexFixture()
+        defer { fixture.cleanup() }
+        let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        try await store.prepare(scope: Self.scope)
+        let cache = LibraryThumbnailCache(store: store, rootURL: fixture.cacheURL)
+        let work = Task {
+            try await cache.warm(assets: [], scope: Self.scope,
+                                 endpoint: AccountSession.fixture.apiURL, accessToken: "test")
+        }
+        work.cancel()
+        await #expect(throws: CancellationError.self) { try await work.value }
+    }
+
+    @Test(arguments: [false, true]) @MainActor
+    func backgroundCompletionWaitsForMetadataAndPreservesCachedFiles(cancel: Bool) async throws {
+        let fixture = try IndexFixture()
+        let suite = "BackgroundSync-\(UUID().uuidString)"
+        let preferences = try #require(UserDefaults(suiteName: suite))
+        defer { fixture.cleanup(); preferences.removePersistentDomain(forName: suite) }
+        preferences.set(true, forKey: "library-index-thumbnail-warming")
+        let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        let asset = Self.asset(id: "one", bucket: "2026-10-01")
+        let source = IndexSource(buckets: ["2026-10-01": [asset]])
+        _ = try await LibraryIndexSynchronizer(source: source, store: store).fullSyncAndVerify(scope: Self.scope)
+        let snapshot = try #require(try await store.snapshot(scope: Self.scope))
+        let record = try #require(snapshot.assets.first)
+        let directory = fixture.cacheURL.appending(path: Self.scope.cacheNamespace).appending(path: "thumbnail")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = directory.appending(path: "one.jpg")
+        try Data([1]).write(to: file)
+        try await store.upsert(derivatives: [.init(assetID: asset.id, derivative: .thumbnail, pixelSize: nil,
+                                                   sourceRevision: record.updatedAt.ISO8601Format(),
+                                                   relativeFileKey: "thumbnail/one.jpg", byteCount: 1, digest: "fixture",
+                                                   isVerified: true, lastAccessedAt: .now, completedAt: .now)], scope: Self.scope)
+        let details = SuspendedBackgroundAssetDetails()
+        let controller = LibraryIndexController(source: source, store: store, assetDetails: details,
+                                                cacheRootURL: fixture.cacheURL,
+                                                resourceConditions: { .init(lowPowerMode: false, thermalState: .nominal) },
+                                                preferences: preferences)
+        controller.start(session: .fixture, endpoint: AccountSession.fixture.apiURL, automatic: true)
+        var completed = false
+        let work = Task {
+            let result = await controller.finishBackgroundSync()
+            completed = true
+            return result
+        }
+        for _ in 0 ..< 150 {
+            if await details.hasPendingRead, controller.status == .upToDate {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(await details.hasPendingRead)
+        #expect(controller.status == .upToDate)
+        #expect(!completed)
+        if cancel {
+            controller.setBackgroundRefreshOnly(true)
+        }
+        let detail = await AssetDetailFixtureSource().assetDetail(id: asset.id)
+        await details.complete(with: detail)
+        #expect(await work.value == !cancel)
+        #expect(FileManager.default.fileExists(atPath: file.path))
+        let finalSnapshot = try #require(try await store.snapshot(scope: Self.scope))
+        #expect(finalSnapshot.derivatives.count == 1)
+        #expect(try await store.cachedAssetDetailIDs(scope: Self.scope).contains(asset.id) == !cancel)
+        controller.suspend()
+    }
+
+    @Test @MainActor func automaticStartsJoinAndReuseSuccessfulBackgroundSync() async throws {
+        let fixture = try IndexFixture()
+        let suite = "BackgroundSync-\(UUID().uuidString)"
+        let preferences = try #require(UserDefaults(suiteName: suite))
+        defer { fixture.cleanup(); preferences.removePersistentDomain(forName: suite) }
+        let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        let source = IndexSource(buckets: ["2026-10-01": [Self.asset(id: "one", bucket: "2026-10-01")]])
+        let controller = LibraryIndexController(source: source, store: store, preferences: preferences)
+        controller.start(session: .fixture, endpoint: AccountSession.fixture.apiURL, automatic: true)
+        let initialStart = controller.startedAt
+        controller.start(session: .fixture, endpoint: AccountSession.fixture.apiURL, automatic: true)
+        #expect(controller.startedAt == initialStart)
+        #expect(await controller.finishBackgroundSync())
+        #expect(await source.summaryRequestCount == 1)
+
+        let restored = LibraryIndexController(source: source, store: store, preferences: preferences)
+        try await restored.restoreBackgroundState(session: .fixture)
+        restored.start(session: .fixture, endpoint: AccountSession.fixture.apiURL, automatic: true)
+        #expect(!restored.hasActiveSyncWork)
+        #expect(await restored.finishBackgroundSync())
+        #expect(await source.summaryRequestCount == 1)
+        restored.syncNow()
+        #expect(await restored.finishBackgroundSync())
+        #expect(await source.summaryRequestCount == 2)
+        controller.suspend()
+        restored.suspend()
+    }
+
+    @Test @MainActor func failedBackgroundSyncDoesNotSuppressAnAutomaticRetry() async throws {
+        let fixture = try IndexFixture()
+        let suite = "BackgroundSync-\(UUID().uuidString)"
+        let preferences = try #require(UserDefaults(suiteName: suite))
+        defer { fixture.cleanup(); preferences.removePersistentDomain(forName: suite) }
+        preferences.set(Date(), forKey: "library-index-last-success-\(Self.scope.cacheNamespace)")
+        let controller = LibraryIndexController(source: FailingIndexSource(),
+                                                store: SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL),
+                                                preferences: preferences)
+        controller.start(session: .fixture, endpoint: AccountSession.fixture.apiURL, automatic: true)
+        #expect(await controller.finishBackgroundSync() == false)
+        #expect(preferences.object(forKey: "library-index-last-success-\(Self.scope.cacheNamespace)") == nil)
+        controller.start(session: .fixture, endpoint: AccountSession.fixture.apiURL, automatic: true)
+        #expect(controller.status == .indexing)
+        #expect(await controller.finishBackgroundSync() == false)
+        controller.suspend()
+    }
+
+    @Test @MainActor func backgroundRestoreHonorsBothPausedPreferences() async throws {
+        let fixture = try IndexFixture()
+        let suite = "BackgroundSync-\(UUID().uuidString)"
+        let preferences = try #require(UserDefaults(suiteName: suite))
+        defer { fixture.cleanup(); preferences.removePersistentDomain(forName: suite) }
+        preferences.set(true, forKey: "library-index-thumbnail-warming")
+        preferences.set(true, forKey: "library-index-thumbnail-warming-paused")
+        let source = IndexSource(buckets: [:])
+        let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        _ = try await LibraryIndexSynchronizer(source: source, store: store).fullSyncAndVerify(scope: Self.scope)
+        try await store.setPaused(true, scope: Self.scope)
+        let controller = LibraryIndexController(source: source, store: store, preferences: preferences)
+        try await controller.restoreBackgroundState(session: .fixture)
+        controller.start(session: .fixture, endpoint: AccountSession.fixture.apiURL, automatic: true)
+        #expect(await controller.finishBackgroundSync())
+        #expect(controller.status == .paused)
+        #expect(controller.thumbnailWarmingPaused)
+        #expect(controller.thumbnailWarmingStatus == .paused)
+        #expect(!controller.hasAutomaticSyncWork)
+        #expect(await source.summaryRequestCount == 1)
+        controller.suspend()
+    }
+
     @Test @MainActor func queuedCacheCanBePausedAndDoesNotResumeWhenConditionsRecover() {
         let defaults = UserDefaults.standard
         let keys = ["library-index-thumbnail-warming", "library-index-thumbnail-warming-paused"]
@@ -638,6 +900,8 @@ struct LibraryIndexSynchronizationTests {
         try await Self.waitUntilTimelinePublicationIsDeferred(controller)
 
         #expect(publishedGenerations.isEmpty)
+        controller.suspend()
+        #expect(controller.hasDeferredTimelinePublication)
         controller.setTimelinePublicationDeferred(false)
         #expect(publishedGenerations.count == 1)
         #expect(!controller.hasDeferredTimelinePublication)
@@ -770,6 +1034,28 @@ struct LibraryIndexSynchronizationTests {
     }
 }
 
+private actor SuspendedBackgroundAssetDetails: AssetDetailReading {
+    private var continuation: CheckedContinuation<AssetDetail, Never>?
+    private var result: AssetDetail?
+    var hasPendingRead: Bool {
+        continuation != nil
+    }
+
+    func assetDetail(id _: String) async -> AssetDetail {
+        if let result {
+            return result
+        }
+        return await withCheckedContinuation { continuation = $0 }
+    }
+
+    func complete(with detail: AssetDetail) {
+        result = detail
+        let pending = continuation
+        continuation = nil
+        pending?.resume(returning: detail)
+    }
+}
+
 private actor IndexProgressRecorder {
     private(set) var values: [LibraryIndexProgress] = []
 
@@ -818,6 +1104,7 @@ private actor AssetDetailFixtureSource: AssetDetailReading {
 
 private actor IndexSource: TimelineReading {
     private var buckets: [String: [TimelineAssetSummary]]
+    private(set) var summaryRequestCount = 0
 
     init(buckets: [String: [TimelineAssetSummary]]) {
         self.buckets = buckets
@@ -828,7 +1115,8 @@ private actor IndexSource: TimelineReading {
     }
 
     func bucketSummaries(query _: TimelineQuery) -> [TimelineBucketSummary] {
-        buckets.map { key, assets in
+        summaryRequestCount += 1
+        return buckets.map { key, assets in
             .init(id: .init(rawValue: key), assetCount: assets.count)
         }
     }

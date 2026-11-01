@@ -56,6 +56,16 @@ final class AppSessionController {
     private var isRestoringSession = false
     private var routeGeneration = 0
     private var pendingPathChangeTask: Task<Void, Never>?
+    @ObservationIgnored var backgroundSyncInvalidated: (() -> Void)?
+    private var preparationTask: Task<Void, Never>?
+    private var foregroundPreparationTask: Task<Void, Never>?
+    private var preparationGeneration = 0
+    private var didPrepareSession = false
+    private(set) var foregroundResourcesReady = false
+    private var isAppInForeground = true
+    private var automaticSyncAllowed = true
+    private var backgroundSyncID: UUID?
+    private var backgroundSyncKind: LibraryBackgroundSyncKind?
 
     init(
         service: any ServerReading & SessionManaging & RouteValidating = ImmichServiceAdapter(),
@@ -143,10 +153,66 @@ final class AppSessionController {
     }
 
     func start() async {
-        let startupStartedAt = Date()
-        media.beginStartupTrace(at: startupStartedAt)
-        Self.startupLogger.info("App session startup started")
+        await prepareSession(inBackground: false)
+        guard !Task.isCancelled else { return }
+        if let foregroundPreparationTask {
+            await foregroundPreparationTask.value
+            return
+        }
+        if !foregroundResourcesReady, case let .signedIn(session) = state {
+            let generation = preparationGeneration
+            let task = Task {
+                await persistentAssetDetails.configure(session: session)
+                guard preparationIsCurrent(generation), case let .signedIn(current) = state, current == session else { return }
+                media.configure(session: session, activeEndpoint: activeRoute?.endpoint)
+                await bootstrapLocalLibrary(session: session)
+                guard preparationIsCurrent(generation), case let .signedIn(updated) = state, updated == session else { return }
+                foregroundResourcesReady = true
+            }
+            foregroundPreparationTask = task
+            await task.value
+            guard generation == preparationGeneration, !Task.isCancelled else { return }
+            foregroundPreparationTask = nil
+        }
         startNetworkMonitoring()
+    }
+
+    private func prepareSession(inBackground: Bool) async {
+        guard !Task.isCancelled else { return }
+        if let preparationTask {
+            await preparationTask.value
+            if !Task.isCancelled, preparationTask.isCancelled, !didPrepareSession {
+                await prepareSession(inBackground: inBackground)
+            }
+            return
+        }
+        guard !didPrepareSession else { return }
+        let generation = preparationGeneration
+        let task = Task { await restoreSession(inBackground: inBackground, generation: generation) }
+        preparationTask = task
+        await task.value
+        guard generation == preparationGeneration else { return }
+        preparationTask = nil
+        if !task.isCancelled, case .loading = state {
+            return
+        }
+        didPrepareSession = !task.isCancelled
+    }
+
+    private func preparationIsCurrent(_ generation: Int) -> Bool {
+        generation == preparationGeneration && !Task.isCancelled
+    }
+
+    private func restoreSession(inBackground: Bool, generation: Int) async {
+        let startupStartedAt = Date()
+        if !inBackground {
+            media.beginStartupTrace(at: startupStartedAt)
+        }
+        if inBackground {
+            Self.startupLogger.info("Background session preparation started")
+        } else {
+            Self.startupLogger.info("App session startup started")
+        }
         if ProcessInfo.processInfo.arguments.contains("-ui-testing-signed-in") {
             let session = AccountSession.fixture
             await persistentAssetDetails.configure(session: session)
@@ -156,7 +222,9 @@ final class AppSessionController {
                 videos.routeDidChange(isReachable: true)
             }
             await photos.load()
+            guard preparationIsCurrent(generation) else { return }
             state = .signedIn(session)
+            foregroundResourcesReady = true
             return
         }
         if ProcessInfo.processInfo.arguments.contains("-ui-testing-signed-out") {
@@ -165,11 +233,14 @@ final class AppSessionController {
         }
 
         connectionProfile = await profileStore.load()
+        guard preparationIsCurrent(generation) else { return }
         Self.startupLogger.info(
             "Connection profile restored elapsedMs=\(Self.elapsedMilliseconds(since: startupStartedAt))"
         )
         do {
-            guard let session = try await sessionStore.load() else {
+            let restoredSession = try await sessionStore.load()
+            guard preparationIsCurrent(generation) else { return }
+            guard let session = restoredSession else {
                 state = .signedOut
                 return
             }
@@ -178,12 +249,16 @@ final class AppSessionController {
             )
             isRestoringSession = true
             defer { isRestoringSession = false }
-            await persistentAssetDetails.configure(session: session)
-            media.configure(session: session, activeEndpoint: nil)
-            Self.startupLogger.info(
-                "Media pipeline configured elapsedMs=\(Self.elapsedMilliseconds(since: startupStartedAt))"
-            )
+            if !inBackground {
+                await persistentAssetDetails.configure(session: session)
+                guard preparationIsCurrent(generation) else { return }
+                media.configure(session: session, activeEndpoint: nil)
+                Self.startupLogger.info(
+                    "Media pipeline configured elapsedMs=\(Self.elapsedMilliseconds(since: startupStartedAt))"
+                )
+            }
             await timeline.configure(session: session, activeEndpoint: nil)
+            guard preparationIsCurrent(generation) else { return }
             Self.startupLogger.info(
                 "Timeline repository configured elapsedMs=\(Self.elapsedMilliseconds(since: startupStartedAt))"
             )
@@ -191,18 +266,33 @@ final class AppSessionController {
             Self.startupLogger.info(
                 "Signed-in shell state published elapsedMs=\(Self.elapsedMilliseconds(since: startupStartedAt))"
             )
-            await bootstrapLocalLibrary(session: session)
-            Self.startupLogger.info(
-                "Local library bootstrap published elapsedMs=\(Self.elapsedMilliseconds(since: startupStartedAt))"
-            )
-            await reevaluateRoute(trigger: .startup)
+            if inBackground {
+                try await libraryIndex.restoreBackgroundState(session: session, includeCacheState: backgroundSyncKind != .refresh)
+                Self.startupLogger.info("Background sync state restored")
+            } else {
+                await bootstrapLocalLibrary(session: session)
+                guard preparationIsCurrent(generation) else { return }
+                foregroundResourcesReady = true
+                Self.startupLogger.info(
+                    "Local library bootstrap published elapsedMs=\(Self.elapsedMilliseconds(since: startupStartedAt))"
+                )
+            }
+            guard preparationIsCurrent(generation) else { return }
+            if !inBackground {
+                await reevaluateRoute(trigger: .startup)
+            }
         } catch SessionStoreError.corruptPayload {
+            guard preparationIsCurrent(generation) else { return }
             try? await sessionStore.delete()
+            guard preparationIsCurrent(generation) else { return }
             activeRoute = nil
             routeStatus = .waitingForNetwork
             state = .signedOut
         } catch {
-            state = .failed(message: Self.message(for: error), server: nil)
+            guard preparationIsCurrent(generation) else { return }
+            // A locked Keychain or unavailable protected store must be retryable
+            // when the user next opens the app; keep its saved credentials.
+            state = inBackground ? .loading : .failed(message: Self.message(for: error), server: nil)
         }
     }
 
@@ -243,6 +333,7 @@ final class AppSessionController {
                 activeEndpoint: session.apiURL
             )
             await bootstrapLocalLibrary(session: session)
+            foregroundResourcesReady = true
             if routeChanged {
                 photos.routeDidChange(isReachable: true)
                 videos.routeDidChange(isReachable: true)
@@ -256,6 +347,8 @@ final class AppSessionController {
     }
 
     func signOut(deleteLocalData: Bool = false) async {
+        backgroundSyncInvalidated?()
+        invalidatePreparation()
         if deleteLocalData {
             await libraryIndex.deleteCurrentAccountData()
         }
@@ -338,7 +431,7 @@ final class AppSessionController {
     }
 
     private func performRouteEvaluation(trigger: RouteEvaluationTrigger) async {
-        guard case let .signedIn(session) = state else { return }
+        guard automaticSyncAllowed, case let .signedIn(session) = state else { return }
         routeGeneration += 1
         let evaluation = routeGeneration
         routeStatus = .checking
@@ -592,6 +685,8 @@ final class AppSessionController {
 
     private func invalidateSession(_ session: AccountSession, evaluation: Int) async {
         guard evaluation == routeGeneration else { return }
+        backgroundSyncInvalidated?()
+        invalidatePreparation()
         routeGeneration += 1
         activeRoute = nil
         routeStatus = .waitingForNetwork
@@ -611,11 +706,22 @@ final class AppSessionController {
     }
 
     func handleBackgroundTransition() {
-        libraryIndex.suspend()
+        isAppInForeground = false
+        if backgroundSyncID == nil {
+            automaticSyncAllowed = false
+            routeGeneration += 1
+            libraryIndex.suspend()
+        } else if backgroundSyncKind == .refresh {
+            libraryIndex.setBackgroundRefreshOnly(true)
+        }
         media.handleBackgroundTransition()
     }
 
     func handleForegroundTransition() async {
+        isAppInForeground = true
+        automaticSyncAllowed = true
+        libraryIndex.setBackgroundRefreshOnly(false)
+        await start()
         if !isRestoringSession {
             await reevaluateRoute(trigger: .foreground)
         }
@@ -629,13 +735,59 @@ final class AppSessionController {
     }
 
     private func startLibraryIndexing(session: AccountSession) {
-        guard !ProcessInfo.processInfo.arguments.contains("-ui-testing-signed-in") else { return }
-        libraryIndex.start(session: session, endpoint: activeRoute?.endpoint ?? session.apiURL)
+        guard automaticSyncAllowed,
+              !ProcessInfo.processInfo.arguments.contains("-ui-testing-signed-in") else { return }
+        libraryIndex.start(session: session, endpoint: activeRoute?.endpoint ?? session.apiURL, automatic: true)
+    }
+
+    func performBackgroundSync(id: UUID, kind: LibraryBackgroundSyncKind = .processing) async -> Bool {
+        guard !Task.isCancelled, backgroundSyncID == nil else { return false }
+        backgroundSyncID = id
+        backgroundSyncKind = kind
+        libraryIndex.setBackgroundRefreshOnly(kind == .refresh)
+        automaticSyncAllowed = true
+        await prepareSession(inBackground: true)
+        guard backgroundSyncID == id, !Task.isCancelled,
+              case let .signedIn(session) = state else { return false }
+        await reevaluateRoute(trigger: .background)
+        guard backgroundSyncID == id, !Task.isCancelled, routeStatus == .connected else { return false }
+        startLibraryIndexing(session: session)
+        return await libraryIndex.finishBackgroundSync(kind: kind)
+    }
+
+    func endBackgroundSync(id: UUID) {
+        guard backgroundSyncID == id else { return }
+        backgroundSyncID = nil
+        backgroundSyncKind = nil
+        if !isAppInForeground {
+            automaticSyncAllowed = false
+            routeGeneration += 1
+            preparationGeneration += 1
+            preparationTask?.cancel()
+            preparationTask = nil
+            if isRestoringSession {
+                didPrepareSession = false
+            }
+            libraryIndex.suspend()
+        }
+        libraryIndex.setBackgroundRefreshOnly(false)
+    }
+
+    private func invalidatePreparation() {
+        preparationGeneration += 1
+        preparationTask?.cancel()
+        preparationTask = nil
+        foregroundPreparationTask?.cancel()
+        foregroundPreparationTask = nil
+        didPrepareSession = true
+        foregroundResourcesReady = false
     }
 
     private func bootstrapLocalLibrary(session: AccountSession) async {
+        let generation = preparationGeneration
         guard !ProcessInfo.processInfo.arguments.contains("-ui-testing-signed-in"),
-              let bootstrap = await libraryIndex.bootstrap(session: session)
+              let bootstrap = await libraryIndex.bootstrap(session: session),
+              preparationIsCurrent(generation)
         else { return }
         photos.bootstrap(bootstrap.photos)
         videos.bootstrap(bootstrap.videos)
@@ -663,6 +815,7 @@ private nonisolated enum RouteEvaluationTrigger: String, Sendable {
     case profileSave = "profile-save"
     case networkPath = "network-path"
     case foreground
+    case background
 }
 
 private nonisolated struct RouteEvaluationOutcome: Sendable {

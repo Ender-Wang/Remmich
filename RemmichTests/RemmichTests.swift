@@ -13,6 +13,108 @@ import UIKit
 @testable import Remmich
 
 struct RemmichTests {
+    @Test @MainActor func headlessSessionWaitsForForegroundResourcesBeforePresentingContent() async {
+        let controller = AppSessionController(
+            service: RouteRestoreService(reachableEndpoints: []),
+            sessionStore: MemorySessionStore(session: .fixture),
+            profileStore: ConnectionProfileStore(suiteName: "BackgroundSync-\(UUID().uuidString)"),
+            networkMonitoringEnabled: false
+        )
+        controller.handleBackgroundTransition()
+        let id = UUID()
+        #expect(await controller.performBackgroundSync(id: id, kind: .refresh) == false)
+        controller.endBackgroundSync(id: id)
+        guard case .signedIn = controller.state else {
+            Issue.record("Expected the headless launch to restore the signed-in session")
+            return
+        }
+        #expect(!controller.foregroundResourcesReady)
+        #expect(controller.media.pipeline == nil)
+        await controller.start()
+        #expect(controller.foregroundResourcesReady)
+        #expect(controller.media.pipeline != nil)
+    }
+
+    @Test(arguments: LibraryBackgroundSyncKind.allCases) @MainActor
+    func backgroundExpirationPreventsLateSessionRestorationFromStartingSync(kind: LibraryBackgroundSyncKind) async throws {
+        let sessions = SuspendedBackgroundSessionStore()
+        let service = RouteRestoreService(reachableEndpoints: [])
+        let controller = AppSessionController(service: service, sessionStore: sessions,
+                                              profileStore: ConnectionProfileStore(suiteName: "BackgroundSync-\(UUID().uuidString)"),
+                                              networkMonitoringEnabled: false)
+        controller.handleBackgroundTransition()
+        let id = UUID()
+        let work = Task { await controller.performBackgroundSync(id: id, kind: kind) }
+        for _ in 0 ..< 150 {
+            if await sessions.hasPendingLoad {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(await sessions.hasPendingLoad)
+        controller.endBackgroundSync(id: id)
+        await sessions.completeLoad(with: .fixture)
+        #expect(await work.value == false)
+        #expect(await service.validatedEndpoints.isEmpty)
+        #expect(controller.media.pipeline == nil)
+        #expect(!controller.libraryIndex.hasActiveSyncWork)
+        // A cancelled headless preparation must remain retryable in foreground.
+        await controller.handleForegroundTransition()
+        guard case .signedOut = controller.state else {
+            Issue.record("Expected foreground startup to retry the cancelled restoration")
+            return
+        }
+        #expect(await sessions.loadCount == 2)
+    }
+
+    @Test @MainActor func signOutWinsOverAnInFlightBackgroundCredentialRead() async throws {
+        let sessions = SuspendedBackgroundSessionStore()
+        let service = RouteRestoreService(reachableEndpoints: [])
+        let controller = AppSessionController(service: service, sessionStore: sessions,
+                                              profileStore: ConnectionProfileStore(suiteName: "BackgroundSync-\(UUID().uuidString)"),
+                                              networkMonitoringEnabled: false)
+        controller.handleBackgroundTransition()
+        let id = UUID()
+        let work = Task { await controller.performBackgroundSync(id: id) }
+        for _ in 0 ..< 150 {
+            if await sessions.hasPendingLoad {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(await sessions.hasPendingLoad)
+        controller.endBackgroundSync(id: id)
+        await controller.signOut()
+        await sessions.completeLoad(with: .fixture)
+        #expect(await work.value == false)
+        guard case .signedOut = controller.state else {
+            Issue.record("Stale credentials must not restore a signed-out account")
+            return
+        }
+        #expect(await service.validatedEndpoints.isEmpty)
+        #expect(!controller.libraryIndex.hasActiveSyncWork)
+    }
+
+    @Test @MainActor func concurrentStartupCallsShareOneCredentialRead() async throws {
+        let sessions = SuspendedBackgroundSessionStore()
+        let controller = AppSessionController(sessionStore: sessions,
+                                              profileStore: ConnectionProfileStore(suiteName: "BackgroundSync-\(UUID().uuidString)"),
+                                              networkMonitoringEnabled: false)
+        let first = Task { await controller.start() }
+        let second = Task { await controller.start() }
+        for _ in 0 ..< 150 {
+            if await sessions.hasPendingLoad {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(await sessions.hasPendingLoad)
+        await sessions.completeLoad(with: nil)
+        await first.value
+        await second.value
+        #expect(await sessions.loadCount == 1)
+    }
+
     @Test func lazyMediaDataLoaderDoesNotConstructNetworkLoaderUntilNeeded() async {
         let factoryCount = LockedCounter()
         let underlying = CountingDataLoader()
@@ -2514,6 +2616,29 @@ private actor RefreshSupersessionTimelineReader: TimelineReading {
             thumbnailRevision: .distantPast
         )
     }
+}
+
+private actor SuspendedBackgroundSessionStore: SessionStoring {
+    private var continuation: CheckedContinuation<AccountSession?, Never>?
+    private(set) var loadCount = 0
+    var hasPendingLoad: Bool {
+        continuation != nil
+    }
+
+    func load() async -> AccountSession? {
+        loadCount += 1
+        guard loadCount == 1 else { return nil }
+        return await withCheckedContinuation { continuation = $0 }
+    }
+
+    func completeLoad(with session: AccountSession?) {
+        let pending = continuation
+        continuation = nil
+        pending?.resume(returning: session)
+    }
+
+    func save(_: AccountSession) {}
+    func delete() {}
 }
 
 private actor MemorySessionStore: SessionStoring {
