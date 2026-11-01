@@ -56,6 +56,8 @@ final class LibraryIndexController {
         playbackBytes: 0
     )
     private(set) var storedAccounts: [StoredLibraryAccount] = []
+    private(set) var isDeletingStoredAccount = false
+    private(set) var storedAccountDeletionProgress = 0.0
     private(set) var thumbnailWarmingEnabled: Bool
     private(set) var thumbnailWarmingPaused: Bool
     private(set) var thumbnailWarmingStatus: ThumbnailWarmingStatus = .off
@@ -626,16 +628,24 @@ final class LibraryIndexController {
     }
 
     func deleteStoredAccount(namespace: String) async {
+        guard !isDeletingStoredAccount else { return }
         preferences.removeObject(forKey: "library-index-last-success-\(namespace)")
         guard namespace != scope?.cacheNamespace else {
             await deleteCurrentAccountData()
             return
         }
+        storedAccountDeletionProgress = 0
+        isDeletingStoredAccount = true
+        defer { isDeletingStoredAccount = false }
         do {
-            try await thumbnailCache.removeAccount(namespace: namespace)
+            try await thumbnailCache.removeAccount(namespace: namespace) { [weak self] fraction in
+                await self?.updateStoredAccountDeletionProgress(fraction)
+            }
             try await store.removeAccount(namespace: namespace)
+            storedAccountDeletionProgress = 0.97
             await media?.removeProfileImageCache(namespace: namespace)
             storedAccounts = try await store.storedAccounts()
+            storedAccountDeletionProgress = 1
             Self.logger.info(
                 "Removed retained account library data scope=\(namespace.prefix(8), privacy: .private)"
             )
@@ -644,6 +654,11 @@ final class LibraryIndexController {
                 "Failed to remove retained account library data error=\(Self.message(for: error), privacy: .public)"
             )
         }
+    }
+
+    private func updateStoredAccountDeletionProgress(_ fraction: Double) {
+        // Reserve the final part for database compaction and profile-cache cleanup.
+        storedAccountDeletionProgress = min(1, max(0, fraction)) * 0.9
     }
 
     func suspend() {

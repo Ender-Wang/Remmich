@@ -1089,10 +1089,19 @@ struct AccountSettingsView: View {
         }
     }
 
-    @ViewBuilder
     private var retainedAccountSection: some View {
-        if !retainedAccounts.isEmpty {
-            sectionCaption("STORED ACCOUNT DATA").padding(.top, 24)
+        VStack(alignment: .leading, spacing: 0) {
+            if !retainedAccounts.isEmpty || libraryIndex.isDeletingStoredAccount {
+                sectionCaption("STORED ACCOUNT DATA").padding(.top, 24)
+            }
+            if libraryIndex.isDeletingStoredAccount {
+                progressMeter(libraryIndex.storedAccountDeletionProgress, tint: Self.cacheColor,
+                              label: "Deleting local account data",
+                              value: libraryIndex.storedAccountDeletionProgress.formatted(.percent))
+                    .padding(.vertical, 12)
+                    .animation(reduceMotion ? nil : .linear(duration: 0.1), value: libraryIndex.storedAccountDeletionProgress)
+                    .transition(.opacity)
+            }
             ForEach(retainedAccounts) { account in
                 VStack(alignment: .leading, spacing: 8) {
                     Text(Self.accountLabel(account)).font(.subheadline.weight(.semibold))
@@ -1107,11 +1116,13 @@ struct AccountSettingsView: View {
                     .buttonStyle(.glass)
                     .buttonBorderShape(.capsule)
                     .frame(minHeight: 44)
+                    .disabled(libraryIndex.isDeletingStoredAccount)
                 }
                 .padding(.vertical, 12)
                 Divider()
             }
         }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: libraryIndex.isDeletingStoredAccount)
     }
 
     private var indexPhase: SyncWorkPhase {

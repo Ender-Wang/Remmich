@@ -416,11 +416,45 @@ actor LibraryThumbnailCache {
         try await store.clearAssetDetails(scope: scope)
     }
 
-    func removeAccount(namespace: String) throws {
+    func removeAccount(
+        namespace: String,
+        progress: (@Sendable (Double) async -> Void)? = nil
+    ) async throws {
         let directory = rootURL.appending(path: namespace, directoryHint: .isDirectory)
-        if FileManager.default.fileExists(atPath: directory.path) {
-            try FileManager.default.removeItem(at: directory)
+        let manager = FileManager.default
+        guard let progress else {
+            if manager.fileExists(atPath: directory.path) {
+                try manager.removeItem(at: directory)
+            }
+            return
         }
+        guard manager.fileExists(atPath: directory.path) else {
+            await progress(1)
+            return
+        }
+        var enumerationError: Error?
+        guard let enumerator = manager.enumerator(at: directory, includingPropertiesForKeys: [], errorHandler: { _, error in
+            enumerationError = error
+            return false
+        }) else {
+            throw CocoaError(.fileReadUnknown, userInfo: [NSFilePathErrorKey: directory.path])
+        }
+        let entries = enumerator.allObjects.compactMap { $0 as? URL }
+        if let enumerationError {
+            throw enumerationError
+        }
+        let total = entries.count + 1
+        await progress(0)
+        // Enumerators visit parents before descendants; remove in reverse order
+        // so each completed entry represents actual removal, including directories.
+        for (index, url) in entries.reversed().enumerated() {
+            try manager.removeItem(at: url)
+            if (index + 1).isMultiple(of: 64) {
+                await progress(Double(index + 1) / Double(total))
+            }
+        }
+        try manager.removeItem(at: directory)
+        await progress(1)
     }
 
     func availableThumbnails(scope: MediaAccountScope) async throws -> [AvailableThumbnail] {
