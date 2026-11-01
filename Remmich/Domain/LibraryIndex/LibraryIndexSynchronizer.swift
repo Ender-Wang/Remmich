@@ -293,13 +293,14 @@ private nonisolated enum LibraryIndexCatalogBuilder {
         }
         return groups.compactMap { key, members in
             let sorted = members.sorted { $0.capturedAt < $1.capturedAt }
-            guard let first = sorted.first, let last = sorted.last else { return nil }
+            guard let start = members.map(\.captureLocalDate).min(),
+                  let end = members.map(\.captureLocalDate).max() else { return nil }
             return LibraryIndexGroupRecord(
                 mediaScope: mediaScope,
                 level: level,
                 key: key,
-                intervalStart: first.capturedAt,
-                intervalEnd: last.capturedAt.addingTimeInterval(0.001),
+                intervalStart: start,
+                intervalEnd: end.addingTimeInterval(0.001),
                 assetCount: sorted.count,
                 owningBucketKeys: Array(Set(sorted.map(\.bucketKey))).sorted(),
                 coverAssetIDs: boundedIDs(from: sorted, limit: 12),
@@ -325,13 +326,7 @@ private nonisolated enum LibraryIndexCatalogBuilder {
 
 private extension LibraryIndexAssetRecord {
     nonisolated init(asset: TimelineAssetSummary, bucketID: TimelineBucketID) {
-        var calendar = Calendar(identifier: .iso8601)
-        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
-        let components = calendar.dateComponents([.year, .month, .day, .weekOfYear], from: asset.capturedAt)
-        let year = components.year ?? 1
-        let month = components.month ?? 1
-        let day = components.day ?? 1
-        let week = components.weekOfYear ?? 1
+        let keys = LibraryIndexCaptureDateKeys(localDate: asset.captureLocalDate)
         self.init(
             id: asset.id,
             ownerID: asset.ownerID,
@@ -350,10 +345,10 @@ private extension LibraryIndexAssetRecord {
             isTrashed: false,
             isOffline: false,
             bucketKey: bucketID.rawValue,
-            dayKey: String(format: "%04d-%02d-%02d", year, month, day),
-            weekKey: String(format: "%04d-W%02d", year, week),
-            monthKey: String(format: "%04d-%02d", year, month),
-            yearKey: String(format: "%04d", year),
+            dayKey: keys.day,
+            weekKey: keys.week,
+            monthKey: keys.month,
+            yearKey: keys.year,
             localOffsetHours: asset.localOffsetHours,
             stackID: asset.stack?.id,
             stackAssetCount: asset.stack?.assetCount,

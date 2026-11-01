@@ -159,7 +159,7 @@ actor ImmichTimelineRepository: TimelineReading, VideoReading, AssetDetailReadin
                         ownerID: $0.ownerID,
                         capturedAt: $0.capturedAt,
                         uploadedAt: $0.uploadedAt,
-                        localOffsetHours: 0,
+                        localOffsetHours: $0.localOffsetHours,
                         mediaKind: .video,
                         durationMilliseconds: $0.durationMilliseconds,
                         aspectRatio: $0.aspectRatio,

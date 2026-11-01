@@ -12,6 +12,23 @@ nonisolated enum LibraryIndexAssetKind: String, Codable, Hashable, Sendable {
     case other
 }
 
+nonisolated struct LibraryIndexCaptureDateKeys {
+    let day: String
+    let week: String
+    let month: String
+    let year: String
+
+    init(localDate: Date) {
+        var calendar = Calendar(identifier: .iso8601)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let parts = calendar.dateComponents([.year, .month, .day, .weekOfYear, .yearForWeekOfYear], from: localDate)
+        year = String(format: "%04d", parts.year ?? 1)
+        month = String(format: "%@-%02d", year, parts.month ?? 1)
+        day = String(format: "%@-%02d", month, parts.day ?? 1)
+        week = String(format: "%04d-W%02d", parts.yearForWeekOfYear ?? 1, parts.weekOfYear ?? 1)
+    }
+}
+
 nonisolated struct LibraryIndexAssetRecord: Codable, Hashable, Identifiable, Sendable {
     let id: String
     let ownerID: String
@@ -40,6 +57,10 @@ nonisolated struct LibraryIndexAssetRecord: Codable, Hashable, Identifiable, Sen
     let stackAssetCount: Int?
     let projectionType: String?
     let thumbhash: String?
+
+    var captureLocalDate: Date {
+        capturedAt.addingTimeInterval((localOffsetHours * 3600).rounded())
+    }
 
     init(
         id: String,

@@ -27,7 +27,7 @@ actor VideoTimelineReader: CompleteTimelineCatalogReading {
         var seenIDs = Set<String>()
         let unique = assets.filter { seenIDs.insert($0.id).inserted }
         assetsByBucket = Dictionary(grouping: unique, by: Self.bucketID(for:))
-            .mapValues { $0.sorted { $0.capturedAt > $1.capturedAt } }
+            .mapValues { $0.sorted { $1.isCaptured(before: $0) } }
         return assetsByBucket.map { TimelineBucketSummary(id: $0.key, assetCount: $0.value.count) }
             .sorted { $0.id.rawValue > $1.id.rawValue }
     }
@@ -56,7 +56,7 @@ actor VideoTimelineReader: CompleteTimelineCatalogReading {
     private static func bucketID(for asset: TimelineAssetSummary) -> TimelineBucketID {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
-        let parts = calendar.dateComponents([.year, .month], from: asset.capturedAt)
+        let parts = calendar.dateComponents([.year, .month], from: asset.captureLocalDate)
         return TimelineBucketID(rawValue: String(format: "%04d-%02d-01", parts.year ?? 1, parts.month ?? 1))
     }
 }

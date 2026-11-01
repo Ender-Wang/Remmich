@@ -713,7 +713,7 @@ struct TimelineAssetThumbnail: View {
 
     private var accessibilityLabel: String {
         var values = [TimelineCaptureDateFormatting.string(
-            from: asset.capturedAt,
+            from: asset.captureLocalDate,
             dateStyle: .medium,
             timeStyle: .short
         )]

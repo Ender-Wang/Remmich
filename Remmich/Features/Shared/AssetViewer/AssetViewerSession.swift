@@ -204,10 +204,7 @@ final class AssetViewerSession {
         var seen = Set<String>()
         return values
             .sorted {
-                if $0.capturedAt != $1.capturedAt {
-                    return $0.capturedAt > $1.capturedAt
-                }
-                return $0.id > $1.id
+                $1.isCaptured(before: $0)
             }
             .filter { seen.insert($0.id).inserted }
     }

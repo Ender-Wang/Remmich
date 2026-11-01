@@ -7,7 +7,7 @@ nonisolated struct AssetViewerContextPresentation: Equatable, Sendable {
 
     init(asset: TimelineAssetSummary, detail: AssetDetail?) {
         assetID = asset.id
-        capturedAt = detail?.capturedAt ?? asset.capturedAt
+        capturedAt = detail?.capturedAt ?? asset.captureLocalDate
         location = Self.normalizedLocation(from: detail)
     }
 

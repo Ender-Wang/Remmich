@@ -812,7 +812,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         }
         cell.alpha = transitionSurface == nil || isPresentationCrossfading ? 1 : 0
         if item.isHeader {
-            let date = catalog.assets[item.assetRange.lowerBound].capturedAt
+            let date = catalog.assets[item.assetRange.lowerBound].captureLocalDate
             let displayedY = layout.layoutAttributesForItem(at: path)?.frame.minY ?? item.frame.minY
             let initiallyPinned = displayedY > item.frame.minY + 0.5
             cell.setHeaderContent(
@@ -1320,7 +1320,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
     ) -> TransitionChromePlan? {
         if item.isHeader {
             let title = TimelineCaptureDateFormatting.string(
-                from: catalog.assets[item.assetRange.lowerBound].capturedAt,
+                from: catalog.assets[item.assetRange.lowerBound].captureLocalDate,
                 dateStyle: .long,
                 timeStyle: .none
             )

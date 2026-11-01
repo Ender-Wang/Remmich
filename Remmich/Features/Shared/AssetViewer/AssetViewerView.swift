@@ -3536,7 +3536,7 @@ struct AssetViewerFilmstrip: View {
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel(TimelineCaptureDateFormatting.string(
-                                from: asset.capturedAt,
+                                from: asset.captureLocalDate,
                                 dateStyle: .medium,
                                 timeStyle: .short
                             ))

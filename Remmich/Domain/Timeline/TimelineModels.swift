@@ -2,6 +2,12 @@ import Foundation
 import Synchronization
 
 nonisolated enum TimelineCaptureDateFormatting {
+    static func monthAndYear(from date: Date) -> String {
+        var style = Date.FormatStyle().month(.wide).year()
+        style.timeZone = TimeZone(secondsFromGMT: 0)!
+        return date.formatted(style)
+    }
+
     private struct FormatterKey: Hashable {
         let dateStyle: DateFormatter.Style
         let timeStyle: DateFormatter.Style
@@ -114,6 +120,7 @@ nonisolated struct TimelineStackSummary: Hashable, Sendable {
 nonisolated struct TimelineAssetSummary: Hashable, Identifiable, Sendable {
     let id: String
     let ownerID: String
+    /// Absolute capture instant; use captureLocalDate for calendar/UI values.
     let capturedAt: Date
     let uploadedAt: Date
     let localOffsetHours: Double
@@ -127,10 +134,33 @@ nonisolated struct TimelineAssetSummary: Hashable, Identifiable, Sendable {
     let projectionType: String?
     let thumbhash: String?
     let thumbnailRevision: Date
+
+    /// Immich's capture-local wall clock encoded on a UTC calendar. The
+    /// supplied offset belongs to this capture, including its DST state.
+    var captureLocalDate: Date {
+        // The timeline API sends float-backed hours. Timezone offsets are
+        // whole seconds; discard representation noise at midnight boundaries.
+        capturedAt.addingTimeInterval((localOffsetHours * 3600).rounded())
+    }
+
+    /// Match Immich: group by capture-local day, then order by the actual
+    /// instant within that day, even when the clock repeats an hour.
+    func isCaptured(before other: Self) -> Bool {
+        let day = floor(captureLocalDate.timeIntervalSince1970 / 86400)
+        let otherDay = floor(other.captureLocalDate.timeIntervalSince1970 / 86400)
+        if day != otherDay {
+            return day < otherDay
+        }
+        if capturedAt != other.capturedAt {
+            return capturedAt < other.capturedAt
+        }
+        return id < other.id
+    }
 }
 
 nonisolated struct AssetDetail: Hashable, Identifiable, Sendable {
     let id: String
+    /// Already Immich localDateTime; never apply the summary offset again.
     let capturedAt: Date
     let originalFileName: String
     let originalMimeType: String?
@@ -315,7 +345,7 @@ nonisolated struct TimelineSection: Identifiable, Sendable {
         var currentAssets: [TimelineAssetSummary] = []
 
         for asset in assets {
-            let day = TimelineCaptureDay(capturedAt: asset.capturedAt)
+            let day = TimelineCaptureDay(capturedAt: asset.captureLocalDate)
             if currentDay == day {
                 currentAssets.append(asset)
                 continue

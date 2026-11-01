@@ -15,11 +15,11 @@ extension PhotosRangeRoute {
         case let .year(year):
             String(year)
         case let .month(bucketID):
-            bucketID.displayDate?.formatted(.dateTime.month(.wide).year()) ?? bucketID.rawValue
+            bucketID.displayDate.map { TimelineCaptureDateFormatting.monthAndYear(from: $0) } ?? bucketID.rawValue
         case let .week(_, weekID, _):
-            "Week of \(weekID.startDate.formatted(date: .abbreviated, time: .omitted))"
+            "Week of \(TimelineCaptureDateFormatting.string(from: weekID.startDate, dateStyle: .medium, timeStyle: .none))"
         case let .day(_, dayID):
-            dayID.displayDate?.formatted(date: .abbreviated, time: .omitted) ?? dayID.id
+            dayID.displayDate.map { TimelineCaptureDateFormatting.string(from: $0, dateStyle: .medium, timeStyle: .none) } ?? dayID.id
         }
     }
 
@@ -365,7 +365,7 @@ struct PhotosMonthsView: View {
             PhotosBucketCoverButton(
                 route: .month(month.id),
                 accessibilityID: "timeline-month-\(month.id.rawValue)",
-                title: month.id.displayDate?.formatted(.dateTime.month(.wide).year())
+                title: month.id.displayDate.map { TimelineCaptureDateFormatting.monthAndYear(from: $0) }
                     ?? month.id.rawValue,
                 count: month.assetCount,
                 systemImage: "calendar.circle",
@@ -591,7 +591,7 @@ private struct PhotosLibraryGroupedCatalogView: View {
             PhotosInlineRangeCardButton(
                 route: .day(bucketID, day),
                 accessibilityID: "timeline-library-day-\(bucketID.rawValue)-\(day.id)",
-                title: day.displayDate?.formatted(date: .abbreviated, time: .omitted) ?? day.id,
+                title: day.displayDate.map { TimelineCaptureDateFormatting.string(from: $0, dateStyle: .medium, timeStyle: .none) } ?? day.id,
                 count: entry.assetCount,
                 systemImage: dayIconSystemImage,
                 assets: entry.coverAssets,
@@ -604,7 +604,7 @@ private struct PhotosLibraryGroupedCatalogView: View {
             PhotosInlineRangeCardButton(
                 route: .week(bucketID, week, .library),
                 accessibilityID: "timeline-library-week-\(week.id)",
-                title: "Week of \(week.startDate.formatted(date: .abbreviated, time: .omitted))",
+                title: "Week of \(TimelineCaptureDateFormatting.string(from: week.startDate, dateStyle: .medium, timeStyle: .none))",
                 count: entry.assetCount,
                 systemImage: "calendar",
                 assets: entry.coverAssets,
@@ -697,25 +697,22 @@ nonisolated enum PhotosRangeAssetCatalog {
             case .year, .month:
                 true
             case let .week(_, weekID, _):
-                TimelineWeekID(day: TimelineCaptureDay(capturedAt: asset.capturedAt)) == weekID
+                TimelineWeekID(day: TimelineCaptureDay(capturedAt: asset.captureLocalDate)) == weekID
             case let .day(_, dayID):
-                TimelineCaptureDay(capturedAt: asset.capturedAt) == dayID
+                TimelineCaptureDay(capturedAt: asset.captureLocalDate) == dayID
             }
         }
         return Dictionary(grouping: filtered, by: \.id)
             .compactMap(\.value.first)
             .sorted {
-                if $0.capturedAt != $1.capturedAt {
-                    return $0.capturedAt > $1.capturedAt
-                }
-                return $0.id > $1.id
+                $1.isCaptured(before: $0)
             }
     }
 
     static func dayGroups(from assets: [TimelineAssetSummary]) -> [TimelineDayGroup] {
         var groups: [TimelineDayGroup] = []
         for asset in assets {
-            let day = TimelineCaptureDay(capturedAt: asset.capturedAt)
+            let day = TimelineCaptureDay(capturedAt: asset.captureLocalDate)
             if groups.last?.id == day {
                 groups[groups.count - 1].assets.append(asset)
             } else {
@@ -900,7 +897,7 @@ struct PhotosRangeAssetsView: View {
 
     private func updateViewport(_ asset: TimelineAssetSummary, visible: Bool) {
         if visible {
-            visibleAssets[asset.id] = asset.capturedAt
+            visibleAssets[asset.id] = asset.captureLocalDate
         } else {
             visibleAssets.removeValue(forKey: asset.id)
         }

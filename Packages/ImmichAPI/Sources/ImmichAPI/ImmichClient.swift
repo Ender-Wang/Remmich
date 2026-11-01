@@ -275,7 +275,8 @@ public actor ImmichClient {
                         return ImmichVideoAsset(
                             id: asset.id,
                             ownerID: asset.ownerId,
-                            capturedAt: asset.localDateTime,
+                            capturedAt: asset.fileCreatedAt,
+                            localOffsetHours: asset.localDateTime.timeIntervalSince(asset.fileCreatedAt) / 3600,
                             uploadedAt: asset.createdAt,
                             thumbnailRevision: Self.thumbnailRevision(
                                 createdAt: asset.createdAt,

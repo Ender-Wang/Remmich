@@ -78,10 +78,7 @@ nonisolated enum LibraryTimelineBootstrapBuilder {
         for (bucketID, bucketRecords) in grouped {
             var assets = bucketRecords.map(\.timelineAssetSummary)
             assets.sort { lhs, rhs in
-                if lhs.capturedAt == rhs.capturedAt {
-                    return lhs.id > rhs.id
-                }
-                return lhs.capturedAt > rhs.capturedAt
+                rhs.isCaptured(before: lhs)
             }
             assetsByBucket[bucketID] = assets
         }
@@ -147,10 +144,7 @@ nonisolated enum LibraryTimelineBootstrapBuilder {
                         .flatMap(\.coverAssetIDs)
                         .compactMap { assetsByID[$0] }
                         .sorted { lhs, rhs in
-                            if lhs.capturedAt == rhs.capturedAt {
-                                return lhs.id < rhs.id
-                            }
-                            return lhs.capturedAt < rhs.capturedAt
+                            lhs.isCaptured(before: rhs)
                         }
                     guard let id = groupedCatalogID(
                         level: level,

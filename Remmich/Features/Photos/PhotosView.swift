@@ -898,7 +898,7 @@ struct PhotosView: View {
     }
 
     private func semanticBucketID(for asset: TimelineAssetSummary) -> TimelineBucketID {
-        let day = TimelineCaptureDay(capturedAt: asset.capturedAt)
+        let day = TimelineCaptureDay(capturedAt: asset.captureLocalDate)
         return semanticBucketID(for: day.displayDate!)
     }
 
@@ -1430,7 +1430,7 @@ struct PhotosView: View {
     private func updateViewport(_ asset: TimelineAssetSummary, visible: Bool) {
         guard isTimelineActive else { return }
         if visible {
-            viewportRuntime.visibleAssets[asset.id] = asset.capturedAt
+            viewportRuntime.visibleAssets[asset.id] = asset.captureLocalDate
         } else {
             viewportRuntime.visibleAssets.removeValue(forKey: asset.id)
         }

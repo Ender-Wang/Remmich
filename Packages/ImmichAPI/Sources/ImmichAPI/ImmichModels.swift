@@ -104,7 +104,9 @@ public enum ImmichAssetVisibility: Codable, Hashable, Sendable {
 public struct ImmichVideoAsset: Hashable, Sendable {
     public let id: String
     public let ownerID: String
+    /// Original UTC instant, separate from the capture-local wall clock.
     public let capturedAt: Date
+    public let localOffsetHours: Double
     public let uploadedAt: Date
     public let thumbnailRevision: Date
     public let durationMilliseconds: Int?

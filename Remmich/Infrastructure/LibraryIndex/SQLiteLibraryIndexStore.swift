@@ -2,7 +2,7 @@ import Foundation
 import SQLite3
 
 actor SQLiteLibraryIndexStore: LibraryIndexStoring {
-    static let currentSchemaVersion = 4
+    static let currentSchemaVersion = 5
 
     private let databaseURL: URL
     private var connection: SQLiteConnection?
@@ -939,6 +939,29 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
                 try database.execute("ALTER TABLE sync_state ADD COLUMN last_index_sync_at REAL")
                 try database.execute("ALTER TABLE sync_state ADD COLUMN last_cache_sync_at REAL")
                 try database.execute("PRAGMA user_version = 4")
+            }
+        }
+        if version < 5 {
+            try database.transaction {
+                // Keep original instants, accepted generations, and cached
+                // derivatives. Only derived calendar keys need repair.
+                let rows = try database.query(
+                    "SELECT scope, generation, asset_id, captured_at, local_offset_hours FROM assets"
+                ) { row in
+                    (row.text(0), row.int64(1), row.text(2), row.date(3), row.double(4))
+                }
+                for (scope, generation, assetID, instant, offset) in rows {
+                    let keys = LibraryIndexCaptureDateKeys(localDate: instant.addingTimeInterval((offset * 3600).rounded()))
+                    try database.execute(
+                        "UPDATE assets SET day_key = ?, week_key = ?, month_key = ?, year_key = ? WHERE scope = ? AND generation = ? AND asset_id = ?",
+                        [.text(keys.day), .text(keys.week), .text(keys.month), .text(keys.year),
+                         .text(scope), .int64(generation), .text(assetID)]
+                    )
+                }
+                // Offline bootstrap rebuilds these projections from the
+                // accepted assets; no server refetch or cache deletion.
+                try database.execute("DELETE FROM grouped_catalogs")
+                try database.execute("PRAGMA user_version = 5")
             }
         }
     }
