@@ -1093,22 +1093,22 @@ struct RemmichTests {
         #expect(display.targetPixels == targetPixels)
     }
 
-    @Test @MainActor func selectedViewerUsesTheSizedFullSizeThumbnailDerivative() throws {
+    @Test @MainActor func viewerPreviewUsesTheSizedPreviewDerivative() throws {
         let media = MediaLibraryController()
         media.configure(session: .fixture, activeEndpoint: AccountSession.fixture.apiURL)
-        let asset = Self.timelineAsset(id: "viewer-fullsize-asset")
+        let asset = Self.timelineAsset(id: "viewer-preview-asset")
         let targetPixels = MediaPixelSize(width: 1206, height: 2622)
-        let descriptor = MediaLibraryController.viewerFullSizeDescriptor(
+        let descriptor = MediaLibraryController.viewerPreviewDescriptor(
             for: asset,
             targetPixels: targetPixels
         )
         let request = try #require(media.imageRequest(for: descriptor))
 
         #expect(descriptor.assetID == asset.id)
-        #expect(descriptor.derivative == .fullSize)
+        #expect(descriptor.derivative == .preview)
         #expect(descriptor.targetPixels == targetPixels)
-        #expect(request.url?.path == "/api/assets/viewer-fullsize-asset/thumbnail")
-        #expect(request.url?.query == "size=fullsize")
+        #expect(request.url?.path == "/api/assets/viewer-preview-asset/thumbnail")
+        #expect(request.url?.query == "size=preview")
     }
 
     @Test func fullSizeRedirectKeepsAuthorizationOnTheImmichOrigin() throws {

@@ -21,6 +21,7 @@ final class MediaLibraryController {
     private(set) var activeAPIURL: URL?
     private(set) var pipeline: ImagePipeline?
     private(set) var downloadService: MediaDownloadService?
+    private let imageDataLoader: (any DataLoading)?
 
     let timelineResidency = TimelineThumbnailResidency()
 
@@ -46,6 +47,10 @@ final class MediaLibraryController {
     private var cachedProfileImageURL: URL?
     private var profileImageCacheRevision = 0
 
+    init(imageDataLoader: (any DataLoading)? = nil) {
+        self.imageDataLoader = imageDataLoader
+    }
+
     func configure(session: AccountSession, activeEndpoint: URL?) {
         let startedAt = Date()
         let nextScope = MediaAccountScope(session: session)
@@ -53,7 +58,7 @@ final class MediaLibraryController {
             clearAll()
             let clearedAt = Date()
             scope = nextScope
-            let pipeline = Self.makePipeline(scope: nextScope)
+            let pipeline = Self.makePipeline(scope: nextScope, imageDataLoader: imageDataLoader)
             self.pipeline = pipeline
             let pipelineAt = Date()
             prefetcher = ImagePrefetcher(
@@ -305,21 +310,7 @@ final class MediaLibraryController {
         for asset: TimelineAssetSummary,
         targetPixels: MediaPixelSize
     ) -> UIImage? {
-        guard let pipeline else { return nil }
-        let descriptors = [
-            Self.viewerFullSizeDescriptor(for: asset, targetPixels: targetPixels),
-            Self.viewerPreviewDescriptor(for: asset, targetPixels: targetPixels),
-        ]
-        for descriptor in descriptors {
-            guard let request = imageRequest(for: descriptor),
-                  let container = pipeline.cache.cachedImage(
-                      for: request,
-                      caches: [.memory]
-                  )
-            else { continue }
-            return container.image
-        }
-        return nil
+        cachedViewerPreview(for: asset, targetPixels: targetPixels)?.image
     }
 
     func viewerThumbnailFallbackRequest(
@@ -728,7 +719,7 @@ final class MediaLibraryController {
         }
     }
 
-    private static func makePipeline(scope: MediaAccountScope) -> ImagePipeline {
+    private static func makePipeline(scope: MediaAccountScope, imageDataLoader: (any DataLoading)?) -> ImagePipeline {
         let startedAt = Date()
         #if DEBUG
             // Keep Nuke's decode/load intervals visible in Instruments so a cold tab-switch
@@ -742,7 +733,7 @@ final class MediaLibraryController {
         let dataCache = try? DataCache(name: "Remmich.Media.\(scope.cacheNamespace)")
         dataCache?.sizeLimit = 512 * 1024 * 1024
         let dataCacheAt = Date()
-        let dataLoader = LazyMediaDataLoader {
+        let dataLoader: any DataLoading = imageDataLoader ?? LazyMediaDataLoader {
             let configuration = URLSessionConfiguration.ephemeral
             configuration.urlCache = nil
             configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
@@ -985,11 +976,8 @@ final nonisolated class LazyMediaDataLoader: DataLoading, @unchecked Sendable {
     }
 }
 
-/// Immich can satisfy `size=fullsize` by redirecting web-compatible stills to
-/// the original endpoint. `URLSession` builds a fresh request for that redirect,
-/// so restore the bearer token only while the request remains on the same
-/// server origin. This keeps ordinary stills on the same Preview -> Full path
-/// as Live Photos without allowing a credential to cross hosts.
+/// Restore authorization on media redirects only within the same server
+/// origin. URLSession may construct a fresh request without that header.
 final nonisolated class MediaRedirectAuthorizationDelegate: NSObject,
     URLSessionTaskDelegate,
     @unchecked Sendable
