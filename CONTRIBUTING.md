@@ -105,7 +105,7 @@ e -l objc -- (void)[[BGTaskScheduler sharedScheduler] _simulateExpirationForTask
 e -l objc -- (void)[[BGTaskScheduler sharedScheduler] _simulateExpirationForTaskWithIdentifier:@"io.github.ender-wang.Remmich.library-sync"]
 ```
 
-These commands are development-only debugger operations; the app contains no private scheduler calls. Verify:
+These commands are development-only debugger operations; the app contains no private scheduler calls. Regression scenarios (recorded device outcomes follow the list):
 
 - Both task kinds are scheduled and logged with `kind=refresh` or `kind=processing`.
 - A short refresh updates the recent index without starting thumbnail caching or maintenance. If preparation/indexing exceeds 20 seconds, it finishes with `refresh-budget-expired` and preserves accepted data.
@@ -117,7 +117,11 @@ These commands are development-only debugger operations; the app contains no pri
 - Sign-out during preparation or caching prevents the old session from restarting work, and removes its pending background request.
 - Low Power Mode, thermal deferral, an unreachable server, and disabled Background App Refresh leave a working foreground fallback.
 
-[LibraryBackgroundSyncTests](RemmichTests/LibraryBackgroundSyncTests.swift), the focused background cases in [LibraryIndexSynchronizationTests](RemmichTests/LibraryIndexSynchronizationTests.swift), and the background-restoration cases in [RemmichTests](RemmichTests/RemmichTests.swift) cover policy, joining, pause persistence, caching completion/cancellation, and invalidation. A local generic-device `build-for-testing` passed for the app and test bundle. Execution of these new cases remains pending CI; native scheduler delivery and expiration require the device checks above.
+[LibraryBackgroundSyncTests](RemmichTests/LibraryBackgroundSyncTests.swift), the focused background cases in [LibraryIndexSynchronizationTests](RemmichTests/LibraryIndexSynchronizationTests.swift), and the background-restoration cases in [RemmichTests](RemmichTests/RemmichTests.swift) cover policy, joining, pause persistence, caching completion/cancellation, and invalidation. A local generic-device `build-for-testing` passed for the app and test bundle. Execution of these new unit tests remains pending CI.
+
+Physical iPhone checks on 2026-11-01 verified both native launch handlers using the debugger commands above. Refresh accepted a new index generation and completed successfully in 3.721 seconds, then scheduled its next request. Processing validated the route, scheduled its next request, and completed successfully using the fresh index and already-complete cache. This verifies native handler execution and successful completion; it does not establish a guaranteed automatic schedule or exercise downloads of missing cache items.
+
+Missing-cache processing, mid-run expiration, and a cold background launch followed by foreground restoration remain separate device regression checks. Sign-out invalidation was reviewed in app logic and has compiled regression tests; manual sign-out was waived, and those tests are not recorded as executed.
 
 ### Source layout
 
