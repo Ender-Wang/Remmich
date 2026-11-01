@@ -50,6 +50,18 @@ The generated API client is wrapped by [ImmichServiceAdapter](Remmich/Infrastruc
 
 The timeline index and paired thumbnail/Info cache are local, account-scoped stores. Video playback uses [AuthenticatedVideoStreamSource](Remmich/Infrastructure/Media/AuthenticatedVideoStreamSource.swift) with one viewer-owned [VideoPlaybackSession](Remmich/Features/Shared/AssetViewer/VideoPlaybackSession.swift). It streams the selected video; persistent original downloads and export actions remain planned work.
 
+### Asset capture times
+
+[TimelineAssetSummary](Remmich/Domain/Timeline/TimelineModels.swift) keeps the original capture instant separate from `captureLocalDate`, which applies Immich's per-asset `localOffsetHours`. Displays, accessibility labels, date groups, and date-only titles use the capture-local calendar. Ordering follows capture-local day, then the original instant within that day, preserving chronology when daylight saving repeats an hour. The offset is rounded to whole seconds when applied to avoid float representation noise at midnight boundaries.
+
+Viewer details already contain Immich's `localDateTime`; they receive no second offset. Video-search fallback carries `fileCreatedAt` plus the offset derived from `localDateTime`, matching the timeline contract. Upload, update, sync, and thumbnail-revision timestamps retain their original meanings. GPS is optional: Remmich uses the server's capture metadata and does not guess a missing timezone from the phone's current location or offset.
+
+SQLite schema 5 repairs persisted day/week/month/year keys, including the ISO week year, and invalidates grouped projections for offline rebuilding from accepted assets. It preserves capture instants, accepted generations, pause state, cached details, derivative manifests, and thumbnail files. This repair requires neither a cache clear nor a server refetch.
+
+[TimelineCaptureDateFormattingTests](RemmichTests/TimelineCaptureDateFormattingTests.swift) and [CaptureTimePersistenceTests](RemmichTests/CaptureTimePersistenceTests.swift) cover offsets, DST, viewer consistency, new index writes, video fallback, and migration. Ten focused tests, including 12 offset cases, passed using unchanged production sources in a temporary macOS harness under `America/Los_Angeles` and `Asia/Shanghai` timezone settings. The iOS app and test bundle compiled successfully. Portable logic ran in the macOS harness; the UIKit semantic-group case is included in the iOS test target.
+
+Device checks are performed by the maintainer during normal use. Reported issues are fixed and amended into the relevant change; device checks are regression references rather than unfinished implementation items.
+
 ### Scoped timeline entry and transitions
 
 [PhotosRangeAssetsView](Remmich/Features/Photos/PhotosRangeViews.swift) opens date groups at the bottom, where the latest assets appear. It uses the native bottom anchor rather than scrolling to the card's rotating cover image. Removing the retained initial center-scroll request also prevents the underlying grid from shifting when the first viewer opens.
@@ -117,11 +129,11 @@ These commands are development-only debugger operations; the app contains no pri
 - Sign-out during preparation or caching prevents the old session from restarting work, and removes its pending background request.
 - Low Power Mode, thermal deferral, an unreachable server, and disabled Background App Refresh leave a working foreground fallback.
 
-[LibraryBackgroundSyncTests](RemmichTests/LibraryBackgroundSyncTests.swift), the focused background cases in [LibraryIndexSynchronizationTests](RemmichTests/LibraryIndexSynchronizationTests.swift), and the background-restoration cases in [RemmichTests](RemmichTests/RemmichTests.swift) cover policy, joining, pause persistence, caching completion/cancellation, and invalidation. A local generic-device `build-for-testing` passed for the app and test bundle. Execution of these new unit tests remains pending CI.
+[LibraryBackgroundSyncTests](RemmichTests/LibraryBackgroundSyncTests.swift), the focused background cases in [LibraryIndexSynchronizationTests](RemmichTests/LibraryIndexSynchronizationTests.swift), and the background-restoration cases in [RemmichTests](RemmichTests/RemmichTests.swift) cover policy, joining, pause persistence, caching completion/cancellation, and invalidation. A local generic-device `build-for-testing` passed for the app and test bundle.
 
 Physical iPhone checks on 2026-11-01 verified both native launch handlers using the debugger commands above. Refresh accepted a new index generation and completed successfully in 3.721 seconds, then scheduled its next request. Processing validated the route, scheduled its next request, and completed successfully using the fresh index and already-complete cache. This verifies native handler execution and successful completion; it does not establish a guaranteed automatic schedule or exercise downloads of missing cache items.
 
-Missing-cache processing, mid-run expiration, and a cold background launch followed by foreground restoration remain separate device regression checks. Sign-out invalidation was reviewed in app logic and has compiled regression tests; manual sign-out was waived, and those tests are not recorded as executed.
+The regression scenarios above are references for diagnosing reported issues. Sign-out invalidation was reviewed in app logic and has compiled regression tests; manual sign-out is not required for this change.
 
 ### Source layout
 
