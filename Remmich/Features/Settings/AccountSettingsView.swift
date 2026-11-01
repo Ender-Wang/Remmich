@@ -382,7 +382,7 @@ struct AccountSettingsView: View {
         switch page {
         case .account: ("person.crop.circle", Self.accountColor, "Profile & session")
         case .connection: ("network", Self.connectionColor, "\(activeRoute?.kind.rawValue.capitalized ?? "No route") · \(routeStatusLabel)")
-        case .index: ("list.bullet.rectangle", Self.indexColor, "\(libraryIndex.indexedAssetCount.formatted()) assets · \(indexStatusPresentation.accessibilityValue)")
+        case .index: ("list.bullet.rectangle", Self.indexColor, "\(libraryIndex.indexedAssetCount.formatted()) assets")
         case .cache: ("externaldrive", Self.cacheColor, thumbnailCacheStatusAccessibilityValue)
         case .home, .appearance: ("", .clear, "")
         }
@@ -416,9 +416,15 @@ struct AccountSettingsView: View {
                 .foregroundStyle(presentation.color)
             Text(page.rawValue).font(compact ? .subheadline.bold() : .headline)
                 .padding(.trailing, compact && page == .connection ? 32 : 0)
-            Text(presentation.detail).font(compact ? .caption2 : .caption).foregroundStyle(.secondary)
-                .lineLimit(compact ? 2 : nil)
-                .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(presentation.detail)
+                if page == .index {
+                    Text(indexStatusPresentation.accessibilityValue)
+                }
+            }
+            .font(compact ? .caption2 : .caption).foregroundStyle(.secondary)
+            .lineLimit(compact ? 2 : nil)
+            .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(compact ? 10 : 16)
