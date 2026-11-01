@@ -375,8 +375,9 @@ struct PhotosView: View {
     @State private var hiddenLivePhotoBadgeAssetID: String?
     @State private var hiddenReturningThumbnailAssetID: String?
     @State private var libraryRange: TimelineLibraryRange = .all
-    @State private var initialAssetByRoute: [PhotosRangeRoute: String] = [:]
     @State private var viewerRoute: AssetViewerRoute?
+    @State private var viewerSourceImage: UIImage?
+    @State private var viewerSourceTarget: AssetViewerDismissalTarget?
     @State private var memoryCardFrames: [String: CGRect] = [:]
     @State private var memoryLaneFrame: CGRect?
     @State private var memoryCoverAssetIDs: [String: String] = [:]
@@ -391,6 +392,7 @@ struct PhotosView: View {
     @State private var semanticCatalog: TimelineSemanticCatalog?
     @State private var semanticCatalogRevision: UInt64 = 0
     @State private var semanticRuntime = TimelineSemanticRuntime()
+    @State private var scopedAssetTransitions = ScopedAssetTransitionRuntime()
     @State private var semanticLatestRequest = 0
     @State private var semanticLatestTask: Task<Void, Never>?
 
@@ -699,7 +701,7 @@ struct PhotosView: View {
               ),
               let week = TimelineWeekID(day: TimelineCaptureDay(capturedAt: representativeDate))
         else { return }
-        selectRoute(.week(newest, week, .library), initialAssetID: nil)
+        selectRoute(.week(newest, week, .library))
     }
 
     private var rangeContent: some View {
@@ -762,7 +764,7 @@ struct PhotosView: View {
                                                            origin: .timeline(bucketID: semanticBucketID(for: asset), contentName: contentName)))
                         },
                         selectGroup: { route, coverID in
-                            selectRoute(semanticRoute(route, coverID: coverID), initialAssetID: coverID)
+                            selectRoute(semanticRoute(route, coverID: coverID))
                         },
                         scaleChanged: semanticScaleChanged,
                         transitionScaleChanged: semanticTransitionScaleChanged,
@@ -947,7 +949,6 @@ struct PhotosView: View {
             media: media,
             tabBarTop: tabBarTop,
             assetLayout: presentation.preferences.assetLayout,
-            initialAssetID: initialAssetByRoute[route],
             onPinch: pinchLibraryRange,
             visibilityChanged: updateVisibility,
             viewportChanged: updateViewport,
@@ -963,18 +964,14 @@ struct PhotosView: View {
         .navigationTitle(route.navigationTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(.visible, for: .navigationBar)
+        .environment(\.scopedAssetTransitionContext, ScopedAssetTransitionContext(runtime: scopedAssetTransitions, scope: route))
     }
 
     private var navigationTitle: String {
         navigationPath.last?.navigationTitle ?? ""
     }
 
-    private func selectRoute(_ route: PhotosRangeRoute, initialAssetID: String?) {
-        if let initialAssetID {
-            initialAssetByRoute[route] = initialAssetID
-        } else {
-            initialAssetByRoute.removeValue(forKey: route)
-        }
+    private func selectRoute(_ route: PhotosRangeRoute) {
         withAnimation(.smooth(duration: 0.25)) {
             navigationPath.append(route)
         }
@@ -989,9 +986,6 @@ struct PhotosView: View {
         transaction.disablesAnimations = true
         withTransaction(transaction) {
             if !navigationPath.isEmpty {
-                if let route = navigationPath.last {
-                    initialAssetByRoute.removeValue(forKey: route)
-                }
                 navigationPath = Array(navigationPath.dropLast())
             } else {
                 semanticRuntime.changeScale(coarser: false)
@@ -1076,6 +1070,8 @@ struct PhotosView: View {
             assetDetails: assetDetails,
             tabBarTop: tabBarTop,
             opensFromSource: opensFromSource,
+            sourceImage: viewerSourceImage,
+            sourceTarget: viewerSourceTarget,
             memoryContentOpacity: memoryViewerContentOpacity,
             memoryRowFrame: memoryLaneFrame,
             dismissalRequest: memoryViewerDismissalRequest,
@@ -1279,6 +1275,13 @@ struct PhotosView: View {
     }
 
     private func presentViewer(_ route: AssetViewerRoute) {
+        if case let .scoped(scope, _) = route.origin {
+            viewerSourceTarget = scopedAssetTransitions.target(assetID: route.selectedAsset.id, scope: scope)
+            viewerSourceImage = scopedAssetTransitions.transitionImage(for: route.selectedAsset, scope: scope)
+        } else {
+            viewerSourceTarget = nil
+            viewerSourceImage = nil
+        }
         hiddenLivePhotoBadgeAssetID = nil
         hiddenReturningThumbnailAssetID = nil
         viewerChromeReleaseTask?.cancel()
@@ -1302,6 +1305,8 @@ struct PhotosView: View {
 
     private func closeViewer() {
         viewerRoute = nil
+        viewerSourceImage = nil
+        viewerSourceTarget = nil
         hiddenMemoryCardID = nil
         memoryViewerContentOpacity = 1
         memoryViewerOpensFromSource = true
@@ -1384,6 +1389,9 @@ struct PhotosView: View {
                 cornerRadius: DesignMetrics.defaultCornerRadius,
                 fillsFrame: true
             )
+        }
+        if case let .scoped(scope, _) = route.origin {
+            return scopedAssetTransitions.target(assetID: assetID, scope: scope)
         }
         guard showsMainTimeline,
               let target = semanticRuntime.dismissalTarget(assetID: assetID, aspectRatio: aspectRatio)

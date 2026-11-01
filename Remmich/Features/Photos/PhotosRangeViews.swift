@@ -732,7 +732,6 @@ struct PhotosRangeAssetsView: View {
     let media: MediaLibraryController
     var tabBarTop: CGFloat = 0
     var assetLayout: PhotosAssetLayout = .square
-    var initialAssetID: String?
     var onPinch: ((PhotosPinchGesture) -> Void)?
     var visibilityChanged: (String, MediaRequestDescriptor?) -> Void = { _, _ in }
     var viewportChanged: (TimelineAssetSummary, Bool) -> Void = { _, _ in }
@@ -745,9 +744,6 @@ struct PhotosRangeAssetsView: View {
     @State private var loadFailed = false
     @State private var loadedBucketCount = 0
     @State private var loadRequest = 0
-    @State private var didPositionInitially = false
-    @State private var didSettleInitialViewport = false
-    @State private var userHasScrolled = false
     @State private var visibleAssets: [String: Date] = [:]
     @State private var layoutAnchorID: String?
     @State private var layoutRestoreTask: Task<Void, Never>?
@@ -821,11 +817,6 @@ struct PhotosRangeAssetsView: View {
                     .scrollTargetLayout()
                 }
                 .defaultScrollAnchor(.bottom)
-                .onScrollPhaseChange { _, phase in
-                    if didSettleInitialViewport, phase == .interacting {
-                        userHasScrolled = true
-                    }
-                }
                 .scrollEdgeEffectHidden(for: .bottom)
                 .photosRangePinchGesture(
                     interaction: pinchInteraction,
@@ -837,24 +828,6 @@ struct PhotosRangeAssetsView: View {
                     handlePinch(gesture)
                 }
                 .ignoresSafeArea(.container, edges: [.horizontal, .bottom])
-                .opacity(initialAssetID == nil || didPositionInitially ? 1 : 0)
-                .task(id: assets.map(\.id)) {
-                    guard !didPositionInitially, !assets.isEmpty else { return }
-                    positionInitialAsset(using: proxy)
-                    didPositionInitially = true
-                }
-                .task(id: PhotosRangeViewportKey(
-                    viewport: geometry.size,
-                    navigationTop: globalFrame.maxY - bottomContentInset
-                )) {
-                    guard didPositionInitially else { return }
-                    try? await Task.sleep(for: .milliseconds(80))
-                    guard !Task.isCancelled,
-                          !didSettleInitialViewport || !userHasScrolled
-                    else { return }
-                    positionInitialAsset(using: proxy)
-                    didSettleInitialViewport = true
-                }
                 .onChange(of: assetLayout) {
                     guard let layoutAnchorID else { return }
                     layoutRestoreTask?.cancel()
@@ -917,18 +890,6 @@ struct PhotosRangeAssetsView: View {
             : "Use Square Layout"
     }
 
-    private func positionInitialAsset(using proxy: ScrollViewProxy) {
-        var transaction = Transaction(animation: nil)
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            if let initialAssetID, assets.contains(where: { $0.id == initialAssetID }) {
-                proxy.scrollTo(initialAssetID, anchor: .center)
-            } else {
-                proxy.scrollTo(PhotosRangeScrollAnchor.bottom, anchor: .bottom)
-            }
-        }
-    }
-
     private func handlePinch(_ gesture: PhotosPinchGesture) {
         guard TimelineAssetLayoutLadder.layout(after: gesture.direction, from: assetLayout) != nil else {
             return
@@ -952,9 +913,6 @@ struct PhotosRangeAssetsView: View {
         loadFailed = false
         loadedBucketCount = 0
         assets = []
-        didPositionInitially = false
-        didSettleInitialViewport = false
-        userHasScrolled = false
         visibleAssets = [:]
         layoutAnchorID = nil
 

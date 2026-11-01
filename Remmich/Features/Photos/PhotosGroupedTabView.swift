@@ -30,7 +30,6 @@ struct PhotosGroupedTabView: View {
 
     @Namespace private var viewerNamespace
     @State private var path: [PhotosRangeRoute] = []
-    @State private var initialAssetByRoute: [PhotosRangeRoute: String] = [:]
     @State private var viewerRoute: AssetViewerRoute?
 
     var body: some View {
@@ -105,7 +104,6 @@ struct PhotosGroupedTabView: View {
             media: media,
             tabBarTop: tabBarTop,
             assetLayout: presentation.preferences.assetLayout,
-            initialAssetID: initialAssetByRoute[route],
             onPinch: pinchAssetLayout,
             transitionNamespace: viewerNamespace,
             assetSelected: { asset, assets in
@@ -128,12 +126,7 @@ struct PhotosGroupedTabView: View {
         }
     }
 
-    private func open(_ route: PhotosRangeRoute, initialAssetID: String?) {
-        if let initialAssetID {
-            initialAssetByRoute[route] = initialAssetID
-        } else {
-            initialAssetByRoute.removeValue(forKey: route)
-        }
+    private func open(_ route: PhotosRangeRoute, initialAssetID _: String?) {
         path.append(route)
     }
 

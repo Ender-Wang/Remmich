@@ -566,6 +566,7 @@ struct TimelineDeterministicAssetRow: View {
 }
 
 struct TimelineAssetThumbnail: View {
+    @Environment(\.scopedAssetTransitionContext) private var scopedTransitionContext
     @Environment(\.displayScale) private var displayScale
     let asset: TimelineAssetSummary
     let media: MediaLibraryController
@@ -622,6 +623,9 @@ struct TimelineAssetThumbnail: View {
                             descriptor: descriptor,
                             cacheType: $0.cacheType
                         )
+                        if let scopedTransitionContext {
+                            scopedTransitionContext.runtime.imageLoaded($0.image, asset: asset, scope: scopedTransitionContext.scope)
+                        }
                         imageLoaded($0.image)
                     }
                 )
@@ -689,6 +693,15 @@ struct TimelineAssetThumbnail: View {
             .opacity(hiddenReturningThumbnailAssetID == asset.id ? 0 : 1)
         }
         .buttonStyle(.plain)
+        .background {
+            if let scopedTransitionContext {
+                ScopedAssetTransitionProbe(
+                    context: scopedTransitionContext, assetID: asset.id, aspectRatio: asset.aspectRatio,
+                    naturalAspectProgress: resolvedNaturalAspectProgress
+                )
+                .accessibilityHidden(true)
+            }
+        }
         .assetViewerTransitionSource(assetID: asset.id, namespace: transitionNamespace)
         .clipped()
         .contentShape(.rect)

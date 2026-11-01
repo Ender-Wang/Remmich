@@ -18,6 +18,8 @@ struct AssetViewerView: View {
     let assetDetails: any AssetDetailReading
     let tabBarTop: CGFloat
     let opensFromSource: Bool
+    let sourceImage: UIImage?
+    let sourceTarget: AssetViewerDismissalTarget?
     let memoryContentOpacity: Double
     let memoryRowFrame: CGRect?
     let dismissalRequest: Int
@@ -105,6 +107,8 @@ struct AssetViewerView: View {
         assetDetails: any AssetDetailReading,
         tabBarTop: CGFloat = 0,
         opensFromSource: Bool = true,
+        sourceImage: UIImage? = nil,
+        sourceTarget: AssetViewerDismissalTarget? = nil,
         memoryContentOpacity: Double = 1,
         memoryRowFrame: CGRect? = nil,
         dismissalRequest: Int = 0,
@@ -121,6 +125,8 @@ struct AssetViewerView: View {
         self.assetDetails = assetDetails
         self.tabBarTop = tabBarTop
         self.opensFromSource = opensFromSource
+        self.sourceImage = sourceImage
+        self.sourceTarget = sourceTarget
         self.memoryContentOpacity = memoryContentOpacity
         self.memoryRowFrame = memoryRowFrame
         self.dismissalRequest = dismissalRequest
@@ -241,8 +247,10 @@ struct AssetViewerView: View {
                     isLandscape: isLandscape
                 )
                 let dismissalImageRect = selectedRenderedImageRect(in: selectedMediaRect)
+                // Opening uses the tapped cell's geometry before UIKit presents
+                // the cover. Return geometry is still measured at dismissal.
                 let openingTarget = openingIsActive
-                    ? dismissalTarget(route.selectedAsset.id) : nil
+                    ? (sourceTarget ?? dismissalTarget(route.selectedAsset.id)) : nil
                 let openingTransform = openingTarget.map { target in
                     AssetViewerDismissalGeometry.landingTransform(
                         imageRect: dismissalImageRect,
@@ -826,6 +834,7 @@ struct AssetViewerView: View {
             AssetViewerFitPage(
                 asset: asset,
                 media: media,
+                sourceImage: asset.id == route.selectedAsset.id ? sourceImage : nil,
                 isSelected: asset.id == session.selectedAssetID,
                 mediaRect: mediaRect,
                 pageSize: requestSize,
@@ -1831,7 +1840,7 @@ struct AssetViewerView: View {
     }
 
     private func beginOpeningAnimation() {
-        guard dismissalTarget(route.selectedAsset.id) != nil else {
+        guard sourceTarget != nil || dismissalTarget(route.selectedAsset.id) != nil else {
             openingIsActive = false
             resumeMemoryAutoRotation()
             return
@@ -3409,6 +3418,7 @@ struct AssetViewerBackdrop: View {
 private struct AssetViewerFitPage: View {
     let asset: TimelineAssetSummary
     let media: MediaLibraryController
+    let sourceImage: UIImage?
     let isSelected: Bool
     let mediaRect: CGRect
     let pageSize: CGSize
@@ -3445,7 +3455,8 @@ private struct AssetViewerFitPage: View {
                     ),
                     media: media,
                     contentMode: .fit,
-                    showsBackground: false
+                    showsBackground: false,
+                    placeholderImage: sourceImage
                 )
                 .frame(width: mediaRect.width, height: mediaRect.height)
                 .position(x: mediaRect.midX, y: mediaRect.midY)
@@ -3457,6 +3468,7 @@ private struct AssetViewerFitPage: View {
                     asset: asset,
                     media: media,
                     isSelected: isSelected,
+                    sourceImage: sourceImage,
                     targetPixels: targetPixels,
                     fitRect: mediaRect,
                     animatesFitChanges: animatesFitChanges,

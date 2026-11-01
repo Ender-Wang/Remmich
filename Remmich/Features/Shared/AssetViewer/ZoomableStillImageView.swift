@@ -37,6 +37,7 @@ struct ZoomableStillImageView: View {
         asset: TimelineAssetSummary,
         media: MediaLibraryController,
         isSelected: Bool,
+        sourceImage: UIImage? = nil,
         targetPixels: MediaPixelSize,
         fitRect: CGRect,
         animatesFitChanges: Bool,
@@ -68,9 +69,9 @@ struct ZoomableStillImageView: View {
             for: asset,
             targetPixels: targetPixels
         )
-        _image = State(initialValue: cachedPreview?.image)
+        _image = State(initialValue: cachedPreview?.image ?? sourceImage)
         _loadedTargetPixels = State(initialValue: cachedPreview?.isFinal == true ? targetPixels : nil)
-        _renderedSource = State(initialValue: cachedPreview == nil ? nil : .preview)
+        _renderedSource = State(initialValue: cachedPreview != nil ? .preview : (sourceImage == nil ? nil : .thumbnail))
     }
 
     var body: some View {
