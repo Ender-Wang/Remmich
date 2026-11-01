@@ -7,7 +7,7 @@ struct ViewerVideoSurface: View {
 
     var body: some View {
         ViewerVideoControllerHost(
-            player: session.player,
+            session: session,
             readyForDisplayChanged: readyForDisplayChanged
         )
         .accessibilityLabel("Video player")
@@ -15,8 +15,8 @@ struct ViewerVideoSurface: View {
     }
 }
 
-private struct ViewerVideoControllerHost: UIViewControllerRepresentable {
-    let player: AVPlayer
+struct ViewerVideoControllerHost: UIViewControllerRepresentable {
+    let session: VideoPlaybackSession
     let readyForDisplayChanged: (Bool) -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -25,8 +25,8 @@ private struct ViewerVideoControllerHost: UIViewControllerRepresentable {
 
     func makeUIViewController(context: Context) -> ViewerVideoContainerViewController {
         let container = ViewerVideoContainerViewController()
-        container.playerController.player = player
-        context.coordinator.observe(container.playerController)
+        container.playerController.player = session.player
+        context.coordinator.observe(container.playerController, session: session)
         return container
     }
 
@@ -35,10 +35,10 @@ private struct ViewerVideoControllerHost: UIViewControllerRepresentable {
         context: Context
     ) {
         context.coordinator.readyForDisplayChanged = readyForDisplayChanged
-        if container.playerController.player !== player {
-            container.playerController.player = player
+        if container.playerController.player !== session.player {
+            container.playerController.player = session.player
         }
-        context.coordinator.observe(container.playerController)
+        context.coordinator.observe(container.playerController, session: session)
     }
 
     static func dismantleUIViewController(
@@ -50,19 +50,23 @@ private struct ViewerVideoControllerHost: UIViewControllerRepresentable {
     }
 
     @MainActor
-    final class Coordinator {
+    final class Coordinator: NSObject, AVPlayerViewControllerDelegate {
         var readyForDisplayChanged: (Bool) -> Void
         private weak var observedController: AVPlayerViewController?
+        private weak var session: VideoPlaybackSession?
         private var readyObservation: NSKeyValueObservation?
 
         init(readyForDisplayChanged: @escaping (Bool) -> Void) {
             self.readyForDisplayChanged = readyForDisplayChanged
+            super.init()
         }
 
-        func observe(_ controller: AVPlayerViewController) {
-            guard observedController !== controller else { return }
+        func observe(_ controller: AVPlayerViewController, session: VideoPlaybackSession) {
+            guard observedController !== controller || self.session !== session else { return }
             invalidate()
             observedController = controller
+            self.session = session
+            controller.delegate = self
             readyObservation = controller.observe(
                 \.isReadyForDisplay,
                 options: [.initial, .new]
@@ -76,13 +80,51 @@ private struct ViewerVideoControllerHost: UIViewControllerRepresentable {
         func invalidate() {
             readyObservation?.invalidate()
             readyObservation = nil
+            observedController?.delegate = nil
+            session?.pictureInPictureDidStop(isAppInBackground: UIApplication.shared.applicationState == .background)
             observedController = nil
+            session = nil
+        }
+
+        func playerViewControllerShouldAutomaticallyDismissAtPictureInPictureStart(_: AVPlayerViewController) -> Bool {
+            // Keep the SwiftUI viewer and its exact playback session mounted.
+            false
+        }
+
+        func playerViewControllerWillStartPictureInPicture(_ playerViewController: AVPlayerViewController) {
+            guard playerViewController === observedController else { return }
+            session?.pictureInPictureWillStart()
+        }
+
+        func playerViewControllerDidStopPictureInPicture(_ playerViewController: AVPlayerViewController) {
+            guard playerViewController === observedController else { return }
+            session?.pictureInPictureDidStop(isAppInBackground: UIApplication.shared.applicationState == .background)
+        }
+
+        func playerViewController(_ playerViewController: AVPlayerViewController, failedToStartPictureInPictureWithError _: any Error) {
+            guard playerViewController === observedController else { return }
+            session?.pictureInPictureDidStop(isAppInBackground: UIApplication.shared.applicationState == .background)
+        }
+
+        func playerViewController(
+            _ playerViewController: AVPlayerViewController,
+            restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completionHandler: @escaping @Sendable (Bool) -> Void
+        ) {
+            // AVKit foregrounds the existing scene. The viewer was retained,
+            // so restoring means handing back to that same attached player.
+            completionHandler(
+                playerViewController === observedController
+                    && session?.isClosed == false
+                    && playerViewController.player === session?.player
+                    && playerViewController.parent != nil
+                    && playerViewController.viewIfLoaded?.window != nil
+            )
         }
     }
 }
 
 @MainActor
-private final class ViewerVideoContainerViewController: UIViewController {
+final class ViewerVideoContainerViewController: UIViewController {
     let playerController = AVPlayerViewController()
 
     override func loadView() {
@@ -95,7 +137,8 @@ private final class ViewerVideoContainerViewController: UIViewController {
         playerController.videoGravity = .resizeAspect
         playerController.entersFullScreenWhenPlaybackBegins = false
         playerController.exitsFullScreenWhenPlaybackEnds = false
-        playerController.allowsPictureInPicturePlayback = false
+        playerController.allowsPictureInPicturePlayback = true
+        playerController.canStartPictureInPictureAutomaticallyFromInline = true
         playerController.updatesNowPlayingInfoCenter = false
         playerController.view.backgroundColor = .black
         playerController.view.clipsToBounds = true

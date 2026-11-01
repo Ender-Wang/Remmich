@@ -1,6 +1,11 @@
 import AVFoundation
 
-final nonisolated class ViewerAudioSessionController: @unchecked Sendable {
+nonisolated protocol ViewerAudioSessionControlling: Sendable {
+    func activate() async throws
+    func deactivate()
+}
+
+final nonisolated class ViewerAudioSessionController: ViewerAudioSessionControlling, @unchecked Sendable {
     private struct Configuration {
         let category: AVAudioSession.Category
         let mode: AVAudioSession.Mode

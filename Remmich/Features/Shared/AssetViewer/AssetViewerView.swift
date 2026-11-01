@@ -556,7 +556,12 @@ struct AssetViewerView: View {
                 }
                 resumeMemoryAutoRotation()
             } else {
-                videoPlaybackSession?.suspend()
+                // AVKit owns background pause versus automatic Picture in
+                // Picture. Pausing at .inactive would cancel the Home gesture's
+                // PiP handoff before AVKit can start it.
+                if phase == .background {
+                    videoPlaybackSession?.sceneDidEnterBackground()
+                }
                 pauseMemoryAutoRotation()
             }
         }

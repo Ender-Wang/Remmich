@@ -94,8 +94,9 @@ final class VideoPlaybackSession {
     private(set) var timelineState = VideoPlaybackTimelineState.empty
     private(set) var generation = 0
     private(set) var isClosed = false
+    private(set) var isPictureInPictureEngaged = false
 
-    private let audioSession = ViewerAudioSessionController()
+    private let audioSession: any ViewerAudioSessionControlling
     private var streamSource: AuthenticatedVideoStreamSource?
     private var playerItem: AVPlayerItem?
     private var observations: [NSKeyValueObservation] = []
@@ -111,8 +112,9 @@ final class VideoPlaybackSession {
     private var bufferingSeekTarget: Double?
     private var lastLoggedBufferSummary: String?
 
-    init(assetID: String) {
+    init(assetID: String, audioSession: any ViewerAudioSessionControlling = ViewerAudioSessionController()) {
         self.assetID = assetID
+        self.audioSession = audioSession
         player = AVPlayer()
         player.automaticallyWaitsToMinimizeStalling = true
     }
@@ -176,7 +178,7 @@ final class VideoPlaybackSession {
         do {
             try await audioSession.activate()
             guard !isClosed, intendedPlayback else {
-                audioSession.deactivate()
+                releaseAudioSessionUnlessPictureInPicture()
                 return
             }
             player.play()
@@ -193,7 +195,7 @@ final class VideoPlaybackSession {
         audioActivationTask = nil
         saveCurrentPosition()
         player.pause()
-        audioSession.deactivate()
+        releaseAudioSessionUnlessPictureInPicture()
         if playerItem != nil {
             phase = .paused
         }
@@ -220,6 +222,16 @@ final class VideoPlaybackSession {
             await play()
         } else {
             phase = .paused
+        }
+    }
+
+    func sceneDidEnterBackground() {
+        guard !isPictureInPictureEngaged else { return }
+        // AVKit owns the handoff for an already-playing video. Preserve the
+        // existing suspension/cancellation behavior for unfinished preparation
+        // and seeks, which must not start playing later in the background.
+        if phase == .preparing || phase.isSeeking {
+            suspend()
         }
     }
 
@@ -257,6 +269,7 @@ final class VideoPlaybackSession {
     func close() {
         guard !isClosed else { return }
         isClosed = true
+        isPictureInPictureEngaged = false
         generation += 1
         seekSequence += 1
         intendedPlayback = false
@@ -264,6 +277,29 @@ final class VideoPlaybackSession {
         audioActivationTask = nil
         saveCurrentPosition()
         resetItem()
+        audioSession.deactivate()
+    }
+
+    func pictureInPictureWillStart() {
+        guard !isClosed else { return }
+        // Include AVKit's start/stop transitions in audio ownership. Pausing
+        // from native PiP controls must not restore the ambient category and
+        // prevent those same controls from resuming in the background.
+        isPictureInPictureEngaged = true
+    }
+
+    func pictureInPictureDidStop(isAppInBackground: Bool) {
+        guard !isClosed, isPictureInPictureEngaged else { return }
+        isPictureInPictureEngaged = false
+        if isAppInBackground {
+            pause()
+        } else if !intendedPlayback || player.timeControlStatus == .paused {
+            audioSession.deactivate()
+        }
+    }
+
+    private func releaseAudioSessionUnlessPictureInPicture() {
+        guard !isPictureInPictureEngaged else { return }
         audioSession.deactivate()
     }
 
@@ -283,7 +319,7 @@ final class VideoPlaybackSession {
     private func startPlayback(generation: Int) async throws {
         try await audioSession.activate()
         guard accepts(generation: generation), intendedPlayback else {
-            audioSession.deactivate()
+            releaseAudioSessionUnlessPictureInPicture()
             return
         }
         if savedPosition > 0 {
@@ -414,7 +450,7 @@ final class VideoPlaybackSession {
             audioActivationTask?.cancel()
             audioActivationTask = nil
             saveCurrentPosition()
-            audioSession.deactivate()
+            releaseAudioSessionUnlessPictureInPicture()
             phase = .paused
         case .waitingToPlayAtSpecifiedRate:
             guard playerItem?.status == .readyToPlay,
@@ -443,7 +479,7 @@ final class VideoPlaybackSession {
         guard accepts(generation: generation) else { return }
         intendedPlayback = false
         saveCurrentPosition()
-        audioSession.deactivate()
+        releaseAudioSessionUnlessPictureInPicture()
         phase = .paused
     }
 
@@ -456,7 +492,7 @@ final class VideoPlaybackSession {
                 guard accepts(generation: generation), intendedPlayback,
                       player.timeControlStatus != .paused
                 else {
-                    audioSession.deactivate()
+                    releaseAudioSessionUnlessPictureInPicture()
                     return
                 }
             } catch {
