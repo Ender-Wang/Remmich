@@ -280,7 +280,7 @@ private struct CollectionDetailView: View {
             collections: PreviewFixtures.collections,
             session: .fixture,
             profile: .init(),
-            activeRoute: .init(kind: .external, endpoint: URL(string: "https://immich.example/api")!),
+            activeRoute: .init(kind: .fallback, endpoint: URL(string: "https://immich.example/api")!),
             routeStatus: .connected,
             libraryIndex: LibraryIndexController(source: PreviewTimelineReader()),
             saveProfile: { _ in .saved(profile: .init()) },

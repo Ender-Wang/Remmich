@@ -21,9 +21,11 @@ open Remmich.xcodeproj
 
 1. Install the pinned SwiftFormat version and let Xcode resolve the packages. Xcode may ask you to trust the Swift OpenAPI Generator build-tool plugin.
 2. Select the **Remmich** scheme and your device, choose your signing team, and use a unique bundle identifier if your team requires one.
-3. Build and run. Sign in with your Immich server address and credentials, then configure Local and External addresses in **Profile → Connection** if needed.
+3. Build and run. Sign in with your Immich server address and credentials, then configure a Primary address and optional Fallback addresses in **Profile → Connection** if needed.
 
-The active Personal Team configuration uses endpoint validation rather than requiring Wi-Fi-information entitlement access. It checks the current endpoint first, then saved alternatives in profile order, using an authenticated identity check. True SSID matching requires an appropriately provisioned paid-team entitlement; the capability is recorded in [Remmich.entitlements](Remmich/Remmich.entitlements).
+Connection selection checks Primary first, then Fallback addresses in order, using authenticated user-ID validation. It does not require Wi-Fi-name access or a location permission. Connection displays omit the trailing `/api` while internal endpoints retain it. A separate unauthenticated `/server/ping` probe measures HTTP response time only while Connection is visible and the app is active; probe rounds do not overlap or switch routes.
+
+Verified endpoint aliases share a stable account cache identity, independent of the current network URL. After successful login, SQLite resolves a retained identity through an exact endpoint/user-ID match or one unambiguous verified alias. Email alone is never an identity key. Saving a profile authenticates additional candidates before recording aliases; unreachable or different-account endpoints are not associated. Ordinary logout retains aliases and cached data; deleting an account's local data removes its aliases, SQL records, and thumbnail namespace. Old address-profile keys are not migrated. Schema 6 adds the account-scoped alias table without moving or merging existing caches.
 
 ## Architecture
 
@@ -31,7 +33,7 @@ The active Personal Team configuration uses endpoint validation rather than requ
 
 ```mermaid
 flowchart TD
-    Keychain[Keychain session] --> Routing[Authenticated Local / External routing]
+    Keychain[Keychain session] --> Routing[Authenticated Primary / Fallback routing]
     Routing --> API[Typed read-only Immich API]
     API --> Index[Local timeline index and incremental sync]
     Index --> Timeline[Photos and Videos timelines]

@@ -6,7 +6,7 @@ nonisolated struct MediaAccountScope: Hashable, Sendable {
     let userID: String
 
     init(session: AccountSession) {
-        serverIdentity = Self.canonicalServerIdentity(session.apiURL)
+        serverIdentity = session.cacheServerIdentity ?? Self.canonicalServerIdentity(session.apiURL)
         userID = session.userID
     }
 
@@ -15,7 +15,7 @@ nonisolated struct MediaAccountScope: Hashable, Sendable {
         return digest.map { String(format: "%02x", $0) }.joined()
     }
 
-    private static func canonicalServerIdentity(_ url: URL) -> String {
+    static func canonicalServerIdentity(_ url: URL) -> String {
         var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
         let scheme = components?.scheme?.lowercased()
         let host = components?.host?.lowercased()

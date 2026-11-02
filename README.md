@@ -35,7 +35,7 @@ Requires an iPhone or iPad running iOS/iPadOS 26.6 or later and an account on yo
 
 CI-built IPA downloads for sideloading are planned for a later update, with AltStore as a possible installation option.
 
-For now, follow [Build and run](CONTRIBUTING.md#build-and-run) to build from source. After installing, sign in with your Immich server address and credentials. Add Local and External addresses in **Profile → Connection** if needed.
+For now, follow [Build and run](CONTRIBUTING.md#build-and-run) to build from source. After installing, sign in with your Immich server address and credentials. Add a Primary address and optional Fallback addresses in **Profile → Connection** if needed.
 
 ## Features
 
@@ -82,7 +82,7 @@ For now, follow [Build and run](CONTRIBUTING.md#build-and-run) to build from sou
 ### 🔐 Account and connection
 
 - Restore your sign-in session from Keychain when you reopen the app.
-- Configure Local and External server addresses, with endpoint validation, failover, and visible connection status.
+- Configure Primary and Fallback server addresses, with authenticated failover, live response times, and shared retained data for verified aliases of the same account.
 - Manage Account, Connection, Index, and Cache & Storage from the profile panel opened through your avatar.
 
 ## Current limitations

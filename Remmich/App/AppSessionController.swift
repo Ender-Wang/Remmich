@@ -1,4 +1,3 @@
-import CoreLocation
 import Foundation
 import Network
 import Observation
@@ -39,17 +38,16 @@ final class AppSessionController {
     let libraryIndex: LibraryIndexController
     private let librarySyncSource: ImmichTimelineRepository
     private let libraryTransfers: LibraryTransferQueue?
+    private let libraryIndexStore: SQLiteLibraryIndexStore
 
     private let service: any ServerReading & SessionManaging & RouteValidating
     private let sessionStore: any SessionStoring
     private let profileStore: ConnectionProfileStore
     private let endpointNormalizer: any EndpointNormalizing
-    private let ssidProvider: any SSIDProviding
     private let networkMonitoringEnabled: Bool
     private let pathChangeDebounce: Duration
     private let photosForegroundRetryEnabled: Bool
     private let persistentAssetDetails: CachedAssetDetailReader
-    private let locationManager = CLLocationManager()
     private let pathMonitor = NWPathMonitor()
     private let routeEvaluationGate = RouteEvaluationGate()
     private var isMonitoringNetwork = false
@@ -76,7 +74,6 @@ final class AppSessionController {
         sessionStore: any SessionStoring = KeychainSessionStore(),
         profileStore: ConnectionProfileStore = .init(),
         endpointNormalizer: any EndpointNormalizing = ImmichEndpointNormalizer(),
-        ssidProvider: any SSIDProviding = CurrentSSIDProvider(),
         networkMonitoringEnabled: Bool = true,
         pathChangeDebounce: Duration = .milliseconds(400),
         timeline: ImmichTimelineRepository = .init()
@@ -84,6 +81,7 @@ final class AppSessionController {
         self.timeline = timeline
         libraryTransfers = transfers
         let libraryIndexStore = SQLiteLibraryIndexStore()
+        self.libraryIndexStore = libraryIndexStore
         let syncSource = transfers == nil ? timeline : ImmichTimelineRepository(transfers: transfers)
         librarySyncSource = syncSource
         libraryIndex = LibraryIndexController(
@@ -142,7 +140,6 @@ final class AppSessionController {
         self.sessionStore = sessionStore
         self.profileStore = profileStore
         self.endpointNormalizer = endpointNormalizer
-        self.ssidProvider = ssidProvider
         self.networkMonitoringEnabled = networkMonitoringEnabled
         self.pathChangeDebounce = pathChangeDebounce
         libraryIndex.acceptedBootstrapDidChange = { [weak self] bootstrap in
@@ -329,7 +326,9 @@ final class AppSessionController {
     func signIn(email: String, password: String, server: ServerDetails) async {
         state = .signingIn(server)
         do {
-            let session = try await service.signIn(email: email, password: password, server: server)
+            let authenticated = try await service.signIn(email: email, password: password, server: server)
+            let session = try await libraryIndexStore.sessionReusingRetainedAccount(authenticated)
+            try await libraryIndexStore.recordVerifiedEndpoint(session.apiURL, session: session)
             try await sessionStore.save(session)
             routeGeneration += 1
             activeRoute = .init(kind: .direct, endpoint: session.apiURL)
@@ -409,12 +408,6 @@ final class AppSessionController {
         guard !profile.endpoints.isEmpty else {
             return .rejected(failures: [])
         }
-        if Bundle.main.object(forInfoDictionaryKey: "RemmichSSIDEntitlementEnabled") as? Bool == true,
-           profile.isSSIDMatchingEnabled,
-           locationManager.authorizationStatus == .notDetermined
-        {
-            locationManager.requestWhenInUseAuthorization()
-        }
         do {
             try await profileStore.save(profile)
         } catch {
@@ -431,6 +424,19 @@ final class AppSessionController {
             activeRoute = configuredRoute
         }
         await reevaluateRoute(trigger: .profileSave)
+        if case let .signedIn(session) = state, routeStatus == .connected, let route = activeRoute,
+           connectionProfile == profile, let selected = profile.endpoints.firstIndex(of: route.endpoint)
+        {
+            // Earlier candidates and the chosen route were already checked.
+            for endpoint in profile.endpoints.dropFirst(selected + 1) {
+                let result = await service.validateRoute(endpoint: endpoint, session: session)
+                guard !Task.isCancelled, case let .signedIn(current) = state, current == session,
+                      connectionProfile == profile else { return .saved(profile: profile) }
+                if result.isReachable {
+                    try? await libraryIndexStore.recordVerifiedEndpoint(endpoint, session: session)
+                }
+            }
+        }
         return .saved(profile: profile)
     }
 
@@ -458,16 +464,10 @@ final class AppSessionController {
             return
         }
 
-        let entitlementEnabled = Bundle.main.object(
-            forInfoDictionaryKey: "RemmichSSIDEntitlementEnabled"
-        ) as? Bool == true
         let outcome = await Self.evaluateRoutes(
             profile: connectionProfile,
-            preferredEndpoint: activeRoute?.endpoint,
-            allowSSIDlessLocalProbe: !entitlementEnabled,
             session: session,
-            service: service,
-            ssidProvider: ssidProvider
+            service: service
         )
         guard let route = outcome.route else {
             guard evaluation == routeGeneration else { return }
@@ -490,6 +490,7 @@ final class AppSessionController {
         guard evaluation == routeGeneration else { return }
         if activeRoute == route {
             routeStatus = .connected
+            try? await libraryIndexStore.recordVerifiedEndpoint(route.endpoint, session: session)
             Self.routeLogger.info(
                 "Retained active \(route.kind.rawValue, privacy: .public) endpoint \(route.endpoint.absoluteString, privacy: .public)"
             )
@@ -500,6 +501,8 @@ final class AppSessionController {
             guard evaluation == routeGeneration else { return }
             activeRoute = route
             routeStatus = .connected
+            try? await libraryIndexStore.recordVerifiedEndpoint(route.endpoint, session: session)
+            guard evaluation == routeGeneration else { return }
             media.updateRoute(route.endpoint)
             if await updateTimelineRoutes(route.endpoint, session: session) {
                 photos.routeDidChange(isReachable: true)
@@ -647,23 +650,16 @@ final class AppSessionController {
     /// native tab selection and other main-run-loop work.
     private nonisolated static func evaluateRoutes(
         profile: ConnectionProfile,
-        preferredEndpoint: URL?,
-        allowSSIDlessLocalProbe: Bool,
         session: AccountSession,
-        service: any RouteValidating,
-        ssidProvider: any SSIDProviding
+        service: any RouteValidating
     ) async -> RouteEvaluationOutcome {
         let audit = RouteValidationAudit()
-        let coordinator = NetworkRouteCoordinator(ssidProvider: ssidProvider) { endpoint in
+        let coordinator = NetworkRouteCoordinator { endpoint in
             let result = await validateRoute(endpoint, session: session, service: service)
             await audit.record(result)
             return result.isReachable
         }
-        let route = await coordinator.evaluate(
-            profile,
-            preferredEndpoint: preferredEndpoint,
-            allowSSIDlessLocalProbe: allowSSIDlessLocalProbe
-        )
+        let route = await coordinator.evaluate(profile)
         return await RouteEvaluationOutcome(
             route: route,
             validationResults: audit.results
@@ -671,25 +667,24 @@ final class AppSessionController {
     }
 
     private func normalizedProfile(from draft: ConnectionProfileDraft) throws -> ConnectionProfile {
-        let localAddress = draft.localAddress.trimmingCharacters(in: .whitespacesAndNewlines)
-        let externalAddresses = draft.externalAddresses
+        let primaryAddress = draft.primaryAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fallbackAddresses = draft.fallbackAddresses
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
 
-        let localEndpoint: URL? = if localAddress.isEmpty {
+        let primaryEndpoint: URL? = if primaryAddress.isEmpty {
             nil
         } else {
-            try normalize(localAddress)
+            try normalize(primaryAddress)
         }
         var seen = Set<URL>()
-        let externalEndpoints = try externalAddresses.compactMap { address -> URL? in
+        let fallbackEndpoints = try fallbackAddresses.compactMap { address -> URL? in
             let endpoint = try normalize(address)
             return seen.insert(endpoint).inserted ? endpoint : nil
         }
         return ConnectionProfile(
-            preferredSSID: draft.preferredSSID.trimmingCharacters(in: .whitespacesAndNewlines),
-            localEndpoint: localEndpoint,
-            externalEndpoints: externalEndpoints
+            primaryEndpoint: primaryEndpoint,
+            fallbackEndpoints: fallbackEndpoints
         )
     }
 
@@ -996,27 +991,10 @@ private nonisolated struct NetworkPathSignature: Equatable, Sendable {
     }
 }
 
-private extension ConnectionProfile {
-    var endpoints: [URL] {
-        ([localEndpoint] + externalEndpoints.map(Optional.some))
-            .compactMap(\.self)
-    }
-
-    func route(matching endpoint: URL) -> ActiveConnectionRoute? {
-        if localEndpoint == endpoint {
-            return .init(kind: .local, endpoint: endpoint)
-        }
-        if externalEndpoints.contains(endpoint) {
-            return .init(kind: .external, endpoint: endpoint)
-        }
-        return nil
-    }
-}
-
 private extension ConnectionProfileDraft {
     var addresses: [String] {
-        let local = localAddress.trimmingCharacters(in: .whitespacesAndNewlines)
-        return ([local] + externalAddresses).filter {
+        let local = primaryAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        return ([local] + fallbackAddresses).filter {
             !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
     }

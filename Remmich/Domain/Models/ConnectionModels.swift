@@ -50,12 +50,13 @@ nonisolated struct AccountSession: Codable, Hashable, Sendable {
     let name: String
     let isAdmin: Bool
     let serverVersion: ServerVersion
+    var cacheServerIdentity: String? = nil
 }
 
 nonisolated enum ConnectionRouteKind: String, Codable, CaseIterable, Sendable {
     case direct
-    case local
-    case external
+    case primary
+    case fallback
 }
 
 nonisolated struct ActiveConnectionRoute: Codable, Hashable, Sendable {
@@ -124,22 +125,41 @@ nonisolated enum RouteValidationResult: Equatable, Sendable {
 }
 
 nonisolated struct ConnectionProfileDraft: Equatable, Sendable {
-    var preferredSSID = ""
-    var localAddress = ""
-    var externalAddresses: [String] = []
+    var primaryAddress = ""
+    var fallbackAddresses: [String] = []
 }
 
 nonisolated struct ConnectionProfile: Codable, Equatable, Sendable {
-    var preferredSSID = ""
-    var localEndpoint: URL?
-    var externalEndpoints: [URL] = []
+    var primaryEndpoint: URL?
+    var fallbackEndpoints: [URL] = []
 
-    var isAutomaticSwitchingEnabled: Bool {
-        localEndpoint != nil
+    init(primaryEndpoint: URL? = nil, fallbackEndpoints: [URL] = []) {
+        self.primaryEndpoint = primaryEndpoint
+        self.fallbackEndpoints = fallbackEndpoints
     }
 
-    var isSSIDMatchingEnabled: Bool {
-        isAutomaticSwitchingEnabled &&
-            !preferredSSID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    var routes: [ActiveConnectionRoute] {
+        var seen = Set<URL>()
+        let primary = primaryEndpoint.map { [ActiveConnectionRoute(kind: .primary, endpoint: $0)] } ?? []
+        return (primary + fallbackEndpoints.map { .init(kind: .fallback, endpoint: $0) })
+            .filter { seen.insert($0.endpoint).inserted }
+    }
+
+    var endpoints: [URL] {
+        routes.map(\.endpoint)
+    }
+
+    func route(matching endpoint: URL) -> ActiveConnectionRoute? {
+        routes.first { $0.endpoint == endpoint }
+    }
+}
+
+nonisolated enum ConnectionAddressFormatting {
+    static func serverAddress(_ apiURL: URL) -> String {
+        guard var components = URLComponents(url: apiURL, resolvingAgainstBaseURL: false) else { return apiURL.absoluteString }
+        if components.percentEncodedPath.hasSuffix("/api") {
+            components.percentEncodedPath.removeLast(4)
+        }
+        return components.url?.absoluteString ?? apiURL.absoluteString
     }
 }

@@ -212,197 +212,6 @@ struct RemmichTests {
         #expect(collectionKinds == Set(FixtureCollectionKind.allCases))
     }
 
-    @Test func preferredSSIDUsesLocalRoute() async throws {
-        let coordinator = NetworkRouteCoordinator(
-            ssidProvider: StubSSIDProvider(ssid: "Home"),
-            validate: { _ in true }
-        )
-        let configured = try profile(preferredSSID: "Home")
-        let route = await coordinator.evaluate(configured)
-        #expect(route?.kind == .local)
-        #expect(route?.endpoint == URL(string: "http://immich.local/api"))
-    }
-
-    @Test(arguments: ["Other", nil])
-    func unavailablePreferredSSIDUsesExternalRoute(ssid: String?) async throws {
-        let coordinator = NetworkRouteCoordinator(
-            ssidProvider: StubSSIDProvider(ssid: ssid),
-            validate: { _ in true }
-        )
-        let configured = try profile(preferredSSID: "Home")
-        let route = await coordinator.evaluate(configured)
-        #expect(route?.kind == .external)
-        #expect(route?.endpoint == URL(string: "https://one.example/api"))
-    }
-
-    @Test func personalTeamWiFiProbesLocalWhenSSIDIsUnavailable() async throws {
-        let recorder = EndpointRecorder()
-        let coordinator = NetworkRouteCoordinator(
-            ssidProvider: StubSSIDProvider(ssid: nil)
-        ) { endpoint in
-            await recorder.record(endpoint)
-            return endpoint.host() == "one.example"
-        }
-
-        let route = try await coordinator.evaluate(
-            profile(preferredSSID: "Home"),
-            allowSSIDlessLocalProbe: true
-        )
-
-        #expect(route?.kind == .external)
-        #expect(try await recorder.endpoints == [
-            url("http://immich.local/api"),
-            url("https://one.example/api"),
-        ])
-    }
-
-    @Test func personalTeamWiFiDoesNotRequireConfiguredSSID() async throws {
-        let coordinator = NetworkRouteCoordinator(
-            ssidProvider: StubSSIDProvider(ssid: nil),
-            validate: { _ in true }
-        )
-        let configured = try profile(preferredSSID: "")
-
-        let route = await coordinator.evaluate(
-            configured,
-            allowSSIDlessLocalProbe: true
-        )
-
-        #expect(route?.kind == .local)
-        #expect(route?.endpoint == URL(string: "http://immich.local/api"))
-    }
-
-    @Test func personalTeamLocalProbeNeverConsultsSSIDProvider() async throws {
-        let coordinator = NetworkRouteCoordinator(
-            ssidProvider: TrappingSSIDProvider(),
-            validate: { _ in true }
-        )
-        let configured = try profile(preferredSSID: "Home")
-
-        let route = await coordinator.evaluate(configured, allowSSIDlessLocalProbe: true)
-
-        #expect(route?.kind == .local)
-    }
-
-    @Test func cancelledEvaluationDoesNotProbeAnotherCandidate() async throws {
-        let recorder = EndpointRecorder()
-        let gate = ValidationGate()
-        let coordinator = NetworkRouteCoordinator(
-            ssidProvider: StubSSIDProvider(ssid: "Home")
-        ) { endpoint in
-            await recorder.record(endpoint)
-            return await gate.waitForAnswer()
-        }
-        let configured = try profile(preferredSSID: "Home")
-
-        let task = Task { await coordinator.evaluate(configured) }
-        await gate.waitUntilAsked()
-        task.cancel()
-        await gate.answer(false)
-        _ = await task.value
-
-        #expect(try await recorder.endpoints == [url("http://immich.local/api")])
-    }
-
-    @Test func cancelledEvaluationDoesNotAcceptALateSuccessfulValidation() async throws {
-        let recorder = EndpointRecorder()
-        let gate = ValidationGate()
-        let coordinator = NetworkRouteCoordinator(
-            ssidProvider: StubSSIDProvider(ssid: "Home")
-        ) { endpoint in
-            await recorder.record(endpoint)
-            return await gate.waitForAnswer()
-        }
-        let configured = try profile(preferredSSID: "Home")
-
-        let task = Task { await coordinator.evaluate(configured) }
-        await gate.waitUntilAsked()
-        task.cancel()
-        // The validator succeeds *after* cancellation — this must not be accepted as the
-        // active route just because nothing else has raced ahead to bump the generation yet.
-        await gate.answer(true)
-
-        let route = await task.value
-        #expect(route == nil)
-        #expect(try await recorder.endpoints == [url("http://immich.local/api")])
-    }
-
-    @Test func exactSSIDModeDoesNotProbeLocalWhenSSIDIsUnavailable() async throws {
-        let recorder = EndpointRecorder()
-        let coordinator = NetworkRouteCoordinator(
-            ssidProvider: StubSSIDProvider(ssid: nil)
-        ) { endpoint in
-            await recorder.record(endpoint)
-            return true
-        }
-
-        let route = try await coordinator.evaluate(
-            profile(preferredSSID: "Home"),
-            allowSSIDlessLocalProbe: false
-        )
-
-        #expect(route?.kind == .external)
-        #expect(try await recorder.endpoints == [url("https://one.example/api")])
-    }
-
-    @Test func unreachableLocalFallsBackInExternalOrder() async throws {
-        let recorder = EndpointRecorder()
-        let coordinator = NetworkRouteCoordinator(
-            ssidProvider: StubSSIDProvider(ssid: "Home")
-        ) { endpoint in
-            await recorder.record(endpoint)
-            return endpoint.host() == "two.example"
-        }
-        let configured = try profile(preferredSSID: "Home")
-        let route = await coordinator.evaluate(configured)
-        let expected = try [
-            url("http://immich.local/api"),
-            url("https://one.example/api"),
-            url("https://two.example/api"),
-        ]
-        #expect(route?.endpoint == URL(string: "https://two.example/api"))
-        #expect(await recorder.endpoints == expected)
-    }
-
-    @Test func currentExternalEndpointIsCheckedBeforeLocalFallback() async throws {
-        let recorder = EndpointRecorder()
-        let coordinator = NetworkRouteCoordinator(
-            ssidProvider: StubSSIDProvider(ssid: nil)
-        ) { endpoint in
-            await recorder.record(endpoint)
-            return true
-        }
-        let external = try url("https://one.example/api")
-
-        let route = try await coordinator.evaluate(
-            profile(preferredSSID: "Home"),
-            preferredEndpoint: external,
-            allowSSIDlessLocalProbe: true
-        )
-
-        #expect(route == ActiveConnectionRoute(kind: .external, endpoint: external))
-        #expect(await recorder.endpoints == [external])
-    }
-
-    @Test func newerRouteEvaluationSupersedesSlowResult() async throws {
-        let provider = MutableSSIDProvider(ssid: "Home")
-        let coordinator = NetworkRouteCoordinator(ssidProvider: provider) { endpoint in
-            if endpoint.host() == "immich.local" {
-                try? await Task.sleep(for: .milliseconds(100))
-            }
-            return true
-        }
-        let configured = try profile(preferredSSID: "Home")
-        let first = Task { await coordinator.evaluate(configured) }
-        await provider.setSSID("Other")
-        let second = await coordinator.evaluate(configured)
-        let firstResult = await first.value
-
-        #expect(second?.kind == .external)
-        #expect(firstResult?.kind == .external)
-        #expect(await coordinator.activeRoute?.kind == .external)
-    }
-
     @Test func featureSourcesCannotImportImmichAPI() throws {
         let repository = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -434,7 +243,6 @@ struct RemmichTests {
             service: service,
             sessionStore: sessionStore,
             profileStore: profileStore,
-            ssidProvider: StubSSIDProvider(ssid: nil),
             networkMonitoringEnabled: false,
             pathChangeDebounce: .zero
         )
@@ -467,7 +275,6 @@ struct RemmichTests {
             service: service,
             sessionStore: MemorySessionStore(session: nil),
             profileStore: ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)"),
-            ssidProvider: StubSSIDProvider(ssid: nil),
             networkMonitoringEnabled: false,
             pathChangeDebounce: .zero
         )
@@ -497,7 +304,6 @@ struct RemmichTests {
             service: service,
             sessionStore: MemorySessionStore(session: nil),
             profileStore: ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)"),
-            ssidProvider: StubSSIDProvider(ssid: nil),
             networkMonitoringEnabled: false,
             pathChangeDebounce: .milliseconds(50)
         )
@@ -532,7 +338,6 @@ struct RemmichTests {
             service: service,
             sessionStore: MemorySessionStore(session: nil),
             profileStore: ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)"),
-            ssidProvider: StubSSIDProvider(ssid: nil),
             networkMonitoringEnabled: false,
             pathChangeDebounce: .zero
         )
@@ -569,7 +374,6 @@ struct RemmichTests {
             service: service,
             sessionStore: sessionStore,
             profileStore: ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)"),
-            ssidProvider: StubSSIDProvider(ssid: nil),
             networkMonitoringEnabled: false,
             pathChangeDebounce: .zero
         )
@@ -603,7 +407,6 @@ struct RemmichTests {
             service: SequencedRouteService(validationResults: [rejected]),
             sessionStore: sessionStore,
             profileStore: ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)"),
-            ssidProvider: StubSSIDProvider(ssid: nil),
             networkMonitoringEnabled: false,
             pathChangeDebounce: .zero
         )
@@ -629,7 +432,6 @@ struct RemmichTests {
             service: SequencedRouteService(validationResults: [transient]),
             sessionStore: sessionStore,
             profileStore: ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)"),
-            ssidProvider: StubSSIDProvider(ssid: nil),
             networkMonitoringEnabled: false,
             pathChangeDebounce: .zero
         )
@@ -657,7 +459,6 @@ struct RemmichTests {
             service: service,
             sessionStore: sessionStore,
             profileStore: ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)"),
-            ssidProvider: StubSSIDProvider(ssid: nil),
             networkMonitoringEnabled: false,
             pathChangeDebounce: .zero
         )
@@ -687,7 +488,7 @@ struct RemmichTests {
         )
         let sessionStore = MemorySessionStore(session: AccountSession.fixture)
         let profileStore = ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)")
-        try await profileStore.save(ConnectionProfile(externalEndpoints: [
+        try await profileStore.save(ConnectionProfile(fallbackEndpoints: [
             url("https://one.example/api"),
             url("https://two.example/api"),
         ]))
@@ -696,7 +497,6 @@ struct RemmichTests {
             service: SequencedRouteService(validationResults: [rejected, rejected]),
             sessionStore: sessionStore,
             profileStore: profileStore,
-            ssidProvider: StubSSIDProvider(ssid: nil),
             networkMonitoringEnabled: false,
             pathChangeDebounce: .zero
         )
@@ -717,7 +517,6 @@ struct RemmichTests {
             service: RestoreService(),
             sessionStore: sessionStore,
             profileStore: ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)"),
-            ssidProvider: StubSSIDProvider(ssid: nil),
             networkMonitoringEnabled: false,
             pathChangeDebounce: .zero
         )
@@ -741,7 +540,6 @@ struct RemmichTests {
             service: RestoreService(),
             sessionStore: sessionStore,
             profileStore: ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)"),
-            ssidProvider: StubSSIDProvider(ssid: nil),
             networkMonitoringEnabled: false,
             pathChangeDebounce: .zero
         )
@@ -765,32 +563,31 @@ struct RemmichTests {
             service: service,
             sessionStore: MemorySessionStore(session: nil),
             profileStore: profileStore,
-            ssidProvider: StubSSIDProvider(ssid: nil),
             networkMonitoringEnabled: false,
             pathChangeDebounce: .zero
         )
         await controller.start()
         await controller.signIn(email: "ender@example.com", password: "password", server: serverDetails)
         let expected = try ConnectionProfile(
-            localEndpoint: url("http://immich.local:2283/api"),
-            externalEndpoints: [url("https://ender-nas.example:2283/api")]
+            primaryEndpoint: url("http://immich.local:2283/api"),
+            fallbackEndpoints: [url("https://ender-nas.example:2283/api")]
         )
 
         let result = await controller.saveConnectionProfile(ConnectionProfileDraft(
-            localAddress: "http://immich.local:2283",
-            externalAddresses: ["ender-nas.example:2283"]
+            primaryAddress: "http://immich.local:2283",
+            fallbackAddresses: ["ender-nas.example:2283"]
         ))
 
         #expect(result == .saved(profile: expected))
         #expect(controller.connectionProfile == expected)
         #expect(await profileStore.load() == expected)
         #expect(try controller.activeRoute == ActiveConnectionRoute(
-            kind: .local,
-            endpoint: #require(expected.localEndpoint)
+            kind: .primary,
+            endpoint: #require(expected.primaryEndpoint)
         ))
         #expect(controller.routeStatus == .connected)
-        #expect(await service.validateCallCount == 1)
-        #expect(try await service.activatedEndpoints == [#require(expected.localEndpoint)])
+        #expect(await service.validateCallCount == 2)
+        #expect(try await service.activatedEndpoints == [#require(expected.primaryEndpoint)])
     }
 
     @Test @MainActor func profileSaveRevalidatesMatchingDirectEndpointBeforePromotion() async {
@@ -801,22 +598,21 @@ struct RemmichTests {
             service: service,
             sessionStore: MemorySessionStore(session: nil),
             profileStore: profileStore,
-            ssidProvider: StubSSIDProvider(ssid: nil),
             networkMonitoringEnabled: false,
             pathChangeDebounce: .zero
         )
         await controller.start()
         await controller.signIn(email: "ender@example.com", password: "password", server: serverDetails)
         let endpoint = AccountSession.fixture.apiURL
-        let profile = ConnectionProfile(localEndpoint: endpoint)
+        let profile = ConnectionProfile(primaryEndpoint: endpoint)
 
         let result = await controller.saveConnectionProfile(ConnectionProfileDraft(
-            localAddress: endpoint.absoluteString
+            primaryAddress: endpoint.absoluteString
         ))
 
         #expect(result == .saved(profile: profile))
         #expect(controller.connectionProfile == profile)
-        #expect(controller.activeRoute == ActiveConnectionRoute(kind: .local, endpoint: endpoint))
+        #expect(controller.activeRoute == ActiveConnectionRoute(kind: .primary, endpoint: endpoint))
         #expect(controller.routeStatus == .connected)
         #expect(await service.validateCallCount == 1)
         #expect(await service.activatedEndpoints.isEmpty)
@@ -834,7 +630,6 @@ struct RemmichTests {
             service: service,
             sessionStore: MemorySessionStore(session: nil),
             profileStore: profileStore,
-            ssidProvider: StubSSIDProvider(ssid: nil),
             networkMonitoringEnabled: false,
             pathChangeDebounce: .zero
         )
@@ -843,11 +638,11 @@ struct RemmichTests {
         let endpoint = try url("https://wrong-account.example/api")
 
         let result = await controller.saveConnectionProfile(ConnectionProfileDraft(
-            externalAddresses: [endpoint.absoluteString]
+            fallbackAddresses: [endpoint.absoluteString]
         ))
 
-        #expect(result == .saved(profile: ConnectionProfile(externalEndpoints: [endpoint])))
-        #expect(await profileStore.load() == ConnectionProfile(externalEndpoints: [endpoint]))
+        #expect(result == .saved(profile: ConnectionProfile(fallbackEndpoints: [endpoint])))
+        #expect(await profileStore.load() == ConnectionProfile(fallbackEndpoints: [endpoint]))
         #expect(controller.activeRoute == ActiveConnectionRoute(
             kind: .direct,
             endpoint: AccountSession.fixture.apiURL
@@ -860,7 +655,7 @@ struct RemmichTests {
     @Test @MainActor func profileSaveRevalidatesRetainedRouteBeforeRestoringConnectedStatus() async throws {
         let session = AccountSession.fixture
         let endpoint = session.apiURL
-        let profile = ConnectionProfile(externalEndpoints: [endpoint])
+        let profile = ConnectionProfile(fallbackEndpoints: [endpoint])
         let service = RouteRestoreService(reachableEndpoints: [endpoint])
         let profileStore = ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)")
         try await profileStore.save(profile)
@@ -869,28 +664,27 @@ struct RemmichTests {
             service: service,
             sessionStore: MemorySessionStore(session: session),
             profileStore: profileStore,
-            ssidProvider: StubSSIDProvider(ssid: nil),
             networkMonitoringEnabled: false,
             pathChangeDebounce: .zero
         )
         await controller.start()
-        #expect(controller.activeRoute == ActiveConnectionRoute(kind: .external, endpoint: endpoint))
+        #expect(controller.activeRoute == ActiveConnectionRoute(kind: .fallback, endpoint: endpoint))
         #expect(controller.routeStatus == .connected)
 
         await service.setReachableEndpoints([])
         await controller.handleNetworkPathChange(usesWiFi: true)
         await controller.handleNetworkPathChange(usesWiFi: false)
-        #expect(controller.activeRoute == ActiveConnectionRoute(kind: .external, endpoint: endpoint))
+        #expect(controller.activeRoute == ActiveConnectionRoute(kind: .fallback, endpoint: endpoint))
         #expect(controller.routeStatus == .unavailable)
 
         await service.setReachableEndpoints([endpoint])
         await service.resetValidatedEndpoints()
         let result = await controller.saveConnectionProfile(ConnectionProfileDraft(
-            externalAddresses: [endpoint.absoluteString]
+            fallbackAddresses: [endpoint.absoluteString]
         ))
 
         #expect(result == .saved(profile: profile))
-        #expect(controller.activeRoute == ActiveConnectionRoute(kind: .external, endpoint: endpoint))
+        #expect(controller.activeRoute == ActiveConnectionRoute(kind: .fallback, endpoint: endpoint))
         #expect(controller.routeStatus == .connected)
         #expect(await service.validatedEndpoints == [endpoint])
     }
@@ -902,7 +696,6 @@ struct RemmichTests {
             service: RestoreService(),
             sessionStore: MemorySessionStore(session: session),
             profileStore: ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)"),
-            ssidProvider: StubSSIDProvider(ssid: nil),
             networkMonitoringEnabled: false,
             pathChangeDebounce: .zero
         )
@@ -925,7 +718,6 @@ struct RemmichTests {
             service: service,
             sessionStore: MemorySessionStore(session: .fixture),
             profileStore: ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)"),
-            ssidProvider: StubSSIDProvider(ssid: nil),
             networkMonitoringEnabled: false,
             pathChangeDebounce: .zero
         )
@@ -959,7 +751,6 @@ struct RemmichTests {
             service: service,
             sessionStore: MemorySessionStore(session: .fixture),
             profileStore: ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)"),
-            ssidProvider: StubSSIDProvider(ssid: nil),
             networkMonitoringEnabled: false,
             pathChangeDebounce: .zero
         )
@@ -985,9 +776,8 @@ struct RemmichTests {
         let profileStore = ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)")
         let local = try url("http://immich.local/api")
         try await profileStore.save(ConnectionProfile(
-            preferredSSID: "Home",
-            localEndpoint: local,
-            externalEndpoints: [session.apiURL]
+            primaryEndpoint: local,
+            fallbackEndpoints: [session.apiURL]
         ))
         let service = RouteRestoreService(reachableEndpoints: [local])
         let controller = AppSessionController(
@@ -995,7 +785,6 @@ struct RemmichTests {
             service: service,
             sessionStore: sessionStore,
             profileStore: profileStore,
-            ssidProvider: StubSSIDProvider(ssid: "Home"),
             networkMonitoringEnabled: false,
             pathChangeDebounce: .zero
         )
@@ -1007,7 +796,7 @@ struct RemmichTests {
             return
         }
         #expect(restored == session)
-        #expect(controller.activeRoute == ActiveConnectionRoute(kind: .local, endpoint: local))
+        #expect(controller.activeRoute == ActiveConnectionRoute(kind: .primary, endpoint: local))
         #expect(controller.media.activeAPIURL == local)
         #expect(controller.routeStatus == .connected)
         #expect(await service.restoreCallCount == 0)
@@ -1020,9 +809,8 @@ struct RemmichTests {
         let profileStore = ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)")
         let local = try url("http://immich.local/api")
         try await profileStore.save(ConnectionProfile(
-            preferredSSID: "Home",
-            localEndpoint: local,
-            externalEndpoints: [session.apiURL]
+            primaryEndpoint: local,
+            fallbackEndpoints: [session.apiURL]
         ))
         let service = RouteRestoreService(reachableEndpoints: [local])
         let controller = AppSessionController(
@@ -1030,13 +818,12 @@ struct RemmichTests {
             service: service,
             sessionStore: sessionStore,
             profileStore: profileStore,
-            ssidProvider: StubSSIDProvider(ssid: nil),
             networkMonitoringEnabled: false,
             pathChangeDebounce: .zero
         )
 
         await controller.start()
-        #expect(controller.activeRoute == ActiveConnectionRoute(kind: .local, endpoint: local))
+        #expect(controller.activeRoute == ActiveConnectionRoute(kind: .primary, endpoint: local))
         #expect(controller.media.activeAPIURL == local)
         #expect(controller.routeStatus == .connected)
         #expect(await sessionStore.storedSession() == session)
@@ -1048,32 +835,28 @@ struct RemmichTests {
         let local = try url("http://immich.local/api")
         let external = try url("https://tailnet.example/api")
         try await profileStore.save(ConnectionProfile(
-            preferredSSID: "Home",
-            localEndpoint: local,
-            externalEndpoints: [external]
+            primaryEndpoint: local,
+            fallbackEndpoints: [external]
         ))
-        let ssid = MutableSSIDProvider(ssid: "Home")
         let service = RouteRestoreService(reachableEndpoints: [local, external])
         let controller = AppSessionController(
             transfers: nil,
             service: service,
             sessionStore: MemorySessionStore(session: session),
             profileStore: profileStore,
-            ssidProvider: ssid,
             networkMonitoringEnabled: false,
             pathChangeDebounce: .zero
         )
 
         await controller.start()
-        #expect(controller.activeRoute == ActiveConnectionRoute(kind: .local, endpoint: local))
+        #expect(controller.activeRoute == ActiveConnectionRoute(kind: .primary, endpoint: local))
 
         await controller.handleNetworkPathChange(usesWiFi: true)
         await service.resetValidatedEndpoints()
         await service.setReachableEndpoints([external])
-        await ssid.setSSID(nil)
         await controller.handleNetworkPathChange(usesWiFi: false)
 
-        #expect(controller.activeRoute == ActiveConnectionRoute(kind: .external, endpoint: external))
+        #expect(controller.activeRoute == ActiveConnectionRoute(kind: .fallback, endpoint: external))
         #expect(controller.media.activeAPIURL == external)
         #expect(controller.routeStatus == .connected)
         #expect(await service.validatedEndpoints == [local, external])
@@ -1088,27 +871,24 @@ struct RemmichTests {
             service: RouteRestoreService(reachableEndpoints: [session.apiURL]),
             sessionStore: MemorySessionStore(session: session),
             profileStore: profileStore,
-            ssidProvider: StubSSIDProvider(ssid: nil),
             networkMonitoringEnabled: false,
             pathChangeDebounce: .zero
         )
         await controller.start()
 
         let result = await controller.saveConnectionProfile(ConnectionProfileDraft(
-            preferredSSID: "Home",
-            localAddress: unreachable.absoluteString,
-            externalAddresses: [session.apiURL.absoluteString]
+            primaryAddress: unreachable.absoluteString,
+            fallbackAddresses: [session.apiURL.absoluteString]
         ))
 
         let expected = ConnectionProfile(
-            preferredSSID: "Home",
-            localEndpoint: unreachable,
-            externalEndpoints: [session.apiURL]
+            primaryEndpoint: unreachable,
+            fallbackEndpoints: [session.apiURL]
         )
         #expect(result == .saved(profile: expected))
         #expect(controller.connectionProfile == expected)
         #expect(await profileStore.load() == expected)
-        #expect(controller.activeRoute == ActiveConnectionRoute(kind: .external, endpoint: session.apiURL))
+        #expect(controller.activeRoute == ActiveConnectionRoute(kind: .fallback, endpoint: session.apiURL))
     }
 
     @Test @MainActor func newerVisibleBucketRefreshSupersedesDelayedMembershipChange() async {
@@ -2387,17 +2167,6 @@ struct RemmichTests {
         #expect(Set(keys).count == 5000)
     }
 
-    private func profile(preferredSSID: String) throws -> ConnectionProfile {
-        try ConnectionProfile(
-            preferredSSID: preferredSSID,
-            localEndpoint: url("http://immich.local/api"),
-            externalEndpoints: [
-                url("https://one.example/api"),
-                url("https://two.example/api"),
-            ]
-        )
-    }
-
     private func url(_ value: String) throws -> URL {
         try #require(URL(string: value))
     }
@@ -2442,58 +2211,6 @@ struct RemmichTests {
             thumbhash: nil,
             thumbnailRevision: thumbnailRevision
         )
-    }
-}
-
-private struct StubSSIDProvider: SSIDProviding {
-    let ssid: String?
-
-    func currentSSID() async -> String? {
-        ssid
-    }
-}
-
-private struct TrappingSSIDProvider: SSIDProviding {
-    func currentSSID() async -> String? {
-        Issue.record("SSID provider must not be consulted when allowSSIDlessLocalProbe is true")
-        return nil
-    }
-}
-
-private actor ValidationGate {
-    private var continuation: CheckedContinuation<Bool, Never>?
-    private var wasAsked = false
-
-    func waitForAnswer() async -> Bool {
-        wasAsked = true
-        return await withCheckedContinuation { continuation = $0 }
-    }
-
-    func waitUntilAsked() async {
-        while !wasAsked {
-            await Task.yield()
-        }
-    }
-
-    func answer(_ value: Bool) {
-        continuation?.resume(returning: value)
-        continuation = nil
-    }
-}
-
-private actor MutableSSIDProvider: SSIDProviding {
-    private var ssid: String?
-
-    init(ssid: String?) {
-        self.ssid = ssid
-    }
-
-    func currentSSID() -> String? {
-        ssid
-    }
-
-    func setSSID(_ value: String?) {
-        ssid = value
     }
 }
 

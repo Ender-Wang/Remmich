@@ -2,7 +2,7 @@ import Foundation
 import SQLite3
 
 actor SQLiteLibraryIndexStore: LibraryIndexStoring {
-    static let currentSchemaVersion = 5
+    static let currentSchemaVersion = 6
 
     private let databaseURL: URL
     private var connection: SQLiteConnection?
@@ -734,7 +734,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
         try migrate(database)
         try database.transaction {
             for table in [
-                "asset_details", "asset_detail_strings", "derivatives", "grouped_catalogs",
+                "account_endpoint_aliases", "asset_details", "asset_detail_strings", "derivatives", "grouped_catalogs",
                 "assets", "generations", "sync_state", "scopes",
             ] {
                 try database.execute(
@@ -752,6 +752,39 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
         let database = try database()
         try migrate(database)
         return try Int(database.scalarInt64("PRAGMA user_version") ?? 0)
+    }
+
+    /// Call only after successful authentication at the incoming endpoint.
+    /// An unrelated endpoint or user ID cannot select another account's scope.
+    func sessionReusingRetainedAccount(_ authenticated: AccountSession) async throws -> AccountSession {
+        let database = try database()
+        try migrate(database)
+        let endpoint = MediaAccountScope.canonicalServerIdentity(authenticated.apiURL)
+        let exact = try database.queryOne(
+            "SELECT server_identity FROM scopes WHERE server_identity = ? AND user_id = ?",
+            [.text(endpoint), .text(authenticated.userID)]
+        ) { $0.text(0) }
+        let aliases = try database.query(
+            """
+            SELECT DISTINCT scopes.server_identity FROM account_endpoint_aliases aliases
+            JOIN scopes ON scopes.scope = aliases.scope
+            WHERE aliases.endpoint = ? AND scopes.user_id = ?
+            """, [.text(endpoint), .text(authenticated.userID)]
+        ) { $0.text(0) }
+        var session = authenticated
+        let identity = exact ?? (aliases.count == 1 ? aliases.first : nil)
+        session.cacheServerIdentity = identity == endpoint ? nil : identity
+        return session
+    }
+
+    /// The caller has authenticated this endpoint as the current session's user.
+    func recordVerifiedEndpoint(_ endpoint: URL, session: AccountSession) async throws {
+        let scope = MediaAccountScope(session: session)
+        let database = try preparedDatabase(scope: scope)
+        try database.execute(
+            "INSERT OR IGNORE INTO account_endpoint_aliases(scope, endpoint) VALUES(?, ?)",
+            [.text(scope.cacheNamespace), .text(MediaAccountScope.canonicalServerIdentity(endpoint))]
+        )
     }
 
     private func preparedDatabase(scope: MediaAccountScope) throws -> SQLiteConnection {
@@ -984,6 +1017,17 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
                 try database.execute("DELETE FROM grouped_catalogs")
                 try database.execute("PRAGMA user_version = 5")
             }
+        }
+        if version < 6 {
+            try database.execute("""
+            CREATE TABLE IF NOT EXISTS account_endpoint_aliases(
+                scope TEXT NOT NULL,
+                endpoint TEXT NOT NULL,
+                PRIMARY KEY(scope, endpoint),
+                FOREIGN KEY(scope) REFERENCES scopes(scope) ON DELETE CASCADE
+            )
+            """)
+            try database.execute("PRAGMA user_version = 6")
         }
     }
 

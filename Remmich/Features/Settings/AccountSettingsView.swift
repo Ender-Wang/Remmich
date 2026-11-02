@@ -110,8 +110,9 @@ struct AccountSettingsView: View {
     let drawsGlassBackground: Bool
 
     @State private var profile: ConnectionProfile
-    @State private var localAddress: String
-    @State private var externalAddresses: String
+    @State private var primaryAddress: String
+    @State private var fallbackAddresses: [String]
+    @State private var connectionLatency = ConnectionLatencyMonitor()
     @State private var isSaving = false
     @State private var saveError: String?
     @State private var showsSignOutChoices = false
@@ -174,8 +175,10 @@ struct AccountSettingsView: View {
         self.showsCloseControl = showsCloseControl
         self.drawsGlassBackground = drawsGlassBackground
         _profile = State(initialValue: profile)
-        _localAddress = State(initialValue: profile.localEndpoint?.absoluteString ?? "")
-        _externalAddresses = State(initialValue: profile.externalEndpoints.map(\.absoluteString).joined(separator: "\n"))
+        let primary = profile.primaryEndpoint ?? (profile.endpoints.isEmpty ? activeRoute?.endpoint ?? session.apiURL : nil)
+        _primaryAddress = State(initialValue: primary.map(ConnectionAddressFormatting.serverAddress) ?? "")
+        let fallbacks = profile.fallbackEndpoints.map(ConnectionAddressFormatting.serverAddress)
+        _fallbackAddresses = State(initialValue: fallbacks.isEmpty ? [""] : fallbacks)
     }
 
     var body: some View {
@@ -338,6 +341,12 @@ struct AccountSettingsView: View {
         }
         .onDisappear { pageTransition?.cancel() }
         .task { appIcons.refresh(); libraryIndex.refreshStoredAccounts() }
+        .task(id: connectionLatencyTargets) {
+            let targets = connectionLatencyTargets
+            guard !targets.isEmpty else { await connectionLatency.run(endpoints: []); return }
+            do { try await Task.sleep(for: .milliseconds(300)) } catch { return }
+            await connectionLatency.run(endpoints: targets)
+        }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
             libraryIndexClock = Date()
@@ -853,22 +862,31 @@ struct AccountSettingsView: View {
             if routeStatus != .connected {
                 Text("\(routeStatusLabel). \(routeStatusDetail)").font(.footnote).foregroundStyle(.secondary)
             }
-            if ssidEntitlementEnabled {
-                connectionField("Preferred Wi-Fi name") {
-                    TextField("Wi-Fi name", text: $profile.preferredSSID)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+            connectionField("Primary address", address: primaryAddress) {
+                TextField("https://photos.example.com:2283", text: $primaryAddress, axis: .vertical)
+                    .lineLimit(1 ... 5)
+                    .textContentType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+            }
+            ForEach(fallbackAddresses.indices, id: \.self) { index in
+                connectionField(fallbackAddresses.count == 1 ? "Fallback address" : "Fallback address \(index + 1)",
+                                address: fallbackAddresses[index])
+                {
+                    HStack(alignment: .top, spacing: 8) {
+                        TextField("Optional server address", text: $fallbackAddresses[index], axis: .vertical)
+                            .textContentType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                            .lineLimit(1 ... 5)
+                        if fallbackAddresses.count > 1 {
+                            Button { fallbackAddresses.remove(at: index) } label: {
+                                Image(systemName: "minus.circle").frame(width: 44, height: 44)
+                            }.buttonStyle(.plain).accessibilityLabel("Remove fallback address \(index + 1)")
+                        }
+                    }
                 }
             }
-            connectionField("Local address", connected: isConnectedAddress(localAddress)) {
-                TextField("Local server address", text: $localAddress, axis: .vertical)
-                    .lineLimit(1 ... 5)
-                    .textContentType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-            }
-            connectionField("External addresses", connected: externalAddresses.components(separatedBy: .newlines).contains(where: isConnectedAddress)) {
-                TextField("One address per line", text: $externalAddresses, axis: .vertical)
-                    .textContentType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-                    .lineLimit(1 ... 5)
-            }
+            Button("Add fallback address", systemImage: "plus") { fallbackAddresses.append("") }
+                .font(.footnote).buttonStyle(.glass).buttonBorderShape(.capsule)
+            Text("Use addresses for the same Immich account. Primary is checked first, then fallbacks. Response times refresh while this page is open.")
+                .font(.footnote).foregroundStyle(.secondary)
             Button { validateAndSaveProfile() } label: {
                 if isSaving {
                     ProgressView().frame(minWidth: 110, minHeight: 28)
@@ -883,15 +901,48 @@ struct AccountSettingsView: View {
 
     private func isConnectedAddress(_ address: String) -> Bool {
         guard routeStatus == .connected, let endpoint = activeRoute?.endpoint else { return false }
-        return URL(string: address.trimmingCharacters(in: .whitespacesAndNewlines)) == endpoint
+        return connectionEndpoint(address) == endpoint
     }
 
-    private func connectionField(_ label: String, connected: Bool = false, @ViewBuilder content: () -> some View) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+    private func connectionEndpoint(_ address: String) -> URL? {
+        try? ImmichEndpointNormalizer().normalizeEndpoint(address)
+    }
+
+    private var connectionLatencyTargets: [URL] {
+        guard selectedPage == .connection, scenePhase == .active else { return [] }
+        return ([primaryAddress] + fallbackAddresses).compactMap(connectionEndpoint)
+    }
+
+    private func connectionField(_ label: String, address: String, @ViewBuilder content: () -> some View) -> some View {
+        let connected = isConnectedAddress(address)
+        return VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text(label).foregroundStyle(.secondary)
                 if connected {
-                    Label("Connected", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                    Label("Connected", systemImage: "checkmark.circle.fill").labelStyle(.iconOnly).foregroundStyle(.green)
+                }
+                Spacer(minLength: 4)
+                if let endpoint = connectionEndpoint(address) {
+                    let sample = connectionLatency.samples[endpoint] ?? .checking
+                    Group {
+                        switch sample {
+                        case let .response(milliseconds):
+                            HStack(spacing: 3) {
+                                Text("\(milliseconds)")
+                                    .contentTransition(reduceMotion ? .identity : .numericText(value: Double(milliseconds)))
+                                    .animation(reduceMotion ? nil : .smooth(duration: 0.3), value: milliseconds)
+                                Text("ms")
+                            }
+                        case .checking, .unavailable:
+                            Text(sample.label)
+                        }
+                    }
+                    .monospacedDigit().foregroundStyle(.secondary)
+                    .id(sample.phase)
+                    .transition(.opacity)
+                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: sample.phase)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Response time: \(sample.label)")
                 }
             }.font(.footnote)
             content().font(.subheadline).padding(12).frame(maxWidth: .infinity, alignment: .leading)
@@ -1729,14 +1780,12 @@ struct AccountSettingsView: View {
     }
 
     private func validateAndSaveProfile() {
-        let externalValues = externalAddresses
-            .components(separatedBy: .newlines)
+        let fallbackValues = fallbackAddresses
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
         let draft = ConnectionProfileDraft(
-            preferredSSID: profile.preferredSSID,
-            localAddress: localAddress,
-            externalAddresses: externalValues
+            primaryAddress: primaryAddress,
+            fallbackAddresses: fallbackValues
         )
         isSaving = true
         Task {
@@ -1745,10 +1794,9 @@ struct AccountSettingsView: View {
             switch result {
             case let .saved(savedProfile):
                 profile = savedProfile
-                localAddress = savedProfile.localEndpoint?.absoluteString ?? ""
-                externalAddresses = savedProfile.externalEndpoints
-                    .map(\.absoluteString)
-                    .joined(separator: "\n")
+                primaryAddress = savedProfile.primaryEndpoint.map(ConnectionAddressFormatting.serverAddress) ?? ""
+                let fallbacks = savedProfile.fallbackEndpoints.map(ConnectionAddressFormatting.serverAddress)
+                fallbackAddresses = fallbacks.isEmpty ? [""] : fallbacks
             case let .rejected(failures):
                 if failures.isEmpty {
                     saveError = "Add at least one server endpoint."
@@ -1803,18 +1851,6 @@ struct AccountSettingsView: View {
         else { return nil }
         return revision
     }()
-
-    private var ssidEntitlementEnabled: Bool {
-        Bundle.main.object(forInfoDictionaryKey: "RemmichSSIDEntitlementEnabled") as? Bool == true
-    }
-
-    private var connectionProfileHelp: String {
-        if ssidEntitlementEnabled {
-            "Remmich saves these addresses as switching candidates. On the preferred Wi-Fi network, it tries the local address before the external addresses."
-        } else {
-            "Remmich saves these addresses as switching candidates, then tries the local address first and the external addresses in order. No Wi-Fi name is required."
-        }
-    }
 }
 
 private extension CGRect {
@@ -1881,7 +1917,7 @@ private struct AccountSettingsGlassBackground: ViewModifier {
     AccountSettingsView(
         session: .fixture,
         profile: .init(),
-        activeRoute: .init(kind: .external, endpoint: URL(string: "https://immich.example/api")!),
+        activeRoute: .init(kind: .fallback, endpoint: URL(string: "https://immich.example/api")!),
         routeStatus: .connected,
         libraryIndex: LibraryIndexController(source: PreviewTimelineReader()),
         saveProfile: { _ in .saved(profile: .init()) },
