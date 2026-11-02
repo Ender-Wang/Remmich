@@ -679,18 +679,15 @@ struct AccountSettingsView: View {
     }
 
     private var versionFooter: some View {
-        VStack(spacing: 3) {
-            Text("Remmich · \(appVersion) (\(appBuild))\(Self.buildRevision.map { " · " + $0 } ?? "")")
-            Text("Immich Server · \(session.serverVersion.description)")
-        }
-        .font(.caption2)
-        .foregroundStyle(.secondary)
-        .multilineTextAlignment(.center)
-        .lineLimit(1)
-        .minimumScaleFactor(0.65)
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 8)
-        .accessibilityIdentifier("profile-versions")
+        Text("Remmich · \(appVersion) (\(appBuild))\(Self.buildRevision.map { " · " + $0 } ?? "")")
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.center)
+            .lineLimit(1)
+            .minimumScaleFactor(0.65)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .accessibilityIdentifier("profile-versions")
     }
 
     private var subpageHeader: some View {
@@ -865,6 +862,7 @@ struct AccountSettingsView: View {
             profileValueRow("Name", value: accountDisplayName, symbol: "person.crop.circle")
             profileValueRow("Email", value: session.userEmail, symbol: "envelope")
             sectionCaption("SERVER").padding(.top, 24)
+            profileValueRow("Immich Server", value: session.serverVersion.description, symbol: "server.rack")
             Button { navigate(to: .connection) } label: {
                 profileValueRow("Connection", value: connectionSummary, symbol: "network", showsChevron: true)
             }
