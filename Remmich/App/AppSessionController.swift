@@ -441,11 +441,12 @@ final class AppSessionController {
     }
 
     private func reevaluateRoute(trigger: RouteEvaluationTrigger, startIndex: Bool = true) async {
+        guard automaticSyncAllowed, !Task.isCancelled, case .signedIn = state else { return }
         let pathSignature = lastNetworkPathSignature
         await routeEvaluationGate.submit { [weak self] in
             await self?.performRouteEvaluation(trigger: trigger, startIndex: startIndex)
         }
-        if !Task.isCancelled, routeStatus == .connected, pathSignature == lastNetworkPathSignature {
+        if automaticSyncAllowed, !Task.isCancelled, routeStatus == .connected, pathSignature == lastNetworkPathSignature {
             validatedNetworkPathSignature = pathSignature
         }
     }
@@ -765,6 +766,7 @@ final class AppSessionController {
     }
 
     func handleForegroundTransition() async {
+        let needsSessionPreparation = !didPrepareSession
         let context = LibraryTransferQueue.diagnosticContext()
         Self.routeLogger.info("App entered foreground; \(context, privacy: .public)")
         isAppInForeground = true
@@ -773,7 +775,9 @@ final class AppSessionController {
         automaticSyncAllowed = true
         libraryIndex.setBackgroundRefreshOnly(false)
         await start()
-        if !isRestoringSession {
+        // Foreground startup already authenticates its route. A callback joining
+        // it must not validate again; headless startup without a route still must.
+        if !isRestoringSession, !(needsSessionPreparation && routeStatus == .connected) {
             await reevaluateRoute(trigger: .foreground)
         }
         if photosForegroundRetryEnabled {

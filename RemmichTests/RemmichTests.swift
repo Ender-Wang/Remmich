@@ -40,7 +40,8 @@ struct RemmichTests {
         let warmID = UUID()
         _ = await controller.performTransferReconciliation(id: warmID, delivery: warm)
         controller.endBackgroundSync(id: warmID)
-        #expect(await service.validatedEndpoints.count == (mode == "warm" ? 1 : 2))
+        let validatedEndpoints = await service.validatedEndpoints
+        #expect(validatedEndpoints.count == (mode == "warm" ? 1 : 2))
         #expect(controller.libraryIndex.startedAt == nil)
         #expect(!controller.libraryIndex.hasActiveSyncWork)
         await controller.signOut()
@@ -758,13 +759,25 @@ struct RemmichTests {
         let restoration = Task { await controller.start() }
         await service.waitUntilValidationStarts()
 
-        await controller.handleForegroundTransition()
+        var foregroundEntered = false
+        let foreground = Task {
+            foregroundEntered = true
+            await controller.handleForegroundTransition()
+        }
+        for _ in 0 ..< 150 {
+            if foregroundEntered {
+                break
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(foregroundEntered)
         await controller.handleNetworkPathChange(usesWiFi: true)
 
         #expect(await service.validateCallCount == 1)
 
         await service.resumeValidation(with: .reachable)
         await restoration.value
+        await foreground.value
 
         #expect(controller.routeStatus == .connected)
         #expect(await service.validateCallCount == 1)

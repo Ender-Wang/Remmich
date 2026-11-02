@@ -213,6 +213,7 @@ actor LibraryThumbnailCache {
                     continue
                 }
                 guard let result = try await group.next() else { break }
+                try Task.checkCancellation()
                 inFlight -= 1
                 if let asset = iterator.next() {
                     remaining.append(asset)
