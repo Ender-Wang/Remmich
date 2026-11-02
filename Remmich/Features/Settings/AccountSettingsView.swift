@@ -29,7 +29,7 @@ struct AccountSettingsView: View {
         let accessibilityValue: String
     }
 
-    private struct SyncCardSummary {
+    private struct ProfileCardSummary {
         let percentage: Double?
         let status: String
 
@@ -129,7 +129,7 @@ struct AccountSettingsView: View {
     @State private var showsThumbnailRebuildConfirmation = false
     @State private var showsThumbnailClearConfirmation = false
     @State private var libraryIndexClock = Date()
-    @State private var profileSyncSummaries: [SettingsPage: SyncCardSummary] = [:]
+    @State private var profileCardSummaries: [SettingsPage: ProfileCardSummary] = [:]
     @State private var selectedPage = SettingsPage.home
     @State private var pageHistory: [SettingsPage] = []
     @State private var cardFrames: [SettingsPage: CGRect] = [:]
@@ -357,10 +357,11 @@ struct AccountSettingsView: View {
             do { try await Task.sleep(for: .milliseconds(300)) } catch { return }
             await connectionLatency.run(endpoints: targets)
         }
-        .task(id: updatesProfileSyncSummaries) {
-            guard updatesProfileSyncSummaries else { return }
+        .task(id: updatesProfileCardSummaries) {
+            guard updatesProfileCardSummaries else { return }
             while !Task.isCancelled {
-                profileSyncSummaries = [
+                profileCardSummaries = [
+                    .connection: ProfileCardSummary(percentage: nil, status: cardPresentation(.connection).detail),
                     .index: syncCardSummary(for: .index),
                     .cache: syncCardSummary(for: .cache),
                 ]
@@ -466,7 +467,9 @@ struct AccountSettingsView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             VStack(alignment: .leading, spacing: 0) {
                 if page == .index || page == .cache {
-                    syncCardLabel(profileSyncSummaries[page] ?? syncCardSummary(for: page))
+                    syncCardLabel(profileCardSummaries[page] ?? syncCardSummary(for: page))
+                } else if page == .connection {
+                    animatedCardStatus(profileCardSummaries[page]?.status ?? presentation.detail)
                 } else {
                     Text(presentation.detail)
                 }
@@ -480,11 +483,11 @@ struct AccountSettingsView: View {
         .padding(.vertical, inset)
     }
 
-    private var updatesProfileSyncSummaries: Bool {
+    private var updatesProfileCardSummaries: Bool {
         selectedPage == .home && scenePhase == .active
     }
 
-    private func syncCardSummary(for page: SettingsPage) -> SyncCardSummary {
+    private func syncCardSummary(for page: SettingsPage) -> ProfileCardSummary {
         let completed: Int
         let total: Int
         let isComplete: Bool
@@ -523,10 +526,10 @@ struct AccountSettingsView: View {
         let percentage = total > 0
             ? (Self.progressFraction(completed: completed, total: total) * 1000).rounded(.down) / 10
             : (isComplete ? 100.0 : nil)
-        return SyncCardSummary(percentage: percentage, status: status)
+        return ProfileCardSummary(percentage: percentage, status: status)
     }
 
-    private func syncCardLabel(_ summary: SyncCardSummary) -> some View {
+    private func syncCardLabel(_ summary: ProfileCardSummary) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 0) {
                 Text(summary.percentageText)
@@ -537,21 +540,25 @@ struct AccountSettingsView: View {
                 }
             }
             .monospacedDigit()
-            ZStack(alignment: .leading) {
-                Text(summary.status)
-                    .id(summary.status)
-                    .transition(.asymmetric(
-                        insertion: .move(edge: .bottom).combined(with: .opacity),
-                        removal: .move(edge: .top).combined(with: .opacity)
-                    ))
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .clipped()
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: summary.status)
+            animatedCardStatus(summary.status)
         }
         .lineLimit(1)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(summary.percentageText)\(summary.percentage == nil ? "" : "%"), \(summary.status)")
+    }
+
+    private func animatedCardStatus(_ text: String) -> some View {
+        ZStack(alignment: .leading) {
+            Text(text)
+                .id(text)
+                .transition(.asymmetric(
+                    insertion: .move(edge: .bottom).combined(with: .opacity),
+                    removal: .move(edge: .top).combined(with: .opacity)
+                ))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .clipped()
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: text)
     }
 
     private func expandingCard(_ page: SettingsPage, source: CGRect, destination: CGRect, compact: Bool) -> some View {
