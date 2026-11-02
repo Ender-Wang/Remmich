@@ -37,6 +37,8 @@ final class AppSessionController {
     let photos: PhotosTimelineStore
     let videos: PhotosTimelineStore
     let libraryIndex: LibraryIndexController
+    private let librarySyncSource: ImmichTimelineRepository
+    private let libraryTransfers: LibraryTransferQueue?
 
     private let service: any ServerReading & SessionManaging & RouteValidating
     private let sessionStore: any SessionStoring
@@ -53,6 +55,7 @@ final class AppSessionController {
     private var isMonitoringNetwork = false
     private var hasReceivedNetworkPath = false
     private var lastNetworkPathSignature: NetworkPathSignature?
+    private var validatedNetworkPathSignature: NetworkPathSignature?
     private var isRestoringSession = false
     private var routeGeneration = 0
     private var pendingPathChangeTask: Task<Void, Never>?
@@ -68,6 +71,7 @@ final class AppSessionController {
     private var backgroundSyncKind: LibraryBackgroundSyncKind?
 
     init(
+        transfers: LibraryTransferQueue? = .shared,
         service: any ServerReading & SessionManaging & RouteValidating = ImmichServiceAdapter(),
         sessionStore: any SessionStoring = KeychainSessionStore(),
         profileStore: ConnectionProfileStore = .init(),
@@ -78,12 +82,16 @@ final class AppSessionController {
         timeline: ImmichTimelineRepository = .init()
     ) {
         self.timeline = timeline
+        libraryTransfers = transfers
         let libraryIndexStore = SQLiteLibraryIndexStore()
+        let syncSource = transfers == nil ? timeline : ImmichTimelineRepository(transfers: transfers)
+        librarySyncSource = syncSource
         libraryIndex = LibraryIndexController(
-            source: timeline,
+            source: syncSource,
             store: libraryIndexStore,
             media: media,
-            assetDetails: timeline
+            assetDetails: syncSource,
+            transfers: transfers
         )
         let persistentAssetDetails = CachedAssetDetailReader(
             source: timeline,
@@ -217,7 +225,7 @@ final class AppSessionController {
             let session = AccountSession.fixture
             await persistentAssetDetails.configure(session: session)
             media.configure(session: session, activeEndpoint: session.apiURL)
-            if await timeline.configure(session: session, activeEndpoint: session.apiURL) {
+            if await configureTimelines(session: session, endpoint: session.apiURL) {
                 photos.routeDidChange(isReachable: true)
                 videos.routeDidChange(isReachable: true)
             }
@@ -257,7 +265,7 @@ final class AppSessionController {
                     "Media pipeline configured elapsedMs=\(Self.elapsedMilliseconds(since: startupStartedAt))"
                 )
             }
-            await timeline.configure(session: session, activeEndpoint: nil)
+            await configureTimelines(session: session, endpoint: nil)
             guard preparationIsCurrent(generation) else { return }
             Self.startupLogger.info(
                 "Timeline repository configured elapsedMs=\(Self.elapsedMilliseconds(since: startupStartedAt))"
@@ -328,9 +336,9 @@ final class AppSessionController {
             routeStatus = .connected
             await persistentAssetDetails.configure(session: session)
             media.configure(session: session, activeEndpoint: session.apiURL)
-            let routeChanged = await timeline.configure(
+            let routeChanged = await configureTimelines(
                 session: session,
-                activeEndpoint: session.apiURL
+                endpoint: session.apiURL
             )
             await bootstrapLocalLibrary(session: session)
             foregroundResourcesReady = true
@@ -348,6 +356,7 @@ final class AppSessionController {
 
     func signOut(deleteLocalData: Bool = false) async {
         backgroundSyncInvalidated?()
+        await libraryTransfers?.invalidate()
         invalidatePreparation()
         if deleteLocalData {
             await libraryIndex.deleteCurrentAccountData()
@@ -359,6 +368,7 @@ final class AppSessionController {
         media.clearAll()
         await persistentAssetDetails.clearSession()
         await timeline.clear()
+        await librarySyncSource.clear()
         photos.reset()
         videos.reset()
         guard case let .signedIn(session) = state else {
@@ -424,13 +434,17 @@ final class AppSessionController {
         return .saved(profile: profile)
     }
 
-    private func reevaluateRoute(trigger: RouteEvaluationTrigger) async {
+    private func reevaluateRoute(trigger: RouteEvaluationTrigger, startIndex: Bool = true) async {
+        let pathSignature = lastNetworkPathSignature
         await routeEvaluationGate.submit { [weak self] in
-            await self?.performRouteEvaluation(trigger: trigger)
+            await self?.performRouteEvaluation(trigger: trigger, startIndex: startIndex)
+        }
+        if !Task.isCancelled, routeStatus == .connected, pathSignature == lastNetworkPathSignature {
+            validatedNetworkPathSignature = pathSignature
         }
     }
 
-    private func performRouteEvaluation(trigger: RouteEvaluationTrigger) async {
+    private func performRouteEvaluation(trigger: RouteEvaluationTrigger, startIndex: Bool) async {
         guard automaticSyncAllowed, case let .signedIn(session) = state else { return }
         routeGeneration += 1
         let evaluation = routeGeneration
@@ -440,7 +454,7 @@ final class AppSessionController {
         )
 
         if connectionProfile.endpoints.isEmpty {
-            await restoreDirectRoute(session, evaluation: evaluation)
+            await restoreDirectRoute(session, evaluation: evaluation, startIndex: startIndex)
             return
         }
 
@@ -487,11 +501,13 @@ final class AppSessionController {
             activeRoute = route
             routeStatus = .connected
             media.updateRoute(route.endpoint)
-            if await timeline.updateRoute(route.endpoint) {
+            if await updateTimelineRoutes(route.endpoint, session: session) {
                 photos.routeDidChange(isReachable: true)
                 videos.routeDidChange(isReachable: true)
             }
-            startLibraryIndexing(session: session)
+            if startIndex {
+                startLibraryIndexing(session: session)
+            }
             Self.routeLogger.info(
                 "Activated \(route.kind.rawValue, privacy: .public) endpoint \(route.endpoint.absoluteString, privacy: .public)"
             )
@@ -531,6 +547,9 @@ final class AppSessionController {
         // restoration also performs its own evaluation, so the initial path snapshot must not
         // restart it. Outside those cases, an unresolved route still needs this first nudge.
         if isFirstCallback, isRestoringSession || routeStatus == .connected {
+            if routeStatus == .connected {
+                validatedNetworkPathSignature = signature
+            }
             return
         }
         // An interface actually transitioning (Wi-Fi associating, a VPN/proxy tunnel
@@ -555,7 +574,7 @@ final class AppSessionController {
         await task.value
     }
 
-    private func restoreDirectRoute(_ session: AccountSession, evaluation: Int) async {
+    private func restoreDirectRoute(_ session: AccountSession, evaluation: Int, startIndex: Bool) async {
         let result = await Self.validateRoute(session.apiURL, session: session, service: service)
         guard evaluation == routeGeneration else { return }
         if result.isSessionRejected {
@@ -587,11 +606,13 @@ final class AppSessionController {
             activeRoute = .init(kind: .direct, endpoint: session.apiURL)
             routeStatus = .connected
             media.updateRoute(session.apiURL)
-            if await timeline.updateRoute(session.apiURL) {
+            if await updateTimelineRoutes(session.apiURL, session: session) {
                 photos.routeDidChange(isReachable: true)
                 videos.routeDidChange(isReachable: true)
             }
-            startLibraryIndexing(session: session)
+            if startIndex {
+                startLibraryIndexing(session: session)
+            }
             Self.routeLogger.info(
                 "Restored direct endpoint \(session.apiURL.absoluteString, privacy: .public)"
             )
@@ -686,6 +707,7 @@ final class AppSessionController {
     private func invalidateSession(_ session: AccountSession, evaluation: Int) async {
         guard evaluation == routeGeneration else { return }
         backgroundSyncInvalidated?()
+        await libraryTransfers?.invalidate()
         invalidatePreparation()
         routeGeneration += 1
         activeRoute = nil
@@ -693,6 +715,7 @@ final class AppSessionController {
         libraryIndex.clearSession()
         media.clearAll()
         await timeline.clear()
+        await librarySyncSource.clear()
         photos.reset()
         videos.reset()
         state = .signingOut
@@ -705,8 +728,37 @@ final class AppSessionController {
         media.handleMemoryPressure()
     }
 
+    @discardableResult
+    private func configureTimelines(session: AccountSession, endpoint: URL?) async -> Bool {
+        let changed = await timeline.configure(session: session, activeEndpoint: endpoint)
+        await librarySyncSource.configure(session: session, activeEndpoint: endpoint)
+        if let endpoint {
+            await libraryTransfers?.setExecutionMode(isAppInForeground ? .foreground : .background)
+            do { try await libraryTransfers?.configure(session: session, endpoint: endpoint, cacheAllowed: LibraryCacheResourceConditions.current.waitReason == nil) }
+            catch { Self.routeLogger.error("Library transfer configuration could not be persisted") }
+        }
+        return changed
+    }
+
+    private func updateTimelineRoutes(_ endpoint: URL, session: AccountSession) async -> Bool {
+        let changed = await timeline.updateRoute(endpoint)
+        await librarySyncSource.updateRoute(endpoint)
+        await libraryTransfers?.setExecutionMode(isAppInForeground ? .foreground : .background)
+        do { try await libraryTransfers?.configure(session: session, endpoint: endpoint, cacheAllowed: LibraryCacheResourceConditions.current.waitReason == nil) }
+        catch { Self.routeLogger.error("Library transfer route could not be persisted") }
+        return changed
+    }
+
     func handleBackgroundTransition() {
         isAppInForeground = false
+        if let transfers = libraryTransfers {
+            let handoff = LibraryTransferEventCompletion(protectExecution: true) {}
+            Task { @MainActor [weak self] in
+                defer { handoff.finish() }
+                guard let self, !isAppInForeground else { return }
+                await transfers.setExecutionMode(.background)
+            }
+        }
         if backgroundSyncID == nil {
             automaticSyncAllowed = false
             routeGeneration += 1
@@ -718,7 +770,11 @@ final class AppSessionController {
     }
 
     func handleForegroundTransition() async {
+        let context = LibraryTransferQueue.diagnosticContext()
+        Self.routeLogger.info("App entered foreground; \(context, privacy: .public)")
         isAppInForeground = true
+        await libraryTransfers?.setExecutionMode(.foreground)
+        guard isAppInForeground else { return }
         automaticSyncAllowed = true
         libraryIndex.setBackgroundRefreshOnly(false)
         await start()
@@ -753,6 +809,42 @@ final class AppSessionController {
         guard backgroundSyncID == id, !Task.isCancelled, routeStatus == .connected else { return false }
         startLibraryIndexing(session: session)
         return await libraryIndex.finishBackgroundSync(kind: kind)
+    }
+
+    func performTransferReconciliation(id: UUID, delivery: LibraryTransferDelivery) async -> Bool {
+        guard !Task.isCancelled, backgroundSyncID == nil else { return false }
+        backgroundSyncID = id
+        backgroundSyncKind = .processing
+        libraryIndex.setBackgroundRefreshOnly(false)
+        automaticSyncAllowed = true
+        await prepareSession(inBackground: true)
+        guard backgroundSyncID == id, !Task.isCancelled,
+              case let .signedIn(session) = state,
+              delivery.owner.namespace == MediaAccountScope(session: session).cacheNamespace,
+              delivery.owner.credentialRevision == LibraryTransferOwner.digest(session.accessToken) else { return false }
+        let reuseRoute = routeStatus == .connected && activeRoute != nil
+            && activeRoute?.endpoint == delivery.owner.endpoint
+            && validatedNetworkPathSignature == lastNetworkPathSignature && !delivery.requiresRouteValidation
+        if !reuseRoute {
+            // Recovery validates identity/reachability, but a delivered thumbnail
+            // must not launch unrelated index discovery as an activation side effect.
+            await reevaluateRoute(trigger: .background, startIndex: false)
+        }
+        guard backgroundSyncID == id, !Task.isCancelled, routeStatus == .connected,
+              let endpoint = activeRoute?.endpoint,
+              case let .signedIn(currentSession) = state,
+              currentSession.accessToken == session.accessToken,
+              MediaAccountScope(session: currentSession).cacheNamespace == delivery.owner.namespace,
+              libraryIndex.configureTransferContinuation(session: session, endpoint: endpoint) else { return false }
+        do {
+            try await libraryTransfers?.configure(session: session, endpoint: endpoint,
+                                                  cacheAllowed: LibraryCacheResourceConditions.current.waitReason == nil)
+        } catch { return false }
+        guard backgroundSyncID == id, !Task.isCancelled else { return false }
+        if reuseRoute {
+            Self.routeLogger.info("Transfer reconciliation reusing validated active route")
+        }
+        return await libraryIndex.finishTransferReconciliation(resumeIndex: delivery.hasIndexWork)
     }
 
     func endBackgroundSync(id: UUID) {

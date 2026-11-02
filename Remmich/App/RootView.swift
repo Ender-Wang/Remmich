@@ -56,6 +56,7 @@ struct RootView: View {
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
+                LibraryBackgroundSyncCoordinator.shared.enteredForeground()
                 AppIconController.shared.refresh()
                 Task {
                     await controller.handleForegroundTransition()

@@ -83,6 +83,7 @@ final class LibraryIndexController {
     private let store: SQLiteLibraryIndexStore
     private let synchronizer: LibraryIndexSynchronizer
     private let thumbnailCache: LibraryThumbnailCache
+    private let transfers: LibraryTransferQueue?
     private weak var media: MediaLibraryController?
     private var scope: MediaAccountScope?
     private var endpoint: URL?
@@ -94,9 +95,13 @@ final class LibraryIndexController {
     private var lastPublishedAt = Date.distantPast
     private var runID: UInt64 = 0
     private var warmingRunID: UInt64 = 0
-    private var lastWarmingLoggedMilestone = -1
+    #if DEBUG
+        private var lastWarmingLoggedMilestone = -1
+        private var lastWarmingLoggedAt = Date.distantPast
+    #endif
     private var warmingProcessedOffset = 0
     private var lastLiveStorageReportAt = Date.distantPast
+    private var preparedCacheGeneration: Int64?
     private var lastPublishedBootstrapGeneration: Int64?
     @ObservationIgnored private var timelinePublicationDeferred = false
     @ObservationIgnored private var deferredBootstrapPublication: DeferredBootstrapPublication?
@@ -121,18 +126,20 @@ final class LibraryIndexController {
         store: SQLiteLibraryIndexStore = .init(),
         media: MediaLibraryController? = nil,
         assetDetails: (any AssetDetailReading)? = nil,
+        transfers: LibraryTransferQueue? = nil,
         cacheRootURL: URL? = nil,
         resourceConditions: @escaping () -> LibraryCacheResourceConditions = { .current },
         preferences: UserDefaults = .standard
     ) {
         self.store = store
+        self.transfers = transfers
         self.media = media
         self.resourceConditions = resourceConditions
         self.preferences = preferences
         thumbnailWarmingEnabled = preferences.bool(forKey: "library-index-thumbnail-warming")
         thumbnailWarmingPaused = preferences.bool(forKey: "library-index-thumbnail-warming-paused")
         synchronizer = LibraryIndexSynchronizer(source: source, store: store)
-        thumbnailCache = LibraryThumbnailCache(store: store, rootURL: cacheRootURL, assetDetails: assetDetails)
+        thumbnailCache = LibraryThumbnailCache(store: store, rootURL: cacheRootURL, assetDetails: assetDetails, transfers: transfers)
         thumbnailWarmingStatus = if thumbnailWarmingEnabled {
             thumbnailWarmingPaused ? .paused : .waiting
         } else {
@@ -171,6 +178,7 @@ final class LibraryIndexController {
 
     /// Restore only the state needed by a headless background launch.
     func restoreBackgroundState(session: AccountSession, includeCacheState: Bool = true) async throws {
+        preparedCacheGeneration = nil
         let nextScope = MediaAccountScope(session: session)
         scope = nextScope
         try await store.prepare(scope: nextScope)
@@ -184,6 +192,9 @@ final class LibraryIndexController {
         lastUpdatedAt = snapshot.syncState.lastIndexSyncAt
         thumbnailWarmingLastUpdatedAt = snapshot.syncState.lastCacheSyncAt
         indexPaused = snapshot.syncState.isPaused
+        if let intent = preferences.string(forKey: "library-transfer-cache-intent-\(nextScope.cacheNamespace)") {
+            pendingThumbnailRequest = ThumbnailRequest(manual: true, rebuild: intent == "rebuild")
+        }
         status = indexPaused ? .paused : .upToDate
         guard includeCacheState else { return }
         let progress = try await thumbnailCache.cachedProgress(assets: snapshot.assets, scope: nextScope)
@@ -194,8 +205,23 @@ final class LibraryIndexController {
 
     /// Join the existing run, including its separately owned thumbnail task.
     func finishBackgroundSync(kind: LibraryBackgroundSyncKind = .processing) async -> Bool {
+        await finishSyncWork(kind: kind, discoverIndex: true, resumeIndex: false)
+    }
+
+    func configureTransferContinuation(session: AccountSession, endpoint: URL) -> Bool {
+        guard scope == MediaAccountScope(session: session) else { return false }
+        self.endpoint = endpoint
+        accessToken = session.accessToken
+        return true
+    }
+
+    func finishTransferReconciliation(resumeIndex: Bool) async -> Bool {
+        await finishSyncWork(kind: .processing, discoverIndex: false, resumeIndex: resumeIndex || indexContinuationPending)
+    }
+
+    private func finishSyncWork(kind: LibraryBackgroundSyncKind, discoverIndex: Bool, resumeIndex: Bool) async -> Bool {
         let expectedScope = scope
-        if !indexPaused, task == nil, status != .upToDate {
+        if !indexPaused, task == nil, (discoverIndex && status != .upToDate) || resumeIndex {
             run(fullReconciliation: false)
         }
         await task?.value
@@ -204,14 +230,15 @@ final class LibraryIndexController {
                 && (indexPaused || status == .upToDate || completedIndexRunID == runID)
         }
         guard !Task.isCancelled, scope == expectedScope, indexPaused || status == .upToDate else { return false }
-        if thumbnailWarmingEnabled, !thumbnailWarmingPaused, warmingTask == nil,
+        if thumbnailWarmingEnabled || pendingThumbnailRequest?.manual == true, !thumbnailWarmingPaused, warmingTask == nil,
            thumbnailWarmingCachedCount < indexedAssetCount
         {
-            warmThumbnails()
+            let request = pendingThumbnailRequest
+            warmThumbnails(manual: request?.manual ?? false, rebuild: request?.rebuild ?? false)
         }
         await warmingTask?.value
         guard !Task.isCancelled, scope == expectedScope else { return false }
-        return !thumbnailWarmingEnabled || thumbnailWarmingPaused || thumbnailWarmingStatus == .upToDate
+        return (!thumbnailWarmingEnabled && pendingThumbnailRequest == nil) || thumbnailWarmingPaused || thumbnailWarmingStatus == .upToDate
             || thumbnailWarmingCachedCount == indexedAssetCount
     }
 
@@ -323,6 +350,9 @@ final class LibraryIndexController {
     func bootstrap(session: AccountSession) async -> LibraryTimelineBootstrap? {
         let nextScope = MediaAccountScope(session: session)
         scope = nextScope
+        if let intent = preferences.string(forKey: "library-transfer-cache-intent-\(nextScope.cacheNamespace)") {
+            pendingThumbnailRequest = ThumbnailRequest(manual: true, rebuild: intent == "rebuild")
+        }
         let bootstrapStartedAt = ContinuousClock.now
         Self.logger.info("Library bootstrap started")
         do {
@@ -423,10 +453,11 @@ final class LibraryIndexController {
         {
             self.endpoint = endpoint
             accessToken = session.accessToken
-            if !backgroundRefreshOnly, thumbnailWarmingEnabled, !thumbnailWarmingPaused,
+            if !backgroundRefreshOnly, thumbnailWarmingEnabled || pendingThumbnailRequest?.manual == true, !thumbnailWarmingPaused,
                thumbnailWarmingCachedCount < indexedAssetCount
             {
-                warmThumbnails()
+                let request = pendingThumbnailRequest
+                warmThumbnails(manual: request?.manual ?? false, rebuild: request?.rebuild ?? false)
             }
             return
         }
@@ -436,6 +467,7 @@ final class LibraryIndexController {
         if scope != nextScope {
             indexContinuationPending = false
             warmingProcessedOffset = 0
+            preparedCacheGeneration = nil
             thumbnailWarmingCachedCount = 0
             thumbnailWarmingThumbnailCount = 0
             thumbnailWarmingMetadataCount = 0
@@ -474,6 +506,7 @@ final class LibraryIndexController {
         task?.cancel()
         task = nil
         status = .paused
+        Task { await transfers?.setEnabled(!indexPaused, lane: "index") }
         Task { try? await store.setPaused(true, scope: scope) }
     }
 
@@ -496,7 +529,7 @@ final class LibraryIndexController {
     private func requestIndexSync(fullReconciliation: Bool) {
         guard let scope else { return }
         guard indexPaused || status == .paused else {
-            run(fullReconciliation: fullReconciliation, restartOperation: true)
+            run(fullReconciliation: fullReconciliation, restartTransferPass: true)
             return
         }
         let resumedElapsed = fullReconciliation ? nil : completedElapsed
@@ -505,7 +538,7 @@ final class LibraryIndexController {
                 try await store.setPaused(false, scope: scope)
                 guard self.scope == scope else { return }
                 indexPaused = false
-                run(fullReconciliation: fullReconciliation, restartOperation: true, resumedElapsed: resumedElapsed)
+                run(fullReconciliation: fullReconciliation, restartTransferPass: true, resumedElapsed: resumedElapsed)
             } catch {
                 guard self.scope == scope else { return }
                 status = .failed("Couldn’t resume indexing. \(Self.message(for: error))")
@@ -527,20 +560,24 @@ final class LibraryIndexController {
             activeThumbnailRequest = nil
             thumbnailWarmingWaitingReason = nil
             cancelThumbnailWarming(reason: "disabled")
+            if let scope {
+                preferences.removeObject(forKey: "library-transfer-cache-intent-\(scope.cacheNamespace)")
+            }
+            Task { await transfers?.setEnabled(false, lane: "cache") }
             thumbnailWarmingThermalState = nil
             thumbnailWarmingStatus = .off
         }
     }
 
     func syncThumbnailCache() {
-        var restartOperation = false
         var rebuild = pendingThumbnailRequest?.rebuild ?? false
+        var resetTransfers = false
         if case .failed = thumbnailWarmingStatus {
-            restartOperation = true
+            resetTransfers = true
             rebuild = activeThumbnailRequest?.rebuild ?? rebuild
         }
         resumeThumbnailWarming()
-        warmThumbnails(manual: true, rebuild: rebuild, restartOperation: restartOperation)
+        warmThumbnails(manual: true, rebuild: rebuild, resetTransfers: resetTransfers)
     }
 
     func pauseThumbnailCache() {
@@ -557,15 +594,17 @@ final class LibraryIndexController {
         thumbnailWarmingPaused = true
         preferences.set(true, forKey: "library-index-thumbnail-warming-paused")
         thumbnailWarmingStatus = .paused
+        Task { await transfers?.setEnabled(!thumbnailWarmingPaused && thumbnailWarmingEnabled, lane: "cache") }
         Self.logger.info("Offline asset caching paused")
     }
 
     func rebuildThumbnailCache() {
         resumeThumbnailWarming()
-        warmThumbnails(manual: true, rebuild: true, restartOperation: true)
+        warmThumbnails(manual: true, rebuild: true, resetTransfers: true)
     }
 
     func clearThumbnails() {
+        preparedCacheGeneration = nil
         pendingThumbnailRequest = nil
         activeThumbnailRequest = nil
         thumbnailWarmingWaitingReason = nil
@@ -578,6 +617,8 @@ final class LibraryIndexController {
         thumbnailWarmingStatus = .off
         guard let scope else { return }
         Task {
+            await transfers?.setEnabled(false, lane: "cache")
+            preferences.removeObject(forKey: "library-transfer-cache-intent-\(scope.cacheNamespace)")
             try? await thumbnailCache.clearThumbnails(scope: scope)
             try? await store.setLastCacheSyncAt(nil, scope: scope)
             media?.clearRegisteredWarmedThumbnails()
@@ -627,10 +668,13 @@ final class LibraryIndexController {
     func deleteCurrentAccountData() async {
         guard let scope else { return }
         suspend()
+        preparedCacheGeneration = nil
         deferredBootstrapPublication = nil
         preferences.removeObject(forKey: successKey(scope))
         lastSuccessfulSyncAt = nil
         do {
+            await transfers?.invalidate(namespace: scope.cacheNamespace)
+            preferences.removeObject(forKey: "library-transfer-cache-intent-\(scope.cacheNamespace)")
             try await thumbnailCache.removeAccount(namespace: scope.cacheNamespace)
             try await store.removeAccount(namespace: scope.cacheNamespace)
             await media?.removeProfileImageCache(namespace: scope.cacheNamespace)
@@ -667,6 +711,7 @@ final class LibraryIndexController {
     func deleteStoredAccount(namespace: String) async {
         guard !isDeletingStoredAccount else { return }
         preferences.removeObject(forKey: "library-index-last-success-\(namespace)")
+        preferences.removeObject(forKey: "library-transfer-cache-intent-\(namespace)")
         guard namespace != scope?.cacheNamespace else {
             await deleteCurrentAccountData()
             return
@@ -675,6 +720,7 @@ final class LibraryIndexController {
         isDeletingStoredAccount = true
         defer { isDeletingStoredAccount = false }
         do {
+            await transfers?.invalidate(namespace: namespace)
             try await thumbnailCache.removeAccount(namespace: namespace) { [weak self] fraction in
                 await self?.updateStoredAccountDeletionProgress(fraction)
             }
@@ -753,6 +799,9 @@ final class LibraryIndexController {
     }
 
     func clearSession() {
+        if let scope {
+            preferences.removeObject(forKey: "library-transfer-cache-intent-\(scope.cacheNamespace)")
+        }
         backgroundRefreshOnly = false
         completedIndexRunID = nil
         indexPaused = false
@@ -783,6 +832,7 @@ final class LibraryIndexController {
         thumbnailWarmingPendingCount = 0
         thumbnailWarmingStartedAt = nil
         warmingProcessedOffset = 0
+        preparedCacheGeneration = nil
         thumbnailWarmingCompletedElapsed = nil
         thumbnailWarmingFailures = []
         thumbnailWarmingLastUpdatedAt = nil
@@ -822,9 +872,10 @@ final class LibraryIndexController {
         }
     }
 
-    private func run(fullReconciliation: Bool, restartOperation: Bool = false, resumedElapsed: TimeInterval? = nil) {
+    private func run(fullReconciliation: Bool, restartTransferPass: Bool = false, resumedElapsed: TimeInterval? = nil) {
         guard let scope, task == nil, !indexPaused else { return }
-        let continuesRun = indexContinuationPending && !restartOperation && !fullReconciliation
+        let resetTransfers = restartTransferPass || fullReconciliation
+        let continuesRun = indexContinuationPending && !resetTransfers
         indexContinuationPending = false
         let refreshOnly = backgroundRefreshOnly && !fullReconciliation
         // An interrupted or failed new attempt must remain eligible for retry,
@@ -856,6 +907,12 @@ final class LibraryIndexController {
         task = Task { [weak self] in
             guard let self else { return }
             do {
+                guard currentRunID == runID, !Task.isCancelled else { return }
+                if resetTransfers {
+                    await transfers?.finishIndexPass(namespace: scope.cacheNamespace)
+                }
+                await transfers?.beginIndexRun(namespace: scope.cacheNamespace)
+                await transfers?.setEnabled(true, lane: "index")
                 let snapshot = try await store.snapshot(scope: scope)
                 guard currentRunID == runID, !Task.isCancelled else { return }
                 if snapshot?.syncState.isPaused == true {
@@ -927,6 +984,9 @@ final class LibraryIndexController {
                 }
                 let completedAt = Date()
                 await recordIndexSync(at: completedAt, scope: scope)
+                if result.isComplete {
+                    await transfers?.finishIndexPass(namespace: scope.cacheNamespace)
+                }
                 guard currentRunID == runID, !Task.isCancelled else { return }
                 // Publish readiness only after the final asynchronous work so
                 // a new sync cannot be rejected by the previous run's task.
@@ -1041,9 +1101,9 @@ final class LibraryIndexController {
         }
     }
 
-    private func warmThumbnails(manual: Bool = false, rebuild: Bool = false, restartOperation: Bool = false) {
+    private func warmThumbnails(manual: Bool = false, rebuild: Bool = false, resetTransfers: Bool = false) {
         guard !backgroundRefreshOnly, warmingTask == nil, thumbnailWarmingEnabled || manual, !thumbnailWarmingPaused else { return }
-        let continuesRun = !restartOperation && pendingThumbnailRequest != nil
+        let continuesRun = !resetTransfers && pendingThumbnailRequest != nil
             && activeThumbnailRequest?.rebuild == rebuild && thumbnailWarmingStartedAt != nil
         if manual {
             pendingThumbnailRequest = ThumbnailRequest(manual: true, rebuild: rebuild)
@@ -1080,7 +1140,10 @@ final class LibraryIndexController {
         thumbnailWarmingCompletedElapsed = nil
         thumbnailWarmingFailures = []
         thumbnailWarmingFailedAt = nil
-        lastWarmingLoggedMilestone = -1
+        #if DEBUG
+            lastWarmingLoggedMilestone = -1
+            lastWarmingLoggedAt = .distantPast
+        #endif
         lastLiveStorageReportAt = .distantPast
         let runStartedAt = thumbnailWarmingStartedAt ?? Date()
         let cache = thumbnailCache
@@ -1089,14 +1152,13 @@ final class LibraryIndexController {
             guard let self, currentWarmingRunID == warmingRunID, !Task.isCancelled, self.scope == scope else { return }
             let startedAt = runStartedAt
             do {
-                try await cache.reconcile(scope: scope)
-                guard currentWarmingRunID == warmingRunID, !Task.isCancelled, self.scope == scope else { return }
-                if let media {
-                    let thumbnails = try await cache.availableThumbnails(scope: scope)
-                    guard currentWarmingRunID == warmingRunID, !Task.isCancelled, self.scope == scope else { return }
-                    media.registerWarmedThumbnails(thumbnails)
+                if manual {
+                    preferences.set(rebuild ? "rebuild" : "sync", forKey: "library-transfer-cache-intent-\(scope.cacheNamespace)")
                 }
-                guard currentWarmingRunID == warmingRunID, !Task.isCancelled, self.scope == scope else { return }
+                if resetTransfers {
+                    await transfers?.invalidate(namespace: scope.cacheNamespace, lane: "cache")
+                }
+                await transfers?.setEnabled(true, lane: "cache")
                 guard let snapshot = try await store.snapshot(scope: scope) else {
                     guard currentWarmingRunID == warmingRunID, !Task.isCancelled else { return }
                     pendingThumbnailRequest = activeThumbnailRequest
@@ -1109,6 +1171,22 @@ final class LibraryIndexController {
                     return
                 }
                 guard currentWarmingRunID == warmingRunID, !Task.isCancelled, self.scope == scope else { return }
+                if !continuesRun || preparedCacheGeneration != snapshot.generation {
+                    try await cache.reconcile(scope: scope)
+                    guard currentWarmingRunID == warmingRunID, !Task.isCancelled, self.scope == scope else { return }
+                    if let media {
+                        let thumbnails = try await cache.availableThumbnails(scope: scope)
+                        guard currentWarmingRunID == warmingRunID, !Task.isCancelled, self.scope == scope else { return }
+                        media.registerWarmedThumbnails(thumbnails)
+                    }
+                    preparedCacheGeneration = snapshot.generation
+                    Self.logger.info("Cache inventory prepared generation=\(snapshot.generation)")
+                } else if let media {
+                    let thumbnails = await cache.indexedThumbnails(from: snapshot, scope: scope)
+                    guard currentWarmingRunID == warmingRunID, !Task.isCancelled, self.scope == scope else { return }
+                    media.registerWarmedThumbnails(thumbnails)
+                    Self.logger.info("Cache inventory continuation reused generation=\(snapshot.generation)")
+                }
                 Self.logger.info(
                     "Offline asset caching started eligible=\(snapshot.assets.count) workers=2"
                 )
@@ -1148,6 +1226,8 @@ final class LibraryIndexController {
                 await recordCacheSync(at: completedAt, scope: scope)
                 guard currentWarmingRunID == warmingRunID, !Task.isCancelled else { return }
                 if unavailableCount == 0 {
+                    await transfers?.finishCachePass(namespace: scope.cacheNamespace)
+                    preferences.removeObject(forKey: "library-transfer-cache-intent-\(scope.cacheNamespace)")
                     thumbnailWarmingStatus = thumbnailWarmingEnabled ? .upToDate : .off
                     thumbnailWarmingFailedAt = nil
                 } else {
@@ -1252,17 +1332,24 @@ final class LibraryIndexController {
                 storageReport = report
             }
         }
-        let percentage = progress.eligibleCount == 0
-            ? 100
-            : Int((Double(progress.cachedCount) / Double(progress.eligibleCount) * 100).rounded())
-        let milestone = percentage / 5
-        guard milestone != lastWarmingLoggedMilestone || progress.processedCount == progress.pendingCount else {
-            return
-        }
-        lastWarmingLoggedMilestone = milestone
-        Self.logger.info(
-            "Offline asset caching progress paired=\(progress.cachedCount) thumbnails=\(progress.thumbnailCachedCount) metadata=\(progress.metadataCachedCount) eligible=\(progress.eligibleCount) bytes=\(progress.cachedBytes) processed=\(progress.processedCount) pending=\(progress.pendingCount) percent=\(percentage)"
-        )
+        #if DEBUG
+            let percentage = progress.eligibleCount == 0
+                ? 100
+                : Int((Double(progress.cachedCount) / Double(progress.eligibleCount) * 100).rounded())
+            let milestone = percentage / 5
+            let now = Date()
+            guard milestone != lastWarmingLoggedMilestone || progress.processedCount == progress.pendingCount
+                || now.timeIntervalSince(lastWarmingLoggedAt) >= 5
+            else {
+                return
+            }
+            lastWarmingLoggedMilestone = milestone
+            lastWarmingLoggedAt = now
+            let context = LibraryTransferQueue.diagnosticContext()
+            Self.logger.info(
+                "Offline asset caching progress \(context, privacy: .public) paired=\(progress.cachedCount) thumbnails=\(progress.thumbnailCachedCount) metadata=\(progress.metadataCachedCount) eligible=\(progress.eligibleCount) bytes=\(progress.cachedBytes) processed=\(progress.processedCount) pending=\(progress.pendingCount) percent=\(percentage)"
+            )
+        #endif
     }
 
     private func applyThumbnailWarmingProgress(_ progress: LibraryThumbnailCache.WarmProgress, updateWorkSample: Bool = false) {
@@ -1310,8 +1397,9 @@ final class LibraryIndexController {
 
     private func publish(_ result: LibraryIndexSyncResult, force: Bool) {
         if !force {
+            let context = LibraryTransferQueue.diagnosticContext()
             Self.logger.info(
-                "Library index generation accepted mode=\(Self.label(for: result.mode), privacy: .public) generation=\(result.generation) indexed=\(result.indexedAssetCount) expected=\(result.expectedAssetCount) hasMoreHistory=\(result.hasMoreHistory) prunedGenerations=\(result.cleanup.removedGenerations) prunedAssets=\(result.cleanup.removedAssetRows) prunedGroups=\(result.cleanup.removedGroupRows)"
+                "Library index generation accepted \(context, privacy: .public) mode=\(Self.label(for: result.mode), privacy: .public) generation=\(result.generation) indexed=\(result.indexedAssetCount) expected=\(result.expectedAssetCount) hasMoreHistory=\(result.hasMoreHistory) prunedGenerations=\(result.cleanup.removedGenerations) prunedAssets=\(result.cleanup.removedAssetRows) prunedGroups=\(result.cleanup.removedGroupRows)"
             )
         }
         let now = Date()

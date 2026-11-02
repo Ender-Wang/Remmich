@@ -257,6 +257,7 @@ nonisolated protocol LibraryIndexStoring: Sendable {
         compact: Bool
     ) async throws -> LibraryIndexMaintenanceReport
     func snapshot(scope: MediaAccountScope) async throws -> LibraryIndexSnapshot?
+    func derivativeRecords(scope: MediaAccountScope) async throws -> [LibraryIndexDerivativeRecord]
     func setPaused(_ paused: Bool, scope: MediaAccountScope) async throws
     func setLastError(_ message: String?, scope: MediaAccountScope) async throws
     func setLastIndexSyncAt(_ date: Date?, scope: MediaAccountScope) async throws
@@ -275,6 +276,12 @@ nonisolated protocol LibraryIndexStoring: Sendable {
     func storageReport(scope: MediaAccountScope) async throws -> LibraryIndexStorageReport
     func storedAccounts() async throws -> [StoredLibraryAccount]
     func removeAccount(namespace: String) async throws
+}
+
+extension LibraryIndexStoring {
+    nonisolated func derivativeRecords(scope: MediaAccountScope) async throws -> [LibraryIndexDerivativeRecord] {
+        try await snapshot(scope: scope)?.derivatives ?? []
+    }
 }
 
 extension TimelineMediaKind {

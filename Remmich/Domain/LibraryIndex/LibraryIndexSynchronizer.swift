@@ -120,11 +120,6 @@ actor LibraryIndexSynchronizer {
             )
             try Task.checkCancellation()
 
-            let generation = if fullReconciliation {
-                try await store.beginReconciliation(scope: scope)
-            } else {
-                try await store.beginGeneration(scope: scope)
-            }
             // Refreshing a bucket does not remove its accepted local records.
             // Replace its contribution only after its new response arrives.
             let acceptedBuckets = Dictionary(grouping: fullReconciliation ? [] : previous?.assets ?? [], by: \.bucketKey)
@@ -141,6 +136,14 @@ actor LibraryIndexSynchronizer {
                 await progress?(progressCounts)
             }
 
+            // Durable transfers may be replayed after suspension. Do not copy an
+            // accepted generation until every selected response is available.
+            try Task.checkCancellation()
+            let generation = if fullReconciliation {
+                try await store.beginReconciliation(scope: scope)
+            } else {
+                try await store.beginGeneration(scope: scope)
+            }
             try await store.removeAssets(
                 in: Set(selected.map(\.id.rawValue)),
                 generation: generation,

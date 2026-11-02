@@ -91,14 +91,24 @@ actor LibraryThumbnailCache {
     private let rootURL: URL
     private let store: any LibraryIndexStoring
     private let assetDetails: (any AssetDetailReading)?
+    private let transfers: LibraryTransferQueue?
+
+    private struct TransferContext: Sendable {
+        let queue: LibraryTransferQueue
+        let scope: MediaAccountScope
+        let endpoint: URL
+        let accessToken: String
+    }
 
     init(
         store: any LibraryIndexStoring,
         rootURL: URL? = nil,
-        assetDetails: (any AssetDetailReading)? = nil
+        assetDetails: (any AssetDetailReading)? = nil,
+        transfers: LibraryTransferQueue? = nil
     ) {
         self.store = store
         self.assetDetails = assetDetails
+        self.transfers = transfers
         if let rootURL {
             self.rootURL = rootURL
         } else {
@@ -120,9 +130,10 @@ actor LibraryThumbnailCache {
             .appending(path: scope.cacheNamespace, directoryHint: .isDirectory)
             .appending(path: MediaDerivative.thumbnail.rawValue, directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let existing = try await store.snapshot(scope: scope)?.derivatives ?? []
+        let existing = try await store.derivativeRecords(scope: scope)
         let eligibleIDs = Set(assets.map(\.id))
         let detailSource = assetDetails
+        let transfer = transfers.map { TransferContext(queue: $0, scope: scope, endpoint: endpoint, accessToken: accessToken) }
         let assetKeys = Set(assets.map { "\($0.id)|\($0.updatedAt.ISO8601Format())" })
         let currentExisting = existing.filter {
             $0.derivative == .thumbnail
@@ -161,35 +172,66 @@ actor LibraryThumbnailCache {
 
         try await withThrowingTaskGroup(of: AssetCacheResult.self) { group in
             var iterator = pending.makeIterator()
-            for _ in 0 ..< 2 {
+            var remaining: [LibraryIndexAssetRecord] = []
+            for _ in 0 ..< LibraryTransferQueue.cacheLookAheadAssets {
                 if let asset = iterator.next() {
-                    let needsThumbnail = !existingKeys.contains(
-                        "\(asset.id)|\(asset.updatedAt.ISO8601Format())"
-                    )
-                    let needsMetadata = !metadataIDs.contains(asset.id)
-                    group.addTask {
-                        try await Self.cache(
-                            asset,
-                            needsThumbnail: needsThumbnail,
-                            needsMetadata: needsMetadata,
-                            endpoint: endpoint,
-                            accessToken: accessToken,
-                            directory: directory,
-                            assetDetails: detailSource
-                        )
-                    }
+                    remaining.append(asset)
                 }
             }
-            while let result = try await group.next() {
+            var lastPrefetchedCount = -LibraryTransferQueue.cacheLookAheadAssets
+            var inFlight = 0
+            let owner = LibraryTransferOwner(scope: scope, endpoint: endpoint, accessToken: accessToken)
+            while !remaining.isEmpty || inFlight > 0 {
                 try Task.checkCancellation()
+                var receiptRevision: UInt64 = 0
+                var readyIDs: Set<String>?
+                if let transfers, !remaining.isEmpty {
+                    let window = Array(remaining.prefix(LibraryTransferQueue.cacheLookAheadAssets))
+                    if processedCount - lastPrefetchedCount >= 16 || inFlight == 0 {
+                        await transfers.prefetchCache(window, scope: scope, endpoint: endpoint,
+                                                      thumbnailIDs: thumbnailIDs, metadataIDs: metadataIDs)
+                        lastPrefetchedCount = processedCount
+                    }
+                    let readiness = try await transfers.readyCacheAssets(window, owner: owner,
+                                                                         thumbnailIDs: thumbnailIDs, metadataIDs: metadataIDs)
+                    readyIDs = readiness.ids
+                    receiptRevision = readiness.revision
+                }
+                while inFlight < 2, let index = remaining.firstIndex(where: { readyIDs?.contains($0.id) ?? true }) {
+                    let asset = remaining.remove(at: index)
+                    let needsThumbnail = !thumbnailIDs.contains(asset.id)
+                    let needsMetadata = !metadataIDs.contains(asset.id)
+                    group.addTask {
+                        try await Self.cache(asset, needsThumbnail: needsThumbnail, needsMetadata: needsMetadata,
+                                             endpoint: endpoint, accessToken: accessToken, directory: directory,
+                                             assetDetails: detailSource, transfer: transfer)
+                    }
+                    inFlight += 1
+                }
+                if inFlight == 0, let transfers, !remaining.isEmpty {
+                    try await transfers.waitForDelivery(after: receiptRevision, owner: owner)
+                    continue
+                }
+                guard let result = try await group.next() else { break }
+                inFlight -= 1
+                if let asset = iterator.next() {
+                    remaining.append(asset)
+                }
                 if let record = result.thumbnailRecord {
                     try await store.upsert(derivatives: [record], scope: scope)
+                    try Task.checkCancellation()
                     thumbnailIDs.insert(record.assetID)
                     successfulBytes += record.byteCount
                 }
                 if let detail = result.assetDetail {
                     try await store.upsert(assetDetail: detail, scope: scope)
+                    try Task.checkCancellation()
                     metadataIDs.insert(detail.id)
+                }
+                if let id = result.thumbnailRecord?.assetID ?? result.assetDetail?.id,
+                   thumbnailIDs.contains(id), detailSource == nil || metadataIDs.contains(id)
+                {
+                    await transfers?.finishCacheAsset(id, namespace: scope.cacheNamespace)
                 }
                 failures.append(contentsOf: result.failures)
                 processedCount += 1
@@ -208,21 +250,6 @@ actor LibraryThumbnailCache {
                     await progress?(currentProgress)
                     lastProgressAt = now
                 }
-                if let asset = iterator.next() {
-                    let needsThumbnail = !thumbnailIDs.contains(asset.id)
-                    let needsMetadata = !metadataIDs.contains(asset.id)
-                    group.addTask {
-                        try await Self.cache(
-                            asset,
-                            needsThumbnail: needsThumbnail,
-                            needsMetadata: needsMetadata,
-                            endpoint: endpoint,
-                            accessToken: accessToken,
-                            directory: directory,
-                            assetDetails: detailSource
-                        )
-                    }
-                }
             }
         }
         try Task.checkCancellation()
@@ -233,7 +260,7 @@ actor LibraryThumbnailCache {
         assets: [LibraryIndexAssetRecord],
         scope: MediaAccountScope
     ) async throws -> WarmProgress {
-        let existing = try await store.snapshot(scope: scope)?.derivatives ?? []
+        let existing = try await store.derivativeRecords(scope: scope)
         let metadataIDs = assetDetails == nil
             ? nil
             : try await store.cachedAssetDetailIDs(scope: scope)
@@ -312,6 +339,9 @@ actor LibraryThumbnailCache {
         lastProgressAt = Date()
 
         let detailSource = assetDetails
+        let transfer = transfers.map { TransferContext(queue: $0, scope: scope, endpoint: endpoint, accessToken: accessToken) }
+        await transfers?.prefetchCache(Array(assets.prefix(LibraryTransferQueue.cacheLookAheadAssets)), scope: scope, endpoint: endpoint,
+                                       thumbnailIDs: thumbnailIDs, metadataIDs: metadataIDs)
         try await withThrowingTaskGroup(of: AssetCacheResult.self) { group in
             var iterator = assets.makeIterator()
             for _ in 0 ..< 2 {
@@ -324,7 +354,8 @@ actor LibraryThumbnailCache {
                             endpoint: endpoint,
                             accessToken: accessToken,
                             directory: stagingDirectory,
-                            assetDetails: detailSource
+                            assetDetails: detailSource,
+                            transfer: transfer
                         )
                     }
                 }
@@ -338,6 +369,7 @@ actor LibraryThumbnailCache {
                 }
                 if let detail = result.assetDetail {
                     try await store.upsert(assetDetail: detail, scope: scope)
+                    try Task.checkCancellation()
                     metadataIDs.insert(detail.id)
                 }
                 failures.append(contentsOf: result.failures)
@@ -345,6 +377,10 @@ actor LibraryThumbnailCache {
                 let pairedCount = detailSource == nil
                     ? records.count
                     : thumbnailIDs.intersection(metadataIDs).count
+                if processedCount.isMultiple(of: 16) {
+                    await transfers?.prefetchCache(Array(assets.dropFirst(processedCount).prefix(LibraryTransferQueue.cacheLookAheadAssets)), scope: scope, endpoint: endpoint,
+                                                   thumbnailIDs: thumbnailIDs, metadataIDs: metadataIDs)
+                }
                 currentProgress = .init(
                     processedCount: processedCount,
                     pendingCount: assets.count,
@@ -369,7 +405,8 @@ actor LibraryThumbnailCache {
                             endpoint: endpoint,
                             accessToken: accessToken,
                             directory: stagingDirectory,
-                            assetDetails: detailSource
+                            assetDetails: detailSource,
+                            transfer: transfer
                         )
                     }
                 }
@@ -389,12 +426,13 @@ actor LibraryThumbnailCache {
             stagingDirectory: stagingDirectory,
             scopeDirectory: scopeDirectory
         )
+        await transfers?.finishCachePass(namespace: scope.cacheNamespace)
         return currentProgress
     }
 
     func reconcile(scope: MediaAccountScope) async throws {
-        guard let snapshot = try await store.snapshot(scope: scope) else { return }
-        let missingKinds = Set(snapshot.derivatives.compactMap { record -> MediaDerivative? in
+        let records = try await store.derivativeRecords(scope: scope)
+        let missingKinds = Set(records.compactMap { record -> MediaDerivative? in
             let fileURL = rootURL
                 .appending(path: scope.cacheNamespace, directoryHint: .isDirectory)
                 .appending(path: record.relativeFileKey)
@@ -458,14 +496,18 @@ actor LibraryThumbnailCache {
     }
 
     func availableThumbnails(scope: MediaAccountScope) async throws -> [AvailableThumbnail] {
-        guard let snapshot = try await store.snapshot(scope: scope) else { return [] }
-        return availableThumbnails(from: snapshot, scope: scope)
+        let records = try await store.derivativeRecords(scope: scope)
+        return availableThumbnails(records: records, scope: scope)
     }
 
     func availableThumbnails(
         from snapshot: LibraryIndexSnapshot,
         scope: MediaAccountScope
     ) -> [AvailableThumbnail] {
+        availableThumbnails(records: snapshot.derivatives, scope: scope)
+    }
+
+    private func availableThumbnails(records: [LibraryIndexDerivativeRecord], scope: MediaAccountScope) -> [AvailableThumbnail] {
         let startedAt = ContinuousClock.now
         let thumbnailDirectory = rootURL
             .appending(path: scope.cacheNamespace, directoryHint: .isDirectory)
@@ -477,7 +519,7 @@ actor LibraryThumbnailCache {
                 options: [.skipsHiddenFiles]
             ))?.map(\.lastPathComponent) ?? []
         )
-        let thumbnails: [AvailableThumbnail] = snapshot.derivatives.compactMap { record in
+        let thumbnails: [AvailableThumbnail] = records.compactMap { record in
             guard record.derivative == .thumbnail, record.isVerified else { return nil }
             let filename = URL(filePath: record.relativeFileKey).lastPathComponent
             guard availableFilenames.contains(filename) else { return nil }
@@ -491,7 +533,7 @@ actor LibraryThumbnailCache {
         let elapsedMilliseconds = Int(components.seconds) * 1000
             + Int(components.attoseconds / 1_000_000_000_000_000)
         Self.logger.info(
-            "Available thumbnail manifest scanned records=\(snapshot.derivatives.count) files=\(availableFilenames.count) available=\(thumbnails.count) elapsedMs=\(elapsedMilliseconds)"
+            "Available thumbnail manifest scanned records=\(records.count) files=\(availableFilenames.count) available=\(thumbnails.count) elapsedMs=\(elapsedMilliseconds)"
         )
         return thumbnails
     }
@@ -583,14 +625,16 @@ actor LibraryThumbnailCache {
         endpoint: URL,
         accessToken: String,
         directory: URL,
-        assetDetails: (any AssetDetailReading)?
+        assetDetails: (any AssetDetailReading)?,
+        transfer: TransferContext? = nil
     ) async throws -> AssetCacheResult {
         async let thumbnailResult = cacheThumbnail(
             asset,
             needed: needsThumbnail,
             endpoint: endpoint,
             accessToken: accessToken,
-            directory: directory
+            directory: directory,
+            transfer: transfer
         )
         async let metadataResult = cacheMetadata(
             asset,
@@ -630,11 +674,12 @@ actor LibraryThumbnailCache {
         needed: Bool,
         endpoint: URL,
         accessToken: String,
-        directory: URL
+        directory: URL,
+        transfer: TransferContext? = nil
     ) async throws -> DownloadResult? {
         guard needed else { return nil }
         do {
-            return try await download(asset, endpoint, accessToken, directory)
+            return try await download(asset, endpoint, accessToken, directory, transfer: transfer)
         } catch is CancellationError {
             throw CancellationError()
         } catch {
@@ -673,7 +718,8 @@ actor LibraryThumbnailCache {
         _ asset: LibraryIndexAssetRecord,
         _ endpoint: URL,
         _ accessToken: String,
-        _ directory: URL
+        _ directory: URL,
+        transfer: TransferContext? = nil
     ) async throws -> DownloadResult {
         try Task.checkCancellation()
         var components = URLComponents(
@@ -689,7 +735,16 @@ actor LibraryThumbnailCache {
         }
         var request = URLRequest(url: url)
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let data: Data
+        let response: URLResponse
+        if let transfer {
+            let result = try await transfer.queue.thumbnailData(for: request, scope: transfer.scope,
+                                                                endpoint: transfer.endpoint, accessToken: transfer.accessToken)
+            data = result.data
+            response = result.response
+        } else {
+            (data, response) = try await URLSession.shared.data(for: request)
+        }
         guard let response = response as? HTTPURLResponse else {
             logger.error(
                 "Thumbnail unavailable asset=\(asset.id.prefix(8), privacy: .public) reason=non-http-response"

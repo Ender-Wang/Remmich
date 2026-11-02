@@ -29,20 +29,39 @@ final class LibraryBackgroundSyncCoordinator {
     private var cleanupTask: Task<Void, Never>?
     private var cleanupDeadlineTask: Task<Void, Never>?
     private var isFinishing = false
+    private var deliveryCheckTask: Task<Void, Never>?
+    private var deliveryCursor = LibraryTransferDeliveryCursor()
+    private var activeIsTransferWork = false
+    private var transferEventCompletions: [LibraryTransferEventCompletion] = []
     private let refreshBudget: Duration
     private let cleanupBudget: Duration
     private let syncOperation: @MainActor (UUID, LibraryBackgroundSyncKind) async -> Bool
+    private let transferOperation: @MainActor (UUID, LibraryTransferDelivery) async -> Bool
+    private let deliveryState: @Sendable () async -> LibraryTransferDelivery?
+    private let applicationState: @MainActor () -> UIApplication.State
+    private let resourcesAllowed: @MainActor () -> Bool
     private var resourceObservers: [NSObjectProtocol] = []
 
     init(
         controller: AppSessionController = AppSessionController(),
         refreshBudget: Duration = LibrarySyncPolicy.backgroundRefreshBudget,
         cleanupBudget: Duration = .seconds(2),
+        applicationState: @escaping @MainActor () -> UIApplication.State = { UIApplication.shared.applicationState },
+        resourcesAllowed: @escaping @MainActor () -> Bool = { LibraryCacheResourceConditions.current.waitReason == nil },
+        deliveryState: (@Sendable () async -> LibraryTransferDelivery?)? = nil,
+        transferOperation: (@MainActor (UUID, LibraryTransferDelivery) async -> Bool)? = nil,
         syncOperation: (@MainActor (UUID, LibraryBackgroundSyncKind) async -> Bool)? = nil
     ) {
         self.controller = controller
         self.refreshBudget = refreshBudget
         self.cleanupBudget = cleanupBudget
+        self.applicationState = applicationState
+        self.resourcesAllowed = resourcesAllowed
+        self.deliveryState = deliveryState ?? { await LibraryTransferQueue.shared.deliveryState() }
+        self.transferOperation = transferOperation ?? { id, delivery in
+            guard LibraryCacheResourceConditions.current.waitReason == nil else { return false }
+            return await controller.performTransferReconciliation(id: id, delivery: delivery)
+        }
         self.syncOperation = syncOperation ?? { id, kind in
             guard LibraryCacheResourceConditions.current.waitReason == nil else { return false }
             return await controller.performBackgroundSync(id: id, kind: kind)
@@ -73,8 +92,13 @@ final class LibraryBackgroundSyncCoordinator {
         for name in [ProcessInfo.thermalStateDidChangeNotification, Notification.Name.NSProcessInfoPowerStateDidChange] {
             resourceObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
-                    guard let self, self.activeKind == .processing, !self.isFinishing else { return }
-                    self.controller.libraryIndex.resourceConditionsChanged(isAppActive: true)
+                    guard let self, !self.isFinishing else { return }
+                    self.controller.libraryIndex.resourceConditionsChanged(isAppActive: self.applicationState() == .active || self.activeKind == .processing)
+                    let cacheAllowed = LibraryCacheResourceConditions.current.waitReason == nil
+                    Task { await LibraryTransferQueue.shared.resourceConditionsChanged(allowed: cacheAllowed) }
+                    if cacheAllowed {
+                        self.scheduleTransferCheck()
+                    }
                 }
             })
         }
@@ -151,12 +175,39 @@ final class LibraryBackgroundSyncCoordinator {
 
     func enteredBackground() {
         let hasProcessingGrant = activeID != nil
-        Self.logger.info("App entered background; library processing grantActive=\(hasProcessingGrant)")
+        let context = LibraryTransferQueue.diagnosticContext()
+        let source = activeID == nil ? "none" : activeIsTransferWork ? "transfer" : "scheduled"
+        Self.logger.info("App entered background; \(context, privacy: .public) syncOwnerActive=\(hasProcessingGrant) source=\(source, privacy: .public)")
         controller.handleBackgroundTransition()
+        if activeIsTransferWork, let activeID {
+            armBudget(id: activeID, duration: .seconds(20), reason: "transfer-reconcile-budget-expired")
+        }
+        #if DEBUG
+            Task { await LibraryTransferQueue.shared.logStatus() }
+        #endif
         scheduleNextSync()
+        scheduleTransferCheck()
+    }
+
+    func enteredForeground() {
+        guard activeIsTransferWork else { return }
+        budgetTask?.cancel()
+        budgetTask = nil
+    }
+
+    private func armBudget(id: UUID, duration: Duration, reason: String) {
+        budgetTask?.cancel()
+        budgetTask = Task { [weak self] in
+            try? await Task.sleep(for: duration)
+            guard !Task.isCancelled else { return }
+            self?.finish(id: id, success: false, reason: reason)
+        }
     }
 
     func cancel() {
+        deliveryCheckTask?.cancel()
+        deliveryCheckTask = nil
+        finishTransferCompletions()
         schedulingTask?.cancel()
         schedulingTask = nil
         cancelRequests()
@@ -166,11 +217,15 @@ final class LibraryBackgroundSyncCoordinator {
         Self.logger.info("Background library sync requests cancelled")
     }
 
-    func launch(_ task: any LibraryBackgroundTask, kind: LibraryBackgroundSyncKind) {
+    func launch(_ task: any LibraryBackgroundTask, kind: LibraryBackgroundSyncKind, maximumDuration: Duration? = nil,
+                delivery: LibraryTransferDelivery? = nil)
+    {
         // Reschedule this kind even if another worker owns the current grant.
-        scheduleNextSync(allowUnrestoredSession: true)
+        if delivery == nil {
+            scheduleNextSync(allowUnrestoredSession: true)
+        }
         guard activeID == nil,
-              !(UIApplication.shared.applicationState == .active && controller.libraryIndex.hasActiveSyncWork)
+              !(applicationState() == .active && controller.libraryIndex.hasActiveSyncWork)
         else {
             Self.logger.info("Background library sync deferred kind=\(kind.rawValue, privacy: .public) reason=worker-busy")
             task.setTaskCompleted(success: false)
@@ -180,24 +235,106 @@ final class LibraryBackgroundSyncCoordinator {
         activeID = id
         activeTask = task
         activeKind = kind
-        if UIApplication.shared.applicationState != .active {
+        activeIsTransferWork = delivery != nil
+        if applicationState() != .active {
             controller.handleBackgroundTransition()
         }
         task.expirationHandler = { [weak self] in
             Task { @MainActor in self?.finish(id: id, success: false, reason: "expired") }
         }
-        if kind == .refresh {
-            budgetTask = Task { [weak self] in
-                try? await Task.sleep(for: self?.refreshBudget ?? LibrarySyncPolicy.backgroundRefreshBudget)
-                guard !Task.isCancelled else { return }
-                self?.finish(id: id, success: false, reason: "refresh-budget-expired")
-            }
+        if let duration = maximumDuration ?? (kind == .refresh ? refreshBudget : nil) {
+            armBudget(id: id, duration: duration, reason: kind == .refresh ? "refresh-budget-expired" : "transfer-reconcile-budget-expired")
         }
-        Self.logger.info("Background library sync started kind=\(kind.rawValue, privacy: .public)")
+        if let delivery {
+            Self.logger.info("Transfer reconciliation started revision=\(delivery.revision)")
+        } else {
+            Self.logger.info("Background library sync started kind=\(kind.rawValue, privacy: .public)")
+        }
         worker = Task { [weak self] in
             guard let self, !Task.isCancelled else { return }
-            let success = await syncOperation(id, kind)
+            let success = if let delivery {
+                await transferOperation(id, delivery)
+            } else {
+                await syncOperation(id, kind)
+            }
             finish(id: id, success: success, reason: success ? "completed" : "deferred-or-failed", waitForCancellation: false)
+        }
+    }
+
+    /// A background URLSession delivery grants a short window for importing
+    /// responses and enqueueing the next bounded batch, not a second sync owner.
+    func reconcileTransferEvents(completion: LibraryTransferEventCompletion) {
+        guard applicationState() == .background else {
+            completion.finish()
+            return
+        }
+        if activeID != nil {
+            if activeIsTransferWork {
+                transferEventCompletions.append(completion)
+            } else {
+                completion.finish()
+            }
+            return
+        }
+        transferEventCompletions.append(completion)
+        scheduleTransferCheck()
+    }
+
+    /// Transfers can finish before iOS suspends the process, especially with a
+    /// debugger attached. Those receipts need the same reconciliation as a wakeup.
+    func transferResponseReady() {
+        scheduleTransferCheck()
+    }
+
+    private func scheduleTransferCheck() {
+        guard applicationState() == .background, !isFinishing, activeID == nil, deliveryCheckTask == nil else { return }
+        switch controller.state {
+        case .loading, .signedIn: break
+        default: finishTransferCompletions(); return
+        }
+        deliveryCheckTask = Task { [weak self] in
+            guard let self else { return }
+            let delivery = await deliveryState()
+            guard !Task.isCancelled else { return }
+            deliveryCheckTask = nil
+            guard activeID == nil else {
+                if !activeIsTransferWork {
+                    finishTransferCompletions()
+                }
+                return
+            }
+            guard applicationState() == .background,
+                  let delivery, deliveryCursor.canBegin(delivery),
+                  resourcesAllowed()
+            else {
+                finishTransferCompletions()
+                return
+            }
+            switch controller.state {
+            case .loading, .signedIn: break
+            default: finishTransferCompletions(); return
+            }
+            let completion: LibraryTransferEventCompletion
+            if !transferEventCompletions.isEmpty {
+                completion = transferEventCompletions.removeFirst()
+            } else {
+                completion = LibraryTransferEventCompletion(protectExecution: true) {}
+                guard completion.hasBackgroundTime else {
+                    completion.finish()
+                    Self.logger.info("Transfer reconciliation deferred; background time unavailable")
+                    return
+                }
+            }
+            deliveryCursor.begin(delivery)
+            launch(completion, kind: .processing, maximumDuration: .seconds(20), delivery: delivery)
+        }
+    }
+
+    private func finishTransferCompletions() {
+        let completions = transferEventCompletions
+        transferEventCompletions = []
+        for completion in completions {
+            completion.finish()
         }
     }
 
@@ -210,6 +347,9 @@ final class LibraryBackgroundSyncCoordinator {
         worker?.cancel()
         worker = nil
         controller.endBackgroundSync(id: id)
+        #if DEBUG
+            Task { await LibraryTransferQueue.shared.logStatus() }
+        #endif
         if waitForCancellation, let cancelledWorker {
             // Keep ownership until cleanup drains, but never wait indefinitely
             // for an operation that does not cooperate with cancellation.
@@ -230,9 +370,11 @@ final class LibraryBackgroundSyncCoordinator {
     private func complete(id: UUID, success: Bool, reason: String) {
         guard activeID == id, let task = activeTask else { return }
         let kind = activeKind ?? .processing
+        let wasTransfer = activeIsTransferWork
         activeID = nil
         activeKind = nil
         activeTask = nil
+        activeIsTransferWork = false
         isFinishing = false
         cleanupTask?.cancel()
         cleanupTask = nil
@@ -248,7 +390,14 @@ final class LibraryBackgroundSyncCoordinator {
         }
         task.expirationHandler = nil
         task.setTaskCompleted(success: success)
-        Self.logger.info("Background library sync finished kind=\(kind.rawValue, privacy: .public) success=\(success) reason=\(reason, privacy: .public)")
+        finishTransferCompletions()
+        if wasTransfer {
+            let outcome = success ? "completed" : (reason == "expired" || reason == "transfer-reconcile-budget-expired") ? "yielded" : "deferred"
+            Self.logger.info("Transfer reconciliation finished outcome=\(outcome, privacy: .public) reason=\(reason, privacy: .public)")
+        } else {
+            Self.logger.info("Background library sync finished kind=\(kind.rawValue, privacy: .public) success=\(success) reason=\(reason, privacy: .public)")
+        }
+        scheduleTransferCheck()
     }
 }
 
@@ -258,6 +407,58 @@ final class RemmichAppDelegate: NSObject, UIApplicationDelegate {
                      didFinishLaunchingWithOptions _: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool
     {
         LibraryBackgroundSyncCoordinator.shared.register()
+        Task {
+            await LibraryTransferQueue.shared.setResponseHandler {
+                await LibraryBackgroundSyncCoordinator.shared.transferResponseReady()
+            }
+        }
         return true
+    }
+
+    func application(_: UIApplication, handleEventsForBackgroundURLSession identifier: String,
+                     completionHandler: @escaping () -> Void)
+    {
+        guard identifier == LibraryTransferQueue.sessionIdentifier else { completionHandler(); return }
+        let completion = LibraryTransferEventCompletion(completionHandler)
+        Task {
+            await LibraryTransferQueue.shared.handleBackgroundEvents {
+                await LibraryBackgroundSyncCoordinator.shared.reconcileTransferEvents(completion: completion)
+            }
+        }
+    }
+}
+
+@MainActor
+final class LibraryTransferEventCompletion: LibraryBackgroundTask {
+    var expirationHandler: (() -> Void)?
+    private var handler: (() -> Void)?
+    private var assertion: UIBackgroundTaskIdentifier = .invalid
+
+    var hasBackgroundTime: Bool {
+        assertion != .invalid
+    }
+
+    init(protectExecution: Bool = false, _ handler: @escaping () -> Void) {
+        self.handler = handler
+        if protectExecution {
+            assertion = UIApplication.shared.beginBackgroundTask(withName: "Library transfer reconciliation") { [weak self] in
+                self?.expirationHandler?()
+                self?.finish()
+            }
+        }
+    }
+
+    func setTaskCompleted(success _: Bool) {
+        finish()
+    }
+
+    func finish() {
+        let completion = handler
+        handler = nil
+        if assertion != .invalid {
+            UIApplication.shared.endBackgroundTask(assertion)
+            assertion = .invalid
+        }
+        completion?()
     }
 }

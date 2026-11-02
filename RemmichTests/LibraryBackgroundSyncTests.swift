@@ -1,9 +1,78 @@
 import BackgroundTasks
 import Foundation
 import Testing
+import UIKit
 @testable import Remmich
 
 struct LibraryBackgroundSyncTests {
+    @Test @MainActor func returningToForegroundRemovesOnlyTheTransferWindowDeadline() async throws {
+        let gate = SuspendedLibrarySync()
+        defer { gate.complete() }
+        let delivery = LibraryTransferDelivery(owner: .init(session: .fixture, endpoint: AccountSession.fixture.apiURL),
+                                               revision: 1, hasReadyResponses: true, hasIndexWork: false, requiresRouteValidation: false)
+        let coordinator = LibraryBackgroundSyncCoordinator(applicationState: { .background },
+                                                           transferOperation: { _, _ in await gate.run() })
+        let task = FakeLibraryBackgroundTask()
+        coordinator.launch(task, kind: .processing, maximumDuration: .milliseconds(10), delivery: delivery)
+        try await waitUntil { gate.started }
+        coordinator.enteredForeground()
+        try await Task.sleep(for: .milliseconds(30))
+        #expect(!gate.wasCancelled)
+        #expect(task.completions.isEmpty)
+        // Genuine system expiration retains authority after the software deadline is removed.
+        task.expirationHandler?()
+        try await waitUntil { gate.wasCancelled }
+        gate.complete()
+        try await waitUntil { !task.completions.isEmpty }
+        #expect(task.completions == [false])
+    }
+
+    @Test @MainActor func deliveredWorkUsesItsOwnOperationAndCoalescesCompletions() async throws {
+        let gate = SuspendedLibrarySync()
+        defer { gate.complete() }
+        var scheduled = 0
+        var imported = 0
+        var completions = 0
+        let delivery = LibraryTransferDelivery(owner: .init(session: .fixture, endpoint: AccountSession.fixture.apiURL),
+                                               revision: 1, hasReadyResponses: true, hasIndexWork: false, requiresRouteValidation: false)
+        let coordinator = LibraryBackgroundSyncCoordinator(applicationState: { .background }, resourcesAllowed: { true },
+                                                           deliveryState: { delivery }, transferOperation: { _, _ in
+                                                               imported += 1
+                                                               return await gate.run()
+                                                           }, syncOperation: { _, _ in scheduled += 1; return true })
+        coordinator.reconcileTransferEvents(completion: LibraryTransferEventCompletion { completions += 1 })
+        coordinator.reconcileTransferEvents(completion: LibraryTransferEventCompletion { completions += 1 })
+        try await waitUntil { gate.started }
+        gate.complete()
+        try await waitUntil { completions == 2 }
+        coordinator.reconcileTransferEvents(completion: LibraryTransferEventCompletion { completions += 1 })
+        try await waitUntil { completions == 3 }
+        #expect(imported == 1)
+        #expect(scheduled == 0)
+    }
+
+    @Test @MainActor func deliveryWithNoReadyResponsesCompletesWithoutStartingSync() async throws {
+        var calls = 0
+        var completions = 0
+        let delivery = LibraryTransferDelivery(owner: .init(session: .fixture, endpoint: AccountSession.fixture.apiURL),
+                                               revision: 1, hasReadyResponses: false, hasIndexWork: false, requiresRouteValidation: false)
+        let coordinator = LibraryBackgroundSyncCoordinator(applicationState: { .background }, resourcesAllowed: { true },
+                                                           deliveryState: { delivery }, transferOperation: { _, _ in calls += 1; return true })
+        coordinator.reconcileTransferEvents(completion: LibraryTransferEventCompletion { completions += 1 })
+        try await waitUntil { completions == 1 }
+        #expect(calls == 0)
+    }
+
+    @Test @MainActor func cancellingDeliveryCheckCompletesItsSystemCallbackOnce() async {
+        var completions = 0
+        let coordinator = LibraryBackgroundSyncCoordinator(applicationState: { .background }, resourcesAllowed: { true },
+                                                           deliveryState: { await Task.yield(); return nil })
+        coordinator.reconcileTransferEvents(completion: LibraryTransferEventCompletion { completions += 1 })
+        coordinator.cancel()
+        await Task.yield()
+        #expect(completions == 1)
+    }
+
     @Test(arguments: LibraryBackgroundSyncKind.allCases) @MainActor
     func coordinatorCompletesSuccessfulWorkOnce(kind: LibraryBackgroundSyncKind) async throws {
         let gate = SuspendedLibrarySync()
@@ -60,10 +129,10 @@ struct LibraryBackgroundSyncTests {
         let second = SuspendedLibrarySync()
         defer { first.complete(); second.complete() }
         var invocation = 0
-        let coordinator = LibraryBackgroundSyncCoordinator(cleanupBudget: .milliseconds(20)) { _, _ in
+        let coordinator = LibraryBackgroundSyncCoordinator(cleanupBudget: .milliseconds(20), syncOperation: { _, _ in
             invocation += 1
             return await (invocation == 1 ? first : second).run()
-        }
+        })
         let expired = FakeLibraryBackgroundTask()
         coordinator.launch(expired, kind: .processing)
         try await waitUntil { first.started }

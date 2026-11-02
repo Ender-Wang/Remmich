@@ -18,6 +18,11 @@ actor ImmichTimelineRepository: TimelineReading, VideoReading, AssetDetailReadin
     private var activeEndpoint: URL?
     private var client: ImmichClient?
     private var generation: UInt64 = 0
+    private let transfers: LibraryTransferQueue?
+
+    init(transfers: LibraryTransferQueue? = nil) {
+        self.transfers = transfers
+    }
 
     @discardableResult
     func configure(session: AccountSession, activeEndpoint: URL?) -> Bool {
@@ -42,10 +47,17 @@ actor ImmichTimelineRepository: TimelineReading, VideoReading, AssetDetailReadin
             client = nil
             return true
         }
-        client = ImmichClient(
-            apiURL: endpoint,
-            credential: .bearer(session.accessToken)
-        )
+        if let transfers {
+            let owner = LibraryTransferOwner(session: session, endpoint: endpoint)
+            client = ImmichClient(apiURL: endpoint, credential: .bearer(session.accessToken),
+                                  transport: ImmichQueuedGETTransport { request, operation in
+                                      let kind: LibraryTransferKind = operation == "getAssetInfo" ? .metadata : .index
+                                      let value = try await transfers.data(for: request, kind: kind, owner: owner)
+                                      return (value.data, value.response)
+                                  })
+        } else {
+            client = ImmichClient(apiURL: endpoint, credential: .bearer(session.accessToken))
+        }
         return true
     }
 
@@ -287,6 +299,9 @@ actor ImmichTimelineRepository: TimelineReading, VideoReading, AssetDetailReadin
     }
 
     private static func map(_ error: Error) -> Error {
+        if let error = error as? ImmichAPIError, error == .cancelled {
+            return CancellationError()
+        }
         if let error = error as? TimelineReadError {
             return error
         }

@@ -392,6 +392,10 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
         )
     }
 
+    func derivativeRecords(scope: MediaAccountScope) async throws -> [LibraryIndexDerivativeRecord] {
+        try readDerivatives(scope: scope, database: preparedDatabase(scope: scope))
+    }
+
     func setPaused(_ paused: Bool, scope: MediaAccountScope) async throws {
         let database = try preparedDatabase(scope: scope)
         try database.execute(

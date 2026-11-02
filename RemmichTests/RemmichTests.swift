@@ -13,8 +13,42 @@ import UIKit
 @testable import Remmich
 
 struct RemmichTests {
+    @Test(arguments: ["warm", "authentication", "network"]) @MainActor
+    func transferImportsReuseRoutesAndOnlyRecoverWhenRequired(mode: String) async {
+        let session = AccountSession(apiURL: AccountSession.fixture.apiURL, accessToken: "fixture-transfer",
+                                     userID: "transfer-\(UUID().uuidString)", userEmail: "test@example.com", name: "Test",
+                                     isAdmin: false, serverVersion: AccountSession.fixture.serverVersion)
+        let service = RouteRestoreService(reachableEndpoints: [session.apiURL])
+        let controller = AppSessionController(transfers: nil, service: service, sessionStore: MemorySessionStore(session: session),
+                                              profileStore: ConnectionProfileStore(suiteName: "TransferLifecycle-\(UUID().uuidString)"),
+                                              networkMonitoringEnabled: false, pathChangeDebounce: .milliseconds(1))
+        controller.handleBackgroundTransition()
+        let owner = LibraryTransferOwner(session: session, endpoint: session.apiURL)
+        let initial = LibraryTransferDelivery(owner: owner, revision: 1, hasReadyResponses: true,
+                                              hasIndexWork: false, requiresRouteValidation: false)
+        let coldID = UUID()
+        _ = await controller.performTransferReconciliation(id: coldID, delivery: initial)
+        controller.endBackgroundSync(id: coldID)
+        #expect(await service.validatedEndpoints == [session.apiURL])
+        #expect(controller.libraryIndex.startedAt == nil)
+        if mode == "network" {
+            await controller.handleNetworkPathChange(usesWiFi: true)
+            await controller.handleNetworkPathChange(usesWiFi: false)
+        }
+        let warm = LibraryTransferDelivery(owner: owner, revision: 2, hasReadyResponses: true,
+                                           hasIndexWork: false, requiresRouteValidation: mode == "authentication")
+        let warmID = UUID()
+        _ = await controller.performTransferReconciliation(id: warmID, delivery: warm)
+        controller.endBackgroundSync(id: warmID)
+        #expect(await service.validatedEndpoints.count == (mode == "warm" ? 1 : 2))
+        #expect(controller.libraryIndex.startedAt == nil)
+        #expect(!controller.libraryIndex.hasActiveSyncWork)
+        await controller.signOut()
+    }
+
     @Test @MainActor func headlessSessionWaitsForForegroundResourcesBeforePresentingContent() async {
         let controller = AppSessionController(
+            transfers: nil,
             service: RouteRestoreService(reachableEndpoints: []),
             sessionStore: MemorySessionStore(session: .fixture),
             profileStore: ConnectionProfileStore(suiteName: "BackgroundSync-\(UUID().uuidString)"),
@@ -39,9 +73,12 @@ struct RemmichTests {
     func backgroundExpirationPreventsLateSessionRestorationFromStartingSync(kind: LibraryBackgroundSyncKind) async throws {
         let sessions = SuspendedBackgroundSessionStore()
         let service = RouteRestoreService(reachableEndpoints: [])
-        let controller = AppSessionController(service: service, sessionStore: sessions,
-                                              profileStore: ConnectionProfileStore(suiteName: "BackgroundSync-\(UUID().uuidString)"),
-                                              networkMonitoringEnabled: false)
+        let controller = AppSessionController(
+            transfers: nil,
+            service: service, sessionStore: sessions,
+            profileStore: ConnectionProfileStore(suiteName: "BackgroundSync-\(UUID().uuidString)"),
+            networkMonitoringEnabled: false
+        )
         controller.handleBackgroundTransition()
         let id = UUID()
         let work = Task { await controller.performBackgroundSync(id: id, kind: kind) }
@@ -70,9 +107,12 @@ struct RemmichTests {
     @Test @MainActor func signOutWinsOverAnInFlightBackgroundCredentialRead() async throws {
         let sessions = SuspendedBackgroundSessionStore()
         let service = RouteRestoreService(reachableEndpoints: [])
-        let controller = AppSessionController(service: service, sessionStore: sessions,
-                                              profileStore: ConnectionProfileStore(suiteName: "BackgroundSync-\(UUID().uuidString)"),
-                                              networkMonitoringEnabled: false)
+        let controller = AppSessionController(
+            transfers: nil,
+            service: service, sessionStore: sessions,
+            profileStore: ConnectionProfileStore(suiteName: "BackgroundSync-\(UUID().uuidString)"),
+            networkMonitoringEnabled: false
+        )
         controller.handleBackgroundTransition()
         let id = UUID()
         let work = Task { await controller.performBackgroundSync(id: id) }
@@ -97,9 +137,12 @@ struct RemmichTests {
 
     @Test @MainActor func concurrentStartupCallsShareOneCredentialRead() async throws {
         let sessions = SuspendedBackgroundSessionStore()
-        let controller = AppSessionController(sessionStore: sessions,
-                                              profileStore: ConnectionProfileStore(suiteName: "BackgroundSync-\(UUID().uuidString)"),
-                                              networkMonitoringEnabled: false)
+        let controller = AppSessionController(
+            transfers: nil,
+            sessionStore: sessions,
+            profileStore: ConnectionProfileStore(suiteName: "BackgroundSync-\(UUID().uuidString)"),
+            networkMonitoringEnabled: false
+        )
         let first = Task { await controller.start() }
         let second = Task { await controller.start() }
         for _ in 0 ..< 150 {
@@ -387,6 +430,7 @@ struct RemmichTests {
         let sessionStore = MemorySessionStore(session: nil)
         let profileStore = ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)")
         let controller = AppSessionController(
+            transfers: nil,
             service: service,
             sessionStore: sessionStore,
             profileStore: profileStore,
@@ -419,6 +463,7 @@ struct RemmichTests {
     @Test @MainActor func directRouteRevalidatesAfterInitialNetworkCallback() async {
         let service = SequencedRouteService(validationResults: [.reachable])
         let controller = AppSessionController(
+            transfers: nil,
             service: service,
             sessionStore: MemorySessionStore(session: nil),
             profileStore: ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)"),
@@ -448,6 +493,7 @@ struct RemmichTests {
     @Test @MainActor func rapidPathChangeBurstDebouncesToOneEvaluation() async {
         let service = SequencedRouteService(validationResults: [])
         let controller = AppSessionController(
+            transfers: nil,
             service: service,
             sessionStore: MemorySessionStore(session: nil),
             profileStore: ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)"),
@@ -482,6 +528,7 @@ struct RemmichTests {
     @Test @MainActor func staleRouteEvaluationIsSupersededNotQueuedBehindIt() async {
         let service = SequentiallyStuckValidationService()
         let controller = AppSessionController(
+            transfers: nil,
             service: service,
             sessionStore: MemorySessionStore(session: nil),
             profileStore: ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)"),
@@ -518,6 +565,7 @@ struct RemmichTests {
         let service = SuspendedValidationService()
         let sessionStore = MemorySessionStore(session: nil)
         let controller = AppSessionController(
+            transfers: nil,
             service: service,
             sessionStore: sessionStore,
             profileStore: ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)"),
@@ -551,6 +599,7 @@ struct RemmichTests {
         )
         let sessionStore = MemorySessionStore(session: AccountSession.fixture)
         let controller = AppSessionController(
+            transfers: nil,
             service: SequencedRouteService(validationResults: [rejected]),
             sessionStore: sessionStore,
             profileStore: ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)"),
@@ -576,6 +625,7 @@ struct RemmichTests {
         )
         let sessionStore = MemorySessionStore(session: AccountSession.fixture)
         let controller = AppSessionController(
+            transfers: nil,
             service: SequencedRouteService(validationResults: [transient]),
             sessionStore: sessionStore,
             profileStore: ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)"),
@@ -603,6 +653,7 @@ struct RemmichTests {
         let service = SequencedRouteService(validationResults: [transient])
         let sessionStore = MemorySessionStore(session: AccountSession.fixture)
         let controller = AppSessionController(
+            transfers: nil,
             service: service,
             sessionStore: sessionStore,
             profileStore: ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)"),
@@ -641,6 +692,7 @@ struct RemmichTests {
             url("https://two.example/api"),
         ]))
         let controller = AppSessionController(
+            transfers: nil,
             service: SequencedRouteService(validationResults: [rejected, rejected]),
             sessionStore: sessionStore,
             profileStore: profileStore,
@@ -661,6 +713,7 @@ struct RemmichTests {
     @Test @MainActor func corruptSavedSessionIsDeletedAndReturnsToOnboarding() async {
         let sessionStore = MemorySessionStore(session: nil, loadError: .corruptPayload)
         let controller = AppSessionController(
+            transfers: nil,
             service: RestoreService(),
             sessionStore: sessionStore,
             profileStore: ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)"),
@@ -684,6 +737,7 @@ struct RemmichTests {
             loadError: .unavailable(message: "Keychain is temporarily unavailable.")
         )
         let controller = AppSessionController(
+            transfers: nil,
             service: RestoreService(),
             sessionStore: sessionStore,
             profileStore: ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)"),
@@ -707,6 +761,7 @@ struct RemmichTests {
         let service = SequencedRouteService(validationResults: [.reachable, .reachable])
         let profileStore = ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)")
         let controller = AppSessionController(
+            transfers: nil,
             service: service,
             sessionStore: MemorySessionStore(session: nil),
             profileStore: profileStore,
@@ -742,6 +797,7 @@ struct RemmichTests {
         let service = SequencedRouteService(validationResults: [.reachable])
         let profileStore = ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)")
         let controller = AppSessionController(
+            transfers: nil,
             service: service,
             sessionStore: MemorySessionStore(session: nil),
             profileStore: profileStore,
@@ -774,6 +830,7 @@ struct RemmichTests {
         let service = SequencedRouteService(validationResults: [failure])
         let profileStore = ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)")
         let controller = AppSessionController(
+            transfers: nil,
             service: service,
             sessionStore: MemorySessionStore(session: nil),
             profileStore: profileStore,
@@ -808,6 +865,7 @@ struct RemmichTests {
         let profileStore = ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)")
         try await profileStore.save(profile)
         let controller = AppSessionController(
+            transfers: nil,
             service: service,
             sessionStore: MemorySessionStore(session: session),
             profileStore: profileStore,
@@ -840,6 +898,7 @@ struct RemmichTests {
     @Test @MainActor func savedSessionRestoresSignedInState() async {
         let session = AccountSession.fixture
         let controller = AppSessionController(
+            transfers: nil,
             service: RestoreService(),
             sessionStore: MemorySessionStore(session: session),
             profileStore: ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)"),
@@ -862,6 +921,7 @@ struct RemmichTests {
     @Test @MainActor func restoredSessionWaitsForAnAuthenticatedRouteBeforeServingMedia() async {
         let service = SuspendedValidationService()
         let controller = AppSessionController(
+            transfers: nil,
             service: service,
             sessionStore: MemorySessionStore(session: .fixture),
             profileStore: ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)"),
@@ -895,6 +955,7 @@ struct RemmichTests {
     @Test @MainActor func savedSessionRestorationIgnoresDuplicateInitialLifecycleTriggers() async {
         let service = SuspendedValidationService()
         let controller = AppSessionController(
+            transfers: nil,
             service: service,
             sessionStore: MemorySessionStore(session: .fixture),
             profileStore: ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)"),
@@ -930,6 +991,7 @@ struct RemmichTests {
         ))
         let service = RouteRestoreService(reachableEndpoints: [local])
         let controller = AppSessionController(
+            transfers: nil,
             service: service,
             sessionStore: sessionStore,
             profileStore: profileStore,
@@ -964,6 +1026,7 @@ struct RemmichTests {
         ))
         let service = RouteRestoreService(reachableEndpoints: [local])
         let controller = AppSessionController(
+            transfers: nil,
             service: service,
             sessionStore: sessionStore,
             profileStore: profileStore,
@@ -992,6 +1055,7 @@ struct RemmichTests {
         let ssid = MutableSSIDProvider(ssid: "Home")
         let service = RouteRestoreService(reachableEndpoints: [local, external])
         let controller = AppSessionController(
+            transfers: nil,
             service: service,
             sessionStore: MemorySessionStore(session: session),
             profileStore: profileStore,
@@ -1020,6 +1084,7 @@ struct RemmichTests {
         let profileStore = ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)")
         let unreachable = try url("http://offline.local/api")
         let controller = AppSessionController(
+            transfers: nil,
             service: RouteRestoreService(reachableEndpoints: [session.apiURL]),
             sessionStore: MemorySessionStore(session: session),
             profileStore: profileStore,
