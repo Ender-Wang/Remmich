@@ -109,6 +109,10 @@ Foreground automatic checks have a five-minute success-only freshness window, pe
 
 After a headless launch, the restoring shell remains visible until foreground media configuration and local timeline bootstrap finish. Cancelled index runs recheck their run ID, account scope, and cancellation after maintenance and cache reads before publishing results. On expiration, the coordinator retains ownership while cancellation drains, with a two-second cleanup limit before completing the native task; late completions cannot affect a newer grant. An unfinished refresh still reports failure when its 20-second budget expires.
 
+Index and cache statistics treat interrupted background windows as continuations. They retain the operation's start time; cache inventory remains visible while the next snapshot loads, and its ETA work sample accumulates across those windows. Elapsed time is wall time across native-transfer waits and suspension within the same in-memory operation. An explicit new operation starts a new clock; deletion and account changes clear the relevant inventory. Live storage reporting uses account-scoped SQL aggregates, throttled to once every five seconds during cache progress. Returning to the profile refreshes committed statistics and rebases its visible clock, without a background UI timer or counting unimported transfer bodies as cached assets.
+
+Manual Pause freezes elapsed time on both Index and Cache & Storage. Resume continues the accumulated value, excluding time spent manually paused. It remains distinct from starting a new Sync/Rebuild operation.
+
 #### Physical-device verification
 
 Native scheduler delivery requires a physical device. Enable Background App Refresh for Remmich, sign in, then leave the app normally. Look for the `BackgroundLibrarySync` messages `scheduled`, `started`, and `finished`. Scheduling errors remain diagnostic messages; foreground sync remains available.

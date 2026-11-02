@@ -604,8 +604,25 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
     }
 
     func storageReport(scope: MediaAccountScope) async throws -> LibraryIndexStorageReport {
-        let snapshot = try await snapshot(scope: scope)
-        return storageReport(snapshot: snapshot)
+        let database = try preparedDatabase(scope: scope)
+        let metadataBytes = metadataFileBytes()
+        // Reporting progress must not decode the entire asset/group catalog.
+        return try database.queryOne(
+            """
+            SELECT COALESCE(SUM(CASE WHEN derivative IN ('thumbnail','preview','fullSize') THEN byte_count ELSE 0 END),0),
+                   COALESCE(SUM(CASE WHEN derivative IN ('thumbnail','preview','fullSize') THEN 1 ELSE 0 END),0),
+                   COALESCE(SUM(CASE WHEN derivative IN ('original','videoPlayback') THEN byte_count ELSE 0 END),0),
+                   COALESCE(SUM(CASE WHEN derivative IN ('original','videoPlayback') THEN 1 ELSE 0 END),0),
+                   COALESCE(SUM(CASE WHEN derivative = 'original' THEN byte_count ELSE 0 END),0),
+                   COALESCE(SUM(CASE WHEN derivative = 'videoPlayback' THEN byte_count ELSE 0 END),0)
+            FROM derivatives WHERE scope = ?
+            """,
+            [.text(scope.cacheNamespace)]
+        ) { row in
+            LibraryIndexStorageReport(metadataBytes: metadataBytes, derivativeBytes: row.int64(0),
+                                      derivativeCount: row.int(1), downloadBytes: row.int64(2), downloadCount: row.int(3),
+                                      originalBytes: row.int64(4), playbackBytes: row.int64(5))
+        } ?? storageReport(snapshot: nil)
     }
 
     func storageReport(snapshot: LibraryIndexSnapshot) -> LibraryIndexStorageReport {

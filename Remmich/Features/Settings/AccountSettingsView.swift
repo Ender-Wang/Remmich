@@ -97,6 +97,7 @@ struct AccountSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.scenePhase) private var scenePhase
 
     let session: AccountSession
     let activeRoute: ActiveConnectionRoute?
@@ -337,6 +338,11 @@ struct AccountSettingsView: View {
         }
         .onDisappear { pageTransition?.cancel() }
         .task { appIcons.refresh(); libraryIndex.refreshStoredAccounts() }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            libraryIndexClock = Date()
+            Task { await libraryIndex.refreshStatistics() }
+        }
         .task(id: updatesLibraryIndexClock) {
             guard updatesLibraryIndexClock else {
                 libraryIndexClock = Date()

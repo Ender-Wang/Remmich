@@ -194,6 +194,44 @@ struct LibraryIndexSynchronizationTests {
         let finalSnapshot = try #require(try await store.snapshot(scope: Self.scope))
         #expect(finalSnapshot.derivatives.count == 1)
         #expect(try await store.cachedAssetDetailIDs(scope: Self.scope).contains(asset.id) == !cancel)
+        if cancel {
+            let originalStart = try #require(controller.thumbnailWarmingStartedAt)
+            let thumbnailCount = controller.thumbnailWarmingThumbnailCount
+            let cachedBytes = controller.thumbnailWarmingCachedBytes
+            #expect(thumbnailCount == 1)
+            #expect(cachedBytes == 1)
+            controller.setBackgroundRefreshOnly(false)
+            controller.syncThumbnailCache()
+            // Resuming a background window must not flash an empty inventory
+            // or restart the elapsed clock while its snapshot is loading.
+            #expect(controller.thumbnailWarmingStartedAt == originalStart)
+            #expect(controller.thumbnailWarmingThumbnailCount == thumbnailCount)
+            #expect(controller.thumbnailWarmingCachedBytes == cachedBytes)
+            for _ in 0 ..< 150 {
+                if await details.hasPendingRead {
+                    break
+                }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            #expect(await details.hasPendingRead)
+            controller.pauseThumbnailCache()
+            let pausedElapsed = try #require(controller.thumbnailWarmingElapsed(at: Date()))
+            #expect(controller.thumbnailWarmingElapsed(at: .distantFuture) == pausedElapsed)
+            await details.complete(with: detail)
+            controller.syncThumbnailCache()
+            let resumedElapsed = try #require(controller.thumbnailWarmingElapsed(at: Date()))
+            #expect(resumedElapsed >= pausedElapsed)
+            #expect(resumedElapsed - pausedElapsed < 0.1)
+            for _ in 0 ..< 150 {
+                if await details.hasPendingRead {
+                    break
+                }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            #expect(await details.hasPendingRead)
+            await details.complete(with: detail)
+            #expect(await controller.finishBackgroundSync())
+        }
         controller.suspend()
     }
 
@@ -838,6 +876,53 @@ struct LibraryIndexSynchronizationTests {
         #expect(FileManager.default.fileExists(atPath: otherDirectory.path))
     }
 
+    @Test @MainActor func interruptedIndexKeepsElapsedUntilAnExplicitNewRun() async throws {
+        let fixture = try IndexFixture()
+        let suite = "IndexStatistics-\(UUID().uuidString)"
+        let preferences = try #require(UserDefaults(suiteName: suite))
+        defer { fixture.cleanup(); preferences.removePersistentDomain(forName: suite) }
+        let source = SuspendedIndexStatisticsSource()
+        let controller = LibraryIndexController(source: source, store: SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL), preferences: preferences)
+        controller.start(session: .fixture, endpoint: AccountSession.fixture.apiURL)
+        for _ in 0 ..< 150 {
+            if await source.requestCount == 1 {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(await source.requestCount == 1)
+        let originalStart = try #require(controller.startedAt)
+        controller.suspend()
+        let elapsed = try #require(controller.elapsed)
+        #expect(controller.elapsed(at: .distantFuture) == elapsed)
+        controller.start(session: .fixture, endpoint: AccountSession.fixture.apiURL, automatic: true)
+        #expect(controller.startedAt == originalStart)
+        controller.pause()
+        let pausedElapsed = try #require(controller.elapsed)
+        #expect(controller.elapsed(at: .distantFuture) == pausedElapsed)
+        controller.resume()
+        for _ in 0 ..< 150 {
+            if controller.status == .indexing {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let resumedElapsed = try #require(controller.elapsed)
+        #expect(resumedElapsed >= pausedElapsed)
+        #expect(resumedElapsed - pausedElapsed < 0.1)
+        controller.suspend()
+        controller.syncNow()
+        for _ in 0 ..< 150 {
+            if controller.status == .indexing {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(controller.status == .indexing)
+        #expect(try #require(controller.startedAt) > originalStart)
+        controller.suspend()
+    }
+
     @Test @MainActor func controllerResetsAndFreezesElapsedForEachRun() async throws {
         let fixture = try IndexFixture()
         defer { fixture.cleanup() }
@@ -1145,6 +1230,23 @@ private struct FailingIndexSource: TimelineReading {
         in _: TimelineBucketID,
         query _: TimelineQuery
     ) async throws -> [TimelineAssetSummary] {
+        []
+    }
+
+    func memories() async throws -> [TimelineMemorySummary] {
+        []
+    }
+}
+
+private actor SuspendedIndexStatisticsSource: TimelineReading {
+    private(set) var requestCount = 0
+    func bucketSummaries(query _: TimelineQuery) async throws -> [TimelineBucketSummary] {
+        requestCount += 1
+        try await Task.sleep(for: .seconds(30))
+        return []
+    }
+
+    func assets(in _: TimelineBucketID, query _: TimelineQuery) async throws -> [TimelineAssetSummary] {
         []
     }
 

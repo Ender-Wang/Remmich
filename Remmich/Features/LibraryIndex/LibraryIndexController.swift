@@ -95,11 +95,14 @@ final class LibraryIndexController {
     private var runID: UInt64 = 0
     private var warmingRunID: UInt64 = 0
     private var lastWarmingLoggedMilestone = -1
+    private var warmingProcessedOffset = 0
+    private var lastLiveStorageReportAt = Date.distantPast
     private var lastPublishedBootstrapGeneration: Int64?
     @ObservationIgnored private var timelinePublicationDeferred = false
     @ObservationIgnored private var deferredBootstrapPublication: DeferredBootstrapPublication?
     private var indexOperation = IndexOperation.sync
     private var indexPaused = false
+    private var indexContinuationPending = false
     private let preferences: UserDefaults
     private var lastSuccessfulSyncAt: Date?
     private var backgroundRefreshOnly = false
@@ -431,6 +434,17 @@ final class LibraryIndexController {
         self.endpoint = endpoint
         accessToken = session.accessToken
         if scope != nextScope {
+            indexContinuationPending = false
+            warmingProcessedOffset = 0
+            thumbnailWarmingCachedCount = 0
+            thumbnailWarmingThumbnailCount = 0
+            thumbnailWarmingMetadataCount = 0
+            thumbnailWarmingCachedBytes = 0
+            thumbnailWarmingEligibleCount = 0
+            thumbnailWarmingProcessedCount = 0
+            thumbnailWarmingPendingCount = 0
+            thumbnailWarmingStartedAt = nil
+            thumbnailWarmingCompletedElapsed = nil
             indexPaused = false
             pendingThumbnailRequest = nil
             activeThumbnailRequest = nil
@@ -482,15 +496,16 @@ final class LibraryIndexController {
     private func requestIndexSync(fullReconciliation: Bool) {
         guard let scope else { return }
         guard indexPaused || status == .paused else {
-            run(fullReconciliation: fullReconciliation)
+            run(fullReconciliation: fullReconciliation, restartOperation: true)
             return
         }
+        let resumedElapsed = fullReconciliation ? nil : completedElapsed
         Task {
             do {
                 try await store.setPaused(false, scope: scope)
                 guard self.scope == scope else { return }
                 indexPaused = false
-                run(fullReconciliation: fullReconciliation)
+                run(fullReconciliation: fullReconciliation, restartOperation: true, resumedElapsed: resumedElapsed)
             } catch {
                 guard self.scope == scope else { return }
                 status = .failed("Couldn’t resume indexing. \(Self.message(for: error))")
@@ -518,19 +533,21 @@ final class LibraryIndexController {
     }
 
     func syncThumbnailCache() {
+        var restartOperation = false
         var rebuild = pendingThumbnailRequest?.rebuild ?? false
         if case .failed = thumbnailWarmingStatus {
+            restartOperation = true
             rebuild = activeThumbnailRequest?.rebuild ?? rebuild
         }
         resumeThumbnailWarming()
-        warmThumbnails(manual: true, rebuild: rebuild)
+        warmThumbnails(manual: true, rebuild: rebuild, restartOperation: restartOperation)
     }
 
     func pauseThumbnailCache() {
         guard thumbnailWarmingStatus == .warming || thumbnailWarmingStatus == .waiting else { return }
-        if thumbnailWarmingStatus == .warming {
+        if activeThumbnailRequest != nil, let thumbnailWarmingStartedAt {
             pendingThumbnailRequest = activeThumbnailRequest
-            thumbnailWarmingCompletedElapsed = thumbnailWarmingStartedAt.map { Date().timeIntervalSince($0) }
+            thumbnailWarmingCompletedElapsed = Date().timeIntervalSince(thumbnailWarmingStartedAt)
         }
         warmingRunID &+= 1
         thumbnailWarmingWaitingReason = nil
@@ -545,7 +562,7 @@ final class LibraryIndexController {
 
     func rebuildThumbnailCache() {
         resumeThumbnailWarming()
-        warmThumbnails(manual: true, rebuild: true)
+        warmThumbnails(manual: true, rebuild: true, restartOperation: true)
     }
 
     func clearThumbnails() {
@@ -585,6 +602,26 @@ final class LibraryIndexController {
         Task {
             storedAccounts = await (try? store.storedAccounts()) ?? storedAccounts
         }
+    }
+
+    /// Reconcile committed state when the visible app returns from suspension.
+    func refreshStatistics() async {
+        guard let expectedScope = scope else { return }
+        let expectedRun = warmingRunID
+        let report = try? await store.storageReport(scope: expectedScope)
+        let accounts = try? await store.storedAccounts()
+        guard !Task.isCancelled, scope == expectedScope, warmingRunID == expectedRun else { return }
+        if let report {
+            storageReport = report
+        }
+        if let accounts {
+            storedAccounts = accounts
+        }
+        guard warmingTask == nil,
+              let snapshot = try? await store.snapshot(scope: expectedScope),
+              let progress = try? await thumbnailCache.cachedProgress(assets: snapshot.assets, scope: expectedScope),
+              !Task.isCancelled, scope == expectedScope, warmingRunID == expectedRun, warmingTask == nil else { return }
+        applyThumbnailWarmingProgress(progress)
     }
 
     func deleteCurrentAccountData() async {
@@ -666,6 +703,10 @@ final class LibraryIndexController {
     }
 
     private func suspend(cancelBootstrapCatalogs: Bool) {
+        if status == .indexing {
+            indexContinuationPending = true
+            completedElapsed = startedAt.map { Date().timeIntervalSince($0) }
+        }
         runID &+= 1
         task?.cancel()
         task = nil
@@ -719,6 +760,7 @@ final class LibraryIndexController {
         activeThumbnailRequest = nil
         thumbnailWarmingWaitingReason = nil
         suspend()
+        indexContinuationPending = false
         deferredBootstrapPublication = nil
         scope = nil
         endpoint = nil
@@ -740,6 +782,7 @@ final class LibraryIndexController {
         thumbnailWarmingProcessedCount = 0
         thumbnailWarmingPendingCount = 0
         thumbnailWarmingStartedAt = nil
+        warmingProcessedOffset = 0
         thumbnailWarmingCompletedElapsed = nil
         thumbnailWarmingFailures = []
         thumbnailWarmingLastUpdatedAt = nil
@@ -779,8 +822,10 @@ final class LibraryIndexController {
         }
     }
 
-    private func run(fullReconciliation: Bool) {
+    private func run(fullReconciliation: Bool, restartOperation: Bool = false, resumedElapsed: TimeInterval? = nil) {
         guard let scope, task == nil, !indexPaused else { return }
+        let continuesRun = indexContinuationPending && !restartOperation && !fullReconciliation
+        indexContinuationPending = false
         let refreshOnly = backgroundRefreshOnly && !fullReconciliation
         // An interrupted or failed new attempt must remain eligible for retry,
         // including after relaunching with an older accepted generation.
@@ -788,7 +833,11 @@ final class LibraryIndexController {
         preferences.removeObject(forKey: successKey(scope))
         runID &+= 1
         let currentRunID = runID
-        startedAt = Date()
+        if let resumedElapsed {
+            startedAt = Date().addingTimeInterval(-resumedElapsed)
+        } else if !continuesRun {
+            startedAt = Date()
+        }
         completedElapsed = nil
         indexFailedAt = nil
         indexOperation = fullReconciliation ? .rebuild : .sync
@@ -799,7 +848,7 @@ final class LibraryIndexController {
             indexedVideoCount = 0
         }
         status = .indexing
-        let runStartedAt = Date()
+        let runStartedAt = startedAt ?? Date()
         Self.logger.info(
             "Library index started operation=\(fullReconciliation ? "rebuild" : "sync", privacy: .public) scope=\(scope.cacheNamespace.prefix(8), privacy: .private)"
         )
@@ -992,8 +1041,10 @@ final class LibraryIndexController {
         }
     }
 
-    private func warmThumbnails(manual: Bool = false, rebuild: Bool = false) {
+    private func warmThumbnails(manual: Bool = false, rebuild: Bool = false, restartOperation: Bool = false) {
         guard !backgroundRefreshOnly, warmingTask == nil, thumbnailWarmingEnabled || manual, !thumbnailWarmingPaused else { return }
+        let continuesRun = !restartOperation && pendingThumbnailRequest != nil
+            && activeThumbnailRequest?.rebuild == rebuild && thumbnailWarmingStartedAt != nil
         if manual {
             pendingThumbnailRequest = ThumbnailRequest(manual: true, rebuild: rebuild)
         }
@@ -1018,23 +1069,25 @@ final class LibraryIndexController {
         warmingRunID &+= 1
         let currentWarmingRunID = warmingRunID
         thumbnailWarmingStatus = .warming
-        thumbnailWarmingCachedCount = 0
-        thumbnailWarmingThumbnailCount = 0
-        thumbnailWarmingMetadataCount = 0
-        thumbnailWarmingCachedBytes = 0
-        thumbnailWarmingEligibleCount = 0
-        thumbnailWarmingProcessedCount = 0
-        thumbnailWarmingPendingCount = 0
-        thumbnailWarmingStartedAt = Date()
+        // Keep the last committed inventory visible while the next window
+        // restores its snapshot. Continuation is still the same cache operation.
+        warmingProcessedOffset = continuesRun ? thumbnailWarmingProcessedCount : 0
+        if !continuesRun {
+            thumbnailWarmingStartedAt = Date()
+            thumbnailWarmingProcessedCount = 0
+            thumbnailWarmingPendingCount = 0
+        }
         thumbnailWarmingCompletedElapsed = nil
         thumbnailWarmingFailures = []
         thumbnailWarmingFailedAt = nil
         lastWarmingLoggedMilestone = -1
+        lastLiveStorageReportAt = .distantPast
+        let runStartedAt = thumbnailWarmingStartedAt ?? Date()
         let cache = thumbnailCache
         let store = store
         warmingTask = Task { [weak self] in
             guard let self, currentWarmingRunID == warmingRunID, !Task.isCancelled, self.scope == scope else { return }
-            let startedAt = Date()
+            let startedAt = runStartedAt
             do {
                 try await cache.reconcile(scope: scope)
                 guard currentWarmingRunID == warmingRunID, !Task.isCancelled, self.scope == scope else { return }
@@ -1177,6 +1230,9 @@ final class LibraryIndexController {
     }
 
     private func resumeThumbnailWarming() {
+        if thumbnailWarmingPaused, let elapsed = thumbnailWarmingCompletedElapsed {
+            thumbnailWarmingStartedAt = Date().addingTimeInterval(-elapsed)
+        }
         thumbnailWarmingPaused = false
         thumbnailWarmingThermalState = nil
         preferences.set(false, forKey: "library-index-thumbnail-warming-paused")
@@ -1185,9 +1241,17 @@ final class LibraryIndexController {
     private func publishThumbnailWarmingProgress(
         _ progress: LibraryThumbnailCache.WarmProgress,
         warmingRunID: UInt64
-    ) {
+    ) async {
         guard warmingRunID == self.warmingRunID else { return }
-        applyThumbnailWarmingProgress(progress)
+        applyThumbnailWarmingProgress(progress, updateWorkSample: true)
+        if Date().timeIntervalSince(lastLiveStorageReportAt) >= 5, let expectedScope = scope {
+            lastLiveStorageReportAt = Date()
+            let report = try? await store.storageReport(scope: expectedScope)
+            guard warmingRunID == self.warmingRunID, scope == expectedScope, !Task.isCancelled else { return }
+            if let report {
+                storageReport = report
+            }
+        }
         let percentage = progress.eligibleCount == 0
             ? 100
             : Int((Double(progress.cachedCount) / Double(progress.eligibleCount) * 100).rounded())
@@ -1201,14 +1265,16 @@ final class LibraryIndexController {
         )
     }
 
-    private func applyThumbnailWarmingProgress(_ progress: LibraryThumbnailCache.WarmProgress) {
+    private func applyThumbnailWarmingProgress(_ progress: LibraryThumbnailCache.WarmProgress, updateWorkSample: Bool = false) {
         thumbnailWarmingCachedCount = progress.cachedCount
         thumbnailWarmingThumbnailCount = progress.thumbnailCachedCount
         thumbnailWarmingMetadataCount = progress.metadataCachedCount
         thumbnailWarmingCachedBytes = progress.cachedBytes
         thumbnailWarmingEligibleCount = progress.eligibleCount
-        thumbnailWarmingProcessedCount = progress.processedCount
-        thumbnailWarmingPendingCount = progress.pendingCount
+        if updateWorkSample {
+            thumbnailWarmingProcessedCount = warmingProcessedOffset + progress.processedCount
+            thumbnailWarmingPendingCount = warmingProcessedOffset + progress.pendingCount
+        }
         if !progress.failures.isEmpty {
             thumbnailWarmingFailures = progress.failures
         }
