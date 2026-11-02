@@ -78,6 +78,7 @@ For now, follow [Build and run](CONTRIBUTING.md#build-and-run) to build from sou
 - Enable automatic thumbnail and metadata caching.
 - Index, metadata, and thumbnail transfers use a shared durable background queue, so queued transfers can continue after leaving the app and be recovered on relaunch. iOS still controls transfer execution and later scheduled sync opportunities. Recent successful syncs avoid repeated checks when you reopen the app.
 - Monitor sync progress, pause or resume work, retry failures, inspect diagnostics, and manage local caches from **Index** and **Cache & Storage**.
+- See live index and cache percentages with their current status directly on the Profile cards.
 
 ### 🔐 Account and connection
 
