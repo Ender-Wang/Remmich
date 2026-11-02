@@ -125,11 +125,10 @@ actor LibraryIndexSynchronizer {
             } else {
                 try await store.beginGeneration(scope: scope)
             }
-            let selectedBucketKeys = Set(selected.map(\.id.rawValue))
-            let retainedAssets = fullReconciliation
-                ? []
-                : previous?.assets.filter { !selectedBucketKeys.contains($0.bucketKey) } ?? []
-            var progressCounts = Self.progress(from: retainedAssets, expectedAssetCount: expectedCount)
+            // Refreshing a bucket does not remove its accepted local records.
+            // Replace its contribution only after its new response arrives.
+            let acceptedBuckets = Dictionary(grouping: fullReconciliation ? [] : previous?.assets ?? [], by: \.bucketKey)
+            var progressCounts = Self.progress(from: fullReconciliation ? [] : previous?.assets ?? [], expectedAssetCount: expectedCount)
             var replacements: [String: [LibraryIndexAssetRecord]] = [:]
             for summary in selected {
                 try Task.checkCancellation()
@@ -138,7 +137,7 @@ actor LibraryIndexSynchronizer {
                     LibraryIndexAssetRecord(asset: $0, bucketID: summary.id)
                 }
                 replacements[summary.id.rawValue] = records
-                progressCounts = progressCounts.adding(records)
+                progressCounts = progressCounts.replacing(acceptedBuckets[summary.id.rawValue] ?? [], with: records)
                 await progress?(progressCounts)
             }
 
@@ -258,11 +257,11 @@ actor LibraryIndexSynchronizer {
 }
 
 private extension LibraryIndexProgress {
-    nonisolated func adding(_ assets: [LibraryIndexAssetRecord]) -> LibraryIndexProgress {
+    nonisolated func replacing(_ previous: [LibraryIndexAssetRecord], with assets: [LibraryIndexAssetRecord]) -> LibraryIndexProgress {
         .init(
-            indexedAssetCount: indexedAssetCount + assets.count,
-            indexedPhotoCount: indexedPhotoCount + assets.count { $0.kind == .image },
-            indexedVideoCount: indexedVideoCount + assets.count { $0.kind == .video },
+            indexedAssetCount: indexedAssetCount - previous.count + assets.count,
+            indexedPhotoCount: indexedPhotoCount - previous.count { $0.kind == .image } + assets.count { $0.kind == .image },
+            indexedVideoCount: indexedVideoCount - previous.count { $0.kind == .video } + assets.count { $0.kind == .video },
             expectedAssetCount: expectedAssetCount
         )
     }
