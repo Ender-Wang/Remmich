@@ -29,6 +29,15 @@ struct AccountSettingsView: View {
         let accessibilityValue: String
     }
 
+    private struct SyncCardSummary {
+        let percentage: Double?
+        let status: String
+
+        var percentageText: String {
+            percentage?.formatted(.number.precision(.fractionLength(0 ... 1))) ?? "—"
+        }
+    }
+
     private struct AnimatedStatusIcon: View {
         @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -120,6 +129,7 @@ struct AccountSettingsView: View {
     @State private var showsThumbnailRebuildConfirmation = false
     @State private var showsThumbnailClearConfirmation = false
     @State private var libraryIndexClock = Date()
+    @State private var profileSyncSummaries: [SettingsPage: SyncCardSummary] = [:]
     @State private var selectedPage = SettingsPage.home
     @State private var pageHistory: [SettingsPage] = []
     @State private var cardFrames: [SettingsPage: CGRect] = [:]
@@ -347,6 +357,16 @@ struct AccountSettingsView: View {
             do { try await Task.sleep(for: .milliseconds(300)) } catch { return }
             await connectionLatency.run(endpoints: targets)
         }
+        .task(id: updatesProfileSyncSummaries) {
+            guard updatesProfileSyncSummaries else { return }
+            while !Task.isCancelled {
+                profileSyncSummaries = [
+                    .index: syncCardSummary(for: .index),
+                    .cache: syncCardSummary(for: .cache),
+                ]
+                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+            }
+        }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
             libraryIndexClock = Date()
@@ -397,8 +417,8 @@ struct AccountSettingsView: View {
         switch page {
         case .account: ("person.crop.circle", Self.accountColor, "Profile & session")
         case .connection: ("network", Self.connectionColor, "\(activeRoute?.kind.rawValue.capitalized ?? "No route") · \(routeStatusLabel)")
-        case .index: ("list.bullet.rectangle", Self.indexColor, "\(libraryIndex.indexedAssetCount.formatted()) assets")
-        case .cache: ("externaldrive", Self.cacheColor, thumbnailCacheStatusAccessibilityValue)
+        case .index: ("list.bullet.rectangle", Self.indexColor, "")
+        case .cache: ("externaldrive", Self.cacheColor, "")
         case .home, .appearance: ("", .clear, "")
         }
     }
@@ -445,9 +465,10 @@ struct AccountSettingsView: View {
             .padding(.trailing, compact && page == .connection ? 32 : 0)
             .frame(maxWidth: .infinity, alignment: .leading)
             VStack(alignment: .leading, spacing: 0) {
-                Text(presentation.detail)
-                if page == .index {
-                    Text(indexStatusPresentation.accessibilityValue)
+                if page == .index || page == .cache {
+                    syncCardLabel(profileSyncSummaries[page] ?? syncCardSummary(for: page))
+                } else {
+                    Text(presentation.detail)
                 }
             }
             .font(compact ? .caption2 : .caption).foregroundStyle(.secondary)
@@ -457,6 +478,80 @@ struct AccountSettingsView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(.vertical, inset)
+    }
+
+    private var updatesProfileSyncSummaries: Bool {
+        selectedPage == .home && scenePhase == .active
+    }
+
+    private func syncCardSummary(for page: SettingsPage) -> SyncCardSummary {
+        let completed: Int
+        let total: Int
+        let isComplete: Bool
+        let status: String
+        if page == .index {
+            completed = displayedIndexCompletedCount
+            total = displayedIndexTotalCount
+            isComplete = libraryIndex.status == .upToDate
+            status = switch libraryIndex.status {
+            case .idle: "Waiting"
+            case .indexing: total > 0 && completed >= total ? "Checking for updates…" : "Indexing…"
+            case .paused: "Paused"
+            case .upToDate: "Up to date"
+            case .failed: "Needs attention"
+            }
+        } else {
+            completed = displayedThumbnailCompletedCount
+            total = displayedThumbnailTotalCount
+            isComplete = libraryIndex.thumbnailWarmingStatus == .upToDate
+            status = switch libraryIndex.thumbnailWarmingStatus {
+            case .off: "Off"
+            case .waiting:
+                switch libraryIndex.thumbnailWarmingWaitingReason {
+                case .lowPowerMode: "Low Power Mode"
+                case .thermalSerious, .thermalCritical: "Cooling down"
+                case .session: "Waiting for connection"
+                case .index: "Waiting for index"
+                case nil: "Waiting"
+                }
+            case .warming: "Caching…"
+            case .paused: "Paused"
+            case .upToDate: "Up to date"
+            case .failed: "Needs attention"
+            }
+        }
+        let percentage = total > 0
+            ? (Self.progressFraction(completed: completed, total: total) * 1000).rounded(.down) / 10
+            : (isComplete ? 100.0 : nil)
+        return SyncCardSummary(percentage: percentage, status: status)
+    }
+
+    private func syncCardLabel(_ summary: SyncCardSummary) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 0) {
+                Text(summary.percentageText)
+                    .contentTransition(reduceMotion ? .identity : .numericText(value: summary.percentage ?? 0))
+                    .animation(reduceMotion ? nil : .smooth(duration: 0.3), value: summary.percentage)
+                if summary.percentage != nil {
+                    Text("%")
+                }
+            }
+            .monospacedDigit()
+            ZStack(alignment: .leading) {
+                Text(summary.status)
+                    .id(summary.status)
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .bottom).combined(with: .opacity),
+                        removal: .move(edge: .top).combined(with: .opacity)
+                    ))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .clipped()
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: summary.status)
+        }
+        .lineLimit(1)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(summary.percentageText)\(summary.percentage == nil ? "" : "%"), \(summary.status)")
     }
 
     private func expandingCard(_ page: SettingsPage, source: CGRect, destination: CGRect, compact: Bool) -> some View {
@@ -833,8 +928,10 @@ struct AccountSettingsView: View {
     }
 
     private var updatesLibraryIndexClock: Bool {
-        (selectedPage == .index && libraryIndex.status == .indexing)
-            || (selectedPage == .cache && libraryIndex.thumbnailWarmingStatus == .warming)
+        scenePhase == .active && (
+            (selectedPage == .index && libraryIndex.status == .indexing)
+                || (selectedPage == .cache && libraryIndex.thumbnailWarmingStatus == .warming)
+        )
     }
 
     private func closePanel() {
