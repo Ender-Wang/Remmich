@@ -11,7 +11,7 @@ struct RootView: View {
         ZStack {
             switch controller.state {
             case .loading:
-                RestoringAppShellView()
+                Color(uiColor: .systemBackground)
             case .signedOut, .checking, .credentials, .signingIn, .failed:
                 OnboardingView(controller: controller)
             case .signingOut:

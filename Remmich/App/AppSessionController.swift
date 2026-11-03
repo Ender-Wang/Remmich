@@ -822,11 +822,14 @@ final class AppSessionController {
         let context = LibraryTransferQueue.diagnosticContext()
         Self.routeLogger.info("App entered foreground; \(context, privacy: .public)")
         isAppInForeground = true
-        await libraryTransfers?.setExecutionMode(.foreground)
-        guard isAppInForeground else { return }
         automaticSyncAllowed = true
         libraryIndex.setBackgroundRefreshOnly(false)
         await start()
+        // Determine whether there is an authenticated owner before waiting for
+        // native transfer restoration. Signed-out startup has no work to hand off.
+        guard isAppInForeground, !Task.isCancelled, case .signedIn = state else { return }
+        await libraryTransfers?.setExecutionMode(.foreground)
+        guard isAppInForeground, !Task.isCancelled, case .signedIn = state else { return }
         // Foreground startup already authenticates its route. A callback joining
         // it must not validate again; headless startup without a route still must.
         if !isRestoringSession, !(needsSessionPreparation && routeStatus == .connected) {

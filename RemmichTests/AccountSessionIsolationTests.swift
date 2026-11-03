@@ -3,6 +3,35 @@ import Testing
 @testable import Remmich
 
 struct AccountSessionIsolationTests {
+    @Test @MainActor func signedOutForegroundStartupDoesNotRestoreRoutesOrLibraryState() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        let suite = "AccountSession-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            defaults.removePersistentDomain(forName: suite)
+        }
+        let service = AccountSwitchService()
+        let transfers = LibraryTransferQueue(rootURL: root.appending(path: "transfers"), nativeTasksProvider: {
+            Issue.record("Signed-out startup must not wait for native transfer restoration")
+            return []
+        })
+        let controller = AppSessionController(
+            transfers: transfers, service: service, sessionStore: IsolatedSessionStore(),
+            profileStore: ConnectionProfileStore(suiteName: suite),
+            libraryIndexStore: SQLiteLibraryIndexStore(databaseURL: root.appending(path: "index.sqlite")),
+            libraryIndexPreferences: defaults, networkMonitoringEnabled: false
+        )
+        await controller.handleForegroundTransition()
+        guard case .signedOut = controller.state else {
+            Issue.record("A missing Keychain session must open login")
+            return
+        }
+        #expect(controller.activeRoute == nil && controller.connectionProfile == .init())
+        #expect(controller.libraryIndex.storageReport == .empty)
+        #expect(await service.validatedEndpoints.isEmpty)
+    }
+
     @Test @MainActor func loginAfterRetainedSignOutUsesOnlyTheNewAccountsRoutes() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         let suite = "AccountSession-\(UUID().uuidString)"
