@@ -359,7 +359,8 @@ final class AppSessionController {
             guard preparationIsCurrent(generation) else { return }
             routeGeneration += 1
             connectionProfile = profile
-            activeRoute = .init(kind: .direct, endpoint: session.apiURL)
+            activeRoute = profile.usingLoginEndpointIfNeeded(session.apiURL).route(matching: session.apiURL)
+                ?? .init(kind: .fallback, endpoint: session.apiURL)
             routeStatus = .connected
             validatedNetworkPathSignature = lastNetworkPathSignature
             await persistentAssetDetails.configure(session: session)
@@ -377,7 +378,8 @@ final class AppSessionController {
                 photos.routeDidChange(isReachable: true)
                 videos.routeDidChange(isReachable: true)
             }
-            Self.routeLogger.info("Connected directly to \(session.apiURL.absoluteString, privacy: .public)")
+            let routeKind = activeRoute?.kind.rawValue ?? "primary"
+            Self.routeLogger.info("Authenticated login endpoint \(session.apiURL.absoluteString, privacy: .public) kind=\(routeKind, privacy: .public)")
             state = .signedIn(session)
             automaticSyncAllowed = isAppInForeground || backgroundSyncID != nil
             startLibraryIndexing(session: session)
@@ -517,13 +519,8 @@ final class AppSessionController {
             "Evaluating saved connection routes trigger=\(trigger.rawValue, privacy: .public)"
         )
 
-        if connectionProfile.endpoints.isEmpty {
-            await restoreDirectRoute(session, evaluation: evaluation, startIndex: startIndex)
-            return
-        }
-
         let outcome = await Self.evaluateRoutes(
-            profile: connectionProfile,
+            profile: connectionProfile.usingLoginEndpointIfNeeded(session.apiURL),
             session: session,
             service: service
         )
@@ -633,57 +630,6 @@ final class AppSessionController {
         }
         pendingPathChangeTask = task
         await task.value
-    }
-
-    private func restoreDirectRoute(_ session: AccountSession, evaluation: Int, startIndex: Bool) async {
-        let result = await Self.validateRoute(session.apiURL, session: session, service: service)
-        guard evaluation == routeGeneration else { return }
-        if result.isSessionRejected {
-            await invalidateSession(session, evaluation: evaluation)
-            return
-        }
-        guard result.isReachable else {
-            routeStatus = hasReceivedNetworkPath ? .unavailable : .waitingForNetwork
-            if let activeRoute {
-                Self.routeLogger.error(
-                    "Direct route validation failed; retaining current \(activeRoute.endpoint.absoluteString, privacy: .public)"
-                )
-            } else {
-                Self.routeLogger.error("Saved direct route is currently unreachable")
-            }
-            return
-        }
-        let directRoute = ActiveConnectionRoute(kind: .direct, endpoint: session.apiURL)
-        if activeRoute == directRoute {
-            routeStatus = .connected
-            Self.routeLogger.info(
-                "Retained active direct endpoint \(session.apiURL.absoluteString, privacy: .public)"
-            )
-            return
-        }
-        do {
-            try await service.activateRoute(endpoint: session.apiURL, session: session)
-            guard evaluation == routeGeneration else { return }
-            activeRoute = .init(kind: .direct, endpoint: session.apiURL)
-            routeStatus = .connected
-            media.updateRoute(session.apiURL)
-            if await updateTimelineRoutes(session.apiURL, session: session) {
-                photos.routeDidChange(isReachable: true)
-                videos.routeDidChange(isReachable: true)
-            }
-            if startIndex {
-                startLibraryIndexing(session: session)
-            }
-            Self.routeLogger.info(
-                "Restored direct endpoint \(session.apiURL.absoluteString, privacy: .public)"
-            )
-        } catch {
-            guard evaluation == routeGeneration else { return }
-            routeStatus = hasReceivedNetworkPath ? .unavailable : .waitingForNetwork
-            Self.routeLogger.error(
-                "Could not restore direct endpoint \(session.apiURL.absoluteString, privacy: .public): \(Self.message(for: error), privacy: .public)"
-            )
-        }
     }
 
     private nonisolated static func validateRoute(

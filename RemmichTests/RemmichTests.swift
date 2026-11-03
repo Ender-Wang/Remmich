@@ -235,7 +235,7 @@ struct RemmichTests {
         #expect(ServerCompatibility.rejectionMessage(for: breaking)?.contains("v4.0.0") == true)
     }
 
-    @Test @MainActor func freshSignInKeepsLoginEndpointDirectAndProfileUnclassified() async {
+    @Test @MainActor func freshSignInUsesImplicitPrimaryWithoutSavingAProfile() async {
         let service = SequencedRouteService(validationResults: [])
         let sessionStore = MemorySessionStore(session: nil)
         let profileStore = ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)")
@@ -261,7 +261,7 @@ struct RemmichTests {
             return
         }
         #expect(session == .fixture)
-        #expect(controller.activeRoute == ActiveConnectionRoute(kind: .direct, endpoint: session.apiURL))
+        #expect(controller.activeRoute == ActiveConnectionRoute(kind: .primary, endpoint: session.apiURL))
         #expect(controller.routeStatus == .connected)
         #expect(controller.connectionProfile == ConnectionProfile())
         #expect(await profileStore.load(for: MediaAccountScope(session: .fixture)) == ConnectionProfile())
@@ -269,7 +269,7 @@ struct RemmichTests {
         #expect(await service.activatedEndpoints.isEmpty)
     }
 
-    @Test @MainActor func directRouteRevalidatesAfterInitialNetworkCallback() async {
+    @Test @MainActor func implicitPrimaryRevalidatesAfterInitialNetworkCallback() async {
         let service = SequencedRouteService(validationResults: [.reachable])
         let controller = AppSessionController(
             transfers: nil,
@@ -291,7 +291,7 @@ struct RemmichTests {
         await controller.handleNetworkPathChange(usesWiFi: false)
         #expect(await service.validateCallCount == 1)
         #expect(controller.activeRoute == ActiveConnectionRoute(
-            kind: .direct,
+            kind: .primary,
             endpoint: AccountSession.fixture.apiURL
         ))
         #expect(controller.routeStatus == .connected)
@@ -326,7 +326,7 @@ struct RemmichTests {
 
         #expect(controller.routeStatus == .connected)
         #expect(controller.activeRoute == ActiveConnectionRoute(
-            kind: .direct,
+            kind: .primary,
             endpoint: AccountSession.fixture.apiURL
         ))
         #expect(await service.validateCallCount == 1)
@@ -356,7 +356,7 @@ struct RemmichTests {
 
         #expect(controller.routeStatus == .connected)
         #expect(controller.activeRoute == ActiveConnectionRoute(
-            kind: .direct,
+            kind: .primary,
             endpoint: AccountSession.fixture.apiURL
         ))
 
@@ -397,7 +397,7 @@ struct RemmichTests {
         #expect(await sessionStore.storedSession() == nil)
     }
 
-    @Test @MainActor func rejectedDirectSessionReturnsToOnboarding() async {
+    @Test @MainActor func rejectedImplicitPrimarySessionReturnsToOnboarding() async {
         let rejected = RouteValidationResult.failed(
             message: "The saved session is not authorized.",
             kind: .sessionRejected
@@ -422,7 +422,7 @@ struct RemmichTests {
         #expect(await sessionStore.storedSession() == nil)
     }
 
-    @Test @MainActor func transientDirectFailureRetainsSavedSession() async {
+    @Test @MainActor func transientImplicitPrimaryFailureRetainsSavedSession() async {
         let transient = RouteValidationResult.failed(
             message: "The endpoint could not be reached.",
             kind: .transient
@@ -476,7 +476,7 @@ struct RemmichTests {
 
         #expect(controller.routeStatus == .connected)
         #expect(controller.activeRoute == ActiveConnectionRoute(
-            kind: .direct,
+            kind: .primary,
             endpoint: AccountSession.fixture.apiURL
         ))
         #expect(await service.validateCallCount == 2)
@@ -591,7 +591,7 @@ struct RemmichTests {
         #expect(try await service.activatedEndpoints == [#require(expected.primaryEndpoint)])
     }
 
-    @Test @MainActor func profileSaveRevalidatesMatchingDirectEndpointBeforePromotion() async {
+    @Test @MainActor func profileSaveRevalidatesMatchingImplicitPrimaryEndpoint() async {
         let service = SequencedRouteService(validationResults: [.reachable])
         let profileStore = ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)")
         let controller = AppSessionController(
@@ -645,7 +645,7 @@ struct RemmichTests {
         #expect(result == .saved(profile: ConnectionProfile(fallbackEndpoints: [endpoint])))
         #expect(await profileStore.load(for: MediaAccountScope(session: .fixture)) == ConnectionProfile(fallbackEndpoints: [endpoint]))
         #expect(controller.activeRoute == ActiveConnectionRoute(
-            kind: .direct,
+            kind: .primary,
             endpoint: AccountSession.fixture.apiURL
         ))
         #expect(controller.routeStatus == .waitingForNetwork)

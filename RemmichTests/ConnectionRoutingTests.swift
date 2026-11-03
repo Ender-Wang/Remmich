@@ -3,6 +3,26 @@ import Testing
 @testable import Remmich
 
 struct ConnectionRoutingTests {
+    @Test func loginEndpointIsImplicitPrimaryWithoutChangingSavedSettings() async throws {
+        let login = try #require(URL(string: "https://demo.immich.app/api"))
+        let saved = ConnectionProfile()
+        let effective = saved.usingLoginEndpointIfNeeded(login)
+        #expect(saved.endpoints.isEmpty)
+        #expect(effective.routes == [.init(kind: .primary, endpoint: login)])
+        let coordinator = NetworkRouteCoordinator { $0 == login }
+        #expect(await coordinator.evaluate(effective) == .init(kind: .primary, endpoint: login))
+    }
+
+    @Test func savedFallbackLoginKeepsItsClassificationAndPriority() {
+        let saved = profile()
+        let login = saved.fallbackEndpoints[0]
+        let effective = saved.usingLoginEndpointIfNeeded(login)
+        #expect(effective == saved)
+        #expect(effective.route(matching: login)?.kind == .fallback)
+        #expect(effective.routes.first?.kind == .primary)
+        #expect(ConnectionRouteKind.allCases == [.primary, .fallback])
+    }
+
     @Test func primaryThenFallbacksAreCheckedInOrder() async {
         let recorder = ConnectionEndpointRecorder()
         let profile = profile()

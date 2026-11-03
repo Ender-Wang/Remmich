@@ -54,7 +54,6 @@ nonisolated struct AccountSession: Codable, Hashable, Sendable {
 }
 
 nonisolated enum ConnectionRouteKind: String, Codable, CaseIterable, Sendable {
-    case direct
     case primary
     case fallback
 }
@@ -151,6 +150,11 @@ nonisolated struct ConnectionProfile: Codable, Equatable, Sendable {
 
     func route(matching endpoint: URL) -> ActiveConnectionRoute? {
         routes.first { $0.endpoint == endpoint }
+    }
+
+    /// The authenticated login URL is Primary until the account saves a route profile.
+    func usingLoginEndpointIfNeeded(_ endpoint: URL) -> ConnectionProfile {
+        endpoints.isEmpty ? .init(primaryEndpoint: endpoint) : self
     }
 }
 

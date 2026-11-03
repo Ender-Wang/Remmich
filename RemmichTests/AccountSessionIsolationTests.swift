@@ -63,7 +63,7 @@ struct AccountSessionIsolationTests {
         #expect(controller.libraryIndex.storageReport == .empty)
         await controller.signIn(email: "second", password: "fixture", server: service.details("second"))
         #expect(controller.connectionProfile == .init())
-        #expect(controller.activeRoute == .init(kind: .direct, endpoint: second.apiURL))
+        #expect(controller.activeRoute == .init(kind: .primary, endpoint: second.apiURL))
         #expect(controller.routeStatus == .connected)
         #expect(controller.media.scope == MediaAccountScope(session: second))
         #expect(!controller.libraryIndex.thumbnailWarmingEnabled)
