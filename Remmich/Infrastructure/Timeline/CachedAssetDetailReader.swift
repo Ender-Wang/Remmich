@@ -10,6 +10,7 @@ actor CachedAssetDetailReader: AssetDetailReading {
     private let source: any AssetDetailReading
     private let store: any LibraryIndexStoring
     private var scope: MediaAccountScope?
+    private var generation: UInt64 = 0
 
     init(source: any AssetDetailReading, store: any LibraryIndexStoring) {
         self.source = source
@@ -17,17 +18,22 @@ actor CachedAssetDetailReader: AssetDetailReading {
     }
 
     func configure(session: AccountSession) {
+        generation &+= 1
         scope = MediaAccountScope(session: session)
     }
 
     func clearSession() {
+        generation &+= 1
         scope = nil
     }
 
     func cachedAssetDetail(id: String) async -> AssetDetail? {
         guard let scope else { return nil }
+        let requestGeneration = generation
         do {
-            return try await store.cachedAssetDetail(id: id, scope: scope)
+            let detail = try await store.cachedAssetDetail(id: id, scope: scope)
+            guard !Task.isCancelled, requestGeneration == generation, self.scope == scope else { return nil }
+            return detail
         } catch {
             Self.logger.error(
                 "Asset detail cache read failed asset=\(id.prefix(8), privacy: .private) error=\(error.localizedDescription, privacy: .public)"
@@ -37,8 +43,10 @@ actor CachedAssetDetailReader: AssetDetailReading {
     }
 
     func assetDetail(id: String) async throws -> AssetDetail {
+        guard let scope else { throw CancellationError() }
+        let requestGeneration = generation
         let detail = try await source.assetDetail(id: id)
-        guard let scope else { return detail }
+        guard !Task.isCancelled, requestGeneration == generation, self.scope == scope else { throw CancellationError() }
         do {
             try await store.upsert(assetDetail: detail, scope: scope)
         } catch {
@@ -46,6 +54,7 @@ actor CachedAssetDetailReader: AssetDetailReading {
                 "Asset detail cache write failed asset=\(id.prefix(8), privacy: .private) error=\(error.localizedDescription, privacy: .public)"
             )
         }
+        guard !Task.isCancelled, requestGeneration == generation, self.scope == scope else { throw CancellationError() }
         return detail
     }
 }

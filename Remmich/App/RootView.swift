@@ -34,6 +34,7 @@ struct RootView: View {
                     signOut: controller.signOut,
                     primaryContentLoadingChanged: { primaryContentLoading = $0 }
                 )
+                .id(MediaAccountScope(session: session))
             }
         }
         .overlay {

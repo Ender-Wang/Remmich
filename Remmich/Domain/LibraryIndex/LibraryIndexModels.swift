@@ -187,6 +187,9 @@ nonisolated struct LibraryIndexSnapshot: Sendable {
 }
 
 nonisolated struct LibraryIndexStorageReport: Equatable, Sendable {
+    static let empty = Self(metadataBytes: 0, derivativeBytes: 0, derivativeCount: 0, downloadBytes: 0,
+                            downloadCount: 0, originalBytes: 0, playbackBytes: 0)
+
     let metadataBytes: Int64
     let derivativeBytes: Int64
     let derivativeCount: Int

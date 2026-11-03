@@ -73,6 +73,8 @@ final class AppSessionController {
         service: any ServerReading & SessionManaging & RouteValidating = ImmichServiceAdapter(),
         sessionStore: any SessionStoring = KeychainSessionStore(),
         profileStore: ConnectionProfileStore = .init(),
+        libraryIndexStore: SQLiteLibraryIndexStore = .init(),
+        libraryIndexPreferences: UserDefaults = .standard,
         endpointNormalizer: any EndpointNormalizing = ImmichEndpointNormalizer(),
         networkMonitoringEnabled: Bool = true,
         pathChangeDebounce: Duration = .milliseconds(400),
@@ -80,7 +82,6 @@ final class AppSessionController {
     ) {
         self.timeline = timeline
         libraryTransfers = transfers
-        let libraryIndexStore = SQLiteLibraryIndexStore()
         self.libraryIndexStore = libraryIndexStore
         let syncSource = transfers == nil ? timeline : ImmichTimelineRepository(transfers: transfers)
         librarySyncSource = syncSource
@@ -89,7 +90,8 @@ final class AppSessionController {
             store: libraryIndexStore,
             media: media,
             assetDetails: syncSource,
-            transfers: transfers
+            transfers: transfers,
+            preferences: libraryIndexPreferences
         )
         let persistentAssetDetails = CachedAssetDetailReader(
             source: timeline,
@@ -237,11 +239,6 @@ final class AppSessionController {
             return
         }
 
-        connectionProfile = await profileStore.load()
-        guard preparationIsCurrent(generation) else { return }
-        Self.startupLogger.info(
-            "Connection profile restored elapsedMs=\(Self.elapsedMilliseconds(since: startupStartedAt))"
-        )
         do {
             let restoredSession = try await sessionStore.load()
             guard preparationIsCurrent(generation) else { return }
@@ -252,8 +249,18 @@ final class AppSessionController {
             Self.startupLogger.info(
                 "Account session restored elapsedMs=\(Self.elapsedMilliseconds(since: startupStartedAt))"
             )
+            let profile = await profileStore.load(for: MediaAccountScope(session: session))
+            guard preparationIsCurrent(generation) else { return }
+            connectionProfile = profile
+            Self.startupLogger.info(
+                "Connection profile restored elapsedMs=\(Self.elapsedMilliseconds(since: startupStartedAt))"
+            )
             isRestoringSession = true
-            defer { isRestoringSession = false }
+            defer {
+                if generation == preparationGeneration {
+                    isRestoringSession = false
+                }
+            }
             if !inBackground {
                 await persistentAssetDetails.configure(session: session)
                 guard preparationIsCurrent(generation) else { return }
@@ -302,9 +309,12 @@ final class AppSessionController {
     }
 
     func connect(address: String) async {
+        invalidatePreparation()
+        let generation = preparationGeneration
         state = .checking
         do {
             let server = try await service.connect(to: address)
+            guard preparationIsCurrent(generation) else { return }
             guard server.isInitialized, server.isOnboarded else {
                 state = .failed(message: "This Immich server has not completed setup yet.", server: nil)
                 return
@@ -319,27 +329,49 @@ final class AppSessionController {
             }
             state = .credentials(server)
         } catch {
+            guard preparationIsCurrent(generation) else { return }
             state = .failed(message: Self.message(for: error), server: nil)
         }
     }
 
     func signIn(email: String, password: String, server: ServerDetails) async {
+        invalidatePreparation()
+        let generation = preparationGeneration
+        routeGeneration += 1
+        pendingPathChangeTask?.cancel()
+        pendingPathChangeTask = nil
+        connectionProfile = .init()
+        activeRoute = nil
+        routeStatus = .waitingForNetwork
+        validatedNetworkPathSignature = nil
+        libraryIndex.clearSession()
         state = .signingIn(server)
         do {
             let authenticated = try await service.signIn(email: email, password: password, server: server)
+            guard preparationIsCurrent(generation) else { return }
             let session = try await libraryIndexStore.sessionReusingRetainedAccount(authenticated)
+            guard preparationIsCurrent(generation) else { return }
             try await libraryIndexStore.recordVerifiedEndpoint(session.apiURL, session: session)
+            guard preparationIsCurrent(generation) else { return }
+            let profile = await profileStore.load(for: MediaAccountScope(session: session))
+            guard preparationIsCurrent(generation) else { return }
             try await sessionStore.save(session)
+            guard preparationIsCurrent(generation) else { return }
             routeGeneration += 1
+            connectionProfile = profile
             activeRoute = .init(kind: .direct, endpoint: session.apiURL)
             routeStatus = .connected
+            validatedNetworkPathSignature = lastNetworkPathSignature
             await persistentAssetDetails.configure(session: session)
+            guard preparationIsCurrent(generation) else { return }
             media.configure(session: session, activeEndpoint: session.apiURL)
             let routeChanged = await configureTimelines(
                 session: session,
                 endpoint: session.apiURL
             )
+            guard preparationIsCurrent(generation) else { return }
             await bootstrapLocalLibrary(session: session)
+            guard preparationIsCurrent(generation) else { return }
             foregroundResourcesReady = true
             if routeChanged {
                 photos.routeDidChange(isReachable: true)
@@ -347,41 +379,62 @@ final class AppSessionController {
             }
             Self.routeLogger.info("Connected directly to \(session.apiURL.absoluteString, privacy: .public)")
             state = .signedIn(session)
+            automaticSyncAllowed = isAppInForeground || backgroundSyncID != nil
             startLibraryIndexing(session: session)
         } catch {
+            guard preparationIsCurrent(generation) else { return }
             state = .failed(message: Self.message(for: error), server: server)
         }
     }
 
     func signOut(deleteLocalData: Bool = false) async {
-        backgroundSyncInvalidated?()
-        await libraryTransfers?.invalidate()
-        invalidatePreparation()
-        if deleteLocalData {
-            await libraryIndex.deleteCurrentAccountData()
-        }
-        libraryIndex.clearSession()
-        routeGeneration += 1
-        activeRoute = nil
-        routeStatus = .waitingForNetwork
-        media.clearAll()
-        await persistentAssetDetails.clearSession()
-        await timeline.clear()
-        await librarySyncSource.clear()
-        photos.reset()
-        videos.reset()
-        guard case let .signedIn(session) = state else {
-            try? await sessionStore.delete()
-            state = .signedOut
-            return
+        let departingSession: AccountSession? = if case let .signedIn(session) = state {
+            session
+        } else {
+            nil
         }
         state = .signingOut
+        backgroundSyncInvalidated?()
+        invalidatePreparation()
+        let generation = preparationGeneration
+        automaticSyncAllowed = false
+        routeGeneration += 1
+        pendingPathChangeTask?.cancel()
+        pendingPathChangeTask = nil
+        backgroundSyncID = nil
+        backgroundSyncKind = nil
+        activeRoute = nil
+        routeStatus = .waitingForNetwork
+        validatedNetworkPathSignature = nil
+        connectionProfile = .init()
+        libraryIndex.suspend()
+        media.clearAll()
+        photos.reset()
+        videos.reset()
+        await libraryTransfers?.invalidate()
+        guard generation == preparationGeneration else { return }
+        if deleteLocalData {
+            await libraryIndex.deleteCurrentAccountData()
+            guard generation == preparationGeneration else { return }
+        }
+        libraryIndex.clearSession()
+        await persistentAssetDetails.clearSession()
+        guard generation == preparationGeneration else { return }
+        await timeline.clear()
+        guard generation == preparationGeneration else { return }
+        await librarySyncSource.clear()
+        guard generation == preparationGeneration else { return }
         try? await sessionStore.delete()
-        await service.signOut(session)
+        guard generation == preparationGeneration else { return }
+        if let departingSession {
+            await service.signOut(departingSession)
+        }
+        guard generation == preparationGeneration else { return }
         state = .signedOut
     }
 
     func resetOnboarding() {
+        invalidatePreparation()
         state = .signedOut
     }
 
@@ -390,11 +443,13 @@ final class AppSessionController {
     }
 
     func saveConnectionProfile(_ draft: ConnectionProfileDraft) async -> ConnectionProfileSaveResult {
-        guard case .signedIn = state else {
+        guard case let .signedIn(session) = state else {
             return .rejected(failures: draft.addresses.map {
                 .init(address: $0, message: "No signed-in session is available.")
             })
         }
+        let generation = preparationGeneration
+        let scope = MediaAccountScope(session: session)
         let profile: ConnectionProfile
         do {
             profile = try normalizedProfile(from: draft)
@@ -409,13 +464,15 @@ final class AppSessionController {
             return .rejected(failures: [])
         }
         do {
-            try await profileStore.save(profile)
+            try await profileStore.save(profile, for: scope)
         } catch {
             return .rejected(failures: [
                 .init(address: "", message: "The connection profile could not be saved."),
             ])
         }
 
+        guard preparationIsCurrent(generation), case let .signedIn(current) = state,
+              MediaAccountScope(session: current) == scope else { return .saved(profile: profile) }
         routeGeneration += 1
         connectionProfile = profile
         if let currentEndpoint = activeRoute?.endpoint,
@@ -700,24 +757,9 @@ final class AppSessionController {
         }
     }
 
-    private func invalidateSession(_ session: AccountSession, evaluation: Int) async {
+    private func invalidateSession(_: AccountSession, evaluation: Int) async {
         guard evaluation == routeGeneration else { return }
-        backgroundSyncInvalidated?()
-        await libraryTransfers?.invalidate()
-        invalidatePreparation()
-        routeGeneration += 1
-        activeRoute = nil
-        routeStatus = .waitingForNetwork
-        libraryIndex.clearSession()
-        media.clearAll()
-        await timeline.clear()
-        await librarySyncSource.clear()
-        photos.reset()
-        videos.reset()
-        state = .signingOut
-        try? await sessionStore.delete()
-        await service.signOut(session)
-        state = .signedOut
+        await signOut()
     }
 
     func handleMemoryPressure() {
@@ -726,22 +768,32 @@ final class AppSessionController {
 
     @discardableResult
     private func configureTimelines(session: AccountSession, endpoint: URL?) async -> Bool {
+        let generation = preparationGeneration
         let changed = await timeline.configure(session: session, activeEndpoint: endpoint)
+        guard preparationIsCurrent(generation) else { return false }
         await librarySyncSource.configure(session: session, activeEndpoint: endpoint)
+        guard preparationIsCurrent(generation) else { return false }
         if let endpoint {
             await libraryTransfers?.setExecutionMode(isAppInForeground ? .foreground : .background)
+            guard preparationIsCurrent(generation) else { return false }
             do { try await libraryTransfers?.configure(session: session, endpoint: endpoint, cacheAllowed: LibraryCacheResourceConditions.current.waitReason == nil) }
             catch { Self.routeLogger.error("Library transfer configuration could not be persisted") }
         }
+        guard preparationIsCurrent(generation) else { return false }
         return changed
     }
 
     private func updateTimelineRoutes(_ endpoint: URL, session: AccountSession) async -> Bool {
+        let generation = preparationGeneration
         let changed = await timeline.updateRoute(endpoint)
+        guard preparationIsCurrent(generation) else { return false }
         await librarySyncSource.updateRoute(endpoint)
+        guard preparationIsCurrent(generation) else { return false }
         await libraryTransfers?.setExecutionMode(isAppInForeground ? .foreground : .background)
+        guard preparationIsCurrent(generation) else { return false }
         do { try await libraryTransfers?.configure(session: session, endpoint: endpoint, cacheAllowed: LibraryCacheResourceConditions.current.waitReason == nil) }
         catch { Self.routeLogger.error("Library transfer route could not be persisted") }
+        guard preparationIsCurrent(generation) else { return false }
         return changed
     }
 
@@ -866,6 +918,7 @@ final class AppSessionController {
 
     private func invalidatePreparation() {
         preparationGeneration += 1
+        isRestoringSession = false
         preparationTask?.cancel()
         preparationTask = nil
         foregroundPreparationTask?.cancel()

@@ -35,11 +35,14 @@ actor LibraryTransferQueue {
 
     private let rootURL: URL
     private let journalURL: URL
+    private let nativeTasksProvider: (@Sendable () async -> [URLSessionTask])?
     private var journal: LibraryTransferJournal
     private var authorization: String?
     private var nativeTasks: [UUID: URLSessionTask] = [:]
     private var waiters: [UUID: [UUID: CheckedContinuation<Response, Error>]] = [:]
     private var startupTask: Task<Void, Never>?
+    private var configurationRevision: UInt64 = 0
+    private var configuringOwner: LibraryTransferOwner?
     private var eventsCompletion: (@Sendable () async -> Void)?
     private var responseHandler: (@Sendable () async -> Void)?
     private var cacheResourcesAllowed = true
@@ -82,7 +85,8 @@ actor LibraryTransferQueue {
         return URLSession(configuration: configuration, delegate: delegate, delegateQueue: callbacks)
     }
 
-    init(rootURL: URL? = nil) {
+    init(rootURL: URL? = nil, nativeTasksProvider: (@Sendable () async -> [URLSessionTask])? = nil) {
+        self.nativeTasksProvider = nativeTasksProvider
         let root = rootURL ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appending(path: "RemmichLibraryTransfers", directoryHint: .isDirectory)
         self.rootURL = root
@@ -204,7 +208,11 @@ actor LibraryTransferQueue {
         {
             try? FileManager.default.removeItem(at: file)
         }
-        let tasks = await session.allTasks
+        let tasks: [URLSessionTask] = if let nativeTasksProvider {
+            await nativeTasksProvider()
+        } else {
+            await session.allTasks
+        }
         for task in tasks {
             guard let attempt = LibraryTransferAttempt(description: task.taskDescription),
                   let job = journal.jobs.first(where: { $0.id == attempt.jobID }), job.state == .running,
@@ -223,8 +231,17 @@ actor LibraryTransferQueue {
     }
 
     func configure(session: AccountSession, endpoint: URL, cacheAllowed: Bool = true) async throws {
-        await start()
+        configurationRevision &+= 1
+        let revision = configurationRevision
         let owner = LibraryTransferOwner(session: session, endpoint: endpoint)
+        configuringOwner = owner
+        defer {
+            if configurationRevision == revision {
+                configuringOwner = nil
+            }
+        }
+        await start()
+        guard !Task.isCancelled, configurationRevision == revision else { throw CancellationError() }
         let removed = journal.activate(owner)
         discard(removed)
         authorization = session.accessToken
@@ -241,13 +258,18 @@ actor LibraryTransferQueue {
         pump()
     }
 
-    func setEnabled(_ enabled: Bool, lane: String) {
+    func setEnabled(_ enabled: Bool, lane: String, namespace: String? = nil) {
+        guard let owner = journal.owner, namespace == nil || owner.namespace == namespace else { return }
         discard(journal.setEnabled(enabled, lane: lane))
         try? persist()
         pump()
     }
 
     func invalidate(namespace: String? = nil, lane: String? = nil) {
+        if lane == nil, namespace == nil || configuringOwner?.namespace == namespace {
+            configurationRevision &+= 1
+            configuringOwner = nil
+        }
         guard namespace == nil || journal.owner?.namespace == namespace else { return }
         discard(journal.remove(lane: lane))
         if lane == nil {

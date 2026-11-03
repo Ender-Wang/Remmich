@@ -264,7 +264,7 @@ struct RemmichTests {
         #expect(controller.activeRoute == ActiveConnectionRoute(kind: .direct, endpoint: session.apiURL))
         #expect(controller.routeStatus == .connected)
         #expect(controller.connectionProfile == ConnectionProfile())
-        #expect(await profileStore.load() == ConnectionProfile())
+        #expect(await profileStore.load(for: MediaAccountScope(session: .fixture)) == ConnectionProfile())
         #expect(await service.validateCallCount == 0)
         #expect(await service.activatedEndpoints.isEmpty)
     }
@@ -492,7 +492,7 @@ struct RemmichTests {
         try await profileStore.save(ConnectionProfile(fallbackEndpoints: [
             url("https://one.example/api"),
             url("https://two.example/api"),
-        ]))
+        ]), for: MediaAccountScope(session: .fixture))
         let controller = AppSessionController(
             transfers: nil,
             service: SequencedRouteService(validationResults: [rejected, rejected]),
@@ -581,7 +581,7 @@ struct RemmichTests {
 
         #expect(result == .saved(profile: expected))
         #expect(controller.connectionProfile == expected)
-        #expect(await profileStore.load() == expected)
+        #expect(await profileStore.load(for: MediaAccountScope(session: .fixture)) == expected)
         #expect(try controller.activeRoute == ActiveConnectionRoute(
             kind: .primary,
             endpoint: #require(expected.primaryEndpoint)
@@ -643,7 +643,7 @@ struct RemmichTests {
         ))
 
         #expect(result == .saved(profile: ConnectionProfile(fallbackEndpoints: [endpoint])))
-        #expect(await profileStore.load() == ConnectionProfile(fallbackEndpoints: [endpoint]))
+        #expect(await profileStore.load(for: MediaAccountScope(session: .fixture)) == ConnectionProfile(fallbackEndpoints: [endpoint]))
         #expect(controller.activeRoute == ActiveConnectionRoute(
             kind: .direct,
             endpoint: AccountSession.fixture.apiURL
@@ -659,7 +659,7 @@ struct RemmichTests {
         let profile = ConnectionProfile(fallbackEndpoints: [endpoint])
         let service = RouteRestoreService(reachableEndpoints: [endpoint])
         let profileStore = ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)")
-        try await profileStore.save(profile)
+        try await profileStore.save(profile, for: MediaAccountScope(session: .fixture))
         let controller = AppSessionController(
             transfers: nil,
             service: service,
@@ -791,7 +791,7 @@ struct RemmichTests {
         try await profileStore.save(ConnectionProfile(
             primaryEndpoint: local,
             fallbackEndpoints: [session.apiURL]
-        ))
+        ), for: MediaAccountScope(session: .fixture))
         let service = RouteRestoreService(reachableEndpoints: [local])
         let controller = AppSessionController(
             transfers: nil,
@@ -824,7 +824,7 @@ struct RemmichTests {
         try await profileStore.save(ConnectionProfile(
             primaryEndpoint: local,
             fallbackEndpoints: [session.apiURL]
-        ))
+        ), for: MediaAccountScope(session: .fixture))
         let service = RouteRestoreService(reachableEndpoints: [local])
         let controller = AppSessionController(
             transfers: nil,
@@ -850,7 +850,7 @@ struct RemmichTests {
         try await profileStore.save(ConnectionProfile(
             primaryEndpoint: local,
             fallbackEndpoints: [external]
-        ))
+        ), for: MediaAccountScope(session: .fixture))
         let service = RouteRestoreService(reachableEndpoints: [local, external])
         let controller = AppSessionController(
             transfers: nil,
@@ -900,7 +900,7 @@ struct RemmichTests {
         )
         #expect(result == .saved(profile: expected))
         #expect(controller.connectionProfile == expected)
-        #expect(await profileStore.load() == expected)
+        #expect(await profileStore.load(for: MediaAccountScope(session: .fixture)) == expected)
         #expect(controller.activeRoute == ActiveConnectionRoute(kind: .fallback, endpoint: session.apiURL))
     }
 

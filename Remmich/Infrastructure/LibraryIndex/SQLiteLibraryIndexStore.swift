@@ -407,6 +407,10 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
         )
     }
 
+    func syncState(scope: MediaAccountScope) async throws -> LibraryIndexSyncState {
+        try readSyncState(scope: scope, database: preparedDatabase(scope: scope))
+    }
+
     func setLastError(_ message: String?, scope: MediaAccountScope) async throws {
         let database = try preparedDatabase(scope: scope)
         try database.execute(

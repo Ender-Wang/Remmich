@@ -346,6 +346,9 @@ struct AccountSettingsView: View {
             }
         )) { Button("OK", role: .cancel) {} } message: { Text(appIcons.errorMessage ?? "") }
         .onChange(of: selectedPage) {
+            if selectedPage == .account {
+                libraryIndex.refreshStoredAccounts()
+            }
             guard showsBrand, let frame = brandFrames[selectedPage] else { return }
             withAnimation(reduceMotion ? nil : .smooth(duration: 0.4)) { brandFrame = frame }
         }
@@ -882,6 +885,7 @@ struct AccountSettingsView: View {
                 showsSignOutChoices = true
             }
             .frame(maxWidth: .infinity, alignment: .center)
+            retainedAccountSection
         }
     }
 
@@ -1068,9 +1072,9 @@ struct AccountSettingsView: View {
                     statistic("Indexed assets", libraryIndex.indexedAssetCount.formatted())
                     statistic("Photos", libraryIndex.indexedPhotoCount.formatted())
                     statistic("Videos", libraryIndex.indexedVideoCount.formatted())
-                    statistic("Index storage", ByteCountFormatter.string(fromByteCount: libraryIndex.storageReport.metadataBytes, countStyle: .file))
+                    statistic("Shared index database", ByteCountFormatter.string(fromByteCount: libraryIndex.storageReport.metadataBytes, countStyle: .file))
                     if let estimate = libraryIndexDatabaseSizeEstimate {
-                        statistic("Estimated index storage / 10K assets", estimate.replacingOccurrences(of: " / 10K assets", with: ""))
+                        statistic("Estimated database storage / 10K assets", estimate.replacingOccurrences(of: " / 10K assets", with: ""))
                     }
                     if let elapsed = libraryIndex.elapsed(at: libraryIndexClock) {
                         statistic("Elapsed time", Self.duration(elapsed))
@@ -1078,6 +1082,8 @@ struct AccountSettingsView: View {
                     statistic("Estimated time remaining", libraryIndex.status == .indexing ? libraryIndex.estimatedRemaining(at: libraryIndexClock).map(Self.duration) ?? "—" : "—")
                     statistic("Last synced", Self.syncedDate(libraryIndex.lastUpdatedAt))
                 }
+                Text("Database size and its per-10K estimate include all stored accounts. Asset counts and sync progress are for this account.")
+                    .font(.caption2).foregroundStyle(.secondary)
                 if case let .failed(message) = libraryIndex.status {
                     Text(message).font(.footnote).foregroundStyle(.red).textSelection(.enabled)
                 }
@@ -1151,7 +1157,6 @@ struct AccountSettingsView: View {
             .frame(minHeight: 50)
             Divider()
             cacheMaintenanceActions
-            retainedAccountSection
         }
     }
 
@@ -1492,9 +1497,10 @@ struct AccountSettingsView: View {
     }
 
     private var libraryIndexDatabaseSizeEstimate: String? {
-        Self.sizePerTenThousandEstimate(
+        let storedAssetCount = libraryIndex.storedAccounts.reduce(0) { $0 + $1.indexedAssetCount }
+        return Self.sizePerTenThousandEstimate(
             bytes: libraryIndex.storageReport.metadataBytes,
-            count: libraryIndex.indexedAssetCount
+            count: storedAssetCount
         )
     }
 

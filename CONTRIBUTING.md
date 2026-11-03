@@ -27,6 +27,10 @@ Connection selection checks Primary first, then Fallback addresses in order, usi
 
 Verified endpoint aliases share a stable account cache identity, independent of the current network URL. After successful login, SQLite resolves a retained identity through an exact endpoint/user-ID match or one unambiguous verified alias. Email alone is never an identity key. Saving a profile authenticates additional candidates before recording aliases; unreachable or different-account endpoints are not associated. Ordinary logout retains aliases and cached data; deleting an account's local data removes its aliases, SQL records, and thumbnail namespace. Old address-profile keys are not migrated. Schema 6 adds the account-scoped alias table without moving or merging existing caches.
 
+Connection profiles, automatic-cache preferences, manual-cache intent, and Index/cache pause choices belong to that same account identity. Signing out while keeping data preserves those choices for the account's next login; another account loads only its own saved state. Session teardown clears runtime statistics, routing, metadata readers, and viewer state before adopting a new owner. Delayed metadata responses and transfer configuration must still match the requesting owner and generation. Legacy global connection/cache preference keys have no known owner and are not adopted. The physical SQLite database size includes all stored accounts; asset and derivative inventories are account-specific.
+
+Manage other accounts' retained local data under **Profile → Account → Stored Account Data**. The list excludes the signed-in account and refreshes when Account opens. Each entry keeps its deletion confirmation and live deletion progress; deleting it leaves the active account and Immich server unchanged. Current-account cache maintenance stays in Cache & Storage, and current-account deletion remains a sign-out choice.
+
 ## Architecture
 
 ### Data flow

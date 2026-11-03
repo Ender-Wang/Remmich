@@ -40,20 +40,23 @@ actor NetworkRouteCoordinator {
 
 actor ConnectionProfileStore {
     private let defaults: UserDefaults
-    private let key = "connection-profile"
 
     init(suiteName: String? = nil) {
         defaults = suiteName.flatMap(UserDefaults.init(suiteName:)) ?? .standard
     }
 
-    func load() -> ConnectionProfile {
-        guard let data = defaults.data(forKey: key),
+    func load(for scope: MediaAccountScope) -> ConnectionProfile {
+        guard let data = defaults.data(forKey: key(scope)),
               let profile = try? JSONDecoder().decode(ConnectionProfile.self, from: data)
         else { return .init() }
         return profile
     }
 
-    func save(_ profile: ConnectionProfile) throws {
-        try defaults.set(JSONEncoder().encode(profile), forKey: key)
+    func save(_ profile: ConnectionProfile, for scope: MediaAccountScope) throws {
+        try defaults.set(JSONEncoder().encode(profile), forKey: key(scope))
+    }
+
+    private func key(_ scope: MediaAccountScope) -> String {
+        "connection-profile-\(scope.cacheNamespace)"
     }
 }

@@ -67,7 +67,7 @@ struct LibraryIndexSynchronizationTests {
         let suite = "BackgroundSync-\(UUID().uuidString)"
         let preferences = try #require(UserDefaults(suiteName: suite))
         defer { fixture.cleanup(); preferences.removePersistentDomain(forName: suite) }
-        preferences.set(true, forKey: "library-index-thumbnail-warming")
+        AccountCachePreferences(enabled: true).save(to: preferences, scope: Self.scope)
         let buckets = ["2026-10-01", "2026-09-01", "2026-08-01", "2026-07-01"]
         let source = IndexSource(buckets: Dictionary(uniqueKeysWithValues: buckets.map {
             ($0, [Self.asset(id: $0, bucket: $0)])
@@ -112,7 +112,7 @@ struct LibraryIndexSynchronizationTests {
         let suite = "BackgroundSync-\(UUID().uuidString)"
         let preferences = try #require(UserDefaults(suiteName: suite))
         defer { fixture.cleanup(); preferences.removePersistentDomain(forName: suite) }
-        preferences.set(true, forKey: "library-index-thumbnail-warming")
+        AccountCachePreferences(enabled: true).save(to: preferences, scope: Self.scope)
         preferences.set(Date(), forKey: "library-index-last-success-\(Self.scope.cacheNamespace)")
         let source = IndexSource(buckets: ["2026-10-01": [Self.asset(id: "one", bucket: "2026-10-01")]])
         let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
@@ -148,7 +148,7 @@ struct LibraryIndexSynchronizationTests {
         let suite = "BackgroundSync-\(UUID().uuidString)"
         let preferences = try #require(UserDefaults(suiteName: suite))
         defer { fixture.cleanup(); preferences.removePersistentDomain(forName: suite) }
-        preferences.set(true, forKey: "library-index-thumbnail-warming")
+        AccountCachePreferences(enabled: true).save(to: preferences, scope: Self.scope)
         let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
         let asset = Self.asset(id: "one", bucket: "2026-10-01")
         let source = IndexSource(buckets: ["2026-10-01": [asset]])
@@ -286,8 +286,7 @@ struct LibraryIndexSynchronizationTests {
         let suite = "BackgroundSync-\(UUID().uuidString)"
         let preferences = try #require(UserDefaults(suiteName: suite))
         defer { fixture.cleanup(); preferences.removePersistentDomain(forName: suite) }
-        preferences.set(true, forKey: "library-index-thumbnail-warming")
-        preferences.set(true, forKey: "library-index-thumbnail-warming-paused")
+        AccountCachePreferences(enabled: true, paused: true).save(to: preferences, scope: Self.scope)
         let source = IndexSource(buckets: [:])
         let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
         _ = try await LibraryIndexSynchronizer(source: source, store: store).fullSyncAndVerify(scope: Self.scope)
@@ -305,12 +304,6 @@ struct LibraryIndexSynchronizationTests {
     }
 
     @Test @MainActor func queuedCacheCanBePausedAndDoesNotResumeWhenConditionsRecover() {
-        let defaults = UserDefaults.standard
-        let keys = ["library-index-thumbnail-warming", "library-index-thumbnail-warming-paused"]
-        let original = keys.map { defaults.object(forKey: $0) }
-        defer { for (key, value) in zip(keys, original) {
-            defaults.set(value, forKey: key)
-        } }
         var conditions = LibraryCacheResourceConditions(lowPowerMode: true, thermalState: .nominal)
         let controller = LibraryIndexController(source: IndexSource(buckets: [:]), resourceConditions: { conditions })
         controller.setThumbnailWarmingEnabled(true)
@@ -329,12 +322,6 @@ struct LibraryIndexSynchronizationTests {
     }
 
     @Test @MainActor func thermalWaitRequiresAnActiveAppBeforeRetrying() {
-        let defaults = UserDefaults.standard
-        let keys = ["library-index-thumbnail-warming", "library-index-thumbnail-warming-paused"]
-        let original = keys.map { defaults.object(forKey: $0) }
-        defer { for (key, value) in zip(keys, original) {
-            defaults.set(value, forKey: key)
-        } }
         var conditions = LibraryCacheResourceConditions(lowPowerMode: false, thermalState: .critical)
         let controller = LibraryIndexController(source: IndexSource(buckets: [:]), resourceConditions: { conditions })
         controller.setThumbnailWarmingEnabled(true)
@@ -349,21 +336,17 @@ struct LibraryIndexSynchronizationTests {
     }
 
     @Test @MainActor func cachedBootstrapPreservesTheUsersPausedCachePreference() async throws {
-        let defaults = UserDefaults.standard
-        let keys = ["library-index-thumbnail-warming", "library-index-thumbnail-warming-paused"]
-        let original = keys.map { defaults.object(forKey: $0) }
-        defer { for (key, value) in zip(keys, original) {
-            defaults.set(value, forKey: key)
-        } }
-        defaults.set(true, forKey: keys[0])
-        defaults.set(true, forKey: keys[1])
+        let suite = "PausedAccount-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        AccountCachePreferences(enabled: true, paused: true).save(to: defaults, scope: Self.scope)
         let fixture = try IndexFixture()
         defer { fixture.cleanup() }
         let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
         let source = IndexSource(buckets: ["2026-10-01": [Self.asset(id: "one", bucket: "2026-10-01")]])
         _ = try await LibraryIndexSynchronizer(source: source, store: store).fullSyncAndVerify(scope: Self.scope)
         try await store.setPaused(true, scope: Self.scope)
-        let controller = LibraryIndexController(source: source, store: store)
+        let controller = LibraryIndexController(source: source, store: store, preferences: defaults)
         _ = await controller.bootstrap(session: .fixture)
         #expect(controller.thumbnailWarmingStatus == .paused)
         #expect(controller.thumbnailWarmingPaused)
