@@ -2,7 +2,7 @@ import Foundation
 import SQLite3
 
 actor SQLiteLibraryIndexStore: LibraryIndexStoring {
-    static let currentSchemaVersion = 6
+    static let currentSchemaVersion = 7
 
     private let databaseURL: URL
     private var connection: SQLiteConnection?
@@ -24,7 +24,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
 
     func prepare(scope: MediaAccountScope) async throws {
         let database = try database()
-        try migrate(database)
+        try prepareSchema(database)
         try ensureScope(scope, database: database)
     }
 
@@ -695,7 +695,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
 
     func storedAccounts() async throws -> [StoredLibraryAccount] {
         let database = try database()
-        try migrate(database)
+        try prepareSchema(database)
         return try database.query(
             """
             SELECT scopes.scope, scopes.server_identity, scopes.user_id,
@@ -716,8 +716,33 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
                        SELECT COUNT(*) FROM derivatives
                        WHERE derivatives.scope = scopes.scope
                    ), 0),
-                   scopes.created_at
+                   scopes.created_at,
+                   state.expected_asset_count, COALESCE(state.is_paused, 0),
+                   (SELECT COUNT(DISTINCT d.asset_id) FROM derivatives AS d
+                    WHERE d.scope = scopes.scope AND d.derivative = 'thumbnail' AND d.is_verified = 1
+                      AND EXISTS (SELECT 1 FROM assets AS a WHERE a.scope = d.scope AND a.asset_id = d.asset_id
+                                  AND a.generation = state.accepted_generation AND a.tombstone = 0
+                                  AND d.source_revision = strftime('%Y-%m-%dT%H:%M:%SZ', a.updated_at, 'unixepoch'))),
+                   (SELECT COUNT(*) FROM asset_details AS m
+                    WHERE m.scope = scopes.scope
+                      AND EXISTS (SELECT 1 FROM assets AS a WHERE a.scope = m.scope AND a.asset_id = m.asset_id
+                                  AND a.generation = state.accepted_generation AND a.tombstone = 0)),
+                   (SELECT COUNT(*) FROM asset_details AS m
+                    WHERE m.scope = scopes.scope
+                      AND EXISTS (SELECT 1 FROM assets AS a WHERE a.scope = m.scope AND a.asset_id = m.asset_id
+                                  AND a.generation = state.accepted_generation AND a.tombstone = 0
+                                  AND EXISTS (SELECT 1 FROM derivatives AS d WHERE d.scope = a.scope AND d.asset_id = a.asset_id
+                                              AND d.derivative = 'thumbnail' AND d.is_verified = 1
+                                              AND d.source_revision = strftime('%Y-%m-%dT%H:%M:%SZ', a.updated_at, 'unixepoch')))),
+                   COALESCE((SELECT SUM(d.byte_count) FROM derivatives AS d
+                    WHERE d.scope = scopes.scope AND d.derivative = 'thumbnail' AND d.is_verified = 1
+                      AND EXISTS (SELECT 1 FROM assets AS a WHERE a.scope = d.scope AND a.asset_id = d.asset_id
+                                  AND a.generation = state.accepted_generation AND a.tombstone = 0
+                                  AND d.source_revision = strftime('%Y-%m-%dT%H:%M:%SZ', a.updated_at, 'unixepoch'))), 0),
+                   state.last_index_sync_at, state.last_cache_sync_at,
+                   scopes.account_name, scopes.account_email
             FROM scopes
+            LEFT JOIN sync_state AS state ON state.scope = scopes.scope
             ORDER BY scopes.created_at DESC
             """
         ) { row in
@@ -728,14 +753,20 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
                 indexedAssetCount: row.int(3),
                 derivativeBytes: row.int64(4),
                 derivativeCount: row.int(5),
-                createdAt: row.date(6)
+                createdAt: row.date(6),
+                expectedAssetCount: row.optionalInt(7),
+                isIndexPaused: row.bool(8),
+                thumbnailCount: row.int(9), metadataCount: row.int(10),
+                cachedAssetCount: row.int(11), thumbnailBytes: row.int64(12),
+                lastIndexSyncAt: row.optionalDate(13), lastCacheSyncAt: row.optionalDate(14),
+                accountName: row.optionalText(15), accountEmail: row.optionalText(16)
             )
         }
     }
 
     func removeAccount(namespace: String) async throws {
         let database = try database()
-        try migrate(database)
+        try prepareSchema(database)
         try database.transaction {
             for table in [
                 "account_endpoint_aliases", "asset_details", "asset_detail_strings", "derivatives", "grouped_catalogs",
@@ -754,7 +785,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
 
     func schemaVersion() async throws -> Int {
         let database = try database()
-        try migrate(database)
+        try prepareSchema(database)
         return try Int(database.scalarInt64("PRAGMA user_version") ?? 0)
     }
 
@@ -762,7 +793,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
     /// An unrelated endpoint or user ID cannot select another account's scope.
     func sessionReusingRetainedAccount(_ authenticated: AccountSession) async throws -> AccountSession {
         let database = try database()
-        try migrate(database)
+        try prepareSchema(database)
         let endpoint = MediaAccountScope.canonicalServerIdentity(authenticated.apiURL)
         let exact = try database.queryOne(
             "SELECT server_identity FROM scopes WHERE server_identity = ? AND user_id = ?",
@@ -791,9 +822,20 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
         )
     }
 
+    /// Display metadata survives credential revocation when local data is kept.
+    /// Only an authenticated/restored session supplies these values, never email matching.
+    func recordAccountIdentity(_ session: AccountSession) async throws {
+        let scope = MediaAccountScope(session: session)
+        let database = try preparedDatabase(scope: scope)
+        try database.execute(
+            "UPDATE scopes SET account_name = ?, account_email = ? WHERE scope = ?",
+            [.text(session.name), .text(session.userEmail), .text(scope.cacheNamespace)]
+        )
+    }
+
     private func preparedDatabase(scope: MediaAccountScope) throws -> SQLiteConnection {
         let database = try database()
-        try migrate(database)
+        try prepareSchema(database)
         try ensureScope(scope, database: database)
         return database
     }
@@ -819,210 +861,168 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
         return opened
     }
 
-    private func migrate(_ database: SQLiteConnection) throws {
-        var version = try Int(database.scalarInt64("PRAGMA user_version") ?? 0)
-        guard version <= Self.currentSchemaVersion else {
+    private func prepareSchema(_ database: SQLiteConnection) throws {
+        let version = try Int(database.scalarInt64("PRAGMA user_version") ?? 0)
+        if version == Self.currentSchemaVersion {
+            return
+        }
+        guard version == 0 else {
             throw LibraryIndexStoreError.unsupportedSchema(version)
         }
-        if version < 1 {
-            try database.transaction {
-                try database.execute("""
-                CREATE TABLE IF NOT EXISTS scopes(
-                    scope TEXT PRIMARY KEY,
-                    server_identity TEXT NOT NULL,
-                    user_id TEXT NOT NULL,
-                    created_at REAL NOT NULL
-                )
-                """)
-                try database.execute("""
-                CREATE TABLE IF NOT EXISTS generations(
-                    scope TEXT NOT NULL,
-                    generation INTEGER NOT NULL,
-                    state TEXT NOT NULL,
-                    started_at REAL NOT NULL,
-                    completed_at REAL,
-                    PRIMARY KEY(scope, generation)
-                )
-                """)
-                try database.execute("""
-                CREATE TABLE IF NOT EXISTS assets(
-                    scope TEXT NOT NULL,
-                    asset_id TEXT NOT NULL,
-                    owner_id TEXT NOT NULL,
-                    kind TEXT NOT NULL,
-                    live_photo_video_id TEXT,
-                    captured_at REAL NOT NULL,
-                    uploaded_at REAL NOT NULL,
-                    updated_at REAL NOT NULL,
-                    checksum TEXT,
-                    width INTEGER,
-                    height INTEGER,
-                    aspect_ratio REAL NOT NULL,
-                    duration_ms INTEGER,
-                    is_favorite INTEGER NOT NULL,
-                    visibility TEXT NOT NULL,
-                    is_trashed INTEGER NOT NULL,
-                    is_offline INTEGER NOT NULL,
-                    bucket_key TEXT NOT NULL,
-                    day_key TEXT NOT NULL,
-                    week_key TEXT NOT NULL,
-                    month_key TEXT NOT NULL,
-                    year_key TEXT NOT NULL,
-                    generation INTEGER NOT NULL,
-                    tombstone INTEGER NOT NULL DEFAULT 0,
-                    PRIMARY KEY(scope, generation, asset_id)
-                )
-                """)
-                try database.execute("CREATE INDEX IF NOT EXISTS assets_scope_day ON assets(scope, day_key, captured_at)")
-                try database.execute("CREATE INDEX IF NOT EXISTS assets_scope_week ON assets(scope, week_key, captured_at)")
-                try database.execute("CREATE INDEX IF NOT EXISTS assets_scope_month ON assets(scope, month_key, captured_at)")
-                try database.execute("CREATE INDEX IF NOT EXISTS assets_scope_updated ON assets(scope, updated_at, asset_id)")
-                try database.execute("""
-                CREATE TABLE IF NOT EXISTS grouped_catalogs(
-                    scope TEXT NOT NULL,
-                    generation INTEGER NOT NULL,
-                    media_scope TEXT NOT NULL,
-                    level TEXT NOT NULL,
-                    group_key TEXT NOT NULL,
-                    interval_start REAL NOT NULL,
-                    interval_end REAL NOT NULL,
-                    asset_count INTEGER NOT NULL,
-                    owning_buckets TEXT NOT NULL,
-                    cover_asset_ids TEXT NOT NULL,
-                    mosaic_seed TEXT NOT NULL,
-                    PRIMARY KEY(scope, generation, media_scope, level, group_key)
-                )
-                """)
-                try database.execute("""
-                CREATE TABLE IF NOT EXISTS sync_state(
-                    scope TEXT PRIMARY KEY,
-                    accepted_generation INTEGER,
-                    last_watermark REAL,
-                    historical_cursor TEXT,
-                    is_paused INTEGER NOT NULL DEFAULT 0,
-                    expected_asset_count INTEGER,
-                    last_error TEXT
-                )
-                """)
-                try database.execute("""
-                CREATE TABLE IF NOT EXISTS derivatives(
-                    scope TEXT NOT NULL,
-                    asset_id TEXT NOT NULL,
-                    derivative TEXT NOT NULL,
-                    pixel_width INTEGER NOT NULL DEFAULT 0,
-                    pixel_height INTEGER NOT NULL DEFAULT 0,
-                    source_revision TEXT NOT NULL,
-                    relative_file_key TEXT NOT NULL,
-                    byte_count INTEGER NOT NULL,
-                    digest TEXT NOT NULL,
-                    is_verified INTEGER NOT NULL,
-                    last_accessed_at REAL NOT NULL,
-                    completed_at REAL NOT NULL,
-                    PRIMARY KEY(scope, asset_id, derivative, pixel_width, pixel_height)
-                )
-                """)
-                try database.execute("PRAGMA user_version = 1")
-            }
-            version = 1
-        }
-        if version < 2 {
-            try database.transaction {
-                try database.execute(
-                    "ALTER TABLE assets ADD COLUMN local_offset_hours REAL NOT NULL DEFAULT 0"
-                )
-                try database.execute("ALTER TABLE assets ADD COLUMN stack_id TEXT")
-                try database.execute("ALTER TABLE assets ADD COLUMN stack_asset_count INTEGER")
-                try database.execute("ALTER TABLE assets ADD COLUMN projection_type TEXT")
-                try database.execute("ALTER TABLE assets ADD COLUMN thumbhash TEXT")
-                try database.execute("PRAGMA user_version = 2")
-            }
-            version = 2
-        }
-        if version < 3 {
-            try database.transaction {
-                try database.execute("""
-                CREATE TABLE IF NOT EXISTS asset_detail_strings(
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    scope TEXT NOT NULL,
-                    kind TEXT NOT NULL,
-                    value TEXT NOT NULL,
-                    UNIQUE(scope, kind, value),
-                    FOREIGN KEY(scope) REFERENCES scopes(scope) ON DELETE CASCADE
-                )
-                """)
-                try database.execute("""
-                CREATE TABLE IF NOT EXISTS asset_details(
-                    scope TEXT NOT NULL,
-                    asset_id TEXT NOT NULL,
-                    captured_at REAL NOT NULL,
-                    original_file_name TEXT NOT NULL,
-                    mime_type_id INTEGER,
-                    width INTEGER,
-                    height INTEGER,
-                    description TEXT,
-                    camera_make_id INTEGER,
-                    camera_model_id INTEGER,
-                    lens_model_id INTEGER,
-                    file_size_bytes INTEGER,
-                    iso INTEGER,
-                    focal_length REAL,
-                    aperture REAL,
-                    exposure_time_id INTEGER,
-                    latitude REAL,
-                    longitude REAL,
-                    city_id INTEGER,
-                    state_id INTEGER,
-                    country_id INTEGER,
-                    cached_at REAL NOT NULL,
-                    PRIMARY KEY(scope, asset_id),
-                    FOREIGN KEY(scope) REFERENCES scopes(scope) ON DELETE CASCADE,
-                    FOREIGN KEY(mime_type_id) REFERENCES asset_detail_strings(id),
-                    FOREIGN KEY(camera_make_id) REFERENCES asset_detail_strings(id),
-                    FOREIGN KEY(camera_model_id) REFERENCES asset_detail_strings(id),
-                    FOREIGN KEY(lens_model_id) REFERENCES asset_detail_strings(id),
-                    FOREIGN KEY(exposure_time_id) REFERENCES asset_detail_strings(id),
-                    FOREIGN KEY(city_id) REFERENCES asset_detail_strings(id),
-                    FOREIGN KEY(state_id) REFERENCES asset_detail_strings(id),
-                    FOREIGN KEY(country_id) REFERENCES asset_detail_strings(id)
-                )
-                """)
-                try database.execute(
-                    "CREATE INDEX IF NOT EXISTS asset_details_scope_cached ON asset_details(scope, cached_at)"
-                )
-                try database.execute("PRAGMA user_version = 3")
-            }
-        }
-        if version < 4 {
-            try database.transaction {
-                try database.execute("ALTER TABLE sync_state ADD COLUMN last_index_sync_at REAL")
-                try database.execute("ALTER TABLE sync_state ADD COLUMN last_cache_sync_at REAL")
-                try database.execute("PRAGMA user_version = 4")
-            }
-        }
-        if version < 5 {
-            try database.transaction {
-                // Keep original instants, accepted generations, and cached
-                // derivatives. Only derived calendar keys need repair.
-                let rows = try database.query(
-                    "SELECT scope, generation, asset_id, captured_at, local_offset_hours FROM assets"
-                ) { row in
-                    (row.text(0), row.int64(1), row.text(2), row.date(3), row.double(4))
-                }
-                for (scope, generation, assetID, instant, offset) in rows {
-                    let keys = LibraryIndexCaptureDateKeys(localDate: instant.addingTimeInterval((offset * 3600).rounded()))
-                    try database.execute(
-                        "UPDATE assets SET day_key = ?, week_key = ?, month_key = ?, year_key = ? WHERE scope = ? AND generation = ? AND asset_id = ?",
-                        [.text(keys.day), .text(keys.week), .text(keys.month), .text(keys.year),
-                         .text(scope), .int64(generation), .text(assetID)]
-                    )
-                }
-                // Offline bootstrap rebuilds these projections from the
-                // accepted assets; no server refetch or cache deletion.
-                try database.execute("DELETE FROM grouped_catalogs")
-                try database.execute("PRAGMA user_version = 5")
-            }
-        }
-        if version < 6 {
+        try database.transaction {
+            try database.execute("""
+            CREATE TABLE IF NOT EXISTS scopes(
+                scope TEXT PRIMARY KEY,
+                server_identity TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                account_name TEXT,
+                account_email TEXT
+            )
+            """)
+            try database.execute("""
+            CREATE TABLE IF NOT EXISTS generations(
+                scope TEXT NOT NULL,
+                generation INTEGER NOT NULL,
+                state TEXT NOT NULL,
+                started_at REAL NOT NULL,
+                completed_at REAL,
+                PRIMARY KEY(scope, generation)
+            )
+            """)
+            try database.execute("""
+            CREATE TABLE IF NOT EXISTS assets(
+                scope TEXT NOT NULL,
+                asset_id TEXT NOT NULL,
+                owner_id TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                live_photo_video_id TEXT,
+                captured_at REAL NOT NULL,
+                uploaded_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                checksum TEXT,
+                width INTEGER,
+                height INTEGER,
+                aspect_ratio REAL NOT NULL,
+                duration_ms INTEGER,
+                is_favorite INTEGER NOT NULL,
+                visibility TEXT NOT NULL,
+                is_trashed INTEGER NOT NULL,
+                is_offline INTEGER NOT NULL,
+                bucket_key TEXT NOT NULL,
+                day_key TEXT NOT NULL,
+                week_key TEXT NOT NULL,
+                month_key TEXT NOT NULL,
+                year_key TEXT NOT NULL,
+                local_offset_hours REAL NOT NULL DEFAULT 0,
+                stack_id TEXT,
+                stack_asset_count INTEGER,
+                projection_type TEXT,
+                thumbhash TEXT,
+                generation INTEGER NOT NULL,
+                tombstone INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY(scope, generation, asset_id)
+            )
+            """)
+            try database.execute("CREATE INDEX IF NOT EXISTS assets_scope_day ON assets(scope, day_key, captured_at)")
+            try database.execute("CREATE INDEX IF NOT EXISTS assets_scope_week ON assets(scope, week_key, captured_at)")
+            try database.execute("CREATE INDEX IF NOT EXISTS assets_scope_month ON assets(scope, month_key, captured_at)")
+            try database.execute("CREATE INDEX IF NOT EXISTS assets_scope_updated ON assets(scope, updated_at, asset_id)")
+            try database.execute("""
+            CREATE TABLE IF NOT EXISTS grouped_catalogs(
+                scope TEXT NOT NULL,
+                generation INTEGER NOT NULL,
+                media_scope TEXT NOT NULL,
+                level TEXT NOT NULL,
+                group_key TEXT NOT NULL,
+                interval_start REAL NOT NULL,
+                interval_end REAL NOT NULL,
+                asset_count INTEGER NOT NULL,
+                owning_buckets TEXT NOT NULL,
+                cover_asset_ids TEXT NOT NULL,
+                mosaic_seed TEXT NOT NULL,
+                PRIMARY KEY(scope, generation, media_scope, level, group_key)
+            )
+            """)
+            try database.execute("""
+            CREATE TABLE IF NOT EXISTS sync_state(
+                scope TEXT PRIMARY KEY,
+                accepted_generation INTEGER,
+                last_watermark REAL,
+                historical_cursor TEXT,
+                is_paused INTEGER NOT NULL DEFAULT 0,
+                expected_asset_count INTEGER,
+                last_error TEXT,
+                last_index_sync_at REAL,
+                last_cache_sync_at REAL
+            )
+            """)
+            try database.execute("""
+            CREATE TABLE IF NOT EXISTS derivatives(
+                scope TEXT NOT NULL,
+                asset_id TEXT NOT NULL,
+                derivative TEXT NOT NULL,
+                pixel_width INTEGER NOT NULL DEFAULT 0,
+                pixel_height INTEGER NOT NULL DEFAULT 0,
+                source_revision TEXT NOT NULL,
+                relative_file_key TEXT NOT NULL,
+                byte_count INTEGER NOT NULL,
+                digest TEXT NOT NULL,
+                is_verified INTEGER NOT NULL,
+                last_accessed_at REAL NOT NULL,
+                completed_at REAL NOT NULL,
+                PRIMARY KEY(scope, asset_id, derivative, pixel_width, pixel_height)
+            )
+            """)
+            try database.execute("""
+            CREATE TABLE IF NOT EXISTS asset_detail_strings(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                scope TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                value TEXT NOT NULL,
+                UNIQUE(scope, kind, value),
+                FOREIGN KEY(scope) REFERENCES scopes(scope) ON DELETE CASCADE
+            )
+            """)
+            try database.execute("""
+            CREATE TABLE IF NOT EXISTS asset_details(
+                scope TEXT NOT NULL,
+                asset_id TEXT NOT NULL,
+                captured_at REAL NOT NULL,
+                original_file_name TEXT NOT NULL,
+                mime_type_id INTEGER,
+                width INTEGER,
+                height INTEGER,
+                description TEXT,
+                camera_make_id INTEGER,
+                camera_model_id INTEGER,
+                lens_model_id INTEGER,
+                file_size_bytes INTEGER,
+                iso INTEGER,
+                focal_length REAL,
+                aperture REAL,
+                exposure_time_id INTEGER,
+                latitude REAL,
+                longitude REAL,
+                city_id INTEGER,
+                state_id INTEGER,
+                country_id INTEGER,
+                cached_at REAL NOT NULL,
+                PRIMARY KEY(scope, asset_id),
+                FOREIGN KEY(scope) REFERENCES scopes(scope) ON DELETE CASCADE,
+                FOREIGN KEY(mime_type_id) REFERENCES asset_detail_strings(id),
+                FOREIGN KEY(camera_make_id) REFERENCES asset_detail_strings(id),
+                FOREIGN KEY(camera_model_id) REFERENCES asset_detail_strings(id),
+                FOREIGN KEY(lens_model_id) REFERENCES asset_detail_strings(id),
+                FOREIGN KEY(exposure_time_id) REFERENCES asset_detail_strings(id),
+                FOREIGN KEY(city_id) REFERENCES asset_detail_strings(id),
+                FOREIGN KEY(state_id) REFERENCES asset_detail_strings(id),
+                FOREIGN KEY(country_id) REFERENCES asset_detail_strings(id)
+            )
+            """)
+            try database.execute(
+                "CREATE INDEX IF NOT EXISTS asset_details_scope_cached ON asset_details(scope, cached_at)"
+            )
             try database.execute("""
             CREATE TABLE IF NOT EXISTS account_endpoint_aliases(
                 scope TEXT NOT NULL,
@@ -1031,7 +1031,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
                 FOREIGN KEY(scope) REFERENCES scopes(scope) ON DELETE CASCADE
             )
             """)
-            try database.execute("PRAGMA user_version = 6")
+            try database.execute("PRAGMA user_version = \(Self.currentSchemaVersion)")
         }
     }
 
@@ -1244,7 +1244,7 @@ nonisolated enum LibraryIndexStoreError: LocalizedError, Equatable, Sendable {
     var errorDescription: String? {
         switch self {
         case let .sqlite(code, message): "Library index database error \(code): \(message)"
-        case let .unsupportedSchema(version): "Library index schema \(version) is newer than this app supports."
+        case let .unsupportedSchema(version): "Local library schema \(version) is unsupported by this test build. Reset local app data before using this build."
         case let .invalidGeneration(generation): "Library index generation \(generation) is not writable."
         }
     }

@@ -5,7 +5,11 @@ nonisolated struct AccountCachePreferences: Codable, Equatable, Sendable {
     var paused = false
 
     static func load(from defaults: UserDefaults, scope: MediaAccountScope) -> Self {
-        guard let data = defaults.data(forKey: key(scope.cacheNamespace)),
+        load(from: defaults, namespace: scope.cacheNamespace)
+    }
+
+    static func load(from defaults: UserDefaults, namespace: String) -> Self {
+        guard let data = defaults.data(forKey: key(namespace)),
               let value = try? JSONDecoder().decode(Self.self, from: data) else { return .init() }
         return value
     }

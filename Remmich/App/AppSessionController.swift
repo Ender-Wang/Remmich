@@ -30,6 +30,16 @@ final class AppSessionController {
     private(set) var activeRoute: ActiveConnectionRoute?
     private(set) var routeStatus: ConnectionRouteStatus = .waitingForNetwork
     private(set) var connectionProfile = ConnectionProfile()
+    private(set) var savedAccounts: [AccountSession] = []
+    private(set) var accountActionError: String?
+    private(set) var isChangingAccount = false
+    private var returnAccount: AccountSession?
+    private var isPreparingAccountSelection = false
+
+    var isAddingAccount: Bool {
+        returnAccount != nil
+    }
+
     let media = MediaLibraryController()
     let timeline: ImmichTimelineRepository
     let assetDetails: any AssetDetailReading
@@ -210,7 +220,7 @@ final class AppSessionController {
         generation == preparationGeneration && !Task.isCancelled
     }
 
-    private func restoreSession(inBackground: Bool, generation: Int) async {
+    private func restoreSession(inBackground: Bool, generation: Int, selectedSession: AccountSession? = nil) async {
         let startupStartedAt = Date()
         if !inBackground {
             media.beginStartupTrace(at: startupStartedAt)
@@ -240,7 +250,13 @@ final class AppSessionController {
         }
 
         do {
-            let restoredSession = try await sessionStore.load()
+            let restoredSession: AccountSession? = if let selectedSession {
+                selectedSession
+            } else {
+                try await sessionStore.load()
+            }
+            guard preparationIsCurrent(generation) else { return }
+            await refreshSavedAccounts()
             guard preparationIsCurrent(generation) else { return }
             guard let session = restoredSession else {
                 state = .signedOut
@@ -249,6 +265,8 @@ final class AppSessionController {
             Self.startupLogger.info(
                 "Account session restored elapsedMs=\(Self.elapsedMilliseconds(since: startupStartedAt))"
             )
+            await rememberAccountIdentity(session)
+            guard preparationIsCurrent(generation) else { return }
             let profile = await profileStore.load(for: MediaAccountScope(session: session))
             guard preparationIsCurrent(generation) else { return }
             connectionProfile = profile
@@ -309,6 +327,7 @@ final class AppSessionController {
     }
 
     func connect(address: String) async {
+        guard !isChangingAccount else { return }
         invalidatePreparation()
         let generation = preparationGeneration
         state = .checking
@@ -335,6 +354,7 @@ final class AppSessionController {
     }
 
     func signIn(email: String, password: String, server: ServerDetails) async {
+        guard !isChangingAccount else { return }
         invalidatePreparation()
         let generation = preparationGeneration
         routeGeneration += 1
@@ -349,9 +369,14 @@ final class AppSessionController {
         do {
             let authenticated = try await service.signIn(email: email, password: password, server: server)
             guard preparationIsCurrent(generation) else { return }
-            let session = try await libraryIndexStore.sessionReusingRetainedAccount(authenticated)
+            var session = try await libraryIndexStore.sessionReusingRetainedAccount(authenticated)
+            if let registry = sessionStore as? any SavedSessionStoring {
+                session = try await session.reusingSavedIdentity(from: registry.savedSessions())
+            }
             guard preparationIsCurrent(generation) else { return }
             try await libraryIndexStore.recordVerifiedEndpoint(session.apiURL, session: session)
+            guard preparationIsCurrent(generation) else { return }
+            await rememberAccountIdentity(session)
             guard preparationIsCurrent(generation) else { return }
             let profile = await profileStore.load(for: MediaAccountScope(session: session))
             guard preparationIsCurrent(generation) else { return }
@@ -381,6 +406,9 @@ final class AppSessionController {
             let routeKind = activeRoute?.kind.rawValue ?? "primary"
             Self.routeLogger.info("Authenticated login endpoint \(session.apiURL.absoluteString, privacy: .public) kind=\(routeKind, privacy: .public)")
             state = .signedIn(session)
+            returnAccount = nil
+            await refreshSavedAccounts()
+            guard preparationIsCurrent(generation) else { return }
             automaticSyncAllowed = isAppInForeground || backgroundSyncID != nil
             startLibraryIndexing(session: session)
         } catch {
@@ -390,12 +418,44 @@ final class AppSessionController {
     }
 
     func signOut(deleteLocalData: Bool = false) async {
+        guard !isChangingAccount else { return }
+        isChangingAccount = true
+        defer { isChangingAccount = false }
+        await finishSignOut(deleteLocalData: deleteLocalData)
+    }
+
+    private func finishSignOut(deleteLocalData: Bool = false) async {
         let departingSession: AccountSession? = if case let .signedIn(session) = state {
             session
         } else {
             nil
         }
         state = .signingOut
+        let generation = await detachAccountRuntime(deleteLocalData: deleteLocalData)
+        guard preparationIsCurrent(generation) else { return }
+        do {
+            if let departingSession, let registry = sessionStore as? any SavedSessionStoring {
+                try await registry.deleteSaved(namespace: MediaAccountScope(session: departingSession).cacheNamespace)
+            } else {
+                try await sessionStore.delete()
+            }
+        } catch {
+            // Retain a retry path if protected storage is unavailable.
+            state = .failed(message: Self.message(for: error), server: nil)
+            return
+        }
+        guard preparationIsCurrent(generation) else { return }
+        if let departingSession {
+            await service.signOut(departingSession)
+        }
+        guard preparationIsCurrent(generation) else { return }
+        returnAccount = nil
+        state = .signedOut
+        await refreshSavedAccounts()
+    }
+
+    /// Stop all readers and transfer ownership without revoking credentials.
+    private func detachAccountRuntime(deleteLocalData: Bool = false) async -> Int {
         backgroundSyncInvalidated?()
         invalidatePreparation()
         let generation = preparationGeneration
@@ -414,25 +474,97 @@ final class AppSessionController {
         photos.reset()
         videos.reset()
         await libraryTransfers?.invalidate()
-        guard generation == preparationGeneration else { return }
+        guard generation == preparationGeneration else { return generation }
         if deleteLocalData {
             await libraryIndex.deleteCurrentAccountData()
-            guard generation == preparationGeneration else { return }
+            guard generation == preparationGeneration else { return generation }
         }
         libraryIndex.clearSession()
         await persistentAssetDetails.clearSession()
-        guard generation == preparationGeneration else { return }
+        guard generation == preparationGeneration else { return generation }
         await timeline.clear()
-        guard generation == preparationGeneration else { return }
+        guard generation == preparationGeneration else { return generation }
         await librarySyncSource.clear()
-        guard generation == preparationGeneration else { return }
-        try? await sessionStore.delete()
-        guard generation == preparationGeneration else { return }
-        if let departingSession {
-            await service.signOut(departingSession)
+        return generation
+    }
+
+    func refreshSavedAccounts() async {
+        guard let registry = sessionStore as? any SavedSessionStoring else { return }
+        let generation = preparationGeneration
+        do {
+            let accounts = try await registry.savedSessions()
+            guard generation == preparationGeneration else { return }
+            savedAccounts = accounts
+        } catch {
+            guard generation == preparationGeneration else { return }
+            accountActionError = Self.message(for: error)
         }
-        guard generation == preparationGeneration else { return }
+    }
+
+    private func rememberAccountIdentity(_ session: AccountSession) async {
+        do {
+            try await libraryIndexStore.recordAccountIdentity(session)
+        } catch {
+            Self.routeLogger.error("Could not save account display metadata: \(Self.message(for: error), privacy: .public)")
+        }
+    }
+
+    func switchAccount(namespace: String) async {
+        guard !isChangingAccount, let registry = sessionStore as? any SavedSessionStoring else { return }
+        if case let .signedIn(current) = state, MediaAccountScope(session: current).cacheNamespace == namespace {
+            return
+        }
+        isChangingAccount = true
+        accountActionError = nil
+        isPreparingAccountSelection = true
+        defer {
+            isChangingAccount = false
+            isPreparingAccountSelection = false
+        }
+        routeGeneration += 1
+        pendingPathChangeTask?.cancel()
+        pendingPathChangeTask = nil
+        do {
+            guard let session = try await registry.loadSaved(namespace: namespace) else {
+                throw SessionStoreError.unavailable(message: "This account needs to sign in again.")
+            }
+            // Pin credentials and persist ownership before disturbing the current
+            // library. No server logout occurs when switching accounts.
+            try await sessionStore.save(session)
+            isPreparingAccountSelection = false
+            state = .loading
+            let generation = await detachAccountRuntime()
+            guard preparationIsCurrent(generation) else { return }
+            returnAccount = nil
+            automaticSyncAllowed = isAppInForeground
+            await restoreSession(inBackground: false, generation: generation, selectedSession: session)
+        } catch {
+            accountActionError = Self.message(for: error)
+        }
+    }
+
+    func addAccount() async {
+        guard !isChangingAccount, case let .signedIn(session) = state else { return }
+        isChangingAccount = true
+        defer { isChangingAccount = false }
+        returnAccount = session
+        state = .loading
+        let generation = await detachAccountRuntime()
+        guard preparationIsCurrent(generation) else { return }
         state = .signedOut
+    }
+
+    func cancelAddingAccount() async {
+        guard let session = returnAccount, !isChangingAccount else { return }
+        await switchAccount(namespace: MediaAccountScope(session: session).cacheNamespace)
+    }
+
+    func signInToStoredAccount(serverIdentity: String) async {
+        if case .signedIn = state {
+            await addAccount()
+        }
+        guard !isChangingAccount else { return }
+        await connect(address: serverIdentity)
     }
 
     func resetOnboarding() {
@@ -500,7 +632,7 @@ final class AppSessionController {
     }
 
     private func reevaluateRoute(trigger: RouteEvaluationTrigger, startIndex: Bool = true) async {
-        guard automaticSyncAllowed, !Task.isCancelled, case .signedIn = state else { return }
+        guard !isPreparingAccountSelection, automaticSyncAllowed, !Task.isCancelled, case .signedIn = state else { return }
         let pathSignature = lastNetworkPathSignature
         await routeEvaluationGate.submit { [weak self] in
             await self?.performRouteEvaluation(trigger: trigger, startIndex: startIndex)
@@ -511,7 +643,7 @@ final class AppSessionController {
     }
 
     private func performRouteEvaluation(trigger: RouteEvaluationTrigger, startIndex: Bool) async {
-        guard automaticSyncAllowed, case let .signedIn(session) = state else { return }
+        guard !isPreparingAccountSelection, automaticSyncAllowed, case let .signedIn(session) = state else { return }
         routeGeneration += 1
         let evaluation = routeGeneration
         routeStatus = .checking
@@ -705,7 +837,8 @@ final class AppSessionController {
 
     private func invalidateSession(_: AccountSession, evaluation: Int) async {
         guard evaluation == routeGeneration else { return }
-        await signOut()
+        await finishSignOut()
+        accountActionError = "This account’s session has expired. Sign in again to reconnect."
     }
 
     func handleMemoryPressure() {

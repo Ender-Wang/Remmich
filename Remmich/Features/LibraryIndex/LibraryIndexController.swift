@@ -632,6 +632,14 @@ final class LibraryIndexController {
         }
     }
 
+    func cachePreferences(namespace: String) -> AccountCachePreferences {
+        AccountCachePreferences.load(from: preferences, namespace: namespace)
+    }
+
+    func hasManualCacheIntent(namespace: String) -> Bool {
+        preferences.string(forKey: "library-transfer-cache-intent-\(namespace)") != nil
+    }
+
     /// Reconcile committed state when the visible app returns from suspension.
     func refreshStatistics() async {
         guard let expectedScope = scope else { return }

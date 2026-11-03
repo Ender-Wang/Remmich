@@ -207,6 +207,16 @@ nonisolated struct StoredLibraryAccount: Equatable, Identifiable, Sendable {
     let derivativeBytes: Int64
     let derivativeCount: Int
     let createdAt: Date
+    var expectedAssetCount: Int?
+    var isIndexPaused = false
+    var thumbnailCount = 0
+    var metadataCount = 0
+    var cachedAssetCount = 0
+    var thumbnailBytes: Int64 = 0
+    var lastIndexSyncAt: Date?
+    var lastCacheSyncAt: Date?
+    var accountName: String?
+    var accountEmail: String?
 
     var id: String {
         namespace

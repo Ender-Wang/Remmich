@@ -3,6 +3,149 @@ import Testing
 @testable import Remmich
 
 struct AccountSessionIsolationTests {
+    @Test @MainActor func outgoingAuthFailureAndRapidSelectionCannotDeleteIncomingCredentials() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        let suite = "SwitchOwnership-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            defaults.removePersistentDomain(forName: suite)
+        }
+        let service = AccountSwitchService()
+        let first = await service.account("first")
+        let second = await service.account("second")
+        let sessions = SelectionGateSessionStore()
+        try await sessions.save(second)
+        try await sessions.save(first)
+        let store = SQLiteLibraryIndexStore(databaseURL: root.appending(path: "index.sqlite"))
+        for account in [first, second] {
+            try await store.setPaused(true, scope: MediaAccountScope(session: account))
+        }
+        let controller = AppSessionController(
+            transfers: nil, service: service, sessionStore: sessions,
+            profileStore: ConnectionProfileStore(suiteName: suite), libraryIndexStore: store,
+            libraryIndexPreferences: defaults, networkMonitoringEnabled: false
+        )
+        await controller.start()
+        let validation = AccountSelectionGate()
+        await service.rejectNextValidation(after: validation)
+        let outgoing = Task { await controller.handleForegroundTransition() }
+        await validation.waitUntilEntered()
+        let selection = AccountSelectionGate()
+        await sessions.gateNextSelection(selection)
+        let incoming = Task { await controller.switchAccount(namespace: MediaAccountScope(session: second).cacheNamespace) }
+        await selection.waitUntilEntered()
+        await controller.switchAccount(namespace: MediaAccountScope(session: first).cacheNamespace)
+        await validation.release()
+        await outgoing.value
+        guard case let .signedIn(stillFirst) = controller.state else { Issue.record("Stale authentication failure ended the session"); return }
+        #expect(stillFirst == first)
+        await selection.release()
+        await incoming.value
+        guard case let .signedIn(selected) = controller.state else { Issue.record("Incoming session was lost"); return }
+        #expect(selected == second)
+        #expect(try await sessions.savedSessions().count == 2)
+        #expect(try await sessions.load() == second)
+        #expect(await service.signedOutAccounts.isEmpty)
+        await controller.signOut()
+    }
+
+    @Test @MainActor func savedSwitchRestoresAccountPausesWithoutLoggingOutOrSigningInAgain() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        let suite = "SavedSwitch-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            defaults.removePersistentDomain(forName: suite)
+        }
+        let records = SessionRecordFixture()
+        let sessions = KeychainSessionStore(records: records)
+        let service = AccountSwitchService()
+        let first = await service.account("first")
+        let second = await service.account("second")
+        try await sessions.save(first)
+        try await sessions.save(second)
+        try await sessions.save(first)
+        let store = SQLiteLibraryIndexStore(databaseURL: root.appending(path: "index.sqlite"))
+        try await store.setPaused(true, scope: MediaAccountScope(session: first))
+        AccountCachePreferences(enabled: true, paused: true).save(to: defaults, scope: MediaAccountScope(session: first))
+        let controller = AppSessionController(
+            transfers: nil, service: service, sessionStore: sessions,
+            profileStore: ConnectionProfileStore(suiteName: suite), libraryIndexStore: store,
+            libraryIndexPreferences: defaults, networkMonitoringEnabled: false
+        )
+        await controller.start()
+        #expect(controller.libraryIndex.status == .paused)
+        records.setFailure(key: "active-session")
+        await controller.switchAccount(namespace: MediaAccountScope(session: second).cacheNamespace)
+        guard case let .signedIn(unchanged) = controller.state else { Issue.record("Failed selection lost the outgoing account"); return }
+        #expect(unchanged == first)
+        #expect(controller.media.scope == MediaAccountScope(session: first))
+        records.setFailure(key: nil)
+        await controller.switchAccount(namespace: MediaAccountScope(session: second).cacheNamespace)
+        #expect(controller.media.scope == MediaAccountScope(session: second))
+        #expect(!controller.libraryIndex.thumbnailWarmingPaused)
+        #expect(controller.activeRoute?.endpoint == second.apiURL)
+        await controller.switchAccount(namespace: MediaAccountScope(session: first).cacheNamespace)
+        #expect(controller.media.scope == MediaAccountScope(session: first))
+        #expect(controller.libraryIndex.status == .paused)
+        #expect(controller.libraryIndex.thumbnailWarmingStatus == .paused)
+        #expect(await service.loginCount == 0)
+        #expect(await service.signedOutAccounts.isEmpty)
+        await controller.addAccount()
+        #expect(controller.isAddingAccount)
+        #expect(controller.media.scope == nil)
+        await controller.cancelAddingAccount()
+        guard case let .signedIn(restored) = controller.state else { Issue.record("Cancel did not restore the account"); return }
+        #expect(restored == first)
+        #expect(!controller.isAddingAccount)
+        #expect(controller.libraryIndex.status == .paused)
+        await controller.libraryIndex.deleteStoredAccount(namespace: MediaAccountScope(session: second).cacheNamespace)
+        #expect(try await sessions.load() == first)
+        #expect(try await sessions.savedSessions().count == 2)
+        #expect(await service.signedOutAccounts.isEmpty)
+        await controller.signOut()
+        #expect(try await sessions.savedSessions() == [second])
+        #expect(await service.signedOutAccounts == [first])
+    }
+
+    @Test @MainActor func addingAccountPreservesOutgoingCredentialsAndDeduplicatesReauthentication() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        let suite = "AddAccount-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            defaults.removePersistentDomain(forName: suite)
+        }
+        let service = AccountSwitchService()
+        let sessions = KeychainSessionStore(records: SessionRecordFixture())
+        let first = await service.account("first")
+        let second = await service.account("second")
+        let indexStore = SQLiteLibraryIndexStore(databaseURL: root.appending(path: "index.sqlite"))
+        let controller = AppSessionController(
+            transfers: nil, service: service, sessionStore: sessions,
+            profileStore: ConnectionProfileStore(suiteName: suite),
+            libraryIndexStore: indexStore,
+            libraryIndexPreferences: defaults, networkMonitoringEnabled: false
+        )
+        await controller.signIn(email: "first", password: "fixture", server: service.details("first"))
+        await controller.addAccount()
+        await controller.signIn(email: "second", password: "fixture", server: service.details("second"))
+        #expect(try await sessions.savedSessions().count == 2)
+        #expect(try await sessions.load() == second)
+        #expect(await service.signedOutAccounts.isEmpty)
+        await controller.addAccount()
+        await controller.signIn(email: "first", password: "fixture", server: service.details("first"))
+        #expect(try await sessions.savedSessions().count == 2)
+        #expect(try await sessions.load() == first)
+        await controller.signOut()
+        #expect(try await sessions.savedSessions() == [second])
+        let retainedFirst = try #require(try await indexStore.storedAccounts().first {
+            $0.namespace == MediaAccountScope(session: first).cacheNamespace
+        })
+        #expect(retainedFirst.accountName == first.name && retainedFirst.accountEmail == first.userEmail)
+    }
+
     @Test @MainActor func signedOutForegroundStartupDoesNotRestoreRoutesOrLibraryState() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         let suite = "AccountSession-\(UUID().uuidString)"
@@ -100,6 +243,13 @@ private actor IsolatedSessionStore: SessionStoring {
 private actor AccountSwitchService: ServerReading, SessionManaging, RouteValidating {
     private let identity = UUID().uuidString
     private(set) var validatedEndpoints: [URL] = []
+    private(set) var signedOutAccounts: [AccountSession] = []
+    private(set) var loginCount = 0
+    private var rejectionGate: AccountSelectionGate?
+
+    func rejectNextValidation(after gate: AccountSelectionGate) {
+        rejectionGate = gate
+    }
 
     func account(_ name: String) -> AccountSession {
         .init(apiURL: URL(string: "https://\(name).invalid/api")!, accessToken: "fixture-\(name)", userID: "\(identity)-\(name)",
@@ -120,18 +270,89 @@ private actor AccountSwitchService: ServerReading, SessionManaging, RouteValidat
     }
 
     func signIn(email: String, password _: String, server _: ServerDetails) -> AccountSession {
-        account(email)
+        loginCount += 1
+        return account(email)
     }
 
     func restore(_ session: AccountSession) -> ServerDetails {
         details(session.name)
     }
 
-    func signOut(_: AccountSession) {}
-    func validateRoute(endpoint: URL, session: AccountSession) -> RouteValidationResult {
+    func signOut(_ session: AccountSession) {
+        signedOutAccounts.append(session)
+    }
+
+    func validateRoute(endpoint: URL, session: AccountSession) async -> RouteValidationResult {
         validatedEndpoints.append(endpoint)
+        if let gate = rejectionGate {
+            rejectionGate = nil
+            await gate.wait()
+            return .failed(message: "Expired outgoing token", kind: .sessionRejected)
+        }
         return endpoint == session.apiURL ? .reachable : .failed(message: "Wrong account endpoint", kind: .endpointRejected)
     }
 
     func activateRoute(endpoint _: URL, session _: AccountSession) {}
+}
+
+private actor AccountSelectionGate {
+    private var entered = false
+    private var pending: CheckedContinuation<Void, Never>?
+    private var observer: CheckedContinuation<Void, Never>?
+
+    func wait() async {
+        entered = true
+        await withCheckedContinuation { continuation in
+            pending = continuation
+            observer?.resume()
+            observer = nil
+        }
+    }
+
+    func waitUntilEntered() async {
+        if entered {
+            return
+        }
+        await withCheckedContinuation { observer = $0 }
+    }
+
+    func release() {
+        pending?.resume(); pending = nil
+    }
+}
+
+private actor SelectionGateSessionStore: SavedSessionStoring {
+    private let store = KeychainSessionStore(records: SessionRecordFixture())
+    private var gate: AccountSelectionGate?
+    func gateNextSelection(_ gate: AccountSelectionGate) {
+        self.gate = gate
+    }
+
+    func load() async throws -> AccountSession? {
+        try await store.load()
+    }
+
+    func save(_ session: AccountSession) async throws {
+        try await store.save(session)
+    }
+
+    func delete() async throws {
+        try await store.delete()
+    }
+
+    func savedSessions() async throws -> [AccountSession] {
+        try await store.savedSessions()
+    }
+
+    func deleteSaved(namespace: String) async throws {
+        try await store.deleteSaved(namespace: namespace)
+    }
+
+    func loadSaved(namespace: String) async throws -> AccountSession? {
+        if let gate {
+            self.gate = nil
+            await gate.wait()
+        }
+        return try await store.loadSaved(namespace: namespace)
+    }
 }

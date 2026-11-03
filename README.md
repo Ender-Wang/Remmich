@@ -83,6 +83,7 @@ For now, follow [Build and run](CONTRIBUTING.md#build-and-run) to build from sou
 ### 🔐 Account and connection
 
 - Restore your sign-in session from Keychain when you reopen the app.
+- Switch saved accounts in **Profile → Account** without signing in again while their sessions remain valid. Each account keeps its own connection settings, index, cache, and pause choices.
 - Configure Primary and Fallback server addresses, with authenticated failover, live response times, and shared retained data for verified aliases of the same account.
 - Manage Account, Connection, Index, and Cache & Storage from the profile panel opened through your avatar.
 

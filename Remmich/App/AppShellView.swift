@@ -19,6 +19,7 @@ struct AppShellView: View {
     let saveProfile: (ConnectionProfileDraft) async -> ConnectionProfileSaveResult
     let signOut: (Bool) async -> Void
     var primaryContentLoadingChanged: ((Bool) -> Void)?
+    var sessionController: AppSessionController?
 
     @State private var tabSelectionState = NativeTabSelectionState()
     @State private var tabContentActivationState = NativeTabContentActivationState()
@@ -177,7 +178,8 @@ struct AppShellView: View {
                             saveProfile: saveProfile,
                             signOut: signOut,
                             dismissAccountRequest: $libraryDismissAccountRequest,
-                            accountPresentationChanged: { libraryAccountPresented = $0 }
+                            accountPresentationChanged: { libraryAccountPresented = $0 },
+                            sessionController: sessionController
                         )
                     }
                 }
@@ -296,6 +298,7 @@ struct AppShellView: View {
                             libraryIndex: libraryIndex,
                             saveProfile: saveProfile,
                             signOut: signOut,
+                            sessionController: sessionController,
                             close: { showsAccount = false }
                         )
                         .nativeEdgeBackAction(active: true, priority: 200) { showsAccount = false }

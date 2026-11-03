@@ -32,7 +32,8 @@ struct RootView: View {
                     libraryIndex: controller.libraryIndex,
                     saveProfile: controller.saveConnectionProfile,
                     signOut: controller.signOut,
-                    primaryContentLoadingChanged: { primaryContentLoading = $0 }
+                    primaryContentLoadingChanged: { primaryContentLoading = $0 },
+                    sessionController: controller
                 )
                 .id(MediaAccountScope(session: session))
             }

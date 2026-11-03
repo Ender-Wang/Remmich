@@ -96,7 +96,11 @@ struct OnboardingView: View {
         } message: {
             Text("HTTP does not protect your password or photos in transit. Continue only on a network you trust.")
         }
-        .nativeEdgeBackAction(active: server != nil, canBegin: !isBusy) { goBack() }
+        .nativeEdgeBackAction(active: server != nil || controller.isAddingAccount, canBegin: !isBusy) { goBack() }
+        .task {
+            await controller.refreshSavedAccounts()
+            controller.libraryIndex.refreshStoredAccounts()
+        }
     }
 
     private var branding: some View {
@@ -120,7 +124,7 @@ struct OnboardingView: View {
     private var connectionCard: some View {
         VStack(alignment: .leading, spacing: 22) {
             HStack(spacing: 12) {
-                if server != nil {
+                if server != nil || controller.isAddingAccount {
                     Button(action: goBack) {
                         Image(systemName: "chevron.left")
                             .frame(width: 44, height: 44)
@@ -129,7 +133,7 @@ struct OnboardingView: View {
                     .buttonStyle(.glass)
                     .buttonBorderShape(.circle)
                     .disabled(isBusy)
-                    .accessibilityLabel("Back to server address")
+                    .accessibilityLabel(server == nil ? "Back to account" : "Back to server address")
                 } else {
                     Image(systemName: "globe")
                         .font(.title2)
@@ -164,6 +168,13 @@ struct OnboardingView: View {
                 .font(.callout)
                 .accessibilityIdentifier("onboarding-error")
             }
+            if controller.isAddingAccount {
+                Button("Cancel adding account") {
+                    focusedField = nil
+                    Task { await controller.cancelAddingAccount() }
+                }
+                .disabled(isBusy || controller.isChangingAccount)
+            }
         }
         .padding(24)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -184,6 +195,9 @@ struct OnboardingView: View {
                     .accessibilityIdentifier("server-address")
             }
             primaryButton(isChecking ? "Checking server…" : "Continue", enabled: canConnect, action: requestConnection)
+            if !controller.isAddingAccount, !controller.savedAccounts.isEmpty || !controller.libraryIndex.storedAccounts.isEmpty {
+                SavedAccountsView(controller: controller, currentSession: nil)
+            }
         }
     }
 
@@ -288,6 +302,10 @@ struct OnboardingView: View {
         guard !isBusy else { return }
         focusedField = nil
         password = ""
+        if server == nil, controller.isAddingAccount {
+            Task { await controller.cancelAddingAccount() }
+            return
+        }
         controller.resetOnboarding()
     }
 }

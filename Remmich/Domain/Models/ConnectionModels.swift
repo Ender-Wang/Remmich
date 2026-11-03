@@ -51,6 +51,19 @@ nonisolated struct AccountSession: Codable, Hashable, Sendable {
     let isAdmin: Bool
     let serverVersion: ServerVersion
     var cacheServerIdentity: String? = nil
+
+    /// A successful login at an already saved endpoint/user retains its verified
+    /// namespace even if that account's local SQL inventory was deleted.
+    func reusingSavedIdentity(from sessions: [Self]) -> Self {
+        let endpoint = MediaAccountScope.canonicalServerIdentity(apiURL)
+        let identities = Set(sessions.filter {
+            $0.userID == userID && MediaAccountScope.canonicalServerIdentity($0.apiURL) == endpoint
+        }.map { MediaAccountScope(session: $0).serverIdentity })
+        guard identities.count == 1, let identity = identities.first else { return self }
+        var session = self
+        session.cacheServerIdentity = identity == endpoint ? nil : identity
+        return session
+    }
 }
 
 nonisolated enum ConnectionRouteKind: String, Codable, CaseIterable, Sendable {

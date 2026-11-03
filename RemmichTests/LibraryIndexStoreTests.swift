@@ -1,9 +1,102 @@
 import Foundation
+import SQLite3
 import Testing
 @testable import Remmich
 
 @Suite(.serialized)
 struct LibraryIndexStoreTests {
+    @Test func retainedNamesAndEmailsAreScopedAndDeletedWithTheirLocalData() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        let first = SavedSessionRegistryTests.session("first")
+        let second = SavedSessionRegistryTests.session("second")
+        try await store.recordAccountIdentity(first)
+        try await store.recordAccountIdentity(second)
+        let firstScope = MediaAccountScope(session: first)
+        let secondScope = MediaAccountScope(session: second)
+        let sessions = KeychainSessionStore(records: SessionRecordFixture())
+        try await sessions.save(first)
+        try await sessions.delete()
+        let reader = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        let accounts = try await reader.storedAccounts()
+        let retained = try #require(accounts.first { $0.namespace == firstScope.cacheNamespace })
+        #expect(retained.accountName == first.name && retained.accountEmail == first.userEmail)
+        let other = try #require(accounts.first { $0.namespace == secondScope.cacheNamespace })
+        #expect(other.accountName == second.name && other.accountEmail == second.userEmail)
+        #expect(try await sessions.savedSessions().isEmpty)
+        try await reader.removeAccount(namespace: firstScope.cacheNamespace)
+        #expect(try await reader.storedAccounts().map(\.namespace) == [secondScope.cacheNamespace])
+    }
+
+    @Test func unsupportedSchemaRequiresResetWithoutChangingExistingData() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        var handle: OpaquePointer?
+        try #require(sqlite3_open(fixture.databaseURL.path, &handle) == SQLITE_OK)
+        defer { sqlite3_close(handle) }
+        try #require(sqlite3_exec(handle, "CREATE TABLE existing_data(value TEXT); INSERT INTO existing_data VALUES('kept'); PRAGMA user_version = 6", nil, nil, nil) == SQLITE_OK)
+        let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        await #expect(throws: LibraryIndexStoreError.self) {
+            try await store.prepare(scope: Self.scope(userID: "current"))
+        }
+        var statement: OpaquePointer?
+        try #require(sqlite3_prepare_v2(handle, "SELECT (SELECT user_version FROM pragma_user_version), value FROM existing_data", -1, &statement, nil) == SQLITE_OK)
+        defer { sqlite3_finalize(statement) }
+        try #require(sqlite3_step(statement) == SQLITE_ROW)
+        #expect(sqlite3_column_int(statement, 0) == 6)
+        #expect(try String(cString: #require(sqlite3_column_text(statement, 1))) == "kept")
+    }
+
+    @Test func accountSummariesUseAcceptedAssetsAndVerifiedThumbnailMetadataPairs() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        let first = Self.scope(userID: "summary-first")
+        let second = Self.scope(userID: "summary-second")
+        let generation = try await store.beginGeneration(scope: first)
+        try await store.upsert(assets: [Self.asset(id: "one"), Self.asset(id: "two"), Self.asset(id: "stale")], generation: generation, scope: first)
+        _ = try await store.acceptGeneration(generation, watermark: nil, historicalCursor: nil, expectedAssetCount: 4, scope: first)
+        try await store.setPaused(true, scope: first)
+        let syncDate = Date(timeIntervalSince1970: 1234)
+        try await store.setLastIndexSyncAt(syncDate, scope: first)
+        try await store.setLastCacheSyncAt(syncDate, scope: first)
+        let otherGeneration = try await store.beginGeneration(scope: second)
+        try await store.upsert(assets: [Self.asset(id: "other")], generation: otherGeneration, scope: second)
+        _ = try await store.acceptGeneration(otherGeneration, watermark: nil, historicalCursor: nil, expectedAssetCount: 1, scope: second)
+        for (id, kind, verified, bytes) in [
+            ("one", MediaDerivative.thumbnail, true, Int64(99)),
+            ("two", .thumbnail, false, 500),
+            ("one", .original, true, 50000),
+            ("orphan", .thumbnail, true, 300),
+            ("stale", .thumbnail, true, 800),
+        ] {
+            try await store.upsert(derivatives: [
+                .init(assetID: id, derivative: kind, pixelSize: nil, sourceRevision: id == "stale" ? "old-revision" : Self.asset(id: id).updatedAt.ISO8601Format(), relativeFileKey: id + kind.rawValue,
+                      byteCount: bytes, digest: "fixture", isVerified: verified, lastAccessedAt: .now, completedAt: .now),
+            ], scope: first)
+        }
+        for id in ["one", "two", "orphan", "stale"] {
+            try await store.upsert(assetDetail: .init(
+                id: id, capturedAt: .now, originalFileName: "fixture.jpg", originalMimeType: nil,
+                width: nil, height: nil, description: nil, cameraMake: nil, cameraModel: nil, lensModel: nil,
+                fileSizeBytes: nil, iso: nil, focalLength: nil, aperture: nil, exposureTime: nil,
+                latitude: nil, longitude: nil, city: nil, state: nil, country: nil
+            ), scope: first)
+        }
+        let staging = try await store.beginGeneration(scope: first)
+        try await store.upsert(assets: [Self.asset(id: "unaccepted")], generation: staging, scope: first)
+        let accounts = try await store.storedAccounts()
+        let summary = try #require(accounts.first { $0.namespace == first.cacheNamespace })
+        #expect(summary.indexedAssetCount == 3 && summary.expectedAssetCount == 4 && summary.isIndexPaused)
+        #expect(summary.thumbnailCount == 1 && summary.metadataCount == 3 && summary.cachedAssetCount == 1)
+        #expect(summary.thumbnailBytes == 99)
+        #expect(summary.lastIndexSyncAt == syncDate && summary.lastCacheSyncAt == syncDate)
+        let other = try #require(accounts.first { $0.namespace == second.cacheNamespace })
+        #expect(other.indexedAssetCount == 1 && other.expectedAssetCount == 1 && !other.isIndexPaused)
+        #expect(other.thumbnailCount == 0 && other.metadataCount == 0 && other.thumbnailBytes == 0)
+    }
+
     @Test func syncTimestampsPreservePersistedUnixSeconds() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
@@ -25,7 +118,7 @@ struct LibraryIndexStoreTests {
         #expect(cacheTimestamp.timeIntervalSince1970 == timestamp.timeIntervalSince1970)
     }
 
-    @Test func migratesAndReadsOnlyAcceptedGeneration() async throws {
+    @Test func createsCurrentSchemaAndReadsOnlyAcceptedGeneration() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
         let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)

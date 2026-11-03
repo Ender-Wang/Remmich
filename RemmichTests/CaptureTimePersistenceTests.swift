@@ -1,5 +1,4 @@
 import Foundation
-import SQLite3
 import Testing
 @testable import Remmich
 
@@ -38,7 +37,7 @@ struct CaptureTimePersistenceTests {
         #expect(try videos.first?.captureLocalDate == Date("2025-12-31T19:30:00Z", strategy: .iso8601))
     }
 
-    @Test func repairsLegacyDateGroupsWithoutDiscardingOfflineData() async throws {
+    @Test func reopensCurrentSchemaWithoutDiscardingOfflineData() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -53,15 +52,15 @@ struct CaptureTimePersistenceTests {
             capturedAt: instant, uploadedAt: instant, updatedAt: instant, checksum: "original",
             width: nil, height: nil, aspectRatio: 1, durationMilliseconds: nil,
             isFavorite: false, visibility: "timeline", isTrashed: false, isOffline: false,
-            bucketKey: "2025-12-01", dayKey: "2026-01-01", weekKey: "2026-W01",
-            monthKey: "2026-01", yearKey: "2026", localOffsetHours: -5
+            bucketKey: "2025-12-01", dayKey: "2025-12-31", weekKey: "2026-W01",
+            monthKey: "2025-12", yearKey: "2025", localOffsetHours: -5
         )
         let store = SQLiteLibraryIndexStore(databaseURL: databaseURL)
         let generation = try await store.beginGeneration(scope: scope)
         try await store.upsert(assets: [record], generation: generation, scope: scope)
         try await store.replace(groups: [.init(
-            mediaScope: .photos, level: "day", key: "2026-01-01", intervalStart: instant,
-            intervalEnd: instant.addingTimeInterval(1), assetCount: 1,
+            mediaScope: .photos, level: "day", key: "2025-12-31", intervalStart: local,
+            intervalEnd: local.addingTimeInterval(1), assetCount: 1,
             owningBucketKeys: [record.bucketKey], coverAssetIDs: [record.id], mosaicSeed: 1
         )], generation: generation, scope: scope)
         _ = try await store.acceptGeneration(generation, watermark: instant, historicalCursor: nil,
@@ -82,27 +81,22 @@ struct CaptureTimePersistenceTests {
         )
         try await store.upsert(assetDetail: detail, scope: scope)
 
-        // Version 4 has the same columns, but derived its keys from raw UTC.
-        var handle: OpaquePointer?
-        try #require(sqlite3_open(databaseURL.path, &handle) == SQLITE_OK)
-        defer { sqlite3_close(handle) }
-        try #require(sqlite3_exec(handle, "PRAGMA user_version = 4", nil, nil, nil) == SQLITE_OK)
         let restored = SQLiteLibraryIndexStore(databaseURL: databaseURL)
         try await restored.prepare(scope: scope)
         let snapshot = try #require(try await restored.snapshot(scope: scope))
-        let migrated = try #require(snapshot.assets.first)
+        let saved = try #require(snapshot.assets.first)
         #expect(snapshot.generation == generation)
         #expect(snapshot.syncState.isPaused)
         #expect(snapshot.syncState.lastIndexSyncAt == instant)
-        #expect(migrated.capturedAt == instant)
-        #expect(migrated.updatedAt == instant)
-        #expect(migrated.localOffsetHours == -5)
-        #expect(migrated.bucketKey == "2025-12-01")
-        #expect(migrated.dayKey == "2025-12-31")
-        #expect(migrated.weekKey == "2026-W01")
-        #expect(migrated.monthKey == "2025-12")
-        #expect(migrated.yearKey == "2025")
-        #expect(snapshot.groups.isEmpty)
+        #expect(saved.capturedAt == instant)
+        #expect(saved.updatedAt == instant)
+        #expect(saved.localOffsetHours == -5)
+        #expect(saved.bucketKey == "2025-12-01")
+        #expect(saved.dayKey == "2025-12-31")
+        #expect(saved.weekKey == "2026-W01")
+        #expect(saved.monthKey == "2025-12")
+        #expect(saved.yearKey == "2025")
+        #expect(snapshot.groups.map(\.key) == ["2025-12-31"])
         #expect(snapshot.derivatives == [derivative])
         #expect(try await restored.cachedAssetDetail(id: record.id, scope: scope) == detail)
         #expect(try Data(contentsOf: file) == Data([1, 2, 3]))

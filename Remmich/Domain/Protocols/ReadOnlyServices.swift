@@ -19,26 +19,6 @@ nonisolated protocol EndpointNormalizing: Sendable {
     func normalizeEndpoint(_ address: String) throws -> URL
 }
 
-nonisolated enum SessionStoreError: LocalizedError, Equatable, Sendable {
-    case corruptPayload
-    case unavailable(message: String)
-
-    var errorDescription: String? {
-        switch self {
-        case .corruptPayload:
-            "The saved session could not be read. Please sign in again."
-        case let .unavailable(message):
-            message
-        }
-    }
-}
-
-nonisolated protocol SessionStoring: Sendable {
-    func load() async throws -> AccountSession?
-    func save(_ session: AccountSession) async throws
-    func delete() async throws
-}
-
 struct ReadAsset: Identifiable, Hashable, Sendable {
     let id: String
     let createdAt: Date

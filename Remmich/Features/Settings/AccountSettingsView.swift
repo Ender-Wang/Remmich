@@ -114,6 +114,7 @@ struct AccountSettingsView: View {
     let libraryIndex: LibraryIndexController
     let saveProfile: (ConnectionProfileDraft) async -> ConnectionProfileSaveResult
     let signOut: (Bool) async -> Void
+    let sessionController: AppSessionController?
     let close: (() -> Void)?
     let showsCloseControl: Bool
     let drawsGlassBackground: Bool
@@ -124,7 +125,6 @@ struct AccountSettingsView: View {
     @State private var connectionLatency = ConnectionLatencyMonitor()
     @State private var isSaving = false
     @State private var saveError: String?
-    @State private var showsSignOutChoices = false
     @State private var pendingAccountDeletion: StoredLibraryAccount?
     @State private var showsThumbnailRebuildConfirmation = false
     @State private var showsThumbnailClearConfirmation = false
@@ -171,6 +171,7 @@ struct AccountSettingsView: View {
         libraryIndex: LibraryIndexController,
         saveProfile: @escaping (ConnectionProfileDraft) async -> ConnectionProfileSaveResult,
         signOut: @escaping (Bool) async -> Void,
+        sessionController: AppSessionController? = nil,
         close: (() -> Void)? = nil,
         showsCloseControl: Bool = true,
         drawsGlassBackground: Bool = true
@@ -181,6 +182,7 @@ struct AccountSettingsView: View {
         self.libraryIndex = libraryIndex
         self.saveProfile = saveProfile
         self.signOut = signOut
+        self.sessionController = sessionController
         self.close = close
         self.showsCloseControl = showsCloseControl
         self.drawsGlassBackground = drawsGlassBackground
@@ -281,21 +283,8 @@ struct AccountSettingsView: View {
         } message: {
             Text(saveError ?? "")
         }
-        .confirmationDialog(
-            "Sign Out",
-            isPresented: $showsSignOutChoices,
-            titleVisibility: .visible
-        ) {
-            Button("Sign Out and Keep Local Data") { performSignOut(deleteLocalData: false) }
-            Button("Sign Out and Delete Local Data", role: .destructive) {
-                performSignOut(deleteLocalData: true)
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Keeping local data lets this account resume without rebuilding its index and cached thumbnails.")
-        }
         .alert(
-            "Delete Stored Account Data?",
+            "Clear Data?",
             isPresented: Binding(
                 get: { pendingAccountDeletion != nil },
                 set: {
@@ -306,12 +295,12 @@ struct AccountSettingsView: View {
             ),
             presenting: pendingAccountDeletion
         ) { account in
-            Button("Delete", role: .destructive) {
+            Button("Clear", role: .destructive) {
                 Task { await libraryIndex.deleteStoredAccount(namespace: account.namespace) }
             }
             Button("Cancel", role: .cancel) {}
         } message: { account in
-            Text("This removes the local index and cached media for \(account.serverIdentity). It does not change the Immich server.")
+            Text("This clears the saved index, thumbnails, and metadata for \(Self.accountLabel(account)). Your saved sign-in and Immich server library are kept.")
         }
         .confirmationDialog(
             "Rebuild Offline Cache?",
@@ -881,11 +870,23 @@ struct AccountSettingsView: View {
             Text("Your Immich server data stays unchanged.")
                 .font(.footnote).foregroundStyle(.secondary)
                 .padding(.bottom, 8)
-            settingsActionButton("Sign Out…", systemImage: "rectangle.portrait.and.arrow.right", role: .destructive) {
-                showsSignOutChoices = true
+            AccountSignOutButton(action: performSignOut) {
+                settingsActionLabel("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
             }
+            .buttonStyle(.glass)
+            .buttonBorderShape(.capsule)
+            .controlSize(.regular)
+            .frame(minHeight: 44)
+            .foregroundStyle(.red)
             .frame(maxWidth: .infinity, alignment: .center)
-            retainedAccountSection
+            if let sessionController {
+                SavedAccountsView(controller: sessionController, currentSession: session) { account in
+                    pendingAccountDeletion = account
+                }
+                .padding(.top, 24)
+            } else {
+                retainedAccountSection
+            }
         }
     }
 
@@ -1275,11 +1276,13 @@ struct AccountSettingsView: View {
                     Button(role: .destructive) {
                         pendingAccountDeletion = account
                     } label: {
-                        Text("Delete local data…").font(.caption.weight(.semibold)).frame(minHeight: 28)
+                        Text("Clear Data").foregroundStyle(.red).font(.caption.weight(.medium)).frame(minHeight: 28)
                     }
                     .buttonStyle(.glass)
                     .buttonBorderShape(.capsule)
+                    .controlSize(.small)
                     .frame(minHeight: 44)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
                     .disabled(libraryIndex.isDeletingStoredAccount)
                 }
                 .padding(.vertical, 12)

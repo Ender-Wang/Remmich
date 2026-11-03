@@ -8,7 +8,6 @@ actor ImmichServiceAdapter: ServerReading, SessionManaging, RouteValidating {
     }
 
     private let discovery: ImmichServerDiscovery
-    private var client: ImmichClient?
     private var validatedRoutes: Set<RouteKey> = []
 
     init(discovery: ImmichServerDiscovery = .init()) {
@@ -19,14 +18,12 @@ actor ImmichServiceAdapter: ServerReading, SessionManaging, RouteValidating {
         let apiURL = try await discovery.discover(address)
         let client = ImmichClient(apiURL: apiURL)
         let info = try await client.validateServer()
-        self.client = client
         return Self.map(info)
     }
 
     func signIn(email: String, password: String, server: ServerDetails) async throws -> AccountSession {
-        let client = client ?? ImmichClient(apiURL: server.apiURL)
+        let client = ImmichClient(apiURL: server.apiURL)
         let session = try await client.login(email: email, password: password)
-        self.client = client
         validatedRoutes.removeAll()
         return AccountSession(
             apiURL: session.apiURL,
@@ -42,15 +39,12 @@ actor ImmichServiceAdapter: ServerReading, SessionManaging, RouteValidating {
     func restore(_ session: AccountSession) async throws -> ServerDetails {
         let client = ImmichClient(apiURL: session.apiURL, credential: .bearer(session.accessToken))
         let info = try await client.validateServer()
-        self.client = client
         return Self.map(info)
     }
 
     func signOut(_ session: AccountSession) async {
-        let client = client ?? ImmichClient(apiURL: session.apiURL, credential: .bearer(session.accessToken))
+        let client = ImmichClient(apiURL: session.apiURL, credential: .bearer(session.accessToken))
         try? await client.logout()
-        self.client = nil
-        validatedRoutes.removeAll()
     }
 
     func validateRoute(endpoint: URL, session: AccountSession) async -> RouteValidationResult {
@@ -82,11 +76,8 @@ actor ImmichServiceAdapter: ServerReading, SessionManaging, RouteValidating {
         }
         guard validatedRoutes.contains(key) else { throw ImmichAPIError.offline }
         validatedRoutes.removeAll()
-        // Activation reuses the just-confirmed reachability/identity without a third network
-        // round trip, but builds the long-lived client on the normal-timeout transport — the
-        // short route-check timeout is only appropriate for the health probe itself, not for
-        // ongoing app traffic (login-adjacent calls, and future browsing/media requests).
-        client = ImmichClient(apiURL: endpoint, credential: .bearer(session.accessToken))
+        // Timeline and media clients are configured separately by the session
+        // controller. Login/logout always construct a client for their owner.
     }
 
     private nonisolated static func failureKind(for error: Error) -> RouteValidationFailureKind {

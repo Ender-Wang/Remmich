@@ -13,6 +13,7 @@ struct LibraryView: View {
     let signOut: (Bool) async -> Void
     @Binding var dismissAccountRequest: Int
     let accountPresentationChanged: (Bool) -> Void
+    var sessionController: AppSessionController?
 
     @State private var accountPresented = false
     @State private var accountContentMounted = false
@@ -143,6 +144,7 @@ struct LibraryView: View {
             libraryIndex: libraryIndex,
             saveProfile: saveProfile,
             signOut: signOut,
+            sessionController: sessionController,
             close: { setAccountPresented(false) },
             showsCloseControl: false,
             drawsGlassBackground: false
