@@ -62,6 +62,8 @@ The timeline index and paired thumbnail/Info cache are local, account-scoped sto
 
 [OnboardingView](Remmich/Features/Onboarding/OnboardingView.swift) uses the profile's animated branding, green connection and blue account accents, and a native glass form. An adaptive layout keeps branding above the form in portrait and beside it in landscape, with scrolling for the keyboard and larger text. [RootView](Remmich/App/RootView.swift) keeps a single onboarding view across server checking, credentials, sign-in progress, and failure so field values and logo motion survive those transitions. Checking uses that mounted branding rather than a second full-screen loader. Server validation, HTTP confirmation, credential storage, and successful library preparation remain owned by `AppSessionController`; OAuth remains unsupported.
 
+Server login notices use a limited native HTML text renderer for line breaks, emphasis, warning text, entities, lists, and HTTP(S) links. Script and embedded active content are omitted; JavaScript links become inactive labels. The renderer loads no web resources and does not extract credentials, fill fields, or submit sign-in. In particular, the official demo's web-only login action remains inactive.
+
 Before Keychain restoration establishes an authenticated account, startup shows the system background and loading logo. Native tab placeholders are reserved for an authenticated library being prepared. Signed-out foreground entry does not wait for native transfer-session restoration.
 
 ### Asset capture times

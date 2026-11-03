@@ -198,10 +198,8 @@ struct OnboardingView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             if !server.loginPageMessage.isEmpty {
-                Text(server.loginPageMessage)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                ServerLoginMessageView(html: server.loginPageMessage,
+                                       baseURL: server.apiURL.deletingLastPathComponent().appendingPathComponent(""))
             }
         }
         if server.capabilities.passwordLogin {
