@@ -962,6 +962,9 @@ struct LibraryIndexSynchronizationTests {
             publishedGenerations.append(bootstrap.photos.generation)
         }
 
+        // A viewer belongs to an adopted account. Initial scope adoption clears
+        // unowned session state, just as switching accounts closes the old viewer.
+        _ = await controller.bootstrap(session: .fixture)
         controller.setTimelinePublicationDeferred(true)
         controller.start(session: .fixture, endpoint: AccountSession.fixture.apiURL)
         try await Self.waitUntilUpToDate(controller)
