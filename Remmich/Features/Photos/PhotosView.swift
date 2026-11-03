@@ -368,6 +368,7 @@ struct PhotosView: View {
 
     @Namespace private var viewerNamespace
     @State private var viewportRuntime = TimelineViewportRuntime()
+    @State private var windowTopInset: CGFloat = 0
     @State private var compactChrome = false
     @State private var semanticMemoryScaleVisible = true
     @State private var viewerOwnsTimelineChrome = false
@@ -736,7 +737,7 @@ struct PhotosView: View {
                 : TimelineRangeGridLayout.minimumBottomNavigationHeight(isPhone: isPhone, viewportSize: geometry.size)
             let topInset = TimelineMemoryLaneSafeArea.topInset(
                 proposed: geometry.safeAreaInsets.top,
-                window: TimelineMemoryLaneSafeArea.activeWindowTopInset
+                window: windowTopInset
             )
             // Keep the row's scroll clearance while compact chrome hides it,
             // so showing the row does not move the timeline underneath it.
@@ -811,6 +812,12 @@ struct PhotosView: View {
                 semanticMemoryLane(topInset: topInset)
             }
             .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: compactChrome)
+        }
+        .background {
+            TimelineWindowSafeAreaReader { inset in
+                guard windowTopInset != inset else { return }
+                windowTopInset = inset
+            }
         }
         .ignoresSafeArea(.container, edges: [.top, .horizontal, .bottom])
         .safeAreaInset(edge: .top, spacing: 0) {
@@ -1470,14 +1477,6 @@ nonisolated enum TimelineMemoryLaneSafeArea {
 
     static func topInset(proposed: CGFloat, window: CGFloat) -> CGFloat {
         max(0, max(proposed, window))
-    }
-
-    @MainActor
-    static var activeWindowTopInset: CGFloat {
-        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-        let scene = scenes.first { $0.activationState == .foregroundActive } ?? scenes.first
-        let window = scene?.windows.first(where: \.isKeyWindow) ?? scene?.windows.first
-        return window?.safeAreaInsets.top ?? 0
     }
 }
 
