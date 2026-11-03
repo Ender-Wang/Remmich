@@ -1121,20 +1121,16 @@ struct LibraryIndexSynchronizationTests {
 
 private actor SuspendedBackgroundAssetDetails: AssetDetailReading {
     private var continuation: CheckedContinuation<AssetDetail, Never>?
-    private var result: AssetDetail?
     var hasPendingRead: Bool {
         continuation != nil
     }
 
     func assetDetail(id _: String) async -> AssetDetail {
-        if let result {
-            return result
-        }
-        return await withCheckedContinuation { continuation = $0 }
+        // Each resumed cache pass must wait for its own metadata response.
+        await withCheckedContinuation { continuation = $0 }
     }
 
     func complete(with detail: AssetDetail) {
-        result = detail
         let pending = continuation
         continuation = nil
         pending?.resume(returning: detail)
