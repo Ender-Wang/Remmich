@@ -211,18 +211,26 @@ final class MediaLibraryController {
             request.priority = priority
             return request
         }
-        guard let scope, let session, let activeAPIURL,
-              let url = Self.mediaURL(for: descriptor, apiURL: activeAPIURL)
+        guard let scope, let session else { return nil }
+        let isCacheOnly = activeAPIURL == nil
+        guard !isCacheOnly || descriptor.derivative == .thumbnail,
+              let url = Self.mediaURL(for: descriptor, apiURL: activeAPIURL ?? session.apiURL)
         else { return nil }
         if let trace {
             Self.logger.info(
-                "First active thumbnail source resolved content=\(trace.name, privacy: .public) source=remote elapsedMs=\(Self.elapsedMilliseconds(since: trace.startedAt))"
+                "First active thumbnail source resolved content=\(trace.name, privacy: .public) source=\(isCacheOnly ? "cache-only" : "remote", privacy: .public) elapsedMs=\(Self.elapsedMilliseconds(since: trace.startedAt))"
             )
         }
         var urlRequest = URLRequest(url: url)
         urlRequest.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
         var request = ImageRequest(urlRequest: urlRequest)
         request.imageID = descriptor.cacheKey(in: scope)
+        if isCacheOnly {
+            // A saved URL supplies request identity, not permission to connect.
+            // Nuke checks both cache layers before rejecting a cache-only miss.
+            // Removing this option on route activation also reloads LazyImage.
+            request.options.insert(.returnCacheDataDontLoad)
+        }
         request.priority = priority
         if let pixels = descriptor.targetPixels {
             request.thumbnail = .init(

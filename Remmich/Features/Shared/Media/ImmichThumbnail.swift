@@ -19,8 +19,10 @@ struct ImmichThumbnail: View {
     @State private var retryID = 0
 
     var body: some View {
+        let request = media.imageRequest(for: descriptor, priority: priority)
+        let isCacheOnly = request?.options.contains(.returnCacheDataDontLoad) == true
         LazyImage(
-            request: media.imageRequest(for: descriptor, priority: priority),
+            request: request,
             transaction: .init(animation: .easeOut(duration: 0.18))
         ) { state in
             ZStack {
@@ -33,7 +35,7 @@ struct ImmichThumbnail: View {
                     rendered(image)
                 } else if let placeholderImage {
                     rendered(Image(uiImage: placeholderImage))
-                } else if state.error != nil {
+                } else if state.error != nil, !isCacheOnly {
                     Button {
                         retryID += 1
                     } label: {
@@ -45,6 +47,8 @@ struct ImmichThumbnail: View {
                 } else if let logoPlaceholderCaption {
                     RemmichCoverLoadingView(caption: logoPlaceholderCaption)
                         .transition(.opacity)
+                } else if isCacheOnly {
+                    ProgressView()
                 } else if state.isLoading {
                     ProgressView(value: Double(state.progress.fraction))
                         .progressViewStyle(.circular)

@@ -300,17 +300,28 @@ final class AppSessionController {
                 try await libraryIndex.restoreBackgroundState(session: session, includeCacheState: backgroundSyncKind != .refresh)
                 Self.startupLogger.info("Background sync state restored")
             } else {
-                await bootstrapLocalLibrary(session: session)
-                guard preparationIsCurrent(generation) else { return }
-                foregroundResourcesReady = true
-                Self.startupLogger.info(
-                    "Local library bootstrap published elapsedMs=\(Self.elapsedMilliseconds(since: startupStartedAt))"
-                )
+                let bootstrap = Task { @MainActor in
+                    guard preparationIsCurrent(generation), case let .signedIn(current) = state, current == session else { return }
+                    await bootstrapLocalLibrary(session: session)
+                    guard preparationIsCurrent(generation), case let .signedIn(current) = state, current == session else { return }
+                    foregroundResourcesReady = true
+                    Self.startupLogger.info(
+                        "Local library bootstrap published elapsedMs=\(Self.elapsedMilliseconds(since: startupStartedAt))"
+                    )
+                }
+                // Validation may use the network while local data is restored.
+                // Outcome application waits on this existing owned task below.
+                foregroundPreparationTask = bootstrap
+                defer {
+                    bootstrap.cancel()
+                    if generation == preparationGeneration {
+                        foregroundPreparationTask = nil
+                    }
+                }
+                await reevaluateRoute(trigger: .startup)
+                await bootstrap.value
             }
             guard preparationIsCurrent(generation) else { return }
-            if !inBackground {
-                await reevaluateRoute(trigger: .startup)
-            }
         } catch SessionStoreError.corruptPayload {
             guard preparationIsCurrent(generation) else { return }
             try? await sessionStore.delete()
@@ -656,6 +667,15 @@ final class AppSessionController {
             session: session,
             service: service
         )
+        guard evaluation == routeGeneration, !Task.isCancelled else { return }
+        if let foregroundPreparationTask {
+            if !foregroundResourcesReady {
+                Self.startupLogger.debug("Route validation finished; waiting for local bootstrap before activation")
+            }
+            await foregroundPreparationTask.value
+        }
+        guard evaluation == routeGeneration, !Task.isCancelled, automaticSyncAllowed,
+              case let .signedIn(current) = state, current == session else { return }
         guard let route = outcome.route else {
             guard evaluation == routeGeneration else { return }
             if !outcome.validationResults.isEmpty,

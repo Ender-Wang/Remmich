@@ -712,7 +712,7 @@ struct RemmichTests {
         #expect(controller.routeStatus == .connected)
     }
 
-    @Test @MainActor func restoredSessionWaitsForAnAuthenticatedRouteBeforeServingMedia() async {
+    @Test @MainActor func restoredSessionServesCacheOnlyThumbnailsWhileValidatingRoute() async {
         let service = SuspendedValidationService()
         let controller = AppSessionController(
             transfers: nil,
@@ -732,8 +732,16 @@ struct RemmichTests {
         let restoration = Task { await controller.start() }
         await service.waitUntilValidationStarts()
 
+        for _ in 0 ..< 500 {
+            if controller.foregroundResourcesReady {
+                break
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(controller.foregroundResourcesReady)
         #expect(controller.media.activeAPIURL == nil)
-        #expect(controller.media.imageRequest(for: descriptor) == nil)
+        #expect(controller.media.imageRequest(for: descriptor)?.options.contains(.returnCacheDataDontLoad) == true)
         await #expect(throws: TimelineReadError.routeUnavailable) {
             try await controller.timeline.bucketSummaries(query: .init())
         }
@@ -742,7 +750,32 @@ struct RemmichTests {
         await restoration.value
 
         #expect(controller.media.activeAPIURL == AccountSession.fixture.apiURL)
-        #expect(controller.media.imageRequest(for: descriptor) != nil)
+        #expect(controller.media.imageRequest(for: descriptor)?.options.contains(.returnCacheDataDontLoad) == false)
+    }
+
+    @Test @MainActor func signOutDuringParallelRestorationRejectsLateValidation() async {
+        let service = SuspendedValidationService()
+        let fixture = AccountSession.fixture
+        let session = AccountSession(apiURL: fixture.apiURL, accessToken: fixture.accessToken,
+                                     userID: "startup-\(UUID().uuidString)", userEmail: fixture.userEmail,
+                                     name: fixture.name, isAdmin: fixture.isAdmin, serverVersion: fixture.serverVersion)
+        let controller = AppSessionController(
+            transfers: nil, service: service, sessionStore: MemorySessionStore(session: session),
+            profileStore: ConnectionProfileStore(suiteName: "RemmichTests-\(UUID().uuidString)"),
+            networkMonitoringEnabled: false, pathChangeDebounce: .zero
+        )
+        let restoration = Task { await controller.start() }
+        await service.waitUntilValidationStarts()
+        await controller.signOut()
+        await service.resumeValidation(with: .reachable)
+        await restoration.value
+        guard case .signedOut = controller.state else {
+            Issue.record("Late startup validation restored a signed-out account")
+            return
+        }
+        #expect(controller.activeRoute == nil)
+        #expect(!controller.foregroundResourcesReady)
+        #expect(controller.media.pipeline == nil)
     }
 
     @Test @MainActor func savedSessionRestorationIgnoresDuplicateInitialLifecycleTriggers() async {
