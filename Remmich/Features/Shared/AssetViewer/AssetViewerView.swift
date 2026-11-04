@@ -3338,49 +3338,36 @@ private struct AssetViewerMemoryProgress: View {
         .accessibilityIdentifier("memory-viewer-progress")
     }
 
-    @ViewBuilder
     private func tracker(progress: Double) -> some View {
-        if count <= 12 {
-            GeometryReader { geometry in
-                let segmentCount = max(1, count)
-                let spacing: CGFloat = 3
-                let segmentWidth = max(
-                    1,
-                    (geometry.size.width - spacing * CGFloat(segmentCount - 1))
-                        / CGFloat(segmentCount)
-                )
-                HStack(alignment: .center, spacing: spacing) {
-                    ForEach(0 ..< segmentCount, id: \.self) { index in
-                        ZStack(alignment: .leading) {
-                            Capsule()
-                                .fill(Color.primary.opacity(0.2))
+        GeometryReader { geometry in
+            let range = MemoryProgressSegments.visibleRange(
+                count: count,
+                selectedIndex: selectedIndex,
+                width: geometry.size.width
+            )
+            let segmentCount = max(1, range.count)
+            let spacing = MemoryProgressSegments.spacing
+            let segmentWidth = max(
+                1,
+                (geometry.size.width - spacing * CGFloat(segmentCount - 1))
+                    / CGFloat(segmentCount)
+            )
+            HStack(alignment: .center, spacing: spacing) {
+                ForEach(range, id: \.self) { index in
+                    ZStack(alignment: .leading) {
+                        Capsule()
+                            .fill(Color.primary.opacity(0.2))
 
-                            Capsule()
-                                .fill(Color.primary.opacity(index < selectedIndex ? 0.55 : 1))
-                                .frame(
-                                    width: segmentWidth * fillAmount(
-                                        for: index,
-                                        currentProgress: progress
-                                    )
+                        Capsule()
+                            .fill(Color.primary.opacity(index < selectedIndex ? 0.55 : 1))
+                            .frame(
+                                width: segmentWidth * fillAmount(
+                                    for: index,
+                                    currentProgress: progress
                                 )
-                        }
-                        .frame(width: segmentWidth, height: index == selectedIndex ? 4 : 3)
+                            )
                     }
-                }
-            }
-        } else {
-            GeometryReader { geometry in
-                ZStack(alignment: .leading) {
-                    Capsule()
-                        .fill(Color.primary.opacity(0.2))
-
-                    Capsule()
-                        .fill(Color.primary)
-                        .frame(
-                            width: geometry.size.width
-                                * CGFloat(Double(selectedIndex) + progress)
-                                / CGFloat(max(1, count))
-                        )
+                    .frame(width: segmentWidth, height: index == selectedIndex ? 4 : 3)
                 }
             }
         }
