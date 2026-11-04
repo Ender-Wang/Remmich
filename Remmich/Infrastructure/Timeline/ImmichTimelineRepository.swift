@@ -128,9 +128,12 @@ actor ImmichTimelineRepository: TimelineReading, VideoReading, AssetDetailReadin
     func memories() async throws -> [TimelineMemorySummary] {
         let (client, requestGeneration) = try requestContext()
         let startedAt = Date()
-        Self.logger.info("Memories started generation=\(requestGeneration)")
+        let queryDate = MemoryQueryDate.string(for: startedAt)
+        Self.logger.info("Memories started generation=\(requestGeneration) for=\(queryDate, privacy: .public)")
         do {
-            let memories = try await client.memories()
+            // Filter before server pagination; an unfiltered first page can
+            // contain only unrelated days and hide today's entire memory lane.
+            let memories = try await client.memories(query: .init(date: queryDate))
             try requireCurrent(requestGeneration)
             Self.logger.info(
                 "Memories finished generation=\(requestGeneration) count=\(memories.count) elapsedMs=\(Self.elapsedMilliseconds(since: startedAt))"
