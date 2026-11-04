@@ -28,6 +28,13 @@ nonisolated protocol TimelineReading: Sendable {
     func bucketSummaries(query: TimelineQuery) async throws -> [TimelineBucketSummary]
     func assets(in bucketID: TimelineBucketID, query: TimelineQuery) async throws -> [TimelineAssetSummary]
     func memories() async throws -> [TimelineMemorySummary]
+    func memories(matching kind: TimelineMediaKind) async throws -> [TimelineMemorySummary]
+}
+
+extension TimelineReading {
+    func memories(matching kind: TimelineMediaKind) async throws -> [TimelineMemorySummary] {
+        try await memories().compactMap { $0.filteringAssets(of: kind) }
+    }
 }
 
 /// Readers that have already materialized their complete result set while

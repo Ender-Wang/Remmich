@@ -1219,7 +1219,8 @@ struct PhotosView: View {
             origin: .memory(AssetViewerMemoryContext(
                 id: memory.id,
                 memoryAt: memory.memoryAt,
-                sourceYear: memory.sourceYear
+                sourceYear: memory.sourceYear,
+                availableOn: memory.availableOn
             ))
         )
     }
@@ -1609,7 +1610,7 @@ private struct TimelineMemoryCard: View {
     }
 
     private var relativeYearTitle: String {
-        let currentYear = Calendar.autoupdatingCurrent.component(.year, from: .now)
+        let currentYear = Calendar.autoupdatingCurrent.component(.year, from: memory.availableOn ?? .now)
         let years = max(1, currentYear - memory.sourceYear)
         return years == 1 ? "1 year ago" : "\(years.formatted()) years ago"
     }
@@ -1658,6 +1659,10 @@ private struct TimelineMemoryCard: View {
                             .font(.caption)
                         Text(TimelineMemoryCardPresentation.itemCountLabel(memory.assets.count))
                             .font(.caption2)
+                        if let upcomingDay = memory.upcomingDayLabel(relativeTo: .now) {
+                            Text(upcomingDay)
+                                .font(.caption2.weight(.semibold))
+                        }
                     }
                     .foregroundStyle(.white)
                     .padding(12)
@@ -1679,7 +1684,7 @@ private struct TimelineMemoryCard: View {
         .buttonStyle(.plain)
         .disabled(isLoading)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(relativeYearTitle), \(memory.memoryAt.formatted(date: .long, time: .omitted))")
+        .accessibilityLabel("\(relativeYearTitle), \(memory.memoryAt.formatted(date: .long, time: .omitted)), \(memory.upcomingDayLabel(relativeTo: .now) ?? "Today")")
         .accessibilityHint("Opens this memory")
         .accessibilityIdentifier("memory-\(memory.id)")
         .accessibilityValue(coverAccessibilityValue)

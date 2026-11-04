@@ -235,9 +235,51 @@ nonisolated struct TimelineMemorySummary: Hashable, Identifiable, Sendable {
     let memoryAt: Date
     let sourceYear: Int
     let assets: [TimelineMemoryAssetSummary]
+    let availableOn: Date?
+
+    init(id: String, memoryAt: Date, sourceYear: Int, assets: [TimelineMemoryAssetSummary], availableOn: Date? = nil) {
+        self.id = id
+        self.memoryAt = memoryAt
+        self.sourceYear = sourceYear
+        self.assets = assets
+        self.availableOn = availableOn
+    }
+
+    func upcomingDayLabel(relativeTo date: Date, calendar: Calendar = .autoupdatingCurrent) -> String? {
+        guard let availableOn,
+              let days = calendar.dateComponents(
+                  [.day], from: calendar.startOfDay(for: date), to: calendar.startOfDay(for: availableOn)
+              ).day,
+              days > 0
+        else { return nil }
+        return days == 1 ? "Tomorrow" : "In \(days) days"
+    }
+
+    func filteringAssets(of kind: TimelineMediaKind) -> TimelineMemorySummary? {
+        let filtered = assets.filter { $0.mediaKind == kind }
+        guard !filtered.isEmpty else { return nil }
+        return .init(id: id, memoryAt: memoryAt, sourceYear: sourceYear, assets: filtered, availableOn: availableOn)
+    }
 }
 
 nonisolated enum TimelineMemoryCatalog {
+    static let maximumUpcomingDays = 3
+
+    static func nearestUpcoming(
+        _ memories: [TimelineMemorySummary],
+        relativeTo referenceDate: Date,
+        calendar: Calendar = .autoupdatingCurrent
+    ) -> [TimelineMemorySummary] {
+        for offset in 0 ... maximumUpcomingDays {
+            guard let day = calendar.date(byAdding: .day, value: offset, to: referenceDate) else { continue }
+            let groups = onThisDay(memories, relativeTo: day, calendar: calendar)
+            if !groups.isEmpty {
+                return groups
+            }
+        }
+        return []
+    }
+
     static func onThisDay(
         _ memories: [TimelineMemorySummary],
         relativeTo referenceDate: Date,
@@ -284,7 +326,8 @@ nonisolated enum TimelineMemoryCatalog {
                     id: $0.id,
                     memoryAt: $0.memoryAt,
                     sourceYear: $0.sourceYear,
-                    assets: $0.assets
+                    assets: $0.assets,
+                    availableOn: calendar.startOfDay(for: referenceDate)
                 )
             }
             .sorted { $0.memoryAt > $1.memoryAt }

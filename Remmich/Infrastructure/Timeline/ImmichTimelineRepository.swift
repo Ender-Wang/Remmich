@@ -126,33 +126,55 @@ actor ImmichTimelineRepository: TimelineReading, VideoReading, AssetDetailReadin
     }
 
     func memories() async throws -> [TimelineMemorySummary] {
+        try await loadMemories(matching: nil)
+    }
+
+    func memories(matching kind: TimelineMediaKind) async throws -> [TimelineMemorySummary] {
+        try await loadMemories(matching: kind)
+    }
+
+    private func loadMemories(matching kind: TimelineMediaKind?) async throws -> [TimelineMemorySummary] {
         let (client, requestGeneration) = try requestContext()
         let startedAt = Date()
-        let queryDate = MemoryQueryDate.string(for: startedAt)
-        Self.logger.info("Memories started generation=\(requestGeneration) for=\(queryDate, privacy: .public)")
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .autoupdatingCurrent
+        let lane = kind == .video ? "Videos" : "Photos"
+        Self.logger.info("Memories started generation=\(requestGeneration) lane=\(lane, privacy: .public)")
         do {
-            // Filter before server pagination; an unfiltered first page can
-            // contain only unrelated days and hide today's entire memory lane.
-            let memories = try await client.memories(query: .init(date: queryDate))
+            let memories = try await MemoryDaySearch.load(relativeTo: startedAt, calendar: calendar) { day in
+                try self.requireCurrent(requestGeneration)
+                let queryDate = MemoryQueryDate.string(for: day, timeZone: calendar.timeZone)
+                Self.logger.info("Memories request generation=\(requestGeneration) lane=\(lane, privacy: .public) for=\(queryDate, privacy: .public)")
+                // Keep only the first twenty records for each candidate day.
+                let loaded = try await client.memories(query: .init(date: queryDate))
+                try self.requireCurrent(requestGeneration)
+                let mapped = loaded.compactMap { memory -> TimelineMemorySummary? in
+                    guard memory.kind == .onThisDay else { return nil }
+                    return TimelineMemorySummary(
+                        id: memory.id,
+                        memoryAt: memory.memoryAt,
+                        sourceYear: memory.year,
+                        assets: memory.assets.map {
+                            TimelineMemoryAssetSummary(id: $0.id, revision: $0.updatedAt, mediaKind: Self.map($0.mediaKind))
+                        }
+                    )
+                }
+                let filtered = kind.map { kind in mapped.compactMap { $0.filteringAssets(of: kind) } } ?? mapped
+                #if DEBUG
+                    let candidates = mapped.prefix(20).map { memory in
+                        "\(memory.memoryAt.ISO8601Format()) year=\(memory.sourceYear) assets=\(memory.assets.count)"
+                    }.joined(separator: "; ")
+                    Self.logger.debug(
+                        "Memories response generation=\(requestGeneration) lane=\(lane, privacy: .public) for=\(queryDate, privacy: .public) serverRecords=\(loaded.count) onThisDayRecords=\(mapped.count) matchingRecords=\(filtered.count) candidates=[\(candidates, privacy: .public)]"
+                    )
+                #endif
+                return filtered
+            }
             try requireCurrent(requestGeneration)
             Self.logger.info(
-                "Memories finished generation=\(requestGeneration) count=\(memories.count) elapsedMs=\(Self.elapsedMilliseconds(since: startedAt))"
+                "Memories finished generation=\(requestGeneration) lane=\(lane, privacy: .public) count=\(memories.count) elapsedMs=\(Self.elapsedMilliseconds(since: startedAt))"
             )
-            return memories.compactMap { memory in
-                guard memory.kind == .onThisDay else { return nil }
-                return TimelineMemorySummary(
-                    id: memory.id,
-                    memoryAt: memory.memoryAt,
-                    sourceYear: memory.year,
-                    assets: memory.assets.map {
-                        TimelineMemoryAssetSummary(
-                            id: $0.id,
-                            revision: $0.updatedAt,
-                            mediaKind: Self.map($0.mediaKind)
-                        )
-                    }
-                )
-            }
+            return memories
         } catch {
             Self.logger.error(
                 "Memories failed generation=\(requestGeneration) elapsedMs=\(Self.elapsedMilliseconds(since: startedAt)) error=\(Self.errorSummary(error), privacy: .public)"

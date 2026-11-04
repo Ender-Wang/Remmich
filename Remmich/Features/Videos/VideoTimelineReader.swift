@@ -41,16 +41,7 @@ actor VideoTimelineReader: CompleteTimelineCatalogReading {
     }
 
     func memories() async throws -> [TimelineMemorySummary] {
-        try await source.memories().compactMap { memory in
-            let videos = memory.assets.filter { $0.mediaKind == .video }
-            guard !videos.isEmpty else { return nil }
-            return TimelineMemorySummary(
-                id: memory.id,
-                memoryAt: memory.memoryAt,
-                sourceYear: memory.sourceYear,
-                assets: videos
-            )
-        }
+        try await source.memories(matching: .video)
     }
 
     private static func bucketID(for asset: TimelineAssetSummary) -> TimelineBucketID {

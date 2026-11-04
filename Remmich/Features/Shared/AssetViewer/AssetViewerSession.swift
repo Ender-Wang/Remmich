@@ -11,9 +11,10 @@ nonisolated struct AssetViewerMemoryContext: Hashable, Sendable {
     let id: String
     let memoryAt: Date
     let sourceYear: Int
+    var availableOn: Date?
 
     var title: String {
-        let currentYear = Calendar.autoupdatingCurrent.component(.year, from: .now)
+        let currentYear = Calendar.autoupdatingCurrent.component(.year, from: availableOn ?? .now)
         let years = max(1, currentYear - sourceYear)
         return years == 1 ? "1 year ago" : "\(years.formatted()) years ago"
     }

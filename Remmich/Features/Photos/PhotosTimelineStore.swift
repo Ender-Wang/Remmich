@@ -901,10 +901,10 @@ final class PhotosTimelineStore {
             guard let self else { return }
             do {
                 let loaded = try await reader.memories()
-                guard requestGeneration == generation else { return }
+                guard !Task.isCancelled, requestGeneration == generation else { return }
                 let referenceDate = now()
                 let calendar = Calendar.autoupdatingCurrent
-                memories = TimelineMemoryCatalog.onThisDay(loaded, relativeTo: referenceDate, calendar: calendar)
+                memories = TimelineMemoryCatalog.nearestUpcoming(loaded, relativeTo: referenceDate, calendar: calendar)
                 let groupCount = memories.count
                 #if DEBUG
                     let reference = calendar.dateComponents([.year, .month, .day], from: referenceDate)
@@ -923,7 +923,7 @@ final class PhotosTimelineStore {
                 )
                 memoryLaneState = memories.isEmpty ? .hidden : .loaded
             } catch {
-                guard requestGeneration == generation else { return }
+                guard !Task.isCancelled, requestGeneration == generation else { return }
                 if Self.isRouteUnavailable(error) {
                     if memories.isEmpty {
                         memoryLaneState = .loading
