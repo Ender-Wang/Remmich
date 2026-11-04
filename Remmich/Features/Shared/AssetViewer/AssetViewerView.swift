@@ -1,3 +1,4 @@
+import OSLog
 import SwiftUI
 import UIKit
 
@@ -8,6 +9,11 @@ struct AssetViewerDismissalTarget {
 }
 
 struct AssetViewerView: View {
+    private static let memoryLogger = Logger(
+        subsystem: "io.github.ender-wang.Remmich",
+        category: "MemoryPlayback"
+    )
+
     @Environment(\.displayScale) private var displayScale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
@@ -434,7 +440,7 @@ struct AssetViewerView: View {
                     .opacity((isOpening
                             ? openingProgress * (chromeVisible ? 1 : 0)
                             : (isolatesDismissalAsset ? 0 : (chromeVisible ? 1 : 0)))
-                        * (isMemoryViewer ? memoryContentOpacity * memoryWrapOpacity : 1))
+                        * (isMemoryViewer ? memoryContentOpacity : 1))
                     .allowsHitTesting(!isolatesDismissalAsset && (chromeVisible || showsInfo))
                     .accessibilityHidden(isolatesDismissalAsset || (!chromeVisible && !showsInfo))
                 }
@@ -517,6 +523,7 @@ struct AssetViewerView: View {
             await preloadCachedAssetDetails(pagerWindowAssets.map(\.id))
         }
         .onChange(of: session.selectedAssetID) { _, newAssetID in
+            logMemoryPlayback("selection")
             videoFirstFrameReady = false
             chromeVisible = true
             syncVideoPlaybackSession()
@@ -538,10 +545,12 @@ struct AssetViewerView: View {
             replaceMemoryRoute()
         }
         .onAppear {
+            logMemoryPlayback("appear")
             visibilityChanged(true)
             beginOpeningAnimation()
         }
         .onDisappear {
+            logMemoryPlayback("disappear")
             videoPlaybackSession?.close()
             openingTask?.cancel()
             dismissalLandingTask?.cancel()
@@ -633,11 +642,19 @@ struct AssetViewerView: View {
                     || isDismissalInteractionActive || openingIsActive
             )
             .onChange(of: pagerPosition) { _, assetID in
+                logMemoryPlayback("position")
                 schedulePagerSelectionSync(assetID)
             }
             .onScrollPhaseChange { _, phase in
                 pagerPhase = phase
+                logMemoryPlayback("scroll-phase")
                 if phase == .idle {
+                    if isMemoryViewer,
+                       let assetID = pagerPosition,
+                       assetID == session.selectedAssetID
+                    {
+                        recenterPagerWindowIfNeeded(on: assetID)
+                    }
                     schedulePagerSelectionSync(pagerPosition)
                     resumeMemoryAutoRotation()
                 } else {
@@ -861,6 +878,11 @@ struct AssetViewerView: View {
                 ),
                 fullResolutionRequestID: fullResolutionRequestIDs[asset.id],
                 renderedImageMetadataChanged: { metadata in
+                    if asset.id == session.selectedAssetID,
+                       renderedImageMetadataByAssetID[asset.id] != metadata
+                    {
+                        logMemoryPlayback("image-ready source=\(metadata.source)")
+                    }
                     renderedImageMetadataByAssetID[asset.id] = metadata
                     if metadata.source == .original {
                         fullResolutionLoadErrors.removeValue(forKey: asset.id)
@@ -1312,6 +1334,7 @@ struct AssetViewerView: View {
     }
 
     private func resetMemoryAutoRotation() {
+        logMemoryPlayback("timer-reset")
         memoryAutoAdvanceTask?.cancel()
         memoryAutoAdvanceTask = nil
         memoryAutoElapsed = 0
@@ -1320,6 +1343,9 @@ struct AssetViewerView: View {
     }
 
     private func pauseMemoryAutoRotation() {
+        if memoryAutoStartedAt != nil {
+            logMemoryPlayback("timer-pause")
+        }
         if let startedAt = memoryAutoStartedAt {
             memoryAutoElapsed = AssetViewerMemoryAutoRotation.elapsed(
                 base: memoryAutoElapsed,
@@ -1343,11 +1369,14 @@ struct AssetViewerView: View {
             return
         }
         memoryAutoStartedAt = .now
+        logMemoryPlayback("timer-start remainingMs=\(Int(remaining * 1000))")
         memoryAutoAdvanceTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(
                 Int64((remaining * 1000).rounded(.up))
             ))
-            guard !Task.isCancelled, memoryAutoRotationCanRun else { return }
+            guard !Task.isCancelled else { return }
+            logMemoryPlayback("timer-fired")
+            guard memoryAutoRotationCanRun else { return }
             advanceMemoryAutomatically()
         }
     }
@@ -1366,6 +1395,7 @@ struct AssetViewerView: View {
         guard memoryAutoRotationCanRun,
               let selectedIndex = session.selectedIndex
         else { return }
+        logMemoryPlayback("advance")
         memoryAutoAdvanceTask = nil
         memoryAutoStartedAt = nil
         memoryAutoElapsed = AssetViewerMemoryAutoRotation.duration
@@ -1382,6 +1412,7 @@ struct AssetViewerView: View {
 
     private func beginMemoryWrap() {
         guard !memoryIsWrapping, let firstAsset = session.assets.first else { return }
+        logMemoryPlayback("wrap-start")
         memoryIsWrapping = true
         memoryWrapTask?.cancel()
         memoryWrapTask = Task { @MainActor in
@@ -1406,6 +1437,7 @@ struct AssetViewerView: View {
             try? await Task.sleep(for: .milliseconds(190))
             guard !Task.isCancelled else { return }
             memoryIsWrapping = false
+            logMemoryPlayback("wrap-finish")
             memoryWrapTask = nil
             resetMemoryAutoRotation()
         }
@@ -2216,7 +2248,13 @@ struct AssetViewerView: View {
             pagerPosition = assetID
         }
         guard session.selectImmediately(assetID) else { return }
-        recenterPagerWindowIfNeeded(on: assetID)
+        // Memory advances animate within the existing page window. Mutating
+        // that window with animations disabled here cancels the same scroll
+        // transaction; recenter after its idle callback instead. Immediate
+        // jumps outside the window and Reduce Motion still need a new window.
+        if !isMemoryViewer || reduceMotion || !pagerWindowAssets.contains(where: { $0.id == assetID }) {
+            recenterPagerWindowIfNeeded(on: assetID)
+        }
         scheduleNeighborLoading(for: assetID)
     }
 
@@ -2238,12 +2276,28 @@ struct AssetViewerView: View {
               selectedIndex - lower <= 1 || upper - selectedIndex <= 1
         else { return }
 
+        logMemoryPlayback("window-recenter-start")
+
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) {
             pagerWindowCenterID = assetID
             pagerPosition = assetID
         }
+        logMemoryPlayback("window-recenter-finish")
+    }
+
+    private func logMemoryPlayback(_ event: String) {
+        #if DEBUG
+            guard isMemoryViewer else { return }
+            let window = pagerWindowAssets
+            let positionIndex = session.assets.firstIndex { $0.id == pagerPosition } ?? -1
+            let centerIndex = session.assets.firstIndex { $0.id == pagerWindowCenterID } ?? -1
+            let runningMs = memoryAutoStartedAt.map { Int(Date.now.timeIntervalSince($0) * 1000) } ?? 0
+            Self.memoryLogger.debug(
+                "Memory playback event=\(event, privacy: .public) timestampMs=\(Int64(Date.now.timeIntervalSince1970 * 1000)) count=\(session.assets.count) index=\(session.selectedIndex ?? -1) positionIndex=\(positionIndex) centerIndex=\(centerIndex) phase=\(String(describing: pagerPhase), privacy: .public) window=\(window.startIndex)..<\(window.endIndex) canRun=\(memoryAutoRotationCanRun) elapsedMs=\(Int(memoryAutoElapsed * 1000)) runningMs=\(runningMs) opening=\(openingIsActive) wrapping=\(memoryIsWrapping) pressed=\(memoryAssetPressActive) zoomed=\(zoomedAssetID != nil) scene=\(String(describing: scenePhase), privacy: .public)"
+            )
+        #endif
     }
 
     private func updateInfoContentHeight(_ height: CGFloat, for assetID: String) {
