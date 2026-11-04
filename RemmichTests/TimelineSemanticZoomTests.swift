@@ -830,6 +830,70 @@ struct TimelineSemanticZoomTests {
         controller.stop()
     }
 
+    @Test @MainActor func coldGroupLogoStaysSquareAndHandsOffWithoutBecomingAnAssetImage() throws {
+        let tile = TimelineSemanticTransitionImageView(image: nil)
+        let logo = tile.placeholderView.logoView
+        tile.frame = CGRect(x: 0, y: 0, width: 240, height: 100)
+        tile.setNeedsLayout()
+        tile.layoutIfNeeded()
+        #expect(tile.image == nil)
+        #expect(!logo.isHidden)
+        #expect(logo.frame == CGRect(x: 95, y: 25, width: 50, height: 50))
+
+        tile.frame.size = CGSize(width: 100, height: 240)
+        tile.setNeedsLayout()
+        tile.layoutIfNeeded()
+        #expect(logo.frame == CGRect(x: 25, y: 95, width: 50, height: 50))
+        #expect(logo.transform == .identity)
+
+        let compact = RemmichCoverPlaceholder.Caption(title: "November", count: 42, isFeatured: false)
+        let featured = RemmichCoverPlaceholder.Caption(title: "A long date title that wraps onto a second line", count: 42, isFeatured: true)
+        tile.placeholderView.sourceCaption = compact
+        tile.placeholderView.caption = featured
+        tile.placeholderView.progress = 0
+        tile.setNeedsLayout()
+        tile.layoutIfNeeded()
+        let start = logo.frame
+        #expect(start.midY < tile.bounds.midY)
+        tile.placeholderView.progress = 1
+        tile.setNeedsLayout()
+        tile.layoutIfNeeded()
+        let end = logo.frame
+        #expect(end.midY < start.midY)
+        #expect(end.width == end.height)
+        tile.placeholderView.progress = 0.5
+        tile.setNeedsLayout()
+        tile.layoutIfNeeded()
+        #expect(abs(logo.frame.midY - (start.midY + end.midY) / 2) < 0.01)
+
+        tile.hidePlaceholderForHandoff()
+        #expect(tile.placeholderView.isHidden)
+        #expect(tile.image == nil)
+        let image = try #require(UIImage(systemName: "circle.fill"))
+        tile.image = image
+        #expect(tile.image === image)
+        #expect(tile.placeholderView.isHidden)
+    }
+
+    @Test @MainActor func logoCenterExcludesWrappedAndScaledCaptions() {
+        let size = CGSize(width: 200, height: 240)
+        let traits = UITraitCollection(preferredContentSizeCategory: .large)
+        let short = RemmichCoverPlaceholder.Caption(title: "November", count: 42, isFeatured: true)
+        let wrapped = RemmichCoverPlaceholder.Caption(title: "A long date title that wraps onto a second line", count: 42, isFeatured: true)
+        let shortFrame = RemmichCoverPlaceholder.frame(in: size, caption: short, traits: traits)
+        let wrappedFrame = RemmichCoverPlaceholder.frame(in: size, caption: wrapped, traits: traits)
+        #expect(shortFrame.midX == size.width / 2)
+        #expect(shortFrame.midY < size.height / 2)
+        #expect(wrappedFrame.midY < shortFrame.midY)
+        let scaledFrame = RemmichCoverPlaceholder.frame(
+            in: size, caption: wrapped, traits: UITraitCollection(preferredContentSizeCategory: .accessibilityExtraExtraExtraLarge)
+        )
+        #expect(scaledFrame.midY < wrappedFrame.midY)
+        let tinyFrame = RemmichCoverPlaceholder.frame(in: CGSize(width: 200, height: 8), caption: short, traits: traits)
+        #expect(tinyFrame.size == .zero)
+        #expect(tinyFrame.midY == 0)
+    }
+
     @Test @MainActor func groupedCoverCompletionFillsEmptyTransitionAndRejectsStaleOrLateImages() throws {
         let start = date("2026-01-01T12:00:00Z")
         let assets = (0 ..< 90).map { index in
@@ -862,6 +926,8 @@ struct TimelineSemanticZoomTests {
         let nodeID = try #require(cell.nodeID)
         let assetID = try #require(cell.coverAssetID)
         let tile = try #require(tiles.first { $0.accessibilityIdentifier == "semantic-zoom-target:\(nodeID)" })
+        let logo = try #require((tile as? TimelineSemanticTransitionImageView)?.placeholderView)
+        #expect(!logo.isHidden)
         let image = try #require(UIImage(systemName: "circle.fill"))
         let otherImage = try #require(UIImage(systemName: "square.fill"))
         let otherAsset = try #require(assets.first { $0.id != assetID })
@@ -870,8 +936,10 @@ struct TimelineSemanticZoomTests {
         controller.groupCoverDidLoad(image, assetID: assetID, thumbnailRevision: start.addingTimeInterval(1), nodeID: nodeID, cell: cell)
         controller.groupCoverDidLoad(image, assetID: assetID, thumbnailRevision: start, nodeID: "old-\(nodeID)", cell: cell)
         #expect(tile.image == nil)
+        #expect(!logo.isHidden)
         controller.groupCoverDidLoad(image, assetID: assetID, thumbnailRevision: start, nodeID: nodeID, cell: cell)
         #expect(tile.image === image)
+        #expect(logo.isHidden)
         #expect(cell.coverImageAssetID == assetID)
         // An existing local/transition image retains ownership on a second completion.
         controller.groupCoverDidLoad(otherImage, assetID: assetID, thumbnailRevision: start, nodeID: nodeID, cell: cell)

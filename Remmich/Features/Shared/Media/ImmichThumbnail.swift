@@ -13,6 +13,7 @@ struct ImmichThumbnail: View {
     var imageScale: CGFloat = 1
     var priority: ImageRequest.Priority = .normal
     var placeholderImage: UIImage?
+    var logoPlaceholderCaption: RemmichCoverPlaceholder.Caption?
     var didLoad: (ImageResponse) -> Void = { _ in }
 
     @State private var retryID = 0
@@ -41,6 +42,9 @@ struct ImmichThumbnail: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Retry image")
+                } else if let logoPlaceholderCaption {
+                    RemmichCoverLoadingView(caption: logoPlaceholderCaption)
+                        .transition(.opacity)
                 } else if state.isLoading {
                     ProgressView(value: Double(state.progress.fraction))
                         .progressViewStyle(.circular)

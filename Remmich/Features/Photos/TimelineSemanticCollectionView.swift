@@ -138,6 +138,39 @@ private struct TimelineSemanticObservedVisibility<Content: View>: View {
     }
 }
 
+/// Keep the logo separate from `image`: only decoded asset pixels may enter
+/// handoffImages, and late asset deliveries must still see an empty image slot.
+final class TimelineSemanticTransitionImageView: UIImageView {
+    let placeholderView = RemmichCoverPlaceholderView(frame: .zero)
+
+    override var image: UIImage? {
+        didSet { placeholderView.isHidden = image != nil }
+    }
+
+    override init(image: UIImage?) {
+        super.init(image: image)
+        contentMode = .scaleAspectFill
+        placeholderView.isHidden = image != nil
+        addSubview(placeholderView)
+    }
+
+    func hidePlaceholderForHandoff() {
+        placeholderView.isHidden = true
+    }
+
+    @available(*, unavailable)
+    required init?(coder _: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        placeholderView.frame = bounds
+        placeholderView.setNeedsLayout()
+        placeholderView.layoutIfNeeded()
+    }
+}
+
 /// Visual effects must retain alpha 1 throughout their ancestor chain. Apply
 /// coverage to a mask on the effect itself, which UIKit forwards to its layers.
 private final class TimelineHeaderMaterialView: UIVisualEffectView {
@@ -1097,6 +1130,10 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
                 let imageView = UIImageView(image: image)
                 imageView.contentMode = .scaleAspectFill
                 snapshot = imageView
+            } else if !nextScale.isAssets {
+                // A captured placeholder would stretch its logo and could not
+                // accept a cover that finishes loading before pinch release.
+                snapshot = TimelineSemanticTransitionImageView(image: nil)
             } else if let cell = collection.cellForItem(at: IndexPath(item: index, section: 0)),
                       let captured = cell.resizableSnapshotView(
                           from: imageRect(item: item, scale: scale, asset: asset).offsetBy(dx: -item.frame.minX, dy: -item.frame.minY),
@@ -1113,6 +1150,11 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             let keepsCover = selectedSources[destination.id] == item.id
                 && targetRepresentatives[destination.id] == representative
                 && represented.insert(destination.id).inserted
+            if let tile = snapshot as? TimelineSemanticTransitionImageView {
+                tile.placeholderView.sourceCaption = placeholderCaption(for: item, scale: scale)
+                tile.placeholderView.caption = placeholderCaption(for: destination, scale: nextScale)
+                tile.placeholderView.progress = 0
+            }
             if keepsCover {
                 snapshot.accessibilityIdentifier = "semantic-zoom-target:\(destination.id)"
                 if let image {
@@ -1141,9 +1183,14 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             if let cached {
                 handoffImages[destination.id] = cached
             }
-            let imageView = UIImageView(image: cached)
+            let imageView = nextScale.isAssets ? UIImageView(image: cached) : TimelineSemanticTransitionImageView(image: cached)
             imageView.contentMode = .scaleAspectFill
-            imageView.backgroundColor = .tertiarySystemFill
+            if let tile = imageView as? TimelineSemanticTransitionImageView {
+                tile.placeholderView.sourceCaption = sourceItem.flatMap { placeholderCaption(for: $0, scale: scale) }
+                tile.placeholderView.caption = placeholderCaption(for: destination, scale: nextScale)
+                tile.placeholderView.progress = 0
+            }
+            imageView.backgroundColor = nextScale.isAssets ? .tertiarySystemFill : .clear
             imageView.accessibilityIdentifier = "semantic-zoom-target:\(destination.id)"
             if imageView.image == nil {
                 loadLocalTransitionImage(into: imageView, destinationID: destination.id, asset: asset,
@@ -1343,7 +1390,8 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
     {
         guard transitionSurface === surface, imageView.image == nil else { return }
         handoffImages[destinationID] = image
-        UIView.transition(with: imageView, duration: UIAccessibility.isReduceMotionEnabled ? 0 : 0.12,
+        let duration = imageView is TimelineSemanticTransitionImageView ? RemmichCoverPlaceholder.fadeDuration : 0.12
+        UIView.transition(with: imageView, duration: UIAccessibility.isReduceMotionEnabled ? 0 : duration,
                           options: [.transitionCrossDissolve, .allowUserInteraction])
         {
             imageView.image = image
@@ -1358,6 +1406,11 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
 
     private func radius(_ scale: TimelineSemanticScale) -> CGFloat {
         scale == .square ? 0 : scale == .natural ? DesignMetrics.compactCornerRadius : DesignMetrics.defaultCornerRadius
+    }
+
+    private func placeholderCaption(for item: TimelineSemanticProjection.Item, scale: TimelineSemanticScale) -> RemmichCoverPlaceholder.Caption? {
+        guard !scale.isAssets, let group = catalog?.groups[scale]?[item.nodeIndex] else { return nil }
+        return .init(title: group.route.navigationTitle, count: group.assets.count, isFeatured: item.isFeatured)
     }
 
     private func distance(_ frame: CGRect, offset: CGFloat) -> CGFloat {
@@ -1390,6 +1443,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         transitionItems.append(TransitionItem(view: snapshot, start: start, end: end, incoming: incoming,
                                               disappears: disappears, startRadius: startRadius, endRadius: endRadius,
                                               usesLayerTransform: hosted))
+        transitionItems[transitionItems.count - 1].relayoutsContent = snapshot is TimelineSemanticTransitionImageView
     }
 
     static func transitionTransform(from base: CGRect, to target: CGRect) -> CGAffineTransform {
@@ -1530,6 +1584,10 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
 
     private func renderProgress(_ progress: CGFloat) {
         for item in transitionItems {
+            if let tile = item.view as? TimelineSemanticTransitionImageView {
+                tile.placeholderView.progress = progress
+                tile.setNeedsLayout()
+            }
             let frame = CGRect(x: mix(item.start.minX, item.end.minX, progress), y: mix(item.start.minY, item.end.minY, progress),
                                width: mix(item.start.width, item.end.width, progress), height: mix(item.start.height, item.end.height, progress))
             if item.usesLayerTransform {
@@ -1537,7 +1595,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             } else {
                 let changesSize = item.view.bounds.size != frame.size
                 item.view.frame = frame
-                if item.relayoutsContent, changesSize {
+                if item.relayoutsContent, changesSize || item.view is TimelineSemanticTransitionImageView {
                     item.view.setNeedsLayout()
                     item.view.layoutIfNeeded()
                 }
@@ -1610,6 +1668,13 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             guard let projection, projection.items.indices.contains(path.item),
                   let cell = collection.cellForItem(at: path) else { continue }
             (cell as? TimelineSemanticCollectionCell)?.setPresentationVisible(!projection.items[path.item].isHeader)
+        }
+        if !scale.isAssets {
+            // Swap identical logos in one frame. Compositing two translucent
+            // copies during the media fade would briefly darken the placeholder.
+            for item in transitionItems {
+                (item.view as? TimelineSemanticTransitionImageView)?.hidePlaceholderForHandoff()
+            }
         }
         guard !UIAccessibility.isReduceMotionEnabled else {
             completePresentationCleanup(surface: surface)

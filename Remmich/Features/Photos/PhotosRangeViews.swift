@@ -1860,7 +1860,6 @@ struct PhotosRangeCard: View {
         Color.clear
             .overlay {
                 ZStack(alignment: .center) {
-                    Rectangle().fill(.quaternary)
                     if currentAsset != nil {
                         ForEach(renderedAssets) { asset in
                             let descriptor = MediaRequestDescriptor(
@@ -1873,7 +1872,10 @@ struct PhotosRangeCard: View {
                                 descriptor: descriptor,
                                 media: media,
                                 contentMode: .fill,
+                                showsBackground: false,
+                                imageScale: CGFloat(scale(for: asset)),
                                 placeholderImage: asset.id == currentAsset?.id ? placeholderImage : nil,
+                                logoPlaceholderCaption: .init(title: title, count: count, isFeatured: isFeatured),
                                 didLoad: {
                                     media.retainTimelineThumbnail(
                                         $0.container,
@@ -1889,17 +1891,11 @@ struct PhotosRangeCard: View {
                                 alignment: .center
                             )
                             .opacity(opacity(for: asset))
-                            .scaleEffect(
-                                scale(for: asset),
-                                anchor: .center
-                            )
                             .clipped()
                             .allowsHitTesting(false)
                         }
                     } else {
-                        Image(systemName: systemImage)
-                            .font(.largeTitle)
-                            .foregroundStyle(.secondary)
+                        RemmichCoverLoadingView(caption: .init(title: title, count: count, isFeatured: isFeatured))
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 }
