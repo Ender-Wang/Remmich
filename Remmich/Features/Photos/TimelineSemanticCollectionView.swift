@@ -115,27 +115,6 @@ private final class TimelineSemanticCollectionLayout: UICollectionViewLayout {
     }
 }
 
-private struct TimelineSemanticDateHeader: View {
-    let title: String
-    let subtitle: String
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline) {
-            Text(title)
-                .font(.headline)
-
-            Spacer()
-
-            Text(subtitle)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-        }
-        .padding(.horizontal)
-        .padding(.top, 8)
-        .padding(.bottom, 4)
-    }
-}
-
 @MainActor
 private final class TimelineSemanticCoverVisibility: ObservableObject {
     @Published var isVisible = false
@@ -147,6 +126,44 @@ private struct TimelineSemanticObservedVisibility<Content: View>: View {
 
     var body: some View {
         content(visibility.isVisible)
+    }
+}
+
+/// Visual effects must retain alpha 1 throughout their ancestor chain. Apply
+/// coverage to a mask on the effect itself, which UIKit forwards to its layers.
+private final class TimelineHeaderMaterialView: UIVisualEffectView {
+    private let coverageMask = UIView()
+    private(set) var coverage: CGFloat = 0
+
+    override init(effect: UIVisualEffect?) {
+        super.init(effect: effect)
+        updateCoverageMask()
+    }
+
+    @available(*, unavailable)
+    required init?(coder _: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func setCoverage(_ value: CGFloat) {
+        let next = min(1, max(0, value))
+        guard coverage != next else { return }
+        coverage = next
+        updateCoverageMask()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        if coverageMask.frame != bounds {
+            updateCoverageMask()
+        }
+    }
+
+    private func updateCoverageMask() {
+        coverageMask.frame = bounds
+        coverageMask.backgroundColor = UIColor.black.withAlphaComponent(coverage)
+        // UIKit copies an effect mask. Reassign it when coverage or size changes.
+        mask = coverageMask
     }
 }
 
@@ -162,8 +179,8 @@ final class TimelineSemanticCollectionCell: UICollectionViewCell {
     var coverImageAssetID: String?
     var nodeID: String?
     private var hostingController: UIHostingController<AnyView>?
-    private let headerTitleMaterialView = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
-    private let headerCountMaterialView = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
+    private let headerTitleMaterialView = TimelineHeaderMaterialView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
+    private let headerCountMaterialView = TimelineHeaderMaterialView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
     private let headerTitleLabel = UILabel()
     private let headerCountLabel = UILabel()
     private var headerNaturalY: CGFloat?
@@ -173,7 +190,6 @@ final class TimelineSemanticCollectionCell: UICollectionViewCell {
     override init(frame: CGRect) {
         super.init(frame: frame)
         for materialView in [headerTitleMaterialView, headerCountMaterialView] {
-            materialView.alpha = 0
             materialView.isUserInteractionEnabled = false
             materialView.clipsToBounds = true
             contentView.insertSubview(materialView, at: 0)
@@ -200,8 +216,8 @@ final class TimelineSemanticCollectionCell: UICollectionViewCell {
         headerNaturalY = nil
         headerTitleLabel.isHidden = true
         headerCountLabel.isHidden = true
-        headerTitleMaterialView.alpha = 0
-        headerCountMaterialView.alpha = 0
+        headerTitleMaterialView.setCoverage(0)
+        headerCountMaterialView.setCoverage(0)
         isPinnedHeader = false
         clipsToBounds = true
         contentView.clipsToBounds = true
@@ -243,6 +259,7 @@ final class TimelineSemanticCollectionCell: UICollectionViewCell {
     }
 
     func clearContent() {
+        contentView.isHidden = false
         hostingController?.rootView = AnyView(EmptyView())
         coverVisibility.isVisible = false
         headerNaturalY = nil
@@ -252,8 +269,8 @@ final class TimelineSemanticCollectionCell: UICollectionViewCell {
         headerCountLabel.text = nil
         headerCountLabel.isHidden = true
         headerCountLabel.alpha = 1
-        headerTitleMaterialView.alpha = 0
-        headerCountMaterialView.alpha = 0
+        headerTitleMaterialView.setCoverage(0)
+        headerCountMaterialView.setCoverage(0)
         isPinnedHeader = false
         hasContent = false
     }
@@ -280,8 +297,19 @@ final class TimelineSemanticCollectionCell: UICollectionViewCell {
     func setHeaderBackgroundOpacity(_ opacity: CGFloat) {
         guard headerNaturalY != nil else { return }
         let subtleOpacity = opacity * Self.headerBackgroundMaximumOpacity
-        headerTitleMaterialView.alpha = subtleOpacity
-        headerCountMaterialView.alpha = subtleOpacity
+        headerTitleMaterialView.setCoverage(subtleOpacity)
+        headerCountMaterialView.setCoverage(subtleOpacity)
+    }
+
+    func setPresentationVisible(_ visible: Bool) {
+        if headerNaturalY != nil {
+            // Hiding content preserves alpha 1 for the effect's ancestors.
+            alpha = 1
+            contentView.isHidden = !visible
+        } else {
+            contentView.isHidden = false
+            alpha = visible ? 1 : 0
+        }
     }
 
     /// Geometry belongs to the deterministic collection layout. SwiftUI's
@@ -439,6 +467,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
     private var targetOffset: CGFloat = 0
     private var animator: UIViewPropertyAnimator?
     private var transitionSurface: UIView?
+    private var transitionMediaSurface: UIView?
     private var transitionItems: [TransitionItem] = []
     private var transitionHostingControllers: [UIViewController] = []
     private var transitionHostingControllerPool: [UIHostingController<AnyView>] = []
@@ -472,13 +501,21 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
     private struct TransitionItem {
         let view: UIView
         let start: CGRect
-        let end: CGRect
+        var end: CGRect
         let incoming: Bool
         let disappears: Bool
         let startRadius: CGFloat
         let endRadius: CGFloat
         var isChrome = false
         var usesLayerTransform = false
+        var relayoutsContent = false
+        var startHeaderAppearance: HeaderAppearance?
+        var endHeaderAppearance: HeaderAppearance?
+    }
+
+    private struct HeaderAppearance {
+        let opacity: CGFloat
+        let backgroundOpacity: CGFloat
     }
 
     private struct TransitionChromeKey: Hashable {
@@ -810,7 +847,6 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         if cell.coverVisibility.isVisible != coversVisible {
             cell.coverVisibility.isVisible = coversVisible
         }
-        cell.alpha = transitionSurface == nil || isPresentationCrossfading ? 1 : 0
         if item.isHeader {
             let date = catalog.assets[item.assetRange.lowerBound].captureLocalDate
             let displayedY = layout.layoutAttributesForItem(at: path)?.frame.minY ?? item.frame.minY
@@ -889,6 +925,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             cell.accessibilityLabel = "\(group.route.navigationTitle), \(group.assets.count) items"
             cell.accessibilityTraits = .button
         }
+        cell.setPresentationVisible(transitionSurface == nil || (isPresentationCrossfading && !item.isHeader))
     }
 
     func collectionView(_: UICollectionView, didEndDisplaying cell: UICollectionViewCell, forItemAt _: IndexPath) {
@@ -975,6 +1012,13 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         surface.clipsToBounds = true
         view.addSubview(surface)
         transitionSurface = surface
+        // Headers stay above the media and keep their own opacity while the
+        // media alone fades into the installed collection at release.
+        let mediaSurface = UIView(frame: surface.bounds)
+        mediaSurface.accessibilityIdentifier = "semantic-zoom-media"
+        mediaSurface.clipsToBounds = true
+        surface.addSubview(mediaSurface)
+        transitionMediaSurface = mediaSurface
 
         // Include a bounded apron around the source, and every tile that can
         // appear in the destination viewport. Target coverage is unconditional:
@@ -1119,17 +1163,31 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
                 destinations.first(where: { $0.assetRange.overlaps(sourceItem.assetRange) })
                     .map { $0.frame.offsetBy(dx: 0, dy: -targetOffset) } ?? start
             }
-            guard let plan = transitionChromePlan(for: sourceItem, scale: scale, catalog: catalog) else { continue }
-            let chrome = transitionChromeView(plan)
+            let chrome: UIView
+            let sourceAppearance: HeaderAppearance?
+            let destinationAppearance: HeaderAppearance?
             if sourceItem.isHeader {
+                sourceAppearance = headerAppearance(at: sourceIndex, frames: sourceFrames, headers: sourceHeaders, top: sourceTop)
+                destinationAppearance = matchingHeaderIndex.map {
+                    headerAppearance(at: $0, frames: targetFrames, headers: targetHeaders, top: targetTop)
+                } ?? sourceAppearance
+                chrome = transitionHeaderView(for: sourceItem, catalog: catalog, appearance: sourceAppearance!)
                 chrome.accessibilityIdentifier = "semantic-zoom-header:\(sourceItem.id)"
+            } else {
+                guard let plan = transitionChromePlan(for: sourceItem, scale: scale, catalog: catalog) else { continue }
+                chrome = transitionChromeView(plan)
+                sourceAppearance = nil
+                destinationAppearance = nil
             }
             if matchingHeaderIndex != nil {
                 carriedHeaderIDs.insert(sourceItem.id)
             }
             addTransition(chrome, start: start, end: end, incoming: false, disappears: matchingHeaderIndex == nil,
-                          startRadius: 0, endRadius: 0, to: surface, hosted: true)
+                          startRadius: 0, endRadius: 0, to: surface, hosted: !sourceItem.isHeader)
             transitionItems[transitionItems.count - 1].isChrome = true
+            transitionItems[transitionItems.count - 1].relayoutsContent = sourceItem.isHeader
+            transitionItems[transitionItems.count - 1].startHeaderAppearance = sourceAppearance
+            transitionItems[transitionItems.count - 1].endHeaderAppearance = destinationAppearance
         }
         for (destinationIndex, destination) in next.items.enumerated() where
             (destination.frame.intersects(targetArea) || destinationIndex == targetPinnedHeader)
@@ -1143,21 +1201,30 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
                                                         headers: targetHeaders, top: targetTop)
                 : destination.frame
             let end = destinationFrame.offsetBy(dx: 0, dy: -targetOffset)
-            guard let plan = transitionChromePlan(for: destination, scale: nextScale, catalog: catalog) else { continue }
-            let chrome = transitionChromeView(plan)
+            let chrome: UIView
+            let appearance: HeaderAppearance?
             if destination.isHeader {
+                appearance = headerAppearance(at: destinationIndex, frames: targetFrames, headers: targetHeaders, top: targetTop)
+                chrome = transitionHeaderView(for: destination, catalog: catalog, appearance: appearance!)
                 chrome.accessibilityIdentifier = "semantic-zoom-header:\(destination.id)"
+            } else {
+                guard let plan = transitionChromePlan(for: destination, scale: nextScale, catalog: catalog) else { continue }
+                chrome = transitionChromeView(plan)
+                appearance = nil
             }
             let start = assetLayoutOnly && destination.isHeader ? end : end.offsetBy(dx: 0, dy: 12)
             addTransition(chrome, start: start, end: end, incoming: true, disappears: false,
-                          startRadius: 0, endRadius: 0, to: surface, hosted: true)
+                          startRadius: 0, endRadius: 0, to: surface, hosted: !destination.isHeader)
             transitionItems[transitionItems.count - 1].isChrome = true
+            transitionItems[transitionItems.count - 1].relayoutsContent = destination.isHeader
+            transitionItems[transitionItems.count - 1].startHeaderAppearance = appearance
+            transitionItems[transitionItems.count - 1].endHeaderAppearance = appearance
         }
         if nextScale.isAssets {
             for destination in destinations {
                 let representative = targetRepresentatives[destination.id]!
                 let asset = catalog.assets[representative]
-                guard TimelineAssetBadgeOverlay.isVisible(for: asset) else { continue }
+                guard TimelineAssetOverlay.isVisible(for: asset) else { continue }
                 let end = imageRect(item: destination, scale: nextScale, asset: asset)
                     .offsetBy(dx: 0, dy: -targetOffset)
                 let sourceItem = sources.first { $0.element.assetRange.contains(representative) }?.element
@@ -1166,15 +1233,17 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
                         .offsetBy(dx: 0, dy: -collection.contentOffset.y)
                 } ?? end.offsetBy(dx: 0, dy: 12)
                 let badge = transitionChromeView(badgeTransitionChromePlan(asset: asset, size: end.size))
+                badge.accessibilityIdentifier = "semantic-zoom-overlay:\(asset.id)"
                 addTransition(badge, start: start, end: end,
                               incoming: !scale.isAssets || sourceItem == nil, disappears: false,
-                              startRadius: 0, endRadius: 0, to: surface, hosted: true)
+                              startRadius: 0, endRadius: 0, to: surface)
+                transitionItems[transitionItems.count - 1].relayoutsContent = true
             }
         } else if scale.isAssets {
             for (_, sourceItem) in sources {
                 let representative = representativeIndex(sourceItem)
                 let asset = catalog.assets[representative]
-                guard TimelineAssetBadgeOverlay.isVisible(for: asset),
+                guard TimelineAssetOverlay.isVisible(for: asset),
                       let destination = destinations.first(where: { $0.assetRange.contains(representative) })
                 else { continue }
                 let start = imageRect(item: sourceItem, scale: scale, asset: asset)
@@ -1182,12 +1251,14 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
                 let end = imageRect(item: destination, scale: nextScale, asset: asset)
                     .offsetBy(dx: 0, dy: -targetOffset)
                 let badge = transitionChromeView(badgeTransitionChromePlan(asset: asset, size: start.size))
+                badge.accessibilityIdentifier = "semantic-zoom-overlay:\(asset.id)"
                 addTransition(badge, start: start, end: end, incoming: false, disappears: true,
-                              startRadius: 0, endRadius: 0, to: surface, hosted: true)
+                              startRadius: 0, endRadius: 0, to: surface)
+                transitionItems[transitionItems.count - 1].relayoutsContent = true
             }
         }
         for cell in collection.visibleCells {
-            cell.alpha = 0
+            (cell as? TimelineSemanticCollectionCell)?.setPresentationVisible(false)
         }
         if !scale.isAssets {
             for path in collection.indexPathsForVisibleItems {
@@ -1267,8 +1338,17 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         }
         snapshot.clipsToBounds = true
         snapshot.layer.cornerRadius = startRadius
-        snapshot.alpha = incoming ? 0 : 1
-        surface.addSubview(snapshot)
+        if let header = snapshot as? TimelineSemanticCollectionCell {
+            header.setPresentationVisible(!incoming)
+        } else {
+            snapshot.alpha = incoming ? 0 : 1
+        }
+        let container = snapshot is TimelineSemanticCollectionCell ? surface : transitionMediaSurface ?? surface
+        container.addSubview(snapshot)
+        if !hosted {
+            snapshot.setNeedsLayout()
+            snapshot.layoutIfNeeded()
+        }
         transitionItems.append(TransitionItem(view: snapshot, start: start, end: end, incoming: incoming,
                                               disappears: disappears, startRadius: startRadius, endRadius: endRadius,
                                               usesLayerTransform: hosted))
@@ -1313,25 +1393,40 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         return controller.view
     }
 
+    private func headerAppearance(at index: Int, frames: [CGRect], headers: [Int], top: CGFloat) -> HeaderAppearance {
+        .init(
+            opacity: TimelinePinnedDayHeaderGeometry.opacity(at: index, frames: frames, headers: headers, top: top),
+            backgroundOpacity: TimelinePinnedDayHeaderGeometry.backgroundOpacity(at: index, frames: frames, headers: headers, top: top)
+        )
+    }
+
+    private func transitionHeaderView(
+        for item: TimelineSemanticProjection.Item,
+        catalog: TimelineSemanticCatalog,
+        appearance: HeaderAppearance
+    ) -> TimelineSemanticCollectionCell {
+        let cell = TimelineSemanticCollectionCell(frame: CGRect(origin: .zero, size: item.frame.size))
+        cell.nodeID = item.id
+        cell.setHeaderContent(
+            title: TimelineCaptureDateFormatting.string(
+                from: catalog.assets[item.assetRange.lowerBound].captureLocalDate,
+                dateStyle: .long, timeStyle: .none
+            ),
+            count: "\(item.assetRange.count.formatted()) items",
+            naturalY: item.frame.minY, pinned: false
+        )
+        cell.setHeaderOpacity(appearance.opacity)
+        cell.setHeaderBackgroundOpacity(appearance.backgroundOpacity)
+        return cell
+    }
+
     private func transitionChromePlan(
         for item: TimelineSemanticProjection.Item,
         scale: TimelineSemanticScale,
         catalog: TimelineSemanticCatalog
     ) -> TransitionChromePlan? {
         if item.isHeader {
-            let title = TimelineCaptureDateFormatting.string(
-                from: catalog.assets[item.assetRange.lowerBound].captureLocalDate,
-                dateStyle: .long,
-                timeStyle: .none
-            )
-            let subtitle = "\(item.assetRange.count.formatted()) items"
-            return makeTransitionChromePlan(
-                role: "header",
-                identity: "\(scale.rawValue):\(item.id)",
-                signature: "\(title)|\(subtitle)",
-                size: item.frame.size,
-                content: TimelineSemanticDateHeader(title: title, subtitle: subtitle)
-            )
+            return nil // Transition headers reuse the native steady-state renderer.
         }
 
         if !scale.isAssets {
@@ -1350,7 +1445,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
 
         guard catalog.assets.indices.contains(item.assetRange.lowerBound) else { return nil }
         let asset = catalog.assets[item.assetRange.lowerBound]
-        guard TimelineAssetBadgeOverlay.isVisible(for: asset) else { return nil }
+        guard TimelineAssetOverlay.isVisible(for: asset) else { return nil }
         return badgeTransitionChromePlan(
             asset: asset,
             size: imageRect(item: item, scale: scale, asset: asset).size
@@ -1361,9 +1456,9 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         makeTransitionChromePlan(
             role: "badge",
             identity: asset.id,
-            signature: "\(asset.livePhotoVideoID != nil)|\(asset.projectionType ?? "")|\(asset.stack?.assetCount ?? 0)|\(input?.hiddenLivePhotoID == asset.id)",
+            signature: "\(asset.livePhotoVideoID != nil)|\(asset.projectionType ?? "")|\(asset.stack?.assetCount ?? 0)|\(asset.mediaKind == .video)|\(asset.durationMilliseconds ?? -1)|\(input?.hiddenLivePhotoID == asset.id)",
             size: size,
-            content: TimelineAssetBadgeOverlay(
+            content: TimelineAssetOverlay(
                 asset: asset,
                 hiddenLivePhotoBadgeAssetID: input?.hiddenLivePhotoID
             )
@@ -1402,13 +1497,27 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             if item.usesLayerTransform {
                 item.view.layer.setAffineTransform(Self.transitionTransform(from: item.end, to: frame))
             } else {
+                let changesSize = item.view.bounds.size != frame.size
                 item.view.frame = frame
+                if item.relayoutsContent, changesSize {
+                    item.view.setNeedsLayout()
+                    item.view.layoutIfNeeded()
+                }
             }
             item.view.layer.cornerRadius = mix(item.startRadius, item.endRadius, progress)
-            item.view.alpha = if item.isChrome {
+            let opacity: CGFloat = if item.isChrome {
                 item.incoming ? progress : item.disappears ? 1 - progress : 1
             } else {
                 item.incoming ? min(1, progress * 2) : item.disappears ? max(0, 1 - progress * 1.5) : 1
+            }
+            if let header = item.view as? TimelineSemanticCollectionCell,
+               let start = item.startHeaderAppearance, let end = item.endHeaderAppearance
+            {
+                header.setPresentationVisible(opacity > 0)
+                header.setHeaderOpacity(mix(start.opacity, end.opacity, progress) * opacity)
+                header.setHeaderBackgroundOpacity(mix(start.backgroundOpacity, end.backgroundOpacity, progress) * opacity)
+            } else {
+                item.view.alpha = opacity
             }
         }
     }
@@ -1422,6 +1531,17 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         gesture = nil
         if commit, let target {
             install(target, focusing: focusAssetIndex, viewportY: pinchCentroid.y, latest: false)
+            // UICollectionView rounds installed cell geometry to display
+            // pixels. Use those actual endpoints before settling the labels.
+            for index in transitionItems.indices {
+                guard let header = transitionItems[index].view as? TimelineSemanticCollectionCell,
+                      let id = header.nodeID, let itemIndex = itemIndexes[id],
+                      let native = collection.cellForItem(at: IndexPath(item: itemIndex, section: 0)) else { continue }
+                transitionItems[index].end = collection.convert(native.frame, to: view)
+                transitionItems[index].endHeaderAppearance = HeaderAppearance(
+                    opacity: headerOpacity(at: itemIndex), backgroundOpacity: headerBackgroundOpacity(at: itemIndex)
+                )
+            }
             input?.scaleChanged(target.scale)
         }
         guard !UIAccessibility.isReduceMotionEnabled, transitionSurface != nil else { finishPresentation(); return }
@@ -1436,8 +1556,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
 
     private func cancelTracking() {
         guard gesture != nil else { return }
-        gesture = nil
-        finishPresentation()
+        settle(commit: false)
     }
 
     private func finishPresentation() {
@@ -1449,14 +1568,19 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             return
         }
         collection?.alpha = 1
-        collection?.visibleCells.forEach { $0.alpha = 1 }
+        for path in collection.indexPathsForVisibleItems {
+            guard let projection, projection.items.indices.contains(path.item),
+                  let cell = collection.cellForItem(at: path) else { continue }
+            (cell as? TimelineSemanticCollectionCell)?.setPresentationVisible(!projection.items[path.item].isHeader)
+        }
         guard !UIAccessibility.isReduceMotionEnabled else {
             completePresentationCleanup(surface: surface)
             return
         }
         isPresentationCrossfading = true
+        let mediaSurface = transitionMediaSurface
         let fade = UIViewPropertyAnimator(duration: 0.18, curve: .easeOut) {
-            surface.alpha = 0
+            mediaSurface?.alpha = 0
         }
         animator = fade
         fade.addCompletion { [weak self, weak surface] _ in
@@ -1477,6 +1601,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         localTransitionTasks = []
         transitionSurface?.removeFromSuperview()
         transitionSurface = nil
+        transitionMediaSurface = nil
         if collection != nil, !scale.isAssets {
             for cell in collection.visibleCells.compactMap({ $0 as? TimelineSemanticCollectionCell }) {
                 let isVisible = input?.isActive == true
@@ -1492,7 +1617,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         input?.transitionScaleChanged(scale)
         collection?.alpha = 1
         collection?.panGestureRecognizer.isEnabled = true
-        collection?.visibleCells.forEach { $0.alpha = 1 }
+        collection?.visibleCells.forEach { ($0 as? TimelineSemanticCollectionCell)?.setPresentationVisible(true) }
         handoffImages = [:]
         if let deferred = deferredInput {
             deferredInput = nil

@@ -5,6 +5,7 @@ struct TimelineAssetOverlay: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let asset: TimelineAssetSummary
     var isHidden = false
+    var hiddenLivePhotoBadgeAssetID: String?
 
     static func isVisible(for asset: TimelineAssetSummary) -> Bool {
         TimelineAssetBadgeOverlay.isVisible(for: asset) || asset.mediaKind == .video
@@ -12,7 +13,7 @@ struct TimelineAssetOverlay: View {
 
     var body: some View {
         ZStack {
-            TimelineAssetBadgeOverlay(asset: asset)
+            TimelineAssetBadgeOverlay(asset: asset, hiddenLivePhotoBadgeAssetID: hiddenLivePhotoBadgeAssetID)
             if asset.mediaKind == .video {
                 Text(Self.duration(asset.durationMilliseconds))
                     .font(.caption2.weight(.semibold))

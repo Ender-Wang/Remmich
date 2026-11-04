@@ -120,7 +120,180 @@ struct TimelineSemanticZoomTests {
         #expect(!headers.isEmpty)
         #expect(Set(headers.compactMap(\.accessibilityIdentifier)).count == headers.count)
         #expect(headers.allSatisfy { abs($0.bounds.height - 36) < 0.5 })
+        let collection = try #require(controller.view.subviews.compactMap { $0 as? UICollectionView }.first)
+        var compared = 0
+        for view in headers {
+            let header = try #require(view as? TimelineSemanticCollectionCell)
+            #expect(header.layer.affineTransform().isIdentity)
+            let nodeID = try #require(header.accessibilityIdentifier?.replacingOccurrences(of: "semantic-zoom-header:", with: ""))
+            guard let steady = collection.visibleCells.compactMap({ $0 as? TimelineSemanticCollectionCell })
+                .first(where: { $0.nodeID == nodeID }) else { continue }
+            #expect(header.frame == collection.convert(steady.frame, to: surface))
+            header.layoutIfNeeded()
+            steady.layoutIfNeeded()
+            let transitionLabels = header.contentView.subviews.compactMap { $0 as? UILabel }
+            let steadyLabels = steady.contentView.subviews.compactMap { $0 as? UILabel }
+            #expect(transitionLabels.count == 2)
+            for (moving, resting) in zip(transitionLabels, steadyLabels) {
+                #expect(moving.text == resting.text)
+                #expect(moving.frame == resting.frame)
+                #expect(moving.font == resting.font)
+                #expect(moving.alpha == resting.alpha)
+            }
+            compared += 1
+        }
+        #expect(compared > 0)
         controller.stop()
+    }
+
+    @Test(arguments: [false, true])
+    @MainActor func assetOverlaysStayVisibleAndUnscaledDuringLayoutPinch(video: Bool) throws {
+        let assets = (0 ..< 25).map { index in
+            TimelineAssetSummary(id: "overlay-\(index)", ownerID: "owner", capturedAt: date("2027-01-01T12:00:00Z"),
+                                 uploadedAt: date("2027-01-01T12:00:00Z"), localOffsetHours: 0,
+                                 mediaKind: video ? .video : .image, durationMilliseconds: video ? 12000 : nil,
+                                 aspectRatio: 1.5, isFavorite: false, visibility: .timeline,
+                                 livePhotoVideoID: video ? nil : "motion-\(index)", stack: nil, projectionType: nil,
+                                 thumbhash: nil, thumbnailRevision: .distantPast)
+        }
+        let controller = TimelineSemanticCollectionController()
+        controller.update(TimelineSemanticCollectionView(
+            catalog: TimelineSemanticCatalog(assets: assets), revision: 1, scale: .square,
+            media: MediaLibraryController(), namespace: nil, bottomClearance: 96,
+            runtime: TimelineSemanticRuntime(), latestRequest: 0, isActive: true,
+            hiddenThumbnailID: nil, hiddenLivePhotoID: nil, selectAsset: { _, _ in }, selectGroup: { _, _ in },
+            scaleChanged: { _ in }, scrolled: { _, _, _ in }, visibleAssetsChanged: { _, _, _ in }, refresh: {}
+        ))
+        controller.view.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        controller.view.setNeedsLayout()
+        controller.view.layoutIfNeeded()
+        let collection = try #require(controller.view.subviews.compactMap { $0 as? UICollectionView }.first)
+        let sourceIDs = Set(collection.visibleCells.compactMap { ($0 as? TimelineSemanticCollectionCell)?.coverAssetID })
+        let pinch = SemanticTestPinch()
+        pinch.point = CGPoint(x: 201, y: 437)
+        pinch.testState = .began
+        controller.perform(NSSelectorFromString("pinched:"), with: pinch)
+        for magnification in [0.95, 0.85] {
+            pinch.testState = .changed
+            pinch.scale = magnification
+            controller.perform(NSSelectorFromString("pinched:"), with: pinch)
+            let surface = try #require(controller.view.subviews.last)
+            let mediaSurface = try #require(surface.subviews.first { $0.accessibilityIdentifier == "semantic-zoom-media" })
+            let overlays = mediaSurface.subviews.filter { $0.accessibilityIdentifier?.hasPrefix("semantic-zoom-overlay:") == true }
+            #expect(!overlays.isEmpty)
+            #expect(overlays.allSatisfy { $0.layer.affineTransform().isIdentity })
+            let carried = overlays.filter { overlay in
+                guard let id = overlay.accessibilityIdentifier?.replacingOccurrences(of: "semantic-zoom-overlay:", with: "") else { return false }
+                return sourceIDs.contains(id)
+            }
+            #expect(!carried.isEmpty)
+            #expect(carried.allSatisfy { $0.alpha == 1 })
+        }
+        controller.stop()
+    }
+
+    @Test(arguments: [false, true])
+    @MainActor func dateHeadersStayAboveTheMediaFadeUntilNativeHandoff(coarser: Bool) async throws {
+        let assets = (0 ..< 25).map { asset("first-\($0)", "2027-01-01T12:00:00Z") }
+            + (0 ..< 25).map { asset("second-\($0)", "2027-01-02T12:00:00Z") }
+        let controller = TimelineSemanticCollectionController()
+        controller.update(TimelineSemanticCollectionView(
+            catalog: TimelineSemanticCatalog(assets: assets), revision: 1, scale: coarser ? .square : .natural,
+            media: MediaLibraryController(), namespace: nil, bottomClearance: 96, topClearance: 90,
+            pinnedHeaderTopClearance: 90, runtime: TimelineSemanticRuntime(), latestRequest: 0, isActive: true,
+            hiddenThumbnailID: nil, hiddenLivePhotoID: nil, selectAsset: { _, _ in }, selectGroup: { _, _ in },
+            scaleChanged: { _ in }, scrolled: { _, _, _ in }, visibleAssetsChanged: { _, _, _ in }, refresh: {}
+        ))
+        controller.view.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        controller.view.setNeedsLayout()
+        controller.view.layoutIfNeeded()
+        let collection = try #require(controller.view.subviews.compactMap { $0 as? UICollectionView }.first)
+        collection.contentOffset.y = 120
+        collection.layoutIfNeeded()
+        let sourceIDs = Set(collection.visibleCells.compactMap { ($0 as? TimelineSemanticCollectionCell)?.nodeID })
+        let pinch = SemanticTestPinch()
+        pinch.point = CGPoint(x: 201, y: 437)
+        pinch.testState = .began
+        controller.perform(NSSelectorFromString("pinched:"), with: pinch)
+        pinch.testState = .changed
+        pinch.scale = coarser ? 0.95 : 1.05
+        controller.perform(NSSelectorFromString("pinched:"), with: pinch)
+        let surface = try #require(controller.view.subviews.last)
+        let mediaSurface = try #require(surface.subviews.first { $0.accessibilityIdentifier == "semantic-zoom-media" })
+        let headers = surface.subviews.compactMap { $0 as? TimelineSemanticCollectionCell }
+            .filter { $0.nodeID.map(sourceIDs.contains) == true }
+        #expect(!headers.isEmpty)
+        #expect(surface.subviews.first === mediaSurface)
+        pinch.testState = .cancelled
+        controller.perform(NSSelectorFromString("pinched:"), with: pinch)
+        for _ in 0 ..< 100 {
+            if mediaSurface.alpha == 0 {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(surface.alpha == 1)
+        #expect(mediaSurface.alpha == 0)
+        #expect(headers.allSatisfy { !$0.isHidden && $0.alpha == 1 })
+        let nativeHeaders = collection.visibleCells.compactMap { $0 as? TimelineSemanticCollectionCell }
+            .filter { cell in headers.contains { $0.nodeID == cell.nodeID } }
+        #expect(!nativeHeaders.isEmpty)
+        #expect(nativeHeaders.allSatisfy { $0.alpha == 1 && $0.contentView.isHidden })
+        for header in headers {
+            let native = try #require(nativeHeaders.first { $0.nodeID == header.nodeID })
+            let frame = collection.convert(native.frame, to: surface)
+            #expect(abs(header.frame.minY - frame.minY) < 0.5)
+        }
+        controller.stop()
+        #expect(surface.superview == nil)
+        #expect(nativeHeaders.allSatisfy { $0.alpha == 1 && !$0.contentView.isHidden })
+    }
+
+    @Test @MainActor func headerMaterialsKeepOpaqueAncestorsAndMaskTheirCoverage() throws {
+        let cell = TimelineSemanticCollectionCell(frame: CGRect(x: 0, y: 0, width: 402, height: 36))
+        cell.setHeaderContent(title: "October 31, 2026", count: "426 items", naturalY: 0, pinned: true)
+        cell.layoutIfNeeded()
+        let materials = cell.contentView.subviews.compactMap { $0 as? UIVisualEffectView }
+        #expect(materials.count == 2)
+        for opacity in [CGFloat(0), 0.5, 1] {
+            cell.setHeaderBackgroundOpacity(opacity)
+            for material in materials {
+                #expect(material.alpha == 1)
+                let mask = try #require(material.mask)
+                #expect(mask.frame == material.bounds)
+                let color = try #require(mask.backgroundColor)
+                #expect(abs(color.cgColor.alpha - opacity * 0.72) < 0.001)
+                var ancestor = material.superview
+                while let view = ancestor {
+                    #expect(view.alpha == 1)
+                    ancestor = view.superview
+                }
+            }
+        }
+        cell.setPresentationVisible(false)
+        #expect(cell.alpha == 1)
+        #expect(cell.contentView.isHidden)
+        cell.setPresentationVisible(true)
+        #expect(cell.alpha == 1)
+        #expect(!cell.contentView.isHidden)
+        cell.frame.size.width = 874
+        cell.setNeedsLayout()
+        cell.layoutIfNeeded()
+        for material in materials {
+            material.layoutIfNeeded()
+            #expect(material.mask?.frame == material.bounds)
+        }
+        cell.setPresentationVisible(false)
+        let parent = UIViewController()
+        cell.setHostedContent(Text("Asset"), parent: parent)
+        cell.setPresentationVisible(true)
+        #expect(!cell.contentView.isHidden)
+        cell.setHeaderContent(title: "October 31, 2026", count: "426 items", naturalY: 0, pinned: true)
+        cell.setHeaderBackgroundOpacity(1)
+        cell.setPresentationVisible(true)
+        #expect(cell.alpha == 1 && !cell.contentView.isHidden)
+        #expect(materials.allSatisfy { $0.alpha == 1 })
     }
 
     @Test @MainActor func dayHeaderPinsAtReadableTopAndNextDayPushesItAway() throws {
@@ -586,7 +759,8 @@ struct TimelineSemanticZoomTests {
         let dataSource = try #require(collection.dataSource as? UICollectionViewDiffableDataSource<Int, String>)
         let visibleIDs = Set(collection.indexPathsForVisibleItems.compactMap { dataSource.itemIdentifier(for: $0) })
         let surface = try #require(controller.view.subviews.first { $0 !== collection })
-        let covered = Set(surface.subviews.compactMap { view -> String? in
+        let mediaSurface = try #require(surface.subviews.first { $0.accessibilityIdentifier == "semantic-zoom-media" })
+        let covered = Set(mediaSurface.subviews.compactMap { view -> String? in
             guard let id = view.accessibilityIdentifier, id.hasPrefix("semantic-zoom-target:") else { return nil }
             return String(id.dropFirst("semantic-zoom-target:".count))
         })
