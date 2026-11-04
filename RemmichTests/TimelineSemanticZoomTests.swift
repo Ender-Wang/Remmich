@@ -769,6 +769,58 @@ struct TimelineSemanticZoomTests {
         controller.stop()
     }
 
+    @Test @MainActor func groupedCoverCompletionFillsEmptyTransitionAndRejectsStaleOrLateImages() throws {
+        let start = date("2026-01-01T12:00:00Z")
+        let assets = (0 ..< 90).map { index in
+            TimelineAssetSummary(id: "day-\(index)", ownerID: "owner",
+                                 capturedAt: start.addingTimeInterval(Double(index) * 86400), uploadedAt: start,
+                                 localOffsetHours: 0, mediaKind: .image, durationMilliseconds: nil, aspectRatio: 1,
+                                 isFavorite: false, visibility: .timeline, livePhotoVideoID: nil, stack: nil,
+                                 projectionType: nil, thumbhash: nil, thumbnailRevision: start)
+        }
+        let controller = TimelineSemanticCollectionController()
+        controller.update(TimelineSemanticCollectionView(
+            catalog: TimelineSemanticCatalog(assets: assets), revision: 1, scale: .natural,
+            media: MediaLibraryController(), namespace: nil, bottomClearance: 96,
+            runtime: TimelineSemanticRuntime(), latestRequest: 0, isActive: true,
+            hiddenThumbnailID: nil, hiddenLivePhotoID: nil, selectAsset: { _, _ in }, selectGroup: { _, _ in },
+            scaleChanged: { _ in }, scrolled: { _, _, _ in }, visibleAssetsChanged: { _, _, _ in }, refresh: {}
+        ))
+        controller.view.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        controller.view.setNeedsLayout()
+        controller.view.layoutIfNeeded()
+        controller.changeScale(coarser: true)
+        let collection = try #require(controller.view.subviews.compactMap { $0 as? UICollectionView }.first)
+        let surface = try #require(controller.view.subviews.last)
+        let mediaSurface = try #require(surface.subviews.first { $0.accessibilityIdentifier == "semantic-zoom-media" })
+        let tiles = mediaSurface.subviews.compactMap { $0 as? UIImageView }
+        let cell = try #require(collection.visibleCells.compactMap { $0 as? TimelineSemanticCollectionCell }.first { cell in
+            guard let nodeID = cell.nodeID else { return false }
+            return tiles.contains { $0.accessibilityIdentifier == "semantic-zoom-target:\(nodeID)" && $0.image == nil }
+        })
+        let nodeID = try #require(cell.nodeID)
+        let assetID = try #require(cell.coverAssetID)
+        let tile = try #require(tiles.first { $0.accessibilityIdentifier == "semantic-zoom-target:\(nodeID)" })
+        let image = try #require(UIImage(systemName: "circle.fill"))
+        let otherImage = try #require(UIImage(systemName: "square.fill"))
+        let otherAsset = try #require(assets.first { $0.id != assetID })
+
+        controller.groupCoverDidLoad(image, assetID: otherAsset.id, thumbnailRevision: start, nodeID: nodeID, cell: cell)
+        controller.groupCoverDidLoad(image, assetID: assetID, thumbnailRevision: start.addingTimeInterval(1), nodeID: nodeID, cell: cell)
+        controller.groupCoverDidLoad(image, assetID: assetID, thumbnailRevision: start, nodeID: "old-\(nodeID)", cell: cell)
+        #expect(tile.image == nil)
+        controller.groupCoverDidLoad(image, assetID: assetID, thumbnailRevision: start, nodeID: nodeID, cell: cell)
+        #expect(tile.image === image)
+        #expect(cell.coverImageAssetID == assetID)
+        // An existing local/transition image retains ownership on a second completion.
+        controller.groupCoverDidLoad(otherImage, assetID: assetID, thumbnailRevision: start, nodeID: nodeID, cell: cell)
+        #expect(tile.image === image)
+        controller.stop()
+        tile.image = nil
+        controller.groupCoverDidLoad(image, assetID: assetID, thumbnailRevision: start, nodeID: nodeID, cell: cell)
+        #expect(tile.image == nil)
+    }
+
     @Test @MainActor func historyLoadingFillsGapsBeforeAnOlderLoadedIsland() async {
         let buckets = (1 ... 7).reversed().map { TimelineBucketSummary(id: .init(rawValue: String(format: "2027-%02d-01", $0)), assetCount: 1) }
         let reader = SemanticHistoryReader(buckets: buckets, emptyIDs: [])

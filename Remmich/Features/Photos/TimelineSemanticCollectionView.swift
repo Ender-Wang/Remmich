@@ -889,6 +889,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             }
             covers.removeAll { $0.id == asset.id }
             covers.insert(asset, at: 0)
+            let coverRevisions = Dictionary(uniqueKeysWithValues: covers.map { ($0.id, $0.thumbnailRevision) })
             let motion = TimelineRangeCoverMotion(
                 rotates: !(scale == .day && item.isFeatured),
                 durationScale: item.isFeatured && scale != .day ? 1.5 : 1,
@@ -904,10 +905,10 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
                                     systemImage: "calendar", assets: covers, media: input.media,
                                     motion: motion, externallyVisible: visible,
                                     placeholderImage: placeholderImage,
-                                    imageLoaded: { [weak cell] assetID, image in
-                                        guard cell?.nodeID == item.id, cell?.coverAssetID == assetID else { return }
-                                        cell?.coverImage = image
-                                        cell?.coverImageAssetID = assetID
+                                    imageLoaded: { [weak self, weak cell] assetID, image in
+                                        guard let self, let cell, let thumbnailRevision = coverRevisions[assetID] else { return }
+                                        groupCoverDidLoad(image, assetID: assetID, thumbnailRevision: thumbnailRevision,
+                                                          nodeID: item.id, cell: cell)
                                     },
                                     onCoverChanged: { [weak cell] assetID in
                                         guard cell?.nodeID == item.id else { return }
@@ -926,6 +927,24 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             cell.accessibilityTraits = .button
         }
         cell.setPresentationVisible(transitionSurface == nil || (isPresentationCrossfading && !item.isHeader))
+    }
+
+    func groupCoverDidLoad(_ image: UIImage, assetID: String, thumbnailRevision: Date,
+                           nodeID: String, cell: TimelineSemanticCollectionCell)
+    {
+        guard let catalog, let assetIndex = catalog.assetIndexes[assetID],
+              catalog.assets[assetIndex].thumbnailRevision == thumbnailRevision,
+              cell.nodeID == nodeID, cell.coverAssetID == assetID else { return }
+        cell.coverImage = image
+        cell.coverImageAssetID = assetID
+        // A native card can finish decoding before the transition's local-only
+        // request. Share that ready image instead of revealing an empty tile.
+        guard let surface = transitionSurface, let target, projection?.scale == target.scale,
+              representativeAssets[nodeID] == assetIndex,
+              target.items.contains(where: { $0.id == nodeID && $0.assetRange.contains(assetIndex) }),
+              let tile = transitionItems.first(where: { $0.view.accessibilityIdentifier == "semantic-zoom-target:\(nodeID)" }),
+              let imageView = tile.view as? UIImageView else { return }
+        fillTransitionImage(image, into: imageView, destinationID: nodeID, surface: surface)
     }
 
     func collectionView(_: UICollectionView, didEndDisplaying cell: UICollectionViewCell, forItemAt _: IndexPath) {
@@ -1297,19 +1316,26 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             guard !Task.isCancelled, let self, let surface, transitionSurface === surface,
                   let imageView, let response else { return }
             media.retainTimelineThumbnail(response.container, descriptor: descriptor, cacheType: response.cacheType)
-            handoffImages[destinationID] = response.image
+            fillTransitionImage(response.image, into: imageView, destinationID: destinationID, surface: surface)
             if let index = itemIndexes[destinationID],
                let cell = collection.cellForItem(at: IndexPath(item: index, section: 0)) as? TimelineSemanticCollectionCell
             {
                 configure(IndexPath(item: index, section: 0), cell: cell)
             }
-            UIView.transition(with: imageView, duration: UIAccessibility.isReduceMotionEnabled ? 0 : 0.12,
-                              options: [.transitionCrossDissolve, .allowUserInteraction])
-            {
-                imageView.image = response.image
-            }
         }
         localTransitionTasks.append(task)
+    }
+
+    private func fillTransitionImage(_ image: UIImage, into imageView: UIImageView,
+                                     destinationID: String, surface: UIView)
+    {
+        guard transitionSurface === surface, imageView.image == nil else { return }
+        handoffImages[destinationID] = image
+        UIView.transition(with: imageView, duration: UIAccessibility.isReduceMotionEnabled ? 0 : 0.12,
+                          options: [.transitionCrossDissolve, .allowUserInteraction])
+        {
+            imageView.image = image
+        }
     }
 
     private func imageRect(item: TimelineSemanticProjection.Item, scale: TimelineSemanticScale, asset: TimelineAssetSummary) -> CGRect {

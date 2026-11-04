@@ -104,6 +104,8 @@ Semantic pinch transitions carry the complete asset overlay, including plain-vid
 
 [TimelineAssetOverlayTests](RemmichTests/TimelineAssetOverlayTests.swift) checks opening opacity and hidden/revealed return states for Live Photos and videos, with an ordinary-photo control. All five rendering cases passed in the macOS harness, and the iOS app/test bundle compiled. The maintainer confirmed the reported opening/return regression resolved on device.
 
+Grouped cards share an already-decoded native cover with an empty matching pinch-transition tile. The delivery checks the current node, asset, thumbnail revision, and installed target; it never replaces a tile that already has an image. Native and local decode completions use the same image crossfade and handoff image map, without new requests or waiting for image readiness before completing a pinch. The focused semantic-zoom fixture covers valid, stale, duplicate, and post-cleanup completions.
+
 ### Filmstrip layout
 
 `AssetViewerFilmstrip`, in [AssetViewerView](Remmich/Features/Shared/AssetViewer/AssetViewerView.swift), centers the complete thumbnail row when it fits the viewport. The row has at least the viewport's width, and fitting content skips selected-item scroll requests. Overflowing content scrolls to the selected stable ID; viewport width is part of the positioning request so resizing also updates the selection's position. [FilmstripAlignmentTests](RemmichTests/FilmstripAlignmentTests.swift) covers fitting rows, selection changes, overflowing content, and resizing using the hosted scroll view.
