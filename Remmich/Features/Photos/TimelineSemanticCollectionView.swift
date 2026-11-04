@@ -116,8 +116,17 @@ private final class TimelineSemanticCollectionLayout: UICollectionViewLayout {
 }
 
 @MainActor
-private final class TimelineSemanticCoverVisibility: ObservableObject {
-    @Published var isVisible = false
+final class TimelineSemanticCoverVisibility: ObservableObject {
+    @Published private(set) var isVisible: Bool
+
+    init(isVisible: Bool) {
+        self.isVisible = isVisible
+    }
+
+    func setVisible(_ visible: Bool) {
+        guard isVisible != visible else { return }
+        isVisible = visible
+    }
 }
 
 private struct TimelineSemanticObservedVisibility<Content: View>: View {
@@ -173,7 +182,7 @@ final class TimelineSemanticCollectionCell: UICollectionViewCell {
     private static let headerBackgroundVerticalPadding: CGFloat = 3
     private static let headerBackgroundMaximumOpacity: CGFloat = 0.72
 
-    fileprivate let coverVisibility = TimelineSemanticCoverVisibility()
+    private(set) var coverVisibility: TimelineSemanticCoverVisibility?
     var coverAssetID: String?
     var coverImage: UIImage?
     var coverImageAssetID: String?
@@ -212,7 +221,13 @@ final class TimelineSemanticCollectionCell: UICollectionViewCell {
         fatalError("init(coder:) has not been implemented")
     }
 
-    func setHostedContent(_ content: some View, parent: UIViewController) {
+    func setHostedContent(_ content: some View, parent: UIViewController,
+                          coverVisibility: TimelineSemanticCoverVisibility? = nil)
+    {
+        // The observer belongs to this hosted root, not the reusable UIKit cell.
+        // Replacing content must not publish to the outgoing SwiftUI tree while
+        // updateUIViewController is synchronously installing a new projection.
+        self.coverVisibility = coverVisibility
         headerNaturalY = nil
         headerTitleLabel.isHidden = true
         headerCountLabel.isHidden = true
@@ -243,7 +258,7 @@ final class TimelineSemanticCollectionCell: UICollectionViewCell {
     func setHeaderContent(title: String, count: String, naturalY: CGFloat, pinned: Bool) {
         hostingController?.rootView = AnyView(EmptyView())
         hostingController?.view.alpha = 0
-        coverVisibility.isVisible = false
+        coverVisibility = nil
         clipsToBounds = true
         contentView.clipsToBounds = true
         headerTitleLabel.text = title
@@ -261,7 +276,7 @@ final class TimelineSemanticCollectionCell: UICollectionViewCell {
     func clearContent() {
         contentView.isHidden = false
         hostingController?.rootView = AnyView(EmptyView())
-        coverVisibility.isVisible = false
+        coverVisibility = nil
         headerNaturalY = nil
         headerTitleLabel.text = nil
         headerTitleLabel.isHidden = true
@@ -844,9 +859,6 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         let assetIndex = representativeIndex(item)
         let asset = catalog.assets[assetIndex]
         let coversVisible = input.isActive && gesture == nil && transitionSurface == nil
-        if cell.coverVisibility.isVisible != coversVisible {
-            cell.coverVisibility.isVisible = coversVisible
-        }
         if item.isHeader {
             let date = catalog.assets[item.assetRange.lowerBound].captureLocalDate
             let displayedY = layout.layoutAttributesForItem(at: path)?.frame.minY ?? item.frame.minY
@@ -898,7 +910,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             cell.coverAssetID = asset.id
             let contentID = "\(item.id):\(revision ?? 0)"
             let placeholderImage = handoffImages[item.id]
-            let coverVisibility = cell.coverVisibility
+            let coverVisibility = TimelineSemanticCoverVisibility(isVisible: coversVisible)
             cell.setHostedContent(
                 TimelineSemanticObservedVisibility(visibility: coverVisibility) { [weak cell] visible in
                     PhotosRangeCard(title: group.route.navigationTitle, count: group.assets.count,
@@ -920,7 +932,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
                                     })
                                     .id(contentID)
                 },
-                parent: self
+                parent: self, coverVisibility: coverVisibility
             )
             cell.isAccessibilityElement = true
             cell.accessibilityLabel = "\(group.route.navigationTitle), \(group.assets.count) items"
@@ -1631,9 +1643,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         if collection != nil, !scale.isAssets {
             for cell in collection.visibleCells.compactMap({ $0 as? TimelineSemanticCollectionCell }) {
                 let isVisible = input?.isActive == true
-                if cell.coverVisibility.isVisible != isVisible {
-                    cell.coverVisibility.isVisible = isVisible
-                }
+                cell.coverVisibility?.setVisible(isVisible)
             }
         }
         transitionItems = []

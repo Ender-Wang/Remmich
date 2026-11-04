@@ -1,3 +1,4 @@
+import Combine
 import CoreGraphics
 import Foundation
 import SwiftUI
@@ -728,6 +729,66 @@ struct TimelineSemanticZoomTests {
         #expect(controller.installationCount == before + 1)
         #expect(abs(collection.contentSize.height - collection.contentOffset.y - collection.bounds.height + 96) < 0.5)
         controller.stop()
+    }
+
+    @Test @MainActor func returningFromYearsRetiresCoverObserversWithoutPublishing() throws {
+        let media = MediaLibraryController()
+        let controller = TimelineSemanticCollectionController()
+        let catalog = TimelineSemanticCatalog(assets: (2010 ... 2026).map {
+            asset(String($0), "\($0)-01-01T12:00:00Z")
+        })
+        func input(scale: TimelineSemanticScale, latestRequest: Int) -> TimelineSemanticCollectionView {
+            TimelineSemanticCollectionView(
+                catalog: catalog, revision: 1, scale: scale, media: media, namespace: nil,
+                bottomClearance: 96, runtime: TimelineSemanticRuntime(), latestRequest: latestRequest, isActive: true,
+                hiddenThumbnailID: nil, hiddenLivePhotoID: nil, selectAsset: { _, _ in }, selectGroup: { _, _ in },
+                scaleChanged: { _ in }, scrolled: { _, _, _ in }, visibleAssetsChanged: { _, _, _ in }, refresh: {}
+            )
+        }
+        controller.update(input(scale: .year, latestRequest: 0))
+        controller.view.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        controller.view.setNeedsLayout()
+        controller.view.layoutIfNeeded()
+        let collection = try #require(controller.view.subviews.compactMap { $0 as? UICollectionView }.first)
+        let outgoing = collection.visibleCells.compactMap { ($0 as? TimelineSemanticCollectionCell)?.coverVisibility }
+        #expect(!outgoing.isEmpty)
+        var publications = 0
+        var subscriptions = outgoing.map { visibility in
+            visibility.objectWillChange.sink { publications += 1 }
+        }
+
+        // This is the synchronous install used by the Photos tab's latest jump.
+        controller.update(input(scale: .natural, latestRequest: 1))
+        #expect(publications == 0)
+        #expect(collection.visibleCells.allSatisfy { ($0 as? TimelineSemanticCollectionCell)?.coverVisibility == nil })
+
+        controller.update(input(scale: .year, latestRequest: 1))
+        let incoming = collection.visibleCells.compactMap { ($0 as? TimelineSemanticCollectionCell)?.coverVisibility }
+        #expect(!incoming.isEmpty)
+        #expect(incoming.allSatisfy { current in !outgoing.contains { $0 === current } })
+        for visibility in incoming {
+            #expect(visibility.isVisible)
+        }
+        subscriptions += incoming.map { visibility in
+            visibility.objectWillChange.sink { publications += 1 }
+        }
+        controller.stop()
+        #expect(publications == 0)
+        withExtendedLifetime(subscriptions) {}
+    }
+
+    @Test @MainActor func coverVisibilityPublishesOnlyLiveVisibilityChanges() {
+        let visibility = TimelineSemanticCoverVisibility(isVisible: false)
+        var publications = 0
+        let subscription = visibility.objectWillChange.sink { publications += 1 }
+        visibility.setVisible(false)
+        #expect(publications == 0)
+        visibility.setVisible(true)
+        #expect(visibility.isVisible)
+        #expect(publications == 1)
+        visibility.setVisible(true)
+        #expect(publications == 1)
+        withExtendedLifetime(subscription) {}
     }
 
     private func date(_ value: String) -> Date {
