@@ -513,7 +513,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
     private var target: TimelineSemanticProjection?
     private var focusAssetIndex = 0
     private var targetOffset: CGFloat = 0
-    private var animator: UIViewPropertyAnimator?
+    private(set) var animator: UIViewPropertyAnimator?
     private var transitionSurface: UIView?
     private var transitionMediaSurface: UIView?
     private var transitionItems: [TransitionItem] = []
@@ -524,7 +524,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
     private var transitionChromeKeysInUse = Set<TransitionChromeKey>()
     private var transitionChromeWarmTask: Task<Void, Never>?
     private var transitionChromeWarmGeneration: UInt64 = 0
-    private var windowExpansionTask: Task<Void, Never>?
+    private(set) var windowExpansionTask: Task<Void, Never>?
     private var olderExpansionRearmOffset: CGFloat?
     private var newerExpansionRearmOffset: CGFloat?
     private var handoffImages: [String: UIImage] = [:]
@@ -1657,7 +1657,10 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
 
     private func finishPresentation() {
         guard !isPresentationCrossfading else { return }
-        animator?.stopAnimation(true)
+        // Explicit finish invokes completions while the animator is stopped.
+        if animator?.state == .active {
+            animator?.stopAnimation(true)
+        }
         animator = nil
         guard let surface = transitionSurface else {
             completePresentationCleanup()
@@ -1697,7 +1700,9 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         if let surface, transitionSurface !== surface {
             return
         }
-        animator?.stopAnimation(true)
+        if animator?.state == .active {
+            animator?.stopAnimation(true)
+        }
         animator = nil
         isPresentationCrossfading = false
         localTransitionTasks.forEach { $0.cancel() }

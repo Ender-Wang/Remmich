@@ -193,11 +193,12 @@ struct TimelineSemanticZoomTests {
         controller.stop()
     }
 
-    @Test(arguments: [false, true])
-    @MainActor func dateHeadersStayAboveTheMediaFadeUntilNativeHandoff(coarser: Bool) async throws {
+    @Test(arguments: [false, true], [false, true])
+    @MainActor func dateHeadersStayAboveTheMediaFadeUntilNativeHandoff(coarser: Bool, interrupted: Bool) throws {
         let assets = (0 ..< 25).map { asset("first-\($0)", "2027-01-01T12:00:00Z") }
             + (0 ..< 25).map { asset("second-\($0)", "2027-01-02T12:00:00Z") }
         let controller = TimelineSemanticCollectionController()
+        defer { controller.stop() }
         controller.update(TimelineSemanticCollectionView(
             catalog: TimelineSemanticCatalog(assets: assets), revision: 1, scale: coarser ? .square : .natural,
             media: MediaLibraryController(), namespace: nil, bottomClearance: 96, topClearance: 90,
@@ -227,13 +228,17 @@ struct TimelineSemanticZoomTests {
         #expect(surface.subviews.first === mediaSurface)
         pinch.testState = .cancelled
         controller.perform(NSSelectorFromString("pinched:"), with: pinch)
-        for _ in 0 ..< 100 {
-            if mediaSurface.alpha == 0 {
-                break
-            }
-            try await Task.sleep(for: .milliseconds(10))
-        }
+        // Drive the two actual animation phases in the same main-actor turn.
+        // A target alpha is not a phase signal: it stays zero after cleanup.
+        let settling = try #require(controller.animator)
+        settling.stopAnimation(false)
+        #expect(settling.state == .stopped)
+        settling.finishAnimation(at: .end)
+        let fade = try #require(controller.animator)
+        #expect(fade !== settling)
+        fade.pauseAnimation()
 
+        #expect(surface.superview === controller.view)
         #expect(surface.alpha == 1)
         #expect(mediaSurface.alpha == 0)
         #expect(headers.allSatisfy { !$0.isHidden && $0.alpha == 1 })
@@ -246,9 +251,16 @@ struct TimelineSemanticZoomTests {
             let frame = collection.convert(native.frame, to: surface)
             #expect(abs(header.frame.minY - frame.minY) < 0.5)
         }
-        controller.stop()
+        if interrupted {
+            controller.stop()
+        } else {
+            fade.stopAnimation(false)
+            #expect(fade.state == .stopped)
+            fade.finishAnimation(at: .end)
+        }
         #expect(surface.superview == nil)
         #expect(nativeHeaders.allSatisfy { $0.alpha == 1 && !$0.contentView.isHidden })
+        #expect(controller.animator == nil)
     }
 
     @Test @MainActor func headerMaterialsKeepOpaqueAncestorsAndMaskTheirCoverage() throws {
@@ -653,6 +665,7 @@ struct TimelineSemanticZoomTests {
     @Test @MainActor func nativeWindowGrowthPreservesVisibleFramesAndCells() async throws {
         let catalog = TimelineSemanticCatalog(assets: (0 ..< 900).map { asset(String(format: "%04d", $0), "2027-01-01T12:00:00Z") })
         let controller = TimelineSemanticCollectionController()
+        defer { controller.stop() }
         controller.update(TimelineSemanticCollectionView(
             catalog: catalog, revision: 1, scale: .natural, media: MediaLibraryController(), namespace: nil,
             bottomClearance: 96, runtime: TimelineSemanticRuntime(), latestRequest: 0, isActive: true,
@@ -682,7 +695,10 @@ struct TimelineSemanticZoomTests {
         let initialCount = collection.numberOfItems(inSection: 0)
         collection.delegate = controller
         controller.scrollViewDidScroll(collection)
-        try await Task.sleep(for: .milliseconds(10))
+        // The queued main-actor expansion yields before installing its window.
+        // Await that operation, rather than assuming a 10 ms scheduling budget.
+        let expansion = try #require(controller.windowExpansionTask)
+        await expansion.value
         collection.layoutIfNeeded()
         var compared = 0
         for path in collection.indexPathsForVisibleItems {
@@ -698,9 +714,9 @@ struct TimelineSemanticZoomTests {
         let expandedCount = collection.numberOfItems(inSection: 0)
         #expect(expandedCount > initialCount)
         controller.scrollViewDidScroll(collection)
-        try await Task.sleep(for: .milliseconds(10))
+        let recheck = try #require(controller.windowExpansionTask)
+        await recheck.value
         #expect(collection.numberOfItems(inSection: 0) == expandedCount)
-        controller.stop()
     }
 
     @Test @MainActor func latestJumpWithCatalogRefreshInstallsOnlyFinalWindow() throws {
