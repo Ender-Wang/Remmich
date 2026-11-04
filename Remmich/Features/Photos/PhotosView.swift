@@ -1590,6 +1590,8 @@ private struct TimelineMemoryCard: View {
     @State private var incomingAsset: TimelineMemoryAssetSummary?
     @State private var coverScales: [String: Double] = [:]
     @State private var coverOpacities: [String: Double] = [:]
+    @State private var coverImages: [String: UIImage] = [:]
+    @State private var crossfadeStartedAt: Date?
     @State private var isPresented = false
     @State private var appliedPreferredAssetID: String?
 
@@ -1616,7 +1618,12 @@ private struct TimelineMemoryCard: View {
     }
 
     private var dominantAsset: TimelineMemoryAssetSummary? {
-        renderedAssets.max { opacity(for: $0) < opacity(for: $1) }
+        if let incomingAsset, let crossfadeStartedAt,
+           Date.now.timeIntervalSince(crossfadeStartedAt) >= TimelineCoverAnimation.fadeDuration / 2
+        {
+            return incomingAsset
+        }
+        return currentAsset
     }
 
     var body: some View {
@@ -1629,17 +1636,14 @@ private struct TimelineMemoryCard: View {
                 ZStack(alignment: .bottomLeading) {
                     ForEach(renderedAssets) { asset in
                         ImmichThumbnail(
-                            descriptor: .init(
-                                assetID: asset.id,
-                                updatedAt: asset.revision,
-                                derivative: .thumbnail,
-                                targetPixels: .init(
-                                    width: Int(width * displayScale),
-                                    height: Int(120 * displayScale)
-                                )
-                            ),
+                            descriptor: coverDescriptor(for: asset),
                             media: media,
-                            contentMode: .fill
+                            contentMode: .fill,
+                            placeholderImage: coverImages[asset.id],
+                            didLoad: { response in
+                                guard renderedAssets.contains(where: { $0.id == asset.id }) else { return }
+                                coverImages[asset.id] = response.image
+                            }
                         )
                         .frame(width: width, height: 120)
                         .opacity(opacity(for: asset))
@@ -1720,6 +1724,11 @@ private struct TimelineMemoryCard: View {
         coverScales[asset.id] ?? 1
     }
 
+    private func coverDescriptor(for asset: TimelineMemoryAssetSummary) -> MediaRequestDescriptor {
+        .init(assetID: asset.id, updatedAt: asset.revision, derivative: .thumbnail,
+              targetPixels: .init(width: Int(width * displayScale), height: Int(120 * displayScale)))
+    }
+
     private func runSlideshow() async {
         guard !memory.assets.isEmpty else { return }
         if !memory.assets.indices.contains(currentIndex) {
@@ -1730,6 +1739,8 @@ private struct TimelineMemoryCard: View {
         withTransaction(transaction) {
             coverScales = currentAsset.map { [$0.id: 1] } ?? [:]
             coverOpacities = currentAsset.map { [$0.id: 1] } ?? [:]
+            coverImages = coverImages.filter { $0.key == currentAsset?.id }
+            crossfadeStartedAt = nil
             incomingAsset = nil
         }
         guard !reduceMotion, memory.assets.count > 1 else { return }
@@ -1739,12 +1750,14 @@ private struct TimelineMemoryCard: View {
             } catch { return }
         }
 
-        var timeBeforeFadeOut = TimelineCoverAnimation.initialHold
+        var shouldStartCurrentZoom = true
         while !Task.isCancelled {
             withTransaction(transaction) {
                 incomingAsset = nil
+                crossfadeStartedAt = nil
                 coverScales = coverScales.filter { $0.key == currentAsset?.id }
                 coverOpacities = coverOpacities.filter { $0.key == currentAsset?.id }
+                coverImages = coverImages.filter { $0.key == currentAsset?.id }
             }
             guard !reduceMotion else { return }
 
@@ -1757,22 +1770,34 @@ private struct TimelineMemoryCard: View {
                 coverOpacities[next.id] = 0
             }
 
-            if timeBeforeFadeOut == TimelineCoverAnimation.initialHold, let currentAsset {
+            if shouldStartCurrentZoom, let currentAsset {
                 withAnimation(.linear(duration: TimelineCoverAnimation.zoomDuration)) {
                     coverScales[currentAsset.id] = TimelineCoverAnimation.zoomScale
                 }
+                shouldStartCurrentZoom = false
             }
             do {
-                try await Task.sleep(for: .seconds(timeBeforeFadeOut))
+                try await Task.sleep(for: .seconds(TimelineCoverAnimation.initialHold))
             } catch { return }
-            if let currentAsset {
-                withAnimation(.linear(duration: TimelineCoverAnimation.fadeDuration)) {
-                    coverOpacities[currentAsset.id] = 0
-                }
+
+            // Do not expose the card background while the incoming thumbnail
+            // loads. Use the same Nuke request/cache as the mounted thumbnail.
+            if coverImages[next.id] == nil {
+                guard let pipeline = media.pipeline,
+                      let request = media.imageRequest(for: coverDescriptor(for: next))
+                else { return }
+                do {
+                    let response = try await pipeline.imageTask(with: request).response
+                    guard !Task.isCancelled else { return }
+                    withTransaction(transaction) {
+                        coverImages[next.id] = response.image
+                    }
+                } catch { return }
             }
-            do {
-                try await Task.sleep(for: .seconds(TimelineCoverAnimation.fadeDuration))
-            } catch { return }
+
+            // The opaque outgoing image stays underneath the incoming fade;
+            // fading both layers out would reveal white/black between them.
+            crossfadeStartedAt = .now
             withAnimation(.linear(duration: TimelineCoverAnimation.fadeDuration)) {
                 coverOpacities[next.id] = 1
             }
@@ -1785,8 +1810,8 @@ private struct TimelineMemoryCard: View {
             withTransaction(transaction) {
                 currentIndex = nextIndex
                 incomingAsset = nil
+                crossfadeStartedAt = nil
             }
-            timeBeforeFadeOut = TimelineCoverAnimation.initialHold
         }
     }
 
@@ -1800,8 +1825,10 @@ private struct TimelineMemoryCard: View {
         withTransaction(transaction) {
             currentIndex = index
             incomingAsset = nil
+            crossfadeStartedAt = nil
             coverScales = [preferredAssetID: 1]
             coverOpacities = [preferredAssetID: 1]
+            coverImages = coverImages.filter { $0.key == preferredAssetID }
             appliedPreferredAssetID = preferredAssetID
         }
     }
