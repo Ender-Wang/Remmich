@@ -53,6 +53,8 @@ For now, follow [Build and run](CONTRIBUTING.md#build-and-run) to build from sou
 - Expand an asset from its thumbnail and return smoothly to its place, including within date-group timelines.
 - Pick a photo from the filmstrip; short rows stay centered, and longer rows follow your selection.
 - Revisit memories above both the Photos and Videos timelines.
+- When today has no memories, check up to three upcoming days and label the earliest available day.
+- Memory-card covers crossfade while keeping their slow zoom.
 - Swipe through memory items and continue to the previous or next memory in the viewer.
 
 ### 🎬 Video playback
