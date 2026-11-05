@@ -1,7 +1,9 @@
 import AVFoundation
+import AVKit
 import Foundation
 import Observation
 import OSLog
+import UIKit
 
 nonisolated enum VideoPlaybackDynamicRange: String, Equatable, Sendable {
     case sdr = "SDR"
@@ -111,6 +113,9 @@ final class VideoPlaybackSession {
     private var seekSequence = 0
     private var bufferingSeekTarget: Double?
     private var lastLoggedBufferSummary: String?
+    @ObservationIgnored private var nowPlayingTitle: String?
+    @ObservationIgnored private var nowPlayingArtwork: Data?
+    @ObservationIgnored private weak var nowPlayingArtworkSource: UIImage?
 
     init(assetID: String, audioSession: any ViewerAudioSessionControlling = ViewerAudioSessionController()) {
         self.assetID = assetID
@@ -121,6 +126,35 @@ final class VideoPlaybackSession {
 
     var isPlaybackIntended: Bool {
         intendedPlayback && !isClosed
+    }
+
+    /// Opted into only by the ordinary full viewer, never muted previews.
+    func updateNowPlayingTitle(filename: String?, caption: String?) {
+        guard !isClosed else { return }
+        let title = ViewerVideoNowPlayingMetadata.title(filename: filename, caption: caption)
+        guard nowPlayingTitle != title else { return }
+        nowPlayingTitle = title
+        if let item = player.currentItem {
+            applyNowPlayingMetadata(to: item)
+        }
+    }
+
+    func updateNowPlayingArtwork(_ image: UIImage, onlyIfMissing: Bool = false) {
+        guard !isClosed, nowPlayingTitle != nil,
+              !onlyIfMissing || nowPlayingArtwork == nil,
+              nowPlayingArtworkSource !== image,
+              let data = ViewerVideoNowPlayingMetadata.artwork(from: image)
+        else { return }
+        nowPlayingArtworkSource = image
+        nowPlayingArtwork = data
+        if let item = player.currentItem {
+            applyNowPlayingMetadata(to: item)
+        }
+    }
+
+    private func applyNowPlayingMetadata(to item: AVPlayerItem) {
+        guard let nowPlayingTitle else { return }
+        item.externalMetadata = ViewerVideoNowPlayingMetadata.items(title: nowPlayingTitle, artwork: nowPlayingArtwork)
     }
 
     func prepare(using media: MediaLibraryController, autoplay: Bool = true) async {
@@ -148,6 +182,7 @@ final class VideoPlaybackSession {
             }
 
             let item = AVPlayerItem(asset: source.asset)
+            applyNowPlayingMetadata(to: item)
             item.preferredForwardBufferDuration = 10
             streamSource = source
             playerItem = item
@@ -280,6 +315,9 @@ final class VideoPlaybackSession {
         audioActivationTask = nil
         saveCurrentPosition()
         resetItem()
+        nowPlayingTitle = nil
+        nowPlayingArtwork = nil
+        nowPlayingArtworkSource = nil
         audioSession.deactivate()
     }
 

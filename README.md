@@ -51,6 +51,8 @@ For now, follow [Build and run](CONTRIBUTING.md#build-and-run) to build from sou
 
 - View photos with zoom, Live Photo motion playback, and detailed asset information.
 - Expand an asset from its thumbnail and return smoothly to its place, including within date-group timelines.
+- Long-press a timeline asset for a centered preview; tap outside or use the Back gesture to dismiss it.
+- Preview Live Photos and videos once with muted playback; tap to pause, resume, or replay. Share and Download in the preview panel are reserved for future export support.
 - Pick a photo from the filmstrip; short rows stay centered, and longer rows follow your selection.
 - Revisit memories above both the Photos and Videos timelines.
 - When today has no memories, check up to three upcoming days and label the earliest available day.
@@ -63,6 +65,9 @@ For now, follow [Build and run](CONTRIBUTING.md#build-and-run) to build from sou
 - Play, pause, and seek in portrait and landscape layouts, with visible buffering status.
 - Double-tap the video to play or pause; single-tap to show or hide playback controls.
 - Continue a playing video in native Picture in Picture when you go Home, with automatic PiP enabled in iOS.
+- Return the same video to its inline player when reopening Remmich from the background.
+- Use iOS Now Playing controls for full-viewer videos; Live Photo motion and muted timeline previews stay separate.
+- See the video caption or filename and its poster in system playback UI, with Remmich identified in the title.
 - See an animated loading logo from the opening transition until the first video frame. It fades in during preparation and fades out when playback is ready.
 - The player area stays black during opening and playback in both themes; surrounding app chrome and Info follow the app theme.
 

@@ -13,6 +13,7 @@ struct VideoPictureInPictureTests {
 
         #expect(container.playerController.allowsPictureInPicturePlayback)
         #expect(container.playerController.canStartPictureInPictureAutomaticallyFromInline)
+        #expect(container.playerController.updatesNowPlayingInfoCenter)
         #expect(!container.playerController.showsPlaybackControls)
         #expect(container.playerController.parent === container)
     }
@@ -131,6 +132,95 @@ struct VideoPictureInPictureTests {
         #expect(audio.deactivationCount == 1)
     }
 
+    @Test(arguments: [false, true]) func foregroundReturnPreservesThePlayerAndPlaybackIntent(paused: Bool) async throws {
+        let window = try await makePlayerWindow()
+        let container = ViewerVideoContainerViewController()
+        let session = VideoPlaybackSession(assetID: "video", audioSession: RecordingVideoAudioSession())
+        let item = AVPlayerItem(asset: AVMutableComposition())
+        session.player.replaceCurrentItem(with: item)
+        container.playerController.player = session.player
+        window.rootViewController = container
+        window.isHidden = false
+        container.view.layoutIfNeeded()
+        let coordinator = ViewerVideoControllerHost.Coordinator(readyForDisplayChanged: { _ in })
+        coordinator.observe(container.playerController, session: session)
+        defer {
+            coordinator.invalidate()
+            session.close()
+            window.isHidden = true
+        }
+        if paused {
+            session.pause()
+        }
+
+        for _ in 0 ..< 2 {
+            coordinator.playerViewControllerWillStartPictureInPicture(container.playerController)
+            coordinator.scenePhaseChanged(.background)
+            coordinator.playerViewControllerDidStartPictureInPicture(container.playerController)
+            coordinator.scenePhaseChanged(.inactive)
+            #expect(container.playerController.allowsPictureInPicturePlayback)
+            coordinator.scenePhaseChanged(.active)
+            #expect(!container.playerController.allowsPictureInPicturePlayback)
+            #expect(session.isPictureInPictureEngaged)
+            #expect(container.playerController.player === session.player)
+            #expect(session.player.currentItem === item)
+            #expect(session.isPlaybackIntended == !paused)
+
+            coordinator.playerViewControllerDidStopPictureInPicture(container.playerController)
+            #expect(container.playerController.allowsPictureInPicturePlayback)
+            #expect(!session.isPictureInPictureEngaged)
+            #expect(session.isPlaybackIntended == !paused)
+        }
+    }
+
+    @Test func foregroundReturnWaitsForPictureInPictureStartupAndAttachment() async throws {
+        let window = try await makePlayerWindow()
+        let container = ViewerVideoContainerViewController()
+        container.loadViewIfNeeded()
+        let session = VideoPlaybackSession(assetID: "video", audioSession: RecordingVideoAudioSession())
+        container.playerController.player = session.player
+        let coordinator = ViewerVideoControllerHost.Coordinator(readyForDisplayChanged: { _ in })
+        coordinator.observe(container.playerController, session: session)
+        defer {
+            coordinator.invalidate()
+            session.close()
+            window.isHidden = true
+        }
+
+        coordinator.playerViewControllerWillStartPictureInPicture(container.playerController)
+        coordinator.scenePhaseChanged(.background)
+        coordinator.scenePhaseChanged(.active)
+        #expect(container.playerController.allowsPictureInPicturePlayback)
+        coordinator.playerViewControllerDidStartPictureInPicture(container.playerController)
+        #expect(container.playerController.allowsPictureInPicturePlayback)
+        window.rootViewController = container
+        window.isHidden = false
+        container.view.layoutIfNeeded()
+        coordinator.scenePhaseChanged(.active)
+        #expect(!container.playerController.allowsPictureInPicturePlayback)
+        coordinator.playerViewControllerDidStopPictureInPicture(container.playerController)
+
+        // An inactive interruption alone must not terminate foreground PiP.
+        coordinator.playerViewControllerWillStartPictureInPicture(container.playerController)
+        coordinator.playerViewControllerDidStartPictureInPicture(container.playerController)
+        coordinator.scenePhaseChanged(.inactive)
+        coordinator.scenePhaseChanged(.active)
+        #expect(container.playerController.allowsPictureInPicturePlayback)
+
+        coordinator.playerViewControllerDidStopPictureInPicture(container.playerController)
+        // A background visit without PiP must not leave a stale return request.
+        coordinator.scenePhaseChanged(.background)
+        coordinator.scenePhaseChanged(.active)
+        coordinator.playerViewControllerWillStartPictureInPicture(container.playerController)
+        coordinator.playerViewControllerDidStartPictureInPicture(container.playerController)
+        #expect(container.playerController.allowsPictureInPicturePlayback)
+
+        session.close()
+        coordinator.scenePhaseChanged(.background)
+        coordinator.scenePhaseChanged(.active)
+        #expect(container.playerController.allowsPictureInPicturePlayback)
+    }
+
     @Test func restoreReturnsToTheSameAttachedPlayerAndRejectsClosedSessions() async throws {
         for _ in 0 ..< 100 {
             if UIApplication.shared.connectedScenes.contains(where: { $0 is UIWindowScene }) {
@@ -165,6 +255,20 @@ struct VideoPictureInPictureTests {
 
         #expect(replies.withLock { $0 } == [true, false])
     }
+}
+
+@MainActor
+private func makePlayerWindow() async throws -> UIWindow {
+    for _ in 0 ..< 100 {
+        if UIApplication.shared.connectedScenes.contains(where: { $0 is UIWindowScene }) {
+            break
+        }
+        try await Task.sleep(for: .milliseconds(20))
+    }
+    let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+    let window = UIWindow(windowScene: scene)
+    window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+    return window
 }
 
 private final nonisolated class RecordingVideoAudioSession: ViewerAudioSessionControlling {
