@@ -134,6 +134,12 @@ Unloaded date cards show a small static copy of the selected app logo over the t
 
 The session retains its playback audio configuration throughout PiP, including a pause from native controls, so those controls can resume playback in the background. Stopping PiP while the app is backgrounded pauses playback and releases audio; terminal viewer dismissal always closes the session. [VideoPictureInPictureTests](RemmichTests/VideoPictureInPictureTests.swift) exercises native configuration, delegate restoration, audio ownership, and cleanup. The actual Home gesture, system PiP controls, and automatic-PiP setting require physical-device verification; see [Apple's standard-player guidance](https://developer.apple.com/documentation/avkit/adopting-picture-in-picture-in-a-standard-player).
 
+The host tracks its own scene's background entry and requests inline return when that scene becomes active again. It waits for PiP startup and the same open player to be attached to a parent/window, then disables `allowsPictureInPicturePlayback` until the stop/failure callback restores eligibility. This follows [Apple's AVKit guidance](https://developer.apple.com/videos/play/wwdc2019/503/) without replacing the player/item, seeking, or requesting play. Inactive-only interruptions do not trigger return, and activation without PiP clears the pending request. Attachment is rechecked on host updates and PiP-start completion. A single diagnostic marks the accepted foreground-return request. Focused fixtures cover startup/attachment races, paused playback intent, player/item identity, a second PiP cycle, a background visit without PiP, and closed-session rejection; these additions have not been executed locally.
+
+Only the ordinary-video `AVPlayerViewController` enables `updatesNowPlayingInfoCenter`, letting AVKit own system playback state and remote controls. Live Photo motion and muted previews use raw player layers and never mount this host. Do not add app-global Now Playing publication or cleanup to shared `VideoPlaybackSession`, which also serves previews.
+
+The maintainer confirmed foreground PiP return and native system controls on device; capture `3a22e70a-3ffe-43e6-8d81-f14d4d386537` contains two accepted return requests matching foreground cycles. The full app and test bundles compile successfully in CI; runtime fixtures have not been executed locally.
+
 ### Background library sync
 
 [LibraryBackgroundSyncCoordinator](Remmich/App/LibraryBackgroundSyncCoordinator.swift) registers two native tasks through the app delegate before launch completes:
