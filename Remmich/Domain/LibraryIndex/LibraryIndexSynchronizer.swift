@@ -17,6 +17,8 @@ nonisolated struct LibraryIndexSyncResult: Sendable {
     let hasMoreHistory: Bool
     let cleanup: LibraryIndexGenerationCleanup
     var hasPendingBucketChanges = false
+    var removedBucketKeys: [String] = []
+    var removedBucketAssetCount = 0
 
     var isComplete: Bool {
         !hasMoreHistory && !hasPendingBucketChanges
@@ -111,6 +113,9 @@ actor LibraryIndexSynchronizer {
             let summaries = try await source.bucketSummaries(query: .init())
                 .sorted { $0.id.rawValue > $1.id.rawValue }
             let expectedCount = summaries.reduce(0) { $0 + $1.assetCount }
+            let serverBucketKeys = Set(summaries.map(\.id.rawValue))
+            let removedBuckets = Set(previous?.assets.map(\.bucketKey) ?? []).subtracting(serverBucketKeys)
+            let removedAssetCount = previous?.assets.count { removedBuckets.contains($0.bucketKey) } ?? 0
             let selected = bucketsToFetch(
                 summaries: summaries,
                 previous: previous,
@@ -123,8 +128,12 @@ actor LibraryIndexSynchronizer {
             // Refreshing a bucket does not remove its accepted local records.
             // Replace its contribution only after its new response arrives.
             let acceptedBuckets = Dictionary(grouping: fullReconciliation ? [] : previous?.assets ?? [], by: \.bucketKey)
-            var progressCounts = Self.progress(from: fullReconciliation ? [] : previous?.assets ?? [], expectedAssetCount: expectedCount)
-            var replacements: [String: [LibraryIndexAssetRecord]] = [:]
+            let retainedAssets = previous?.assets.filter { !removedBuckets.contains($0.bucketKey) } ?? []
+            var progressCounts = Self.progress(from: fullReconciliation ? [] : retainedAssets, expectedAssetCount: expectedCount)
+            // The complete summary response can omit months whose last asset
+            // was removed. Empty replacements retire those copied local rows
+            // only after every requested bucket has successfully loaded.
+            var replacements = Dictionary(uniqueKeysWithValues: removedBuckets.map { ($0, [LibraryIndexAssetRecord]()) })
             for summary in selected {
                 try Task.checkCancellation()
                 let assets = try await source.assets(in: summary.id, query: .init())
@@ -145,7 +154,7 @@ actor LibraryIndexSynchronizer {
                 try await store.beginGeneration(scope: scope)
             }
             try await store.removeAssets(
-                in: Set(selected.map(\.id.rawValue)),
+                in: Set(replacements.keys),
                 generation: generation,
                 scope: scope
             )
@@ -168,6 +177,7 @@ actor LibraryIndexSynchronizer {
             let nextCursor = fullReconciliation ? nil : summaries
                 .first { !Set(stagedAssets.map(\.bucketKey)).contains($0.id.rawValue) }?
                 .id.rawValue
+            try Task.checkCancellation()
             let cleanup = try await store.acceptGeneration(
                 generation,
                 watermark: stagedAssets.map(\.updatedAt).max(),
@@ -185,7 +195,9 @@ actor LibraryIndexSynchronizer {
                 expectedAssetCount: expectedCount,
                 hasMoreHistory: nextCursor != nil,
                 cleanup: cleanup,
-                hasPendingBucketChanges: hasPendingBucketChanges
+                hasPendingBucketChanges: hasPendingBucketChanges,
+                removedBucketKeys: removedBuckets.sorted(),
+                removedBucketAssetCount: removedAssetCount
             )
         } catch {
             if !(error is CancellationError) {

@@ -421,6 +421,93 @@ struct LibraryIndexSynchronizationTests {
         #expect(try await store.snapshot(scope: scope)?.assets.map(\.id) == ["kept"])
     }
 
+    @Test(arguments: ["incremental", "recent-only", "historical"], ["2026-11-01", "2020-01-01"])
+    func synchronizationRetiresAnEntireVanishedMonth(mode: String, vanishedMonth: String) async throws {
+        let fixture = try IndexFixture()
+        defer { fixture.cleanup() }
+        let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        let kept = Self.asset(id: "kept", bucket: "2026-10-01")
+        let source = IndexSource(buckets: [
+            "2026-10-01": [kept],
+            vanishedMonth: [Self.asset(id: "removed-one", bucket: vanishedMonth),
+                            Self.asset(id: "removed-two", bucket: vanishedMonth),
+                            Self.asset(id: "removed-video", bucket: vanishedMonth, mediaKind: .video)],
+        ])
+        let synchronizer = LibraryIndexSynchronizer(source: source, store: store, batchSize: 1)
+        _ = try await synchronizer.fullSyncAndVerify(scope: Self.scope)
+        let otherSession = AccountSession(apiURL: AccountSession.fixture.apiURL, accessToken: "other-token", userID: "other-user",
+                                          userEmail: "other@example.com", name: "Other", isAdmin: false,
+                                          serverVersion: AccountSession.fixture.serverVersion)
+        let otherScope = MediaAccountScope(session: otherSession)
+        _ = try await synchronizer.fullSyncAndVerify(scope: otherScope)
+        let otherBefore = try #require(try await store.snapshot(scope: otherScope))
+        await source.replaceBuckets(with: ["2026-10-01": [kept]])
+
+        let result = if mode == "historical" {
+            try await synchronizer.resumeHistorical(scope: Self.scope)
+        } else {
+            try await synchronizer.synchronizeRecent(scope: Self.scope, recentOnly: mode == "recent-only")
+        }
+        let snapshot = try #require(try await store.snapshot(scope: Self.scope))
+        #expect(result.indexedAssetCount == 1)
+        #expect(result.expectedAssetCount == 1)
+        #expect(result.indexedPhotoCount == 1)
+        #expect(result.indexedVideoCount == 0)
+        #expect(result.removedBucketKeys == [vanishedMonth])
+        #expect(result.removedBucketAssetCount == 3)
+        #expect(result.isComplete)
+        #expect(snapshot.assets.map(\.id) == ["kept"])
+        #expect(snapshot.syncState.indexedAssetCount == 1)
+        #expect(!snapshot.groups.isEmpty)
+        #expect(snapshot.groups.allSatisfy { $0.assetCount == 1 && !$0.owningBucketKeys.contains(vanishedMonth) })
+        let otherAfter = try #require(try await store.snapshot(scope: otherScope))
+        #expect(otherAfter.generation == otherBefore.generation)
+        #expect(otherAfter.assets == otherBefore.assets)
+        #expect(otherAfter.groups == otherBefore.groups)
+    }
+
+    @Test func emptyServerLibraryRetiresAllPreviouslyIndexedMonths() async throws {
+        let fixture = try IndexFixture()
+        defer { fixture.cleanup() }
+        let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        let source = IndexSource(buckets: ["2026-10-01": [Self.asset(id: "removed", bucket: "2026-10-01")]])
+        let synchronizer = LibraryIndexSynchronizer(source: source, store: store)
+        _ = try await synchronizer.fullSyncAndVerify(scope: Self.scope)
+        await source.replaceBuckets(with: [:])
+
+        let result = try await synchronizer.synchronizeRecent(scope: Self.scope)
+        let snapshot = try #require(try await store.snapshot(scope: Self.scope))
+        #expect(result.indexedAssetCount == 0 && result.expectedAssetCount == 0)
+        #expect(result.removedBucketAssetCount == 1)
+        #expect(result.isComplete)
+        #expect(snapshot.assets.isEmpty && snapshot.groups.isEmpty)
+    }
+
+    @Test(arguments: [false, true]) func failedOrCancelledSyncDoesNotPromoteVanishedMonthRemoval(cancel: Bool) async throws {
+        let fixture = try IndexFixture()
+        defer { fixture.cleanup() }
+        let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        let source = IndexSource(buckets: [
+            "2026-10-01": [Self.asset(id: "kept", bucket: "2026-10-01")],
+            "2020-01-01": [Self.asset(id: "removed", bucket: "2020-01-01")],
+        ])
+        _ = try await LibraryIndexSynchronizer(source: source, store: store).fullSyncAndVerify(scope: Self.scope)
+        let before = try #require(try await store.snapshot(scope: Self.scope))
+        let failing = FailedBucketContentsSource(cancel: cancel)
+        do {
+            _ = try await LibraryIndexSynchronizer(source: failing, store: store).synchronizeRecent(scope: Self.scope)
+            Issue.record("The failed bucket fetch unexpectedly succeeded")
+        } catch is CancellationError {
+            #expect(cancel)
+        } catch {
+            #expect(!cancel)
+        }
+        let after = try #require(try await store.snapshot(scope: Self.scope))
+        #expect(after.generation == before.generation)
+        #expect(after.assets == before.assets)
+        #expect(after.groups == before.groups)
+    }
+
     @Test func warmLaunchReusesAcceptedHistoryAndRepairsChangedMonth() async throws {
         let fixture = try IndexFixture()
         defer { fixture.cleanup() }
@@ -1193,6 +1280,25 @@ private actor IndexSource: TimelineReading {
     }
 
     func memories() -> [TimelineMemorySummary] {
+        []
+    }
+}
+
+private struct FailedBucketContentsSource: TimelineReading {
+    let cancel: Bool
+
+    func bucketSummaries(query _: TimelineQuery) async throws -> [TimelineBucketSummary] {
+        [.init(id: .init(rawValue: "2026-10-01"), assetCount: 1)]
+    }
+
+    func assets(in _: TimelineBucketID, query _: TimelineQuery) async throws -> [TimelineAssetSummary] {
+        if cancel {
+            throw CancellationError()
+        }
+        throw URLError(.notConnectedToInternet)
+    }
+
+    func memories() async throws -> [TimelineMemorySummary] {
         []
     }
 }
