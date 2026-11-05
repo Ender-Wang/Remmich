@@ -1,5 +1,6 @@
 import AVFoundation
 import Nuke
+import NukeUI
 import Observation
 import SwiftUI
 
@@ -24,12 +25,22 @@ final class TimelineAssetPreviewSession: Identifiable {
     let asset: TimelineAssetSummary
     let image: UIImage?
     let playback: VideoPlaybackSession?
+    private(set) var previewImage: UIImage?
     private(set) var wantsPlayback = true
     private var preparationStarted = false
     private(set) var isDismissing = false
     private(set) var isOpeningComplete = false
     var transitionProgress: CGFloat = 0
     var transitionTarget: AssetViewerDismissalTarget?
+
+    var acceptsInput: Bool {
+        !isDismissing
+    }
+
+    func receivePreviewImage(_ image: UIImage) {
+        guard !isDismissing else { return }
+        previewImage = image
+    }
 
     var isPlaybackIntended: Bool {
         !isDismissing && (preparationStarted ? playback?.isPlaybackIntended == true : wantsPlayback)
@@ -123,6 +134,7 @@ struct TimelineAssetPreview: View {
     @Environment(\.displayScale) private var displayScale
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ScaledMetric(relativeTo: .body) private var scaledActionHeight: CGFloat = 48
+    @State private var imageRetryID = 0
     let session: TimelineAssetPreviewSession
     let media: MediaLibraryController
     let viewport: CGRect
@@ -241,21 +253,53 @@ struct TimelineAssetPreview: View {
     }
 
     private func previewContent(pixels: MediaPixelSize, derivative: MediaDerivative) -> some View {
-        ZStack {
-            if session.isOpeningComplete {
-                ImmichThumbnail(
-                    descriptor: .init(assetID: session.asset.id, updatedAt: session.asset.thumbnailRevision,
-                                      derivative: derivative, targetPixels: pixels),
-                    media: media, contentMode: .fit, showsBackground: false,
-                    placeholderImage: session.image
-                )
-            } else if let image = session.image {
+        let descriptor = MediaRequestDescriptor(assetID: session.asset.id, updatedAt: session.asset.thumbnailRevision,
+                                                derivative: derivative, targetPixels: pixels)
+        let request = session.isOpeningComplete ? media.imageRequest(for: descriptor) : nil
+        return ZStack {
+            // Keep the hero pixels mounted through loading and dismissal. A new
+            // derivative fades over this base instead of replacing its view.
+            if let image = session.image {
                 Image(uiImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
             } else {
                 RemmichLoadingView(label: "Loading preview", isAnimating: false)
             }
+            if let image = session.previewImage {
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .id(ObjectIdentifier(image))
+                    .transition(.opacity)
+            }
+            LazyImage(request: request) { state in
+                if state.error != nil, request != nil, request?.options.contains(.returnCacheDataDontLoad) != true {
+                    Button {
+                        imageRetryID += 1
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.title3.weight(.semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Retry image")
+                } else {
+                    Color.clear
+                }
+            }
+            .pipeline(media.pipeline ?? .shared)
+            .onCompletion { result in
+                guard case let .success(response) = result else { return }
+                // Memory-cache completion can be synchronous inside a view
+                // update. Publish later, with the same fade as a network hit.
+                Task { @MainActor in
+                    withAnimation(.easeOut(duration: 0.18)) {
+                        session.receivePreviewImage(response.image)
+                    }
+                }
+            }
+            .onDisappear(.cancel)
+            .id(imageRetryID)
             if let playback = session.playback {
                 SilentPreviewPlayer(player: playback.player)
                     .allowsHitTesting(false)
@@ -324,14 +368,16 @@ private struct SilentPreviewPlayer: UIViewRepresentable {
             isOpaque = false
             playerLayer.videoGravity = .resizeAspect
             playerLayer.player = player
-            playerLayer.opacity = 0
+            alpha = 0
             readiness = playerLayer.observe(\.isReadyForDisplay, options: [.initial, .new]) { layer, _ in
                 let ready = layer.isReadyForDisplay
                 Task { @MainActor [weak self] in
-                    guard let self, ready else { return }
+                    guard let self, ready, alpha == 0 else { return }
                     // Retain readiness on pause/end; never reveal a blank layer
                     // during the preview's closing animation.
-                    playerLayer.opacity = 1
+                    UIView.animate(withDuration: 0.18) {
+                        self.alpha = 1
+                    }
                 }
             }
         }

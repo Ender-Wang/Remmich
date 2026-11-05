@@ -469,10 +469,13 @@ struct PhotosView: View {
         }
         .navigationTitle(navigationTitle)
         .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(assetPreview != nil)
-        .nativeEdgeBackAction(active: viewerRoute == nil && (assetPreview != nil || !navigationPath.isEmpty || libraryRange != .all), action: navigateBack)
+        .navigationBarBackButtonHidden(hasInteractivePreview)
+        .nativeEdgeBackAction(active: viewerRoute == nil && (hasInteractivePreview || !navigationPath.isEmpty || libraryRange != .all), action: navigateBack)
         .environment(\.timelineAssetPreviewAction, previewAction)
         .overlay { previewOverlay }
+        .sensoryFeedback(.impact(weight: .light, intensity: 0.5), trigger: assetPreview?.id) { _, new in
+            new != nil
+        }
         .fullScreenCover(item: fullScreenViewerRoute) { route in
             assetViewer(route: route, opensFromSource: true)
         }
@@ -503,7 +506,7 @@ struct PhotosView: View {
         }
         .toolbarBackground(navigationPath.isEmpty ? .hidden : .visible, for: .navigationBar)
         .toolbar {
-            if assetPreview == nil, !navigationPath.isEmpty || libraryRange != .all {
+            if !hasInteractivePreview, !navigationPath.isEmpty || libraryRange != .all {
                 ToolbarItem(placement: .topBarLeading) {
                     Button(action: navigateBack) {
                         Label("Back", systemImage: "chevron.backward")
@@ -560,10 +563,11 @@ struct PhotosView: View {
             }
         }
         .onChange(of: scrollToLatestRequest) {
-            if assetPreview != nil {
+            if hasInteractivePreview {
                 dismissPreview()
                 return
             }
+            retireDismissedPreview()
             if memoryOverlayRoute != nil {
                 memoryViewerDismissalRequest &+= 1
                 return
@@ -1025,6 +1029,7 @@ struct PhotosView: View {
                                          viewport: CGRect(x: 0, y: top, width: available.width, height: available.height),
                                          globalOrigin: globalFrame.origin)
                         .accessibilityAction(.escape) { dismissPreview() }
+                        .accessibilityHidden(assetPreview.isDismissing)
                         .id(assetPreview.id)
                         .transition(.identity)
                         .zIndex(1)
@@ -1032,12 +1037,23 @@ struct PhotosView: View {
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
         }
-        .allowsHitTesting(assetPreview != nil)
+        .allowsHitTesting(hasInteractivePreview)
+    }
+
+    private var hasInteractivePreview: Bool {
+        assetPreview?.acceptsInput == true
+    }
+
+    private func retireDismissedPreview() {
+        guard let preview = assetPreview, preview.isDismissing else { return }
+        preview.close()
+        assetPreview = nil
     }
 
     private var previewAction: TimelineAssetPreviewAction {
         TimelineAssetPreviewAction { asset, image in
-            guard viewerRoute == nil, assetPreview == nil, isTabContentActivated, scenePhase == .active else { return }
+            guard viewerRoute == nil, !hasInteractivePreview, isTabContentActivated, scenePhase == .active else { return }
+            retireDismissedPreview()
             if let scope = navigationPath.last {
                 assetPreview = TimelineAssetPreviewSession(
                     asset: asset, image: scopedAssetTransitions.transitionImage(for: asset, scope: scope) ?? image,
@@ -1081,10 +1097,11 @@ struct PhotosView: View {
     }
 
     private func navigateBack() {
-        if assetPreview != nil {
+        if hasInteractivePreview {
             dismissPreview()
             return
         }
+        retireDismissedPreview()
         // Swapping an asset grid or grouped catalog back to its parent can
         // publish hundreds of visibility changes. Keep that structural swap
         // atomic instead of implicitly animating every outgoing and incoming
@@ -1383,7 +1400,8 @@ struct PhotosView: View {
     }
 
     private func presentViewer(_ route: AssetViewerRoute) {
-        guard assetPreview == nil else { return }
+        guard !hasInteractivePreview else { return }
+        retireDismissedPreview()
         switch route.origin {
         case let .scoped(scope, _):
             viewerSourceTarget = scopedAssetTransitions.target(assetID: route.selectedAsset.id, scope: scope)

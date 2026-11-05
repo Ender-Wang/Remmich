@@ -105,7 +105,9 @@ struct TimelineAssetPreviewTests {
 
     @Test @MainActor func dismissalRejectsDelayedPreparationAndResume() async {
         let session = TimelineAssetPreviewSession(asset: asset(video: false, live: true), image: nil)
+        #expect(session.acceptsInput)
         session.beginDismissal()
+        #expect(!session.acceptsInput)
         session.completeOpening()
         #expect(!session.isOpeningComplete)
         await session.prepare(using: MediaLibraryController())
@@ -116,6 +118,25 @@ struct TimelineAssetPreviewTests {
         session.close()
         session.close()
         #expect(session.playback?.isClosed == true)
+    }
+
+    @Test @MainActor func dismissalRetainsDisplayedPixelsAndRejectsLateImageDelivery() {
+        let thumbnail = UIImage()
+        let preview = UIImage()
+        let lateImage = UIImage()
+        let session = TimelineAssetPreviewSession(asset: asset(video: false, live: false), image: thumbnail)
+        session.completeOpening()
+        session.receivePreviewImage(preview)
+        #expect(session.image === thumbnail)
+        #expect(session.previewImage === preview)
+
+        session.beginDismissal()
+        session.receivePreviewImage(lateImage)
+        #expect(session.image === thumbnail)
+        #expect(session.previewImage === preview)
+        session.close()
+        session.receivePreviewImage(lateImage)
+        #expect(session.previewImage === preview)
     }
 
     @Test @MainActor func motionPreparationWaitsForOpeningCompletion() async {
