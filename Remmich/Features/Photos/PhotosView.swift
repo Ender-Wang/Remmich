@@ -439,7 +439,7 @@ struct PhotosView: View {
         self.showAccount = showAccount
     }
 
-    var body: some View {
+    private var timelineContent: some View {
         ZStack {
             switch store.loadState {
             case .idle, .loading:
@@ -526,123 +526,127 @@ struct PhotosView: View {
                 showAccount()
             }
         }
-        .onAppear {
-            viewportRuntime.isTimelineActive = isTimelineActive
-            rotationState?.setVisualHandoffEligible(
-                false,
-                for: tabDestination
-            )
-            media.beginTimelinePresentation()
-            if isTimelineActive {
-                media.beginTimelineContentPresentation(contentName)
-            }
-        }
-        .task { await store.load() }
-        .task(id: store.semanticContentRevision) {
-            let revision = store.semanticContentRevision
-            let assets = store.semanticAssetsSnapshot()
-            let build = Task.detached(priority: .userInitiated) {
-                TimelineSemanticCatalog(assets: assets)
-            }
-            let catalog = await withTaskCancellationHandler {
-                await build.value
-            } onCancel: {
-                build.cancel()
-            }
-            guard !Task.isCancelled, revision == store.semanticContentRevision else { return }
-            semanticCatalog = catalog
-            semanticCatalogRevision = revision
-        }
-        .onChange(of: isTimelineActive) { _, isVisible in
-            viewportRuntime.isTimelineActive = isVisible
-            // The collection performs deterministic rotation directly. It does
-            // not register for the retired SwiftUI scroll-settlement gate.
-            rotationState?.setVisualHandoffEligible(false, for: tabDestination)
-            if isVisible {
-                media.beginTimelineContentPresentation(contentName)
-            }
-        }
-        .onChange(of: scrollToLatestRequest) {
-            if hasInteractivePreview {
-                dismissPreview()
-                return
-            }
-            retireDismissedPreview()
-            if memoryOverlayRoute != nil {
-                memoryViewerDismissalRequest &+= 1
-                return
-            }
-            semanticLatestTask?.cancel()
-            semanticLatestTask = Task { @MainActor in
-                defer { store.completeJump(); semanticLatestTask = nil }
-                guard let newest = store.bucketSummaries.first?.id,
-                      await store.prepareJump(to: newest), !Task.isCancelled else { return }
-                if store.semanticAssetsSnapshot().isEmpty {
-                    await store.loadOlderSemanticPage()
+    }
+
+    var body: some View {
+        timelineContent
+            .onAppear {
+                viewportRuntime.isTimelineActive = isTimelineActive
+                rotationState?.setVisualHandoffEligible(
+                    false,
+                    for: tabDestination
+                )
+                media.beginTimelinePresentation()
+                if isTimelineActive {
+                    media.beginTimelineContentPresentation(contentName)
                 }
+            }
+            .task { await store.load() }
+            .task(id: store.semanticContentRevision) {
                 let revision = store.semanticContentRevision
                 let assets = store.semanticAssetsSnapshot()
-                let build = Task.detached(priority: .userInitiated) { TimelineSemanticCatalog(assets: assets) }
-                let catalog = await withTaskCancellationHandler { await build.value } onCancel: { build.cancel() }
-                guard !Task.isCancelled else { return }
-                var transaction = Transaction(animation: nil)
-                transaction.disablesAnimations = true
-                withTransaction(transaction) {
-                    if revision >= semanticCatalogRevision {
-                        semanticCatalog = catalog
-                        semanticCatalogRevision = revision
-                    }
-                    navigationPath = []
-                    libraryRange = .all
-                    semanticLatestRequest &+= 1
+                let build = Task.detached(priority: .userInitiated) {
+                    TimelineSemanticCatalog(assets: assets)
+                }
+                let catalog = await withTaskCancellationHandler {
+                    await build.value
+                } onCancel: {
+                    build.cancel()
+                }
+                guard !Task.isCancelled, revision == store.semanticContentRevision else { return }
+                semanticCatalog = catalog
+                semanticCatalogRevision = revision
+            }
+            .onChange(of: isTimelineActive) { _, isVisible in
+                viewportRuntime.isTimelineActive = isVisible
+                // The collection performs deterministic rotation directly. It does
+                // not register for the retired SwiftUI scroll-settlement gate.
+                rotationState?.setVisualHandoffEligible(false, for: tabDestination)
+                if isVisible {
+                    media.beginTimelineContentPresentation(contentName)
                 }
             }
-        }
-        .onChange(of: requestedLibraryRange, initial: true) { _, requestedLibraryRange in
-            guard let requestedLibraryRange else { return }
-            dismissPreview()
-            navigationPath.removeAll()
-            libraryRange = requestedLibraryRange.range
-            requestedLibraryRangeHandled()
-        }
-        .onChange(of: libraryRange, initial: true) { _, range in
-            setSemanticMemoryScaleVisible(range == .all)
-        }
-        .onChange(of: isTabContentActivated) { _, active in
-            if !active {
-                dismissPreview()
+            .onChange(of: scrollToLatestRequest) {
+                if hasInteractivePreview {
+                    dismissPreview()
+                    return
+                }
+                retireDismissedPreview()
+                if memoryOverlayRoute != nil {
+                    memoryViewerDismissalRequest &+= 1
+                    return
+                }
+                semanticLatestTask?.cancel()
+                semanticLatestTask = Task { @MainActor in
+                    defer { store.completeJump(); semanticLatestTask = nil }
+                    guard let newest = store.bucketSummaries.first?.id,
+                          await store.prepareJump(to: newest), !Task.isCancelled else { return }
+                    if store.semanticAssetsSnapshot().isEmpty {
+                        await store.loadOlderSemanticPage()
+                    }
+                    let revision = store.semanticContentRevision
+                    let assets = store.semanticAssetsSnapshot()
+                    let build = Task.detached(priority: .userInitiated) { TimelineSemanticCatalog(assets: assets) }
+                    let catalog = await withTaskCancellationHandler { await build.value } onCancel: { build.cancel() }
+                    guard !Task.isCancelled else { return }
+                    var transaction = Transaction(animation: nil)
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) {
+                        if revision >= semanticCatalogRevision {
+                            semanticCatalog = catalog
+                            semanticCatalogRevision = revision
+                        }
+                        navigationPath = []
+                        libraryRange = .all
+                        semanticLatestRequest &+= 1
+                    }
+                }
             }
-        }
-        .onChange(of: media.scope?.cacheNamespace) {
-            assetPreview?.close()
-            assetPreview = nil
-        }
-        .onChange(of: scenePhase) { _, phase in
-            if phase != .active {
+            .onChange(of: requestedLibraryRange, initial: true) { _, requestedLibraryRange in
+                guard let requestedLibraryRange else { return }
+                dismissPreview()
+                navigationPath.removeAll()
+                libraryRange = requestedLibraryRange.range
+                requestedLibraryRangeHandled()
+            }
+            .onChange(of: libraryRange, initial: true) { _, range in
+                setSemanticMemoryScaleVisible(range == .all)
+            }
+            .onChange(of: isTabContentActivated) { _, active in
+                if !active {
+                    dismissPreview()
+                }
+            }
+            .onChange(of: media.scope?.cacheNamespace) {
                 assetPreview?.close()
                 assetPreview = nil
             }
-        }
-        .onDisappear {
-            assetPreview?.close()
-            assetPreview = nil
-            semanticLatestTask?.cancel()
-            semanticLatestTask = nil
-            if memoryOverlayRoute != nil {
-                closeViewer()
+            .onChange(of: scenePhase) { _, phase in
+                if phase != .active {
+                    assetPreview?.close()
+                    assetPreview = nil
+                }
             }
-            rotationState?.setVisualHandoffEligible(false, for: tabDestination)
-            viewportRuntime.viewportUpdateTask?.cancel()
-            viewportRuntime.viewportUpdateTask = nil
-            memoryPresentationTask?.cancel()
-            memoryPresentationTask = nil
-            loadingMemoryID = nil
-            store.completeJump()
-        }
-        .accessibilityIdentifier(rootAccessibilityID)
-        .overlay(alignment: .bottomTrailing) {
-            rangeUITestControls
-        }
+            .onDisappear {
+                assetPreview?.close()
+                assetPreview = nil
+                semanticLatestTask?.cancel()
+                semanticLatestTask = nil
+                if memoryOverlayRoute != nil {
+                    closeViewer()
+                }
+                rotationState?.setVisualHandoffEligible(false, for: tabDestination)
+                viewportRuntime.viewportUpdateTask?.cancel()
+                viewportRuntime.viewportUpdateTask = nil
+                memoryPresentationTask?.cancel()
+                memoryPresentationTask = nil
+                loadingMemoryID = nil
+                store.completeJump()
+            }
+            .accessibilityIdentifier(rootAccessibilityID)
+            .overlay(alignment: .bottomTrailing) {
+                rangeUITestControls
+            }
     }
 
     private var rangePresentation: some View {

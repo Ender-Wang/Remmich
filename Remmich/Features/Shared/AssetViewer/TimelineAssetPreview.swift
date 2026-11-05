@@ -369,7 +369,7 @@ private struct SilentPreviewPlayer: UIViewRepresentable {
             playerLayer.videoGravity = .resizeAspect
             playerLayer.player = player
             alpha = 0
-            readiness = playerLayer.observe(\.isReadyForDisplay, options: [.initial, .new]) { layer, _ in
+            readiness = playerLayer.observe(\.isReadyForDisplay, options: [.initial, .new]) { [weak self] layer, _ in
                 let ready = layer.isReadyForDisplay
                 Task { @MainActor [weak self] in
                     guard let self, ready, alpha == 0 else { return }
