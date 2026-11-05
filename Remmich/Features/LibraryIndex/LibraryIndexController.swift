@@ -1421,6 +1421,16 @@ final class LibraryIndexController {
             Self.logger.info(
                 "Library index generation accepted \(context, privacy: .public) mode=\(Self.label(for: result.mode), privacy: .public) generation=\(result.generation) indexed=\(result.indexedAssetCount) expected=\(result.expectedAssetCount) hasMoreHistory=\(result.hasMoreHistory) prunedGenerations=\(result.cleanup.removedGenerations) prunedAssets=\(result.cleanup.removedAssetRows) prunedGroups=\(result.cleanup.removedGroupRows)"
             )
+            if !result.removedBucketKeys.isEmpty {
+                Self.logger.notice(
+                    "Library index retired absent server buckets generation=\(result.generation) buckets=\(result.removedBucketKeys.joined(separator: ","), privacy: .public) removedAssets=\(result.removedBucketAssetCount)"
+                )
+            }
+            if result.isComplete, result.indexedAssetCount != result.expectedAssetCount {
+                Self.logger.notice(
+                    "Library index count mismatch generation=\(result.generation) indexed=\(result.indexedAssetCount) expected=\(result.expectedAssetCount)"
+                )
+            }
         }
         let now = Date()
         guard force || now.timeIntervalSince(lastPublishedAt) >= 1 else { return }
