@@ -71,6 +71,40 @@ jobs:
             COMPILER_INDEX_STORE_ENABLE=NO \
             | xcbeautify
 
+      - name: Test preview transitions and viewer routes
+        run: |
+          xcodebuild test-without-building \
+            -quiet \
+            -project Remmich.xcodeproj \
+            -scheme Remmich \
+            -configuration Debug \
+            -destination "$IPHONE_DESTINATION" \
+            -derivedDataPath "$DERIVED_DATA_PATH" \
+            -resultBundlePath "$RUNNER_TEMP/RemmichPreviewHeroTests.xcresult" \
+            -only-testing:RemmichTests/TimelineAssetPreviewTests \
+            -only-testing:RemmichTests/ScopedAssetTransitionTests \
+            -only-testing:RemmichTests/AssetViewerSessionTests \
+            -jobs 2 \
+            -parallel-testing-enabled NO \
+            COMPILER_INDEX_STORE_ENABLE=NO
+
+      - name: Report preview test failures
+        if: ${{ failure() }}
+        run: |
+          if [[ -d "$RUNNER_TEMP/RemmichPreviewHeroTests.xcresult" ]]; then
+            xcrun xcresulttool get test-results summary \
+              --path "$RUNNER_TEMP/RemmichPreviewHeroTests.xcresult" --format json
+          fi
+
+      - name: Upload preview test results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: remmich-preview-hero-results
+          path: ${{ runner.temp }}/RemmichPreviewHeroTests.xcresult
+          if-no-files-found: ignore
+          retention-days: 3
+
       - name: Archive test products
         run: |
           test -d "$DERIVED_DATA_PATH/Build/Products"

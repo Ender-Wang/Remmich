@@ -929,10 +929,10 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
                                        },
                                        hiddenLivePhotoBadgeAssetID: input.hiddenLivePhotoID,
                                        hiddenReturningThumbnailAssetID: input.hiddenThumbnailID)
-                    .environment(\.timelineAssetPreviewAction, TimelineAssetPreviewAction { [weak self] asset, image in
+                    .environment(\.timelineAssetPreviewAction, TimelineAssetPreviewAction { [weak self] asset, image, _ in
                         guard let self, gesture == nil, animator == nil,
                               let input = self.input, input.isActive else { return }
-                        input.previewAsset?.open(asset, image)
+                        input.previewAsset?.open(asset, image, Array(catalog.assets[max(0, assetIndex - 80) ..< min(catalog.assets.count, assetIndex + 81)].reversed()))
                     }),
                 parent: self
             )

@@ -439,7 +439,7 @@ struct PhotosView: View {
         self.showAccount = showAccount
     }
 
-    var body: some View {
+    private var timelineContent: some View {
         ZStack {
             switch store.loadState {
             case .idle, .loading:
@@ -469,10 +469,14 @@ struct PhotosView: View {
         }
         .navigationTitle(navigationTitle)
         .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(assetPreview != nil)
-        .nativeEdgeBackAction(active: viewerRoute == nil && (assetPreview != nil || !navigationPath.isEmpty || libraryRange != .all), action: navigateBack)
+        .navigationBarBackButtonHidden(hasInteractivePreview)
+        .nativeEdgeBackAction(active: viewerRoute == nil && (hasInteractivePreview || !navigationPath.isEmpty || libraryRange != .all), action: navigateBack)
         .environment(\.timelineAssetPreviewAction, previewAction)
+        .environment(\.timelineHiddenSourceAssetID, hiddenReturningThumbnailAssetID ?? assetPreview?.hiddenSourceAssetID)
         .overlay { previewOverlay }
+        .sensoryFeedback(.impact(weight: .light, intensity: 0.5), trigger: assetPreview?.id) { _, new in
+            new != nil
+        }
         .fullScreenCover(item: fullScreenViewerRoute) { route in
             assetViewer(route: route, opensFromSource: true)
         }
@@ -503,7 +507,7 @@ struct PhotosView: View {
         }
         .toolbarBackground(navigationPath.isEmpty ? .hidden : .visible, for: .navigationBar)
         .toolbar {
-            if assetPreview == nil, !navigationPath.isEmpty || libraryRange != .all {
+            if !hasInteractivePreview, !navigationPath.isEmpty || libraryRange != .all {
                 ToolbarItem(placement: .topBarLeading) {
                     Button(action: navigateBack) {
                         Label("Back", systemImage: "chevron.backward")
@@ -523,122 +527,127 @@ struct PhotosView: View {
                 showAccount()
             }
         }
-        .onAppear {
-            viewportRuntime.isTimelineActive = isTimelineActive
-            rotationState?.setVisualHandoffEligible(
-                false,
-                for: tabDestination
-            )
-            media.beginTimelinePresentation()
-            if isTimelineActive {
-                media.beginTimelineContentPresentation(contentName)
-            }
-        }
-        .task { await store.load() }
-        .task(id: store.semanticContentRevision) {
-            let revision = store.semanticContentRevision
-            let assets = store.semanticAssetsSnapshot()
-            let build = Task.detached(priority: .userInitiated) {
-                TimelineSemanticCatalog(assets: assets)
-            }
-            let catalog = await withTaskCancellationHandler {
-                await build.value
-            } onCancel: {
-                build.cancel()
-            }
-            guard !Task.isCancelled, revision == store.semanticContentRevision else { return }
-            semanticCatalog = catalog
-            semanticCatalogRevision = revision
-        }
-        .onChange(of: isTimelineActive) { _, isVisible in
-            viewportRuntime.isTimelineActive = isVisible
-            // The collection performs deterministic rotation directly. It does
-            // not register for the retired SwiftUI scroll-settlement gate.
-            rotationState?.setVisualHandoffEligible(false, for: tabDestination)
-            if isVisible {
-                media.beginTimelineContentPresentation(contentName)
-            }
-        }
-        .onChange(of: scrollToLatestRequest) {
-            if assetPreview != nil {
-                dismissPreview()
-                return
-            }
-            if memoryOverlayRoute != nil {
-                memoryViewerDismissalRequest &+= 1
-                return
-            }
-            semanticLatestTask?.cancel()
-            semanticLatestTask = Task { @MainActor in
-                defer { store.completeJump(); semanticLatestTask = nil }
-                guard let newest = store.bucketSummaries.first?.id,
-                      await store.prepareJump(to: newest), !Task.isCancelled else { return }
-                if store.semanticAssetsSnapshot().isEmpty {
-                    await store.loadOlderSemanticPage()
+    }
+
+    var body: some View {
+        timelineContent
+            .onAppear {
+                viewportRuntime.isTimelineActive = isTimelineActive
+                rotationState?.setVisualHandoffEligible(
+                    false,
+                    for: tabDestination
+                )
+                media.beginTimelinePresentation()
+                if isTimelineActive {
+                    media.beginTimelineContentPresentation(contentName)
                 }
+            }
+            .task { await store.load() }
+            .task(id: store.semanticContentRevision) {
                 let revision = store.semanticContentRevision
                 let assets = store.semanticAssetsSnapshot()
-                let build = Task.detached(priority: .userInitiated) { TimelineSemanticCatalog(assets: assets) }
-                let catalog = await withTaskCancellationHandler { await build.value } onCancel: { build.cancel() }
-                guard !Task.isCancelled else { return }
-                var transaction = Transaction(animation: nil)
-                transaction.disablesAnimations = true
-                withTransaction(transaction) {
-                    if revision >= semanticCatalogRevision {
-                        semanticCatalog = catalog
-                        semanticCatalogRevision = revision
-                    }
-                    navigationPath = []
-                    libraryRange = .all
-                    semanticLatestRequest &+= 1
+                let build = Task.detached(priority: .userInitiated) {
+                    TimelineSemanticCatalog(assets: assets)
+                }
+                let catalog = await withTaskCancellationHandler {
+                    await build.value
+                } onCancel: {
+                    build.cancel()
+                }
+                guard !Task.isCancelled, revision == store.semanticContentRevision else { return }
+                semanticCatalog = catalog
+                semanticCatalogRevision = revision
+            }
+            .onChange(of: isTimelineActive) { _, isVisible in
+                viewportRuntime.isTimelineActive = isVisible
+                // The collection performs deterministic rotation directly. It does
+                // not register for the retired SwiftUI scroll-settlement gate.
+                rotationState?.setVisualHandoffEligible(false, for: tabDestination)
+                if isVisible {
+                    media.beginTimelineContentPresentation(contentName)
                 }
             }
-        }
-        .onChange(of: requestedLibraryRange, initial: true) { _, requestedLibraryRange in
-            guard let requestedLibraryRange else { return }
-            dismissPreview()
-            navigationPath.removeAll()
-            libraryRange = requestedLibraryRange.range
-            requestedLibraryRangeHandled()
-        }
-        .onChange(of: libraryRange, initial: true) { _, range in
-            setSemanticMemoryScaleVisible(range == .all)
-        }
-        .onChange(of: isTabContentActivated) { _, active in
-            if !active {
-                dismissPreview()
+            .onChange(of: scrollToLatestRequest) {
+                if hasInteractivePreview {
+                    dismissPreview()
+                    return
+                }
+                retireDismissedPreview()
+                if memoryOverlayRoute != nil {
+                    memoryViewerDismissalRequest &+= 1
+                    return
+                }
+                semanticLatestTask?.cancel()
+                semanticLatestTask = Task { @MainActor in
+                    defer { store.completeJump(); semanticLatestTask = nil }
+                    guard let newest = store.bucketSummaries.first?.id,
+                          await store.prepareJump(to: newest), !Task.isCancelled else { return }
+                    if store.semanticAssetsSnapshot().isEmpty {
+                        await store.loadOlderSemanticPage()
+                    }
+                    let revision = store.semanticContentRevision
+                    let assets = store.semanticAssetsSnapshot()
+                    let build = Task.detached(priority: .userInitiated) { TimelineSemanticCatalog(assets: assets) }
+                    let catalog = await withTaskCancellationHandler { await build.value } onCancel: { build.cancel() }
+                    guard !Task.isCancelled else { return }
+                    var transaction = Transaction(animation: nil)
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) {
+                        if revision >= semanticCatalogRevision {
+                            semanticCatalog = catalog
+                            semanticCatalogRevision = revision
+                        }
+                        navigationPath = []
+                        libraryRange = .all
+                        semanticLatestRequest &+= 1
+                    }
+                }
             }
-        }
-        .onChange(of: media.scope?.cacheNamespace) {
-            assetPreview?.close()
-            assetPreview = nil
-        }
-        .onChange(of: scenePhase) { _, phase in
-            if phase != .active {
+            .onChange(of: requestedLibraryRange, initial: true) { _, requestedLibraryRange in
+                guard let requestedLibraryRange else { return }
+                dismissPreview()
+                navigationPath.removeAll()
+                libraryRange = requestedLibraryRange.range
+                requestedLibraryRangeHandled()
+            }
+            .onChange(of: libraryRange, initial: true) { _, range in
+                setSemanticMemoryScaleVisible(range == .all)
+            }
+            .onChange(of: isTabContentActivated) { _, active in
+                if !active {
+                    dismissPreview()
+                }
+            }
+            .onChange(of: media.scope?.cacheNamespace) {
                 assetPreview?.close()
                 assetPreview = nil
             }
-        }
-        .onDisappear {
-            assetPreview?.close()
-            assetPreview = nil
-            semanticLatestTask?.cancel()
-            semanticLatestTask = nil
-            if memoryOverlayRoute != nil {
-                closeViewer()
+            .onChange(of: scenePhase) { _, phase in
+                if phase != .active {
+                    assetPreview?.close()
+                    assetPreview = nil
+                }
             }
-            rotationState?.setVisualHandoffEligible(false, for: tabDestination)
-            viewportRuntime.viewportUpdateTask?.cancel()
-            viewportRuntime.viewportUpdateTask = nil
-            memoryPresentationTask?.cancel()
-            memoryPresentationTask = nil
-            loadingMemoryID = nil
-            store.completeJump()
-        }
-        .accessibilityIdentifier(rootAccessibilityID)
-        .overlay(alignment: .bottomTrailing) {
-            rangeUITestControls
-        }
+            .onDisappear {
+                assetPreview?.close()
+                assetPreview = nil
+                semanticLatestTask?.cancel()
+                semanticLatestTask = nil
+                if memoryOverlayRoute != nil {
+                    closeViewer()
+                }
+                rotationState?.setVisualHandoffEligible(false, for: tabDestination)
+                viewportRuntime.viewportUpdateTask?.cancel()
+                viewportRuntime.viewportUpdateTask = nil
+                memoryPresentationTask?.cancel()
+                memoryPresentationTask = nil
+                loadingMemoryID = nil
+                store.completeJump()
+            }
+            .accessibilityIdentifier(rootAccessibilityID)
+            .overlay(alignment: .bottomTrailing) {
+                rangeUITestControls
+            }
     }
 
     private var rangePresentation: some View {
@@ -788,7 +797,7 @@ struct PhotosView: View {
                         runtime: semanticRuntime,
                         latestRequest: semanticLatestRequest,
                         isActive: isTabContentActivated && navigationPath.isEmpty && viewerRoute == nil,
-                        hiddenThumbnailID: hiddenReturningThumbnailAssetID,
+                        hiddenThumbnailID: hiddenReturningThumbnailAssetID ?? assetPreview?.hiddenSourceAssetID,
                         hiddenLivePhotoID: hiddenLivePhotoBadgeAssetID,
                         selectAsset: { asset, assets in
                             presentViewer(AssetViewerRoute(selectedAsset: asset, initialAssets: assets,
@@ -801,6 +810,9 @@ struct PhotosView: View {
                         scaleChanged: semanticScaleChanged,
                         transitionScaleChanged: semanticTransitionScaleChanged,
                         scrolled: { delta, gap, userScrolling in
+                            if userScrolling, delta != 0 {
+                                updateReturningPreviewSource()
+                            }
                             guard !viewerOwnsTimelineChrome else { return }
                             if let compact = viewportRuntime.chromeTracker.update(offsetDelta: delta, bottomGap: gap,
                                                                                   userScrolling: userScrolling, programmaticJump: false)
@@ -991,6 +1003,7 @@ struct PhotosView: View {
             visibilityChanged: updateVisibility,
             viewportChanged: updateViewport,
             transitionNamespace: viewerNamespace,
+            sourceMoved: updateReturningPreviewSource,
             assetSelected: { asset, assets in
                 presentViewer(AssetViewerRoute(
                     selectedAsset: asset,
@@ -1023,8 +1036,10 @@ struct PhotosView: View {
                         .onTapGesture { dismissPreview() }
                     TimelineAssetPreview(session: assetPreview, media: media,
                                          viewport: CGRect(x: 0, y: top, width: available.width, height: available.height),
-                                         globalOrigin: globalFrame.origin)
+                                         globalOrigin: globalFrame.origin,
+                                         openViewer: { promotePreview(assetPreview, from: $0) })
                         .accessibilityAction(.escape) { dismissPreview() }
+                        .accessibilityHidden(assetPreview.isDismissing)
                         .id(assetPreview.id)
                         .transition(.identity)
                         .zIndex(1)
@@ -1032,21 +1047,34 @@ struct PhotosView: View {
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
         }
-        .allowsHitTesting(assetPreview != nil)
+        .allowsHitTesting(hasInteractivePreview)
+    }
+
+    private var hasInteractivePreview: Bool {
+        assetPreview?.acceptsInput == true
+    }
+
+    private func retireDismissedPreview() {
+        guard let preview = assetPreview, preview.isDismissing, !preview.isPromoting else { return }
+        removePreview(preview)
     }
 
     private var previewAction: TimelineAssetPreviewAction {
-        TimelineAssetPreviewAction { asset, image in
-            guard viewerRoute == nil, assetPreview == nil, isTabContentActivated, scenePhase == .active else { return }
+        TimelineAssetPreviewAction { asset, image, assets in
+            guard viewerRoute == nil, !hasInteractivePreview, isTabContentActivated, scenePhase == .active else { return }
+            retireDismissedPreview()
+            let origin: AssetViewerOrigin = navigationPath.last.map { .scoped(route: $0, contentName: contentName) }
+                ?? .timeline(bucketID: semanticBucketID(for: asset), contentName: contentName)
+            let route = AssetViewerRoute(selectedAsset: asset, initialAssets: assets, origin: origin)
             if let scope = navigationPath.last {
                 assetPreview = TimelineAssetPreviewSession(
                     asset: asset, image: scopedAssetTransitions.transitionImage(for: asset, scope: scope) ?? image,
-                    target: scopedAssetTransitions.target(assetID: asset.id, scope: scope)
+                    target: scopedAssetTransitions.target(assetID: asset.id, scope: scope), viewerRoute: route
                 )
             } else {
                 let source = semanticRuntime.openingSource(for: asset)
                 assetPreview = TimelineAssetPreviewSession(asset: asset, image: source?.image ?? image,
-                                                           target: source?.target ?? previewTarget(for: asset))
+                                                           target: source?.target ?? previewTarget(for: asset), viewerRoute: route)
             }
         }
     }
@@ -1061,17 +1089,52 @@ struct PhotosView: View {
     private func dismissPreview() {
         guard let preview = assetPreview, !preview.isDismissing else { return }
         preview.beginDismissal()
-        preview.transitionTarget = previewTarget(for: preview.asset) ?? preview.transitionTarget
+        preview.transitionTarget = previewTarget(for: preview.asset)
         withAnimation(reduceMotion ? AssetViewerTransitionMotion.reducedMotion : AssetViewerTransitionMotion.returning,
                       completionCriteria: .removed)
         {
             preview.transitionProgress = 0
         } completion: {
-            preview.close()
-            if assetPreview?.id == preview.id {
-                assetPreview = nil
-            }
+            finishPreviewLanding(preview)
         }
+    }
+
+    private func updateReturningPreviewSource() {
+        guard let preview = assetPreview, preview.isDismissing, !preview.isPromoting else { return }
+        // UIKit can report scrolling during a representable layout/update.
+        // Defer publication, then measure the latest global source geometry.
+        Task { @MainActor [weak preview] in
+            guard let preview, assetPreview?.id == preview.id, !preview.isClosed else { return }
+            guard let target = previewTarget(for: preview.asset) else {
+                finishPreviewLanding(preview)
+                return
+            }
+            var transaction = Transaction(animation: nil)
+            transaction.disablesAnimations = true
+            withTransaction(transaction) { preview.updateReturnSource(target) }
+        }
+    }
+
+    private func finishPreviewLanding(_ preview: TimelineAssetPreviewSession) {
+        guard assetPreview?.id == preview.id, preview.beginSourceHandoff() else { return }
+        withAnimation(.easeOut(duration: 0.12), completionCriteria: .removed) {
+            preview.handoffOpacity = 0
+        } completion: {
+            removePreview(preview)
+        }
+    }
+
+    private func removePreview(_ preview: TimelineAssetPreviewSession) {
+        preview.close()
+        guard assetPreview?.id == preview.id else { return }
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { assetPreview = nil }
+    }
+
+    private func promotePreview(_ preview: TimelineAssetPreviewSession, from target: AssetViewerDismissalTarget) {
+        guard assetPreview?.id == preview.id, let route = preview.viewerRoute, preview.beginPromotion() else { return }
+        presentViewer(route, sourceOverride: (target, preview.previewImage ?? preview.image))
     }
 
     private func selectRoute(_ route: PhotosRangeRoute) {
@@ -1081,10 +1144,11 @@ struct PhotosView: View {
     }
 
     private func navigateBack() {
-        if assetPreview != nil {
+        if hasInteractivePreview {
             dismissPreview()
             return
         }
+        retireDismissedPreview()
         // Swapping an asset grid or grouped catalog back to its parent can
         // publish hundreds of visibility changes. Keep that structural swap
         // atomic instead of implicitly animating every outgoing and incoming
@@ -1186,6 +1250,11 @@ struct PhotosView: View {
             namespace: viewerNamespace,
             close: closeViewer,
             visibilityChanged: { visible in
+                if visible, let preview = assetPreview, preview.isPromoting,
+                   preview.viewerRoute == route, viewerRoute == route
+                {
+                    removePreview(preview)
+                }
                 if !visible,
                    memoryViewerIsSwitching,
                    case .memory = route.origin
@@ -1382,8 +1451,11 @@ struct PhotosView: View {
         memoryLaneFrame = frame
     }
 
-    private func presentViewer(_ route: AssetViewerRoute) {
-        guard assetPreview == nil else { return }
+    private func presentViewer(_ route: AssetViewerRoute,
+                               sourceOverride: (target: AssetViewerDismissalTarget, image: UIImage?)? = nil)
+    {
+        guard !hasInteractivePreview else { return }
+        retireDismissedPreview()
         switch route.origin {
         case let .scoped(scope, _):
             viewerSourceTarget = scopedAssetTransitions.target(assetID: route.selectedAsset.id, scope: scope)
@@ -1396,13 +1468,17 @@ struct PhotosView: View {
             viewerSourceTarget = nil
             viewerSourceImage = nil
         }
+        if let sourceOverride {
+            viewerSourceTarget = sourceOverride.target
+            viewerSourceImage = sourceOverride.image
+        }
         if case .memory = route.origin {
             hiddenLivePhotoBadgeAssetID = nil
         } else {
             hiddenLivePhotoBadgeAssetID = TimelineAssetOverlay.isVisible(for: route.selectedAsset)
                 ? route.selectedAsset.id : nil
         }
-        hiddenReturningThumbnailAssetID = nil
+        hiddenReturningThumbnailAssetID = sourceOverride == nil ? nil : route.selectedAsset.id
         viewerChromeReleaseTask?.cancel()
         viewerChromeReleaseTask = nil
         viewerOwnsTimelineChrome = true

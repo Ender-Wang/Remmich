@@ -733,6 +733,7 @@ struct PhotosRangeAssetsView: View {
     var visibilityChanged: (String, MediaRequestDescriptor?) -> Void = { _, _ in }
     var viewportChanged: (TimelineAssetSummary, Bool) -> Void = { _, _ in }
     var transitionNamespace: Namespace.ID?
+    var sourceMoved: () -> Void = {}
     var assetSelected: (TimelineAssetSummary, [TimelineAssetSummary]) -> Void = { _, _ in }
 
     @State private var pinchInteraction = PhotosRangePinchInteraction()
@@ -763,6 +764,7 @@ struct PhotosRangeAssetsView: View {
             LoadingStateView(isLoading: isLoading, label: "Loading items",
                              detail: bucketIDs.count > 1 ? "\(loadedBucketCount) of \(bucketIDs.count) date groups" : nil)
         }
+        .environment(\.timelinePreviewAssets, assets)
         .task(id: LoadKey(route: route, request: loadRequest)) {
             await loadAssets()
         }
@@ -814,6 +816,11 @@ struct PhotosRangeAssetsView: View {
                     .scrollTargetLayout()
                 }
                 .defaultScrollAnchor(.bottom)
+                .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { old, new in
+                    if old != new {
+                        sourceMoved()
+                    }
+                }
                 .scrollEdgeEffectHidden(for: .bottom)
                 .photosRangePinchGesture(
                     interaction: pinchInteraction,
