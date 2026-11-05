@@ -82,6 +82,7 @@ For now, follow [Build and run](CONTRIBUTING.md#build-and-run) to build from sou
 ### 💾 Offline browsing and storage
 
 - Keep a local timeline index, cached thumbnails, and cached asset information for offline browsing.
+- Refresh the local index when items are removed from the server, including months that become empty.
 - See cached timeline thumbnails on a cold launch while the app checks its connection, including when the server is unreachable.
 - Enable automatic thumbnail and metadata caching.
 - Index, metadata, and thumbnail transfers use a shared durable background queue, so queued transfers can continue after leaving the app and be recovered on relaunch. iOS still controls transfer execution and later scheduled sync opportunities. Recent successful syncs avoid repeated checks when you reopen the app.
