@@ -5,6 +5,8 @@
 //  Created by Ender Wang on 9/25/26.
 //
 
+import AVFoundation
+import AVKit
 import Foundation
 import Nuke
 import SwiftUI
@@ -1748,6 +1750,36 @@ struct RemmichTests {
         #expect(cached.isFinal)
     }
 
+    @Test @MainActor func alreadyCachedVideoPosterCanSeedSystemArtworkWithoutAnotherLoad() throws {
+        let media = MediaLibraryController()
+        media.configure(session: .fixture, activeEndpoint: AccountSession.fixture.apiURL)
+        let asset = Self.timelineAsset(id: "already-loaded-video-poster", mediaKind: .video)
+        let targetPixels = MediaPixelSize(width: 1206, height: 2622)
+        let descriptor = MediaLibraryController.viewerPreviewDescriptor(for: asset, targetPixels: targetPixels)
+        let request = try #require(media.imageRequest(for: descriptor))
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 12, height: 18)).image { context in
+            UIColor.systemBlue.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 12, height: 18))
+        }
+        let pipeline = try #require(media.pipeline)
+        pipeline.cache.storeCachedImage(ImageContainer(image: image), for: request, caches: [.memory])
+
+        // Selection can happen after the neighboring poster's completion fired.
+        // Seed the new player from memory rather than waiting for another completion.
+        let session = VideoPlaybackSession(assetID: asset.id)
+        let item = AVPlayerItem(asset: AVMutableComposition())
+        session.player.replaceCurrentItem(with: item)
+        defer { session.close() }
+        session.updateNowPlayingTitle(filename: "Video.mov", caption: nil)
+        let cached = try #require(media.cachedViewerTransitionImage(for: asset, targetPixels: targetPixels))
+        session.updateNowPlayingArtwork(cached, onlyIfMissing: true)
+
+        let data = try #require(item.externalMetadata.first { $0.identifier == .commonIdentifierArtwork }?.dataValue)
+        let artwork = try #require(UIImage(data: data))
+        #expect(artwork.size == image.size)
+        #expect(session.player.currentItem === item)
+    }
+
     @Test @MainActor func progressiveViewerPreviewDoesNotSuppressFinalLoad() throws {
         let media = MediaLibraryController()
         media.configure(session: .fixture, activeEndpoint: AccountSession.fixture.apiURL)
@@ -2238,7 +2270,8 @@ struct RemmichTests {
 
     private nonisolated static func timelineAsset(
         id: String,
-        thumbnailRevision: Date = .distantPast
+        thumbnailRevision: Date = .distantPast,
+        mediaKind: TimelineMediaKind = .image
     ) -> TimelineAssetSummary {
         TimelineAssetSummary(
             id: id,
@@ -2246,7 +2279,7 @@ struct RemmichTests {
             capturedAt: .distantPast,
             uploadedAt: .distantPast,
             localOffsetHours: 0,
-            mediaKind: .image,
+            mediaKind: mediaKind,
             durationMilliseconds: nil,
             aspectRatio: 1,
             isFavorite: false,

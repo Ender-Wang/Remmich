@@ -67,6 +67,7 @@ For now, follow [Build and run](CONTRIBUTING.md#build-and-run) to build from sou
 - Continue a playing video in native Picture in Picture when you go Home, with automatic PiP enabled in iOS.
 - Return the same video to its inline player when reopening Remmich from the background.
 - Use iOS Now Playing controls for full-viewer videos; Live Photo motion and muted timeline previews stay separate.
+- See the video caption or filename and its poster in system playback UI, with Remmich identified in the title.
 - See an animated loading logo from the opening transition until the first video frame. It fades in during preparation and fades out when playback is ready.
 - The player area stays black during opening and playback in both themes; surrounding app chrome and Info follow the app theme.
 

@@ -140,6 +140,8 @@ Only the ordinary-video `AVPlayerViewController` enables `updatesNowPlayingInfoC
 
 The maintainer confirmed foreground PiP return and native system controls on device; capture `3a22e70a-3ffe-43e6-8d81-f14d4d386537` contains two accepted return requests matching foreground cycles. The full app and test bundles compile successfully in CI; runtime fixtures have not been executed locally.
 
+Full-viewer video opts into `AVPlayerItem.externalMetadata` with `Remmich · <caption or filename>` (first nonempty description line, then original filename, then `Video`). The current Immich model has no distinct title field. Existing source pixels, the memory-cached viewer Preview, and the poster's completion supply artwork without another image request. JPEG artwork preserves aspect ratio and is bounded to 512 pixels. Metadata is installed before item attachment and refreshed in place; it does not replace the item, change playback intent, or publish timing manually. The opt-in fields do not participate in SwiftUI observation, remain unset for previews, survive a retry, and clear on session close. The maintainer confirmed the title/cover behavior works as expected with capture `4c922de0-9f4c-4783-ba44-95351ebb6ebd`. Metadata and cached-poster fixtures compile in the successful [CI build](https://github.com/Ender-Wang/Remmich/actions/runs/41988342269); they have not been run locally. See [Apple's AVKit metadata guidance](https://developer.apple.com/videos/play/wwdc2022/110338/).
+
 ### Background library sync
 
 [LibraryBackgroundSyncCoordinator](Remmich/App/LibraryBackgroundSyncCoordinator.swift) registers two native tasks through the app delegate before launch completes:

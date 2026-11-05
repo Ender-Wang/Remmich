@@ -1,3 +1,4 @@
+import Nuke
 import OSLog
 import SwiftUI
 import UIKit
@@ -499,7 +500,15 @@ struct AssetViewerView: View {
         }
         .task(id: openingIsActive ? nil : videoPlaybackSession?.assetID) {
             guard !openingIsActive, let videoPlaybackSession else { return }
+            updateVideoNowPlayingTitle()
+            seedVideoNowPlayingArtwork()
             await videoPlaybackSession.prepare(using: media)
+        }
+        .onChange(of: selectedAssetDetail) {
+            updateVideoNowPlayingTitle()
+        }
+        .onChange(of: viewerPreviewTargetPixels) {
+            seedVideoNowPlayingArtwork()
         }
         .onChange(of: videoPlaybackSession?.generation) { _, _ in
             videoFirstFrameReady = false
@@ -878,6 +887,12 @@ struct AssetViewerView: View {
                     height: Int(max(1, requestSize.height * displayScale))
                 ),
                 fullResolutionRequestID: fullResolutionRequestIDs[asset.id],
+                videoPosterLoaded: { image in
+                    guard asset.id == session.selectedAssetID,
+                          let playback = videoPlaybackSession, playback.assetID == asset.id else { return }
+                    updateVideoNowPlayingTitle()
+                    playback.updateNowPlayingArtwork(image)
+                },
                 renderedImageMetadataChanged: { metadata in
                     if asset.id == session.selectedAssetID,
                        renderedImageMetadataByAssetID[asset.id] != metadata
@@ -2424,6 +2439,23 @@ struct AssetViewerView: View {
         )
     }
 
+    private func updateVideoNowPlayingTitle() {
+        guard let playback = videoPlaybackSession,
+              playback.assetID == session.selectedAssetID else { return }
+        let detail = selectedAssetDetail.flatMap { $0.id == playback.assetID ? $0 : nil }
+        playback.updateNowPlayingTitle(filename: detail?.originalFileName, caption: detail?.description)
+    }
+
+    private func seedVideoNowPlayingArtwork() {
+        guard let asset = session.selectedAsset,
+              let playback = videoPlaybackSession, playback.assetID == asset.id else { return }
+        let cached = viewerPreviewTargetPixels.flatMap { media.cachedViewerTransitionImage(for: asset, targetPixels: $0) }
+        let captured = asset.id == route.selectedAsset.id ? sourceImage : nil
+        if let image = cached ?? captured {
+            playback.updateNowPlayingArtwork(image, onlyIfMissing: true)
+        }
+    }
+
     private func syncVideoPlaybackSession() {
         guard let selectedAsset = session.selectedAsset,
               selectedAsset.mediaKind == .video
@@ -3567,6 +3599,7 @@ private struct AssetViewerFitPage: View {
     let showsVideoPoster: Bool
     let targetPixels: MediaPixelSize
     let fullResolutionRequestID: Int?
+    let videoPosterLoaded: (UIImage) -> Void
     let renderedImageMetadataChanged: (AssetViewerRenderedImageMetadata) -> Void
     let fullResolutionLoadFailed: (String?) -> Void
     let zoomChanged: (Bool) -> Void
@@ -3595,7 +3628,8 @@ private struct AssetViewerFitPage: View {
                     media: media,
                     contentMode: .fit,
                     showsBackground: false,
-                    placeholderImage: sourceImage
+                    placeholderImage: sourceImage,
+                    didLoad: { response in videoPosterLoaded(response.image) }
                 )
                 .frame(width: mediaRect.width, height: mediaRect.height)
                 .position(x: mediaRect.midX, y: mediaRect.midY)
