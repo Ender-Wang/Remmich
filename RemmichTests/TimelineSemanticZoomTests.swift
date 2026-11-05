@@ -624,6 +624,52 @@ struct TimelineSemanticZoomTests {
         #expect(controller.view.subviews.count == 1)
     }
 
+    @Test @MainActor func openingSourceRetainsVisiblePixelsWithoutAViewerCacheAndRejectsReusedCells() throws {
+        let catalog = TimelineSemanticCatalog(assets: (0 ..< 60).map { asset(String(format: "%03d", $0), "2027-01-01T12:00:00Z") })
+        let runtime = TimelineSemanticRuntime()
+        let controller = TimelineSemanticCollectionController()
+        runtime.controller = controller
+        let input = TimelineSemanticCollectionView(
+            catalog: catalog, revision: 1, scale: .natural, media: MediaLibraryController(), namespace: nil,
+            bottomClearance: 96, topClearance: 180, runtime: runtime, latestRequest: 0, isActive: true,
+            hiddenThumbnailID: nil, hiddenLivePhotoID: nil, selectAsset: { _, _ in }, selectGroup: { _, _ in },
+            scaleChanged: { _ in }, scrolled: { _, _, _ in }, visibleAssetsChanged: { _, _, _ in }, refresh: {}
+        )
+        controller.update(input)
+        defer { controller.stop() }
+        controller.view.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        controller.view.setNeedsLayout()
+        controller.view.layoutIfNeeded()
+        let collection = try #require(controller.view.subviews.compactMap { $0 as? UICollectionView }.first)
+        let cell = try #require(collection.visibleCells.compactMap { $0 as? TimelineSemanticCollectionCell }.first { $0.coverAssetID != nil })
+        let selected = try #require(catalog.assets.first { $0.id == cell.coverAssetID })
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 40, height: 60)).image { context in
+            UIColor.red.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 40, height: 60))
+        }
+        cell.coverImage = image
+        cell.coverImageAssetID = selected.id
+        let source = try #require(runtime.openingSource(for: selected))
+        #expect(source.image === image)
+        #expect(source.target.imageFrame == controller.dismissalTarget(assetID: selected.id, aspectRatio: selected.aspectRatio)?.imageFrame)
+
+        // The captured source survives cell reuse; lookup cannot return the replacement's pixels.
+        cell.coverImage = nil
+        cell.coverImageAssetID = nil
+        #expect(source.image === image)
+        let unloaded = try #require(runtime.openingSource(for: selected))
+        #expect(unloaded.image == nil)
+        #expect(unloaded.target.imageFrame == source.target.imageFrame)
+        cell.coverImage = image
+        cell.coverImageAssetID = "another-asset"
+        #expect(runtime.openingSource(for: selected)?.image == nil)
+        cell.isHidden = true
+        #expect(runtime.openingSource(for: selected) == nil)
+        cell.isHidden = false
+        cell.nodeID = "reused-cell"
+        #expect(runtime.openingSource(for: selected) == nil)
+    }
+
     @Test @MainActor func timelineInsetsAlignContentAndScrollIndicatorAtBothEdges() throws {
         let catalog = TimelineSemanticCatalog(assets: (0 ..< 60).map { asset(String(format: "%03d", $0), "2027-01-01T12:00:00Z") })
         let controller = TimelineSemanticCollectionController()

@@ -65,6 +65,7 @@ struct AssetViewerView: View {
     @State private var openingIsActive: Bool
     @State private var openingProgress: CGFloat
     @State private var openingTask: Task<Void, Never>?
+    @State private var openingGeneration = 0
     @State private var isDismissing = false
     @State private var dismissalDragTranslation = CGSize.zero
     @State private var dismissalDragStartLocation = CGPoint.zero
@@ -307,9 +308,9 @@ struct AssetViewerView: View {
                 ZStack {
                     if !isMemoryViewer {
                         AssetViewerBackdrop(videoRect: session.isVideoPlayback ? selectedMediaRect : nil)
-                            .opacity(usesNativeDismissal
-                                ? 0
-                                : (isOpening ? openingProgress : dismissalBackdropOpacity))
+                            .modifier(AssetViewerTransitionOpacity(value: usesNativeDismissal
+                                    ? 0
+                                    : (isOpening ? openingProgress : dismissalBackdropOpacity)))
                     }
                     if isMemoryViewer {
                         if let memoryPanelRect {
@@ -358,12 +359,11 @@ struct AssetViewerView: View {
                         rect: isMemoryViewer ? memoryPanelRect : nil
                     ))
                     .mask {
-                        RoundedRectangle(
+                        AssetViewerTransitionRoundedMask(
                             cornerRadius: usesNativeDismissal
                                 ? 0
                                 : (isOpening
-                                    ? openingCornerRadius : dismissalLandingCornerRadius),
-                            style: .continuous
+                                    ? openingCornerRadius : dismissalLandingCornerRadius)
                         )
                         .frame(
                             width: viewerMaskRect.width,
@@ -437,10 +437,10 @@ struct AssetViewerView: View {
                     .frame(width: safeRect.width, height: safeRect.height)
                     .position(x: safeRect.midX, y: safeRect.midY)
                     .zIndex(1)
-                    .opacity((isOpening
+                    .modifier(AssetViewerTransitionOpacity(value: (isOpening
                             ? openingProgress * (chromeVisible ? 1 : 0)
                             : (isolatesDismissalAsset ? 0 : (chromeVisible ? 1 : 0)))
-                        * (isMemoryViewer ? memoryContentOpacity : 1))
+                        * (isMemoryViewer ? memoryContentOpacity : 1)))
                     .allowsHitTesting(!isolatesDismissalAsset && (chromeVisible || showsInfo))
                     .accessibilityHidden(isolatesDismissalAsset || (!chromeVisible && !showsInfo))
                 }
@@ -553,6 +553,7 @@ struct AssetViewerView: View {
             logMemoryPlayback("disappear")
             videoPlaybackSession?.close()
             openingTask?.cancel()
+            openingGeneration += 1
             dismissalLandingTask?.cancel()
             dismissalThumbnailRevealTask?.cancel()
             nativeDismissalController.reset()
@@ -1884,7 +1885,11 @@ struct AssetViewerView: View {
     }
 
     private func beginOpeningAnimation() {
+        openingTask?.cancel()
+        openingGeneration += 1
+        let generation = openingGeneration
         guard sourceTarget != nil || dismissalTarget(route.selectedAsset.id) != nil else {
+            openingProgress = 1
             openingIsActive = false
             resumeMemoryAutoRotation()
             return
@@ -1896,19 +1901,36 @@ struct AssetViewerView: View {
         }
         openingTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(16))
-            guard !Task.isCancelled else { return }
-            withAnimation(.easeOut(duration: 0.28)) {
-                openingProgress = 1
+            guard !Task.isCancelled, openingGeneration == generation, !isDismissing else { return }
+            if isMemoryViewer {
+                withAnimation(.easeOut(duration: 0.28)) {
+                    openingProgress = 1
+                }
+                try? await Task.sleep(for: .milliseconds(300))
+                guard !Task.isCancelled, openingGeneration == generation, !isDismissing else { return }
+                openingIsActive = false
+                resumeMemoryAutoRotation()
+                return
             }
-            try? await Task.sleep(for: .milliseconds(300))
-            guard !Task.isCancelled else { return }
-            openingIsActive = false
-            resumeMemoryAutoRotation()
+            // Keep source geometry mounted through the spring's settling tail.
+            // Logical completion can precede the final rendered spring frames.
+            withAnimation(AssetViewerTransitionMotion.opening, completionCriteria: .removed) {
+                openingProgress = 1
+            } completion: {
+                guard openingGeneration == generation, openingIsActive, !isDismissing else { return }
+                var transaction = Transaction(animation: nil)
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    openingIsActive = false
+                }
+            }
         }
     }
 
     private func replaceMemoryRoute() {
         guard isMemoryViewer else { return }
+        openingTask?.cancel()
+        openingGeneration += 1
         let originalAssets = session.assets.filter {
             fullResolutionRequestIDs[$0.id] != nil
         }
@@ -2026,6 +2048,7 @@ struct AssetViewerView: View {
             anchor: anchor,
             fillsTarget: destination?.fillsFrame == true
         )
+        let generation = openingGeneration
         if nativeDismissalController.isActive {
             let cropSize = destination?.fillsFrame == true
                 ? AssetViewerDismissalGeometry.sourceCropSize(
@@ -2046,11 +2069,16 @@ struct AssetViewerView: View {
                 maskRect: cropRect,
                 cornerRadius: (destination?.cornerRadius ?? 0)
                     / max(landing.scale, 0.04),
-                duration: 0.28
-            )
+                duration: isMemoryViewer ? 0.28 : AssetViewerTransitionMotion.returnDuration,
+                bounce: isMemoryViewer ? nil : CGFloat(AssetViewerTransitionMotion.returnBounce)
+            ) {
+                guard !isMemoryViewer, openingGeneration == generation, isDismissing else { return }
+                finishTimelineLanding(fillsFrame: destination?.fillsFrame == true, usesNativeSurface: true)
+            }
             withAnimation(.easeInOut(duration: 0.45)) {
                 isLandingDismissal = true
             }
+            guard isMemoryViewer else { return }
             dismissalLandingTask = Task { @MainActor in
                 if destination?.fillsFrame == true {
                     try? await Task.sleep(for: .milliseconds(300))
@@ -2073,16 +2101,26 @@ struct AssetViewerView: View {
                 landingScale: landing.scale
             )
         }
-        withAnimation(.easeOut(duration: 0.28)) {
+        let landingAnimation: Animation = isMemoryViewer
+            ? .easeOut(duration: 0.28)
+            : AssetViewerTransitionMotion.returning
+        withAnimation(landingAnimation, completionCriteria: .removed) {
+            if !isMemoryViewer {
+                isLandingDismissal = true
+            }
             dismissalLandingScale = landing.scale
             dismissalLandingTranslation = landing.translation
             dismissalBackdropOpacity = 0
             dismissalLandingCornerRadius = (destination?.cornerRadius ?? 0)
                 / max(landing.scale, 0.04)
+        } completion: {
+            guard !isMemoryViewer, openingGeneration == generation, isDismissing else { return }
+            finishTimelineLanding(fillsFrame: destination?.fillsFrame == true, usesNativeSurface: false)
         }
         if destination?.fillsFrame == true {
             dismissalCropProgress = 1
         }
+        guard isMemoryViewer else { return }
         withAnimation(.easeInOut(duration: 0.45)) {
             isLandingDismissal = true
         }
@@ -2098,6 +2136,25 @@ struct AssetViewerView: View {
             } else {
                 try? await Task.sleep(for: .milliseconds(500))
             }
+            guard !Task.isCancelled else { return }
+            closeWithoutAnimation()
+        }
+    }
+
+    private func finishTimelineLanding(fillsFrame: Bool, usesNativeSurface: Bool) {
+        if fillsFrame {
+            returningTimelineThumbnailChanged(nil)
+            if usesNativeSurface {
+                nativeDismissalController.fadeImageOut(duration: 0.12)
+            } else {
+                withAnimation(.easeInOut(duration: 0.12)) {
+                    dismissalAssetOpacity = 0
+                }
+            }
+        }
+        dismissalLandingTask?.cancel()
+        dismissalLandingTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(200))
             guard !Task.isCancelled else { return }
             closeWithoutAnimation()
         }
@@ -3030,6 +3087,22 @@ nonisolated struct AssetViewerMemoryInteractionShape: Shape {
     }
 }
 
+private nonisolated struct AssetViewerTransitionRoundedMask: Shape {
+    var cornerRadius: CGFloat
+
+    var animatableData: CGFloat {
+        get { cornerRadius }
+        set { cornerRadius = newValue }
+    }
+
+    func path(in bounds: CGRect) -> Path {
+        RoundedRectangle(
+            cornerRadius: min(max(0, cornerRadius), min(bounds.width, bounds.height) / 2),
+            style: .continuous
+        ).path(in: bounds)
+    }
+}
+
 nonisolated struct AssetViewerTransitionClipShape: Shape {
     let target: CGRect
     var progress: CGFloat
@@ -3172,7 +3245,9 @@ private final class AssetViewerNativeDismissalController: NSObject {
         scale: CGFloat,
         maskRect: CGRect,
         cornerRadius: CGFloat,
-        duration: TimeInterval
+        duration: TimeInterval,
+        bounce: CGFloat? = nil,
+        completion: @escaping @MainActor () -> Void
     ) {
         guard isActive else { return }
         stopAnimator()
@@ -3181,10 +3256,15 @@ private final class AssetViewerNativeDismissalController: NSObject {
             cornerRadius: cornerRadius,
             duration: min(0.14, duration)
         )
-        let animator = UIViewPropertyAnimator(
-            duration: duration,
-            curve: .easeOut
-        ) {
+        let animator = if let bounce {
+            UIViewPropertyAnimator(
+                duration: duration,
+                timingParameters: UISpringTimingParameters(duration: duration, bounce: bounce)
+            )
+        } else {
+            UIViewPropertyAnimator(duration: duration, curve: .easeOut)
+        }
+        animator.addAnimations {
             self.contentView.transform = CGAffineTransform(
                 a: scale,
                 b: 0,
@@ -3194,6 +3274,10 @@ private final class AssetViewerNativeDismissalController: NSObject {
                 ty: translation.height
             )
             self.backdropView.alpha = 0
+        }
+        animator.addCompletion { position in
+            guard position == .end else { return }
+            completion()
         }
         self.animator = animator
         animator.startAnimation()

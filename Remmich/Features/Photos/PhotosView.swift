@@ -1283,10 +1283,15 @@ struct PhotosView: View {
     }
 
     private func presentViewer(_ route: AssetViewerRoute) {
-        if case let .scoped(scope, _) = route.origin {
+        switch route.origin {
+        case let .scoped(scope, _):
             viewerSourceTarget = scopedAssetTransitions.target(assetID: route.selectedAsset.id, scope: scope)
             viewerSourceImage = scopedAssetTransitions.transitionImage(for: route.selectedAsset, scope: scope)
-        } else {
+        case .timeline:
+            let source = semanticRuntime.openingSource(for: route.selectedAsset)
+            viewerSourceTarget = source?.target
+            viewerSourceImage = source?.image
+        case .memory:
             viewerSourceTarget = nil
             viewerSourceImage = nil
         }

@@ -14,6 +14,10 @@ final class TimelineSemanticRuntime {
         controller?.dismissalTarget(assetID: assetID, aspectRatio: aspectRatio)
     }
 
+    func openingSource(for asset: TimelineAssetSummary) -> (target: AssetViewerDismissalTarget, image: UIImage?)? {
+        controller?.openingSource(for: asset)
+    }
+
     func changeScale(coarser: Bool) {
         controller?.changeScale(coarser: coarser)
     }
@@ -2120,6 +2124,19 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             newerExpansionRearmOffset = collection.contentOffset.y + rearmDistance
         }
         isExpanding = false
+    }
+
+    func openingSource(for asset: TimelineAssetSummary) -> (target: AssetViewerDismissalTarget, image: UIImage?)? {
+        guard gesture == nil, animator == nil, scale.isAssets, let projection,
+              let index = projection.items.firstIndex(where: { !$0.isHeader && $0.id == asset.id }),
+              let target = dismissalTarget(assetID: asset.id, aspectRatio: asset.aspectRatio),
+              let cell = collection.cellForItem(at: IndexPath(item: index, section: 0)) as? TimelineSemanticCollectionCell,
+              cell.nodeID == asset.id, cell.coverAssetID == asset.id, !cell.isHidden
+        else { return nil }
+        // Retain the displayed pixels before presentation changes timeline ownership.
+        // A valid frame is useful even when its thumbnail has not finished loading.
+        let image = cell.coverImageAssetID == asset.id ? cell.coverImage : nil
+        return (target, image ?? cachedImage(asset: asset, frame: projection.items[index].frame))
     }
 
     func dismissalTarget(assetID: String, aspectRatio: Double) -> AssetViewerDismissalTarget? {
