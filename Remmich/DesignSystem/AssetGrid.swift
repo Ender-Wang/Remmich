@@ -566,6 +566,7 @@ struct TimelineDeterministicAssetRow: View {
 }
 
 struct TimelineAssetThumbnail: View {
+    @Environment(\.timelineAssetPreviewAction) private var previewAction
     @Environment(\.scopedAssetTransitionContext) private var scopedTransitionContext
     @Environment(\.displayScale) private var displayScale
     let asset: TimelineAssetSummary
@@ -590,84 +591,92 @@ struct TimelineAssetThumbnail: View {
     }
 
     var body: some View {
-        Button {
-            assetSelected(asset)
-        } label: {
-            GeometryReader { proxy in
-                let requestPoints = requestSide ?? max(proxy.size.width, proxy.size.height)
-                let requestPixels = Self.targetPixels(for: requestPoints, scale: displayScale)
-                let progress = resolvedNaturalAspectProgress
-                let descriptor = MediaRequestDescriptor(
-                    assetID: asset.id,
-                    updatedAt: asset.thumbnailRevision,
-                    derivative: .thumbnail,
-                    targetPixels: .init(width: requestPixels, height: requestPixels)
-                )
-                ImmichThumbnail(
-                    descriptor: descriptor,
-                    media: media,
-                    contentMode: .fit,
-                    showsBackground: true,
-                    backgroundOpacity: 1 - Double(progress),
-                    imageCornerRadius: DesignMetrics.compactCornerRadius * progress,
-                    imageScale: TimelineThumbnailGeometry.imageScale(
-                        aspectRatio: asset.aspectRatio,
-                        containerAspectRatio: proxy.size.width / max(1, proxy.size.height),
-                        naturalAspectProgress: progress
-                    ),
-                    priority: priority,
-                    placeholderImage: placeholderImage,
-                    didLoad: {
-                        media.retainTimelineThumbnail(
-                            $0.container,
-                            descriptor: descriptor,
-                            cacheType: $0.cacheType
-                        )
-                        if let scopedTransitionContext {
-                            scopedTransitionContext.runtime.imageLoaded($0.image, asset: asset, scope: scopedTransitionContext.scope)
-                        }
-                        imageLoaded($0.image)
+        GeometryReader { proxy in
+            let requestPoints = requestSide ?? max(proxy.size.width, proxy.size.height)
+            let requestPixels = Self.targetPixels(for: requestPoints, scale: displayScale)
+            let progress = resolvedNaturalAspectProgress
+            let descriptor = MediaRequestDescriptor(
+                assetID: asset.id,
+                updatedAt: asset.thumbnailRevision,
+                derivative: .thumbnail,
+                targetPixels: .init(width: requestPixels, height: requestPixels)
+            )
+            ImmichThumbnail(
+                descriptor: descriptor,
+                media: media,
+                contentMode: .fit,
+                showsBackground: true,
+                backgroundOpacity: 1 - Double(progress),
+                imageCornerRadius: DesignMetrics.compactCornerRadius * progress,
+                imageScale: TimelineThumbnailGeometry.imageScale(
+                    aspectRatio: asset.aspectRatio,
+                    containerAspectRatio: proxy.size.width / max(1, proxy.size.height),
+                    naturalAspectProgress: progress
+                ),
+                priority: priority,
+                placeholderImage: placeholderImage,
+                didLoad: {
+                    media.retainTimelineThumbnail(
+                        $0.container,
+                        descriptor: descriptor,
+                        cacheType: $0.cacheType
+                    )
+                    if let scopedTransitionContext {
+                        scopedTransitionContext.runtime.imageLoaded($0.image, asset: asset, scope: scopedTransitionContext.scope)
                     }
-                )
-                .frame(width: proxy.size.width, height: proxy.size.height)
-                .overlay(alignment: .topTrailing) {
-                    if asset.isFavorite {
-                        Image(systemName: "heart.fill")
-                            .foregroundStyle(.white)
-                            .padding(7)
-                            .shadow(radius: 2)
-                    }
+                    imageLoaded($0.image)
                 }
-                .overlay {
-                    if TimelineAssetOverlay.isVisible(for: asset) {
-                        GeometryReader { overlayGeometry in
-                            let thumbnailRect = TimelineThumbnailGeometry.renderedImageRect(
-                                in: overlayGeometry.size,
-                                aspectRatio: asset.aspectRatio,
-                                naturalAspectProgress: progress
-                            )
-                            TimelineAssetOverlay(
-                                asset: asset,
-                                isHidden: hiddenLivePhotoBadgeAssetID == asset.id
-                            )
-                            .frame(
-                                width: thumbnailRect.width,
-                                height: thumbnailRect.height,
-                                alignment: .bottomLeading
-                            )
-                            .position(x: thumbnailRect.midX, y: thumbnailRect.midY)
-                        }
-                    }
-                }
-                .onAppear { visibilityChanged(asset.id, descriptor) }
-                .onDisappear { visibilityChanged(asset.id, nil) }
-                .onScrollVisibilityChange(threshold: 0.5) { visible in
-                    viewportChanged(asset, visible)
+            )
+            .frame(width: proxy.size.width, height: proxy.size.height)
+            .overlay(alignment: .topTrailing) {
+                if asset.isFavorite {
+                    Image(systemName: "heart.fill")
+                        .foregroundStyle(.white)
+                        .padding(7)
+                        .shadow(radius: 2)
                 }
             }
-            .opacity(hiddenReturningThumbnailAssetID == asset.id ? 0 : 1)
+            .overlay {
+                if TimelineAssetOverlay.isVisible(for: asset) {
+                    GeometryReader { overlayGeometry in
+                        let thumbnailRect = TimelineThumbnailGeometry.renderedImageRect(
+                            in: overlayGeometry.size,
+                            aspectRatio: asset.aspectRatio,
+                            naturalAspectProgress: progress
+                        )
+                        TimelineAssetOverlay(
+                            asset: asset,
+                            isHidden: hiddenLivePhotoBadgeAssetID == asset.id
+                        )
+                        .frame(
+                            width: thumbnailRect.width,
+                            height: thumbnailRect.height,
+                            alignment: .bottomLeading
+                        )
+                        .position(x: thumbnailRect.midX, y: thumbnailRect.midY)
+                    }
+                }
+            }
+            .onAppear { visibilityChanged(asset.id, descriptor) }
+            .onDisappear { visibilityChanged(asset.id, nil) }
+            .onScrollVisibilityChange(threshold: 0.5) { visible in
+                viewportChanged(asset, visible)
+            }
+            .contentShape(.rect)
+            .gesture(LongPressGesture(minimumDuration: 0.45, maximumDistance: 10)
+                .exclusively(before: TapGesture())
+                .onEnded { result in
+                    switch result {
+                    case .first:
+                        let request = media.imageRequest(for: descriptor)
+                        let image = request.flatMap { media.pipeline?.cache.cachedImage(for: $0)?.image }
+                        previewAction?.open(asset, image)
+                    case .second:
+                        assetSelected(asset)
+                    }
+                })
         }
-        .buttonStyle(.plain)
+        .opacity(hiddenReturningThumbnailAssetID == asset.id ? 0 : 1)
         .background {
             if let scopedTransitionContext {
                 ScopedAssetTransitionProbe(
@@ -682,6 +691,13 @@ struct TimelineAssetThumbnail: View {
         .contentShape(.rect)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityLabel)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { assetSelected(asset) }
+        .accessibilityActions {
+            if let previewAction {
+                Button("Preview") { previewAction.open(asset, nil) }
+            }
+        }
         .accessibilityIdentifier("asset-\(asset.id)")
         .id(asset.id)
     }

@@ -1495,10 +1495,10 @@ struct AssetViewerView: View {
         GlassEffectContainer(spacing: 12) {
             HStack(spacing: 0) {
                 glassActionButton(
-                    systemImage: "square.and.arrow.up",
-                    label: "Share",
+                    systemImage: AssetViewerExportAction.share.systemImage,
+                    label: AssetViewerExportAction.share.title,
                     identifier: "asset-viewer-share",
-                    enabled: false
+                    enabled: AssetViewerExportAction.share.isEnabled
                 ) {}
 
                 Spacer(minLength: 12)
@@ -1515,12 +1515,12 @@ struct AssetViewerView: View {
                     .accessibilityIdentifier("asset-viewer-info")
 
                     Button {} label: {
-                        Image(systemName: "square.and.arrow.down")
+                        Image(systemName: AssetViewerExportAction.download.systemImage)
                             .frame(width: controlHitSize, height: controlHitSize)
                     }
-                    .disabled(true)
-                    .accessibilityLabel("Download")
-                    .accessibilityHint("Coming in a later update")
+                    .disabled(!AssetViewerExportAction.download.isEnabled)
+                    .accessibilityLabel(AssetViewerExportAction.download.title)
+                    .accessibilityHint(AssetViewerExportAction.download.unavailableHint)
                     .accessibilityIdentifier("asset-viewer-download")
                 }
                 .font(.title2.weight(.semibold))
@@ -2897,16 +2897,18 @@ nonisolated enum AssetViewerDismissalGeometry {
         targetRect: CGRect,
         viewportSize: CGSize,
         anchor: UnitPoint,
-        fillsTarget: Bool = false
+        fillsTarget: Bool = false,
+        allowsUpscaling: Bool = false
     ) -> (scale: CGFloat, translation: CGSize) {
         guard imageRect.width > 0, imageRect.height > 0,
               targetRect.width > 0, targetRect.height > 0
         else { return (1, .zero) }
         let widthScale = targetRect.width / imageRect.width
         let heightScale = targetRect.height / imageRect.height
-        let scale = min(1, max(0.04, fillsTarget
-                ? max(widthScale, heightScale)
-                : min(widthScale, heightScale)))
+        let requestedScale = max(0.04, fillsTarget
+            ? max(widthScale, heightScale)
+            : min(widthScale, heightScale))
+        let scale = allowsUpscaling ? requestedScale : min(1, requestedScale)
         let pivot = CGPoint(
             x: anchor.x * viewportSize.width,
             y: anchor.y * viewportSize.height

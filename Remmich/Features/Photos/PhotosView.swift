@@ -346,6 +346,7 @@ struct PhotosView: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.scenePhase) private var scenePhase
 
     let store: PhotosTimelineStore
     let presentation: PhotosPresentationState
@@ -377,6 +378,7 @@ struct PhotosView: View {
     @State private var hiddenReturningThumbnailAssetID: String?
     @State private var libraryRange: TimelineLibraryRange = .all
     @State private var viewerRoute: AssetViewerRoute?
+    @State private var assetPreview: TimelineAssetPreviewSession?
     @State private var viewerSourceImage: UIImage?
     @State private var viewerSourceTarget: AssetViewerDismissalTarget?
     @State private var memoryCardFrames: [String: CGRect] = [:]
@@ -467,7 +469,10 @@ struct PhotosView: View {
         }
         .navigationTitle(navigationTitle)
         .navigationBarTitleDisplayMode(.inline)
-        .nativeEdgeBackAction(active: viewerRoute == nil && (!navigationPath.isEmpty || libraryRange != .all), action: navigateBack)
+        .navigationBarBackButtonHidden(assetPreview != nil)
+        .nativeEdgeBackAction(active: viewerRoute == nil && (assetPreview != nil || !navigationPath.isEmpty || libraryRange != .all), action: navigateBack)
+        .environment(\.timelineAssetPreviewAction, previewAction)
+        .overlay { previewOverlay }
         .fullScreenCover(item: fullScreenViewerRoute) { route in
             assetViewer(route: route, opensFromSource: true)
         }
@@ -498,7 +503,7 @@ struct PhotosView: View {
         }
         .toolbarBackground(navigationPath.isEmpty ? .hidden : .visible, for: .navigationBar)
         .toolbar {
-            if !navigationPath.isEmpty || libraryRange != .all {
+            if assetPreview == nil, !navigationPath.isEmpty || libraryRange != .all {
                 ToolbarItem(placement: .topBarLeading) {
                     Button(action: navigateBack) {
                         Label("Back", systemImage: "chevron.backward")
@@ -513,7 +518,10 @@ struct PhotosView: View {
                     TimelineRangeNavigationTitle(title: title)
                 }
             }
-            AccountToolbarButton(action: showAccount)
+            AccountToolbarButton {
+                dismissPreview()
+                showAccount()
+            }
         }
         .onAppear {
             viewportRuntime.isTimelineActive = isTimelineActive
@@ -552,6 +560,10 @@ struct PhotosView: View {
             }
         }
         .onChange(of: scrollToLatestRequest) {
+            if assetPreview != nil {
+                dismissPreview()
+                return
+            }
             if memoryOverlayRoute != nil {
                 memoryViewerDismissalRequest &+= 1
                 return
@@ -584,6 +596,7 @@ struct PhotosView: View {
         }
         .onChange(of: requestedLibraryRange, initial: true) { _, requestedLibraryRange in
             guard let requestedLibraryRange else { return }
+            dismissPreview()
             navigationPath.removeAll()
             libraryRange = requestedLibraryRange.range
             requestedLibraryRangeHandled()
@@ -591,7 +604,24 @@ struct PhotosView: View {
         .onChange(of: libraryRange, initial: true) { _, range in
             setSemanticMemoryScaleVisible(range == .all)
         }
+        .onChange(of: isTabContentActivated) { _, active in
+            if !active {
+                dismissPreview()
+            }
+        }
+        .onChange(of: media.scope?.cacheNamespace) {
+            assetPreview?.close()
+            assetPreview = nil
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active {
+                assetPreview?.close()
+                assetPreview = nil
+            }
+        }
         .onDisappear {
+            assetPreview?.close()
+            assetPreview = nil
             semanticLatestTask?.cancel()
             semanticLatestTask = nil
             if memoryOverlayRoute != nil {
@@ -764,6 +794,7 @@ struct PhotosView: View {
                             presentViewer(AssetViewerRoute(selectedAsset: asset, initialAssets: assets,
                                                            origin: .timeline(bucketID: semanticBucketID(for: asset), contentName: contentName)))
                         },
+                        previewAsset: previewAction,
                         selectGroup: { route, coverID in
                             selectRoute(semanticRoute(route, coverID: coverID))
                         },
@@ -978,6 +1009,71 @@ struct PhotosView: View {
         navigationPath.last?.navigationTitle ?? ""
     }
 
+    private var previewOverlay: some View {
+        GeometryReader { geometry in
+            let globalFrame = geometry.frame(in: .global)
+            let bottom = tabBarTop > 0 ? min(geometry.size.height, tabBarTop - globalFrame.minY) : geometry.size.height - geometry.safeAreaInsets.bottom
+            let top = geometry.safeAreaInsets.top
+            let available = CGSize(width: geometry.size.width, height: max(0, bottom - top))
+            ZStack(alignment: .topLeading) {
+                if let assetPreview {
+                    Color.clear
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        .contentShape(.rect)
+                        .onTapGesture { dismissPreview() }
+                    TimelineAssetPreview(session: assetPreview, media: media,
+                                         viewport: CGRect(x: 0, y: top, width: available.width, height: available.height),
+                                         globalOrigin: globalFrame.origin)
+                        .accessibilityAction(.escape) { dismissPreview() }
+                        .id(assetPreview.id)
+                        .transition(.identity)
+                        .zIndex(1)
+                }
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height)
+        }
+        .allowsHitTesting(assetPreview != nil)
+    }
+
+    private var previewAction: TimelineAssetPreviewAction {
+        TimelineAssetPreviewAction { asset, image in
+            guard viewerRoute == nil, assetPreview == nil, isTabContentActivated, scenePhase == .active else { return }
+            if let scope = navigationPath.last {
+                assetPreview = TimelineAssetPreviewSession(
+                    asset: asset, image: scopedAssetTransitions.transitionImage(for: asset, scope: scope) ?? image,
+                    target: scopedAssetTransitions.target(assetID: asset.id, scope: scope)
+                )
+            } else {
+                let source = semanticRuntime.openingSource(for: asset)
+                assetPreview = TimelineAssetPreviewSession(asset: asset, image: source?.image ?? image,
+                                                           target: source?.target ?? previewTarget(for: asset))
+            }
+        }
+    }
+
+    private func previewTarget(for asset: TimelineAssetSummary) -> AssetViewerDismissalTarget? {
+        if let scope = navigationPath.last {
+            return scopedAssetTransitions.target(assetID: asset.id, scope: scope)
+        }
+        return semanticRuntime.dismissalTarget(assetID: asset.id, aspectRatio: asset.aspectRatio)
+    }
+
+    private func dismissPreview() {
+        guard let preview = assetPreview, !preview.isDismissing else { return }
+        preview.beginDismissal()
+        preview.transitionTarget = previewTarget(for: preview.asset) ?? preview.transitionTarget
+        withAnimation(reduceMotion ? AssetViewerTransitionMotion.reducedMotion : AssetViewerTransitionMotion.returning,
+                      completionCriteria: .removed)
+        {
+            preview.transitionProgress = 0
+        } completion: {
+            preview.close()
+            if assetPreview?.id == preview.id {
+                assetPreview = nil
+            }
+        }
+    }
+
     private func selectRoute(_ route: PhotosRangeRoute) {
         withAnimation(.smooth(duration: 0.25)) {
             navigationPath.append(route)
@@ -985,6 +1081,10 @@ struct PhotosView: View {
     }
 
     private func navigateBack() {
+        if assetPreview != nil {
+            dismissPreview()
+            return
+        }
         // Swapping an asset grid or grouped catalog back to its parent can
         // publish hundreds of visibility changes. Keep that structural swap
         // atomic instead of implicitly animating every outgoing and incoming
@@ -1283,6 +1383,7 @@ struct PhotosView: View {
     }
 
     private func presentViewer(_ route: AssetViewerRoute) {
+        guard assetPreview == nil else { return }
         switch route.origin {
         case let .scoped(scope, _):
             viewerSourceTarget = scopedAssetTransitions.target(assetID: route.selectedAsset.id, scope: scope)

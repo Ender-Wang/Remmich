@@ -123,13 +123,13 @@ final class VideoPlaybackSession {
         intendedPlayback && !isClosed
     }
 
-    func prepare(using media: MediaLibraryController) async {
+    func prepare(using media: MediaLibraryController, autoplay: Bool = true) async {
         guard !isClosed else { return }
         generation += 1
         let preparationGeneration = generation
         resetItem()
         phase = .preparing
-        intendedPlayback = true
+        intendedPlayback = autoplay
         resumesPreparationAfterSuspension = false
 
         do {
@@ -159,6 +159,9 @@ final class VideoPlaybackSession {
                     from: item.asset,
                     generation: preparationGeneration
                 )
+            }
+            if !autoplay {
+                phase = .paused
             }
             try await startPlayback(generation: preparationGeneration)
         } catch is CancellationError {

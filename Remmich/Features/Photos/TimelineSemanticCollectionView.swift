@@ -38,6 +38,7 @@ struct TimelineSemanticCollectionView: UIViewControllerRepresentable {
     let hiddenThumbnailID: String?
     let hiddenLivePhotoID: String?
     let selectAsset: (TimelineAssetSummary, [TimelineAssetSummary]) -> Void
+    var previewAsset: TimelineAssetPreviewAction?
     let selectGroup: (PhotosRangeRoute, String?) -> Void
     let scaleChanged: (TimelineSemanticScale) -> Void
     var transitionScaleChanged: (TimelineSemanticScale) -> Void = { _ in }
@@ -927,7 +928,12 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
                                            cell?.coverImageAssetID = asset.id
                                        },
                                        hiddenLivePhotoBadgeAssetID: input.hiddenLivePhotoID,
-                                       hiddenReturningThumbnailAssetID: input.hiddenThumbnailID),
+                                       hiddenReturningThumbnailAssetID: input.hiddenThumbnailID)
+                    .environment(\.timelineAssetPreviewAction, TimelineAssetPreviewAction { [weak self] asset, image in
+                        guard let self, gesture == nil, animator == nil,
+                              let input = self.input, input.isActive else { return }
+                        input.previewAsset?.open(asset, image)
+                    }),
                 parent: self
             )
         } else {
