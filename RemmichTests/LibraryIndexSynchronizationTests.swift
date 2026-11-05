@@ -458,6 +458,7 @@ struct LibraryIndexSynchronizationTests {
         #expect(result.isComplete)
         #expect(snapshot.assets.map(\.id) == ["kept"])
         #expect(snapshot.syncState.indexedAssetCount == 1)
+        #expect(!snapshot.groups.isEmpty)
         #expect(snapshot.groups.allSatisfy { $0.assetCount == 1 && !$0.owningBucketKeys.contains(vanishedMonth) })
         let otherAfter = try #require(try await store.snapshot(scope: otherScope))
         #expect(otherAfter.generation == otherBefore.generation)
