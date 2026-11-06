@@ -1,3 +1,4 @@
+import OSLog
 import SwiftUI
 
 /// Shared motion for timeline asset expansion and its return to the source cell.
@@ -17,6 +18,46 @@ nonisolated enum AssetViewerTransitionMotion {
 
     static var reducedMotion: Animation {
         .easeOut(duration: 0.15)
+    }
+}
+
+/// Temporary, non-observable timing capture: logging must not invalidate the
+/// animated view or introduce an additional SwiftUI transaction.
+@MainActor
+final class AssetViewerGestureDiagnostics {
+    private let context: String
+    #if DEBUG
+        private static let logger = Logger(subsystem: "io.github.ender-wang.Remmich", category: "ViewerGesture")
+        private let startedAt = Date.timeIntervalSinceReferenceDate
+        private var dragDecisions: Set<String> = []
+    #endif
+
+    init(context: String) {
+        self.context = context
+    }
+
+    func record(_ event: String, assetID: String, details: String = "") {
+        #if DEBUG
+            let source = context
+            let elapsed = Int((Date.timeIntervalSinceReferenceDate - startedAt) * 1000)
+            Self.logger.debug("Viewer gesture diagnostic context=\(source, privacy: .public) event=\(event, privacy: .public) asset=\(String(assetID.prefix(8)), privacy: .public) elapsedMs=\(elapsed) \(details, privacy: .public)")
+        #endif
+    }
+
+    func dragChanged(assetID: String, decision: String, translation: CGSize) {
+        #if DEBUG
+            guard dragDecisions.insert(decision).inserted else { return }
+            record("drag-changed", assetID: assetID,
+                   details: "decision=\(decision) dx=\(Int(translation.width)) dy=\(Int(translation.height))")
+        #endif
+    }
+
+    func dragEnded(assetID: String, decision: String, translation: CGSize, predictedEnd: CGSize) {
+        #if DEBUG
+            record("drag-ended", assetID: assetID,
+                   details: "decision=\(decision) dx=\(Int(translation.width)) dy=\(Int(translation.height)) predictedY=\(Int(predictedEnd.height))")
+            dragDecisions.removeAll()
+        #endif
     }
 }
 

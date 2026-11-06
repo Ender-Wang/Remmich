@@ -67,6 +67,7 @@ struct AssetViewerView: View {
     @State private var openingProgress: CGFloat
     @State private var openingTask: Task<Void, Never>?
     @State private var openingGeneration = 0
+    @State private var gestureDiagnostics = AssetViewerGestureDiagnostics(context: "viewer")
     @State private var isDismissing = false
     @State private var dismissalDragTranslation = CGSize.zero
     @State private var dismissalDragStartLocation = CGPoint.zero
@@ -1644,6 +1645,9 @@ struct AssetViewerView: View {
     ) -> some Gesture {
         DragGesture(minimumDistance: 16)
             .onChanged { value in
+                gestureDiagnostics.dragChanged(assetID: session.selectedAssetID,
+                                               decision: openingIsActive ? "blocked-opening" : (isDismissing ? "blocked-closing" : (zoomedAssetID != nil ? "blocked-zoom" : (abs(value.translation.height) > abs(value.translation.width) * 1.2 ? "accepted" : "blocked-direction"))),
+                                               translation: value.translation)
                 guard !openingIsActive,
                       !isDismissing,
                       zoomedAssetID == nil,
@@ -1769,6 +1773,9 @@ struct AssetViewerView: View {
                 }
             }
             .onEnded { value in
+                gestureDiagnostics.dragEnded(assetID: session.selectedAssetID,
+                                             decision: openingIsActive ? "blocked-opening" : (isDismissing ? "blocked-closing" : (zoomedAssetID != nil ? "blocked-zoom" : "routing")),
+                                             translation: value.translation, predictedEnd: value.predictedEndTranslation)
                 guard !openingIsActive, !isDismissing else {
                     verticalDragRoute = nil
                     return
@@ -1900,16 +1907,20 @@ struct AssetViewerView: View {
     }
 
     private func beginOpeningAnimation() {
+        gestureDiagnostics.record("opening-requested", assetID: session.selectedAssetID,
+                                  details: "sourceImage=\(sourceImage != nil)")
         openingTask?.cancel()
         openingGeneration += 1
         let generation = openingGeneration
         guard sourceTarget != nil || dismissalTarget(route.selectedAsset.id) != nil else {
+            gestureDiagnostics.record("opening-skipped", assetID: session.selectedAssetID, details: "reason=no-source")
             openingProgress = 1
             openingIsActive = false
             resumeMemoryAutoRotation()
             return
         }
         guard !reduceMotion else {
+            gestureDiagnostics.record("opening-skipped", assetID: session.selectedAssetID, details: "reason=reduce-motion")
             openingProgress = 1
             openingIsActive = false
             return
@@ -1917,12 +1928,14 @@ struct AssetViewerView: View {
         openingTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(16))
             guard !Task.isCancelled, openingGeneration == generation, !isDismissing else { return }
+            gestureDiagnostics.record("opening-started", assetID: session.selectedAssetID)
             if isMemoryViewer {
                 withAnimation(.easeOut(duration: 0.28)) {
                     openingProgress = 1
                 }
                 try? await Task.sleep(for: .milliseconds(300))
                 guard !Task.isCancelled, openingGeneration == generation, !isDismissing else { return }
+                gestureDiagnostics.record("opening-settled", assetID: session.selectedAssetID)
                 openingIsActive = false
                 resumeMemoryAutoRotation()
                 return
@@ -1933,6 +1946,7 @@ struct AssetViewerView: View {
                 openingProgress = 1
             } completion: {
                 guard openingGeneration == generation, openingIsActive, !isDismissing else { return }
+                gestureDiagnostics.record("opening-settled", assetID: session.selectedAssetID)
                 var transaction = Transaction(animation: nil)
                 transaction.disablesAnimations = true
                 withTransaction(transaction) {
