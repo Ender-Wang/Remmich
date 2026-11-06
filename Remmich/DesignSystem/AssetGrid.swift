@@ -568,6 +568,8 @@ struct TimelineDeterministicAssetRow: View {
 struct TimelineAssetThumbnail: View {
     @Environment(\.timelineAssetPreviewAction) private var previewAction
     @Environment(\.scopedAssetTransitionContext) private var scopedTransitionContext
+    @Environment(\.timelineHiddenSourceAssetID) private var hiddenSourceAssetID
+    @Environment(\.timelinePreviewAssets) private var previewAssets
     @Environment(\.displayScale) private var displayScale
     let asset: TimelineAssetSummary
     let media: MediaLibraryController
@@ -670,13 +672,13 @@ struct TimelineAssetThumbnail: View {
                     case .first:
                         let request = media.imageRequest(for: descriptor)
                         let image = request.flatMap { media.pipeline?.cache.cachedImage(for: $0)?.image }
-                        previewAction?.open(asset, image)
+                        previewAction?.open(asset, image, previewAssets)
                     case .second:
                         assetSelected(asset)
                     }
                 })
         }
-        .opacity(hiddenReturningThumbnailAssetID == asset.id ? 0 : 1)
+        .opacity(hiddenReturningThumbnailAssetID == asset.id || hiddenSourceAssetID == asset.id ? 0 : 1)
         .background {
             if let scopedTransitionContext {
                 ScopedAssetTransitionProbe(
@@ -695,7 +697,7 @@ struct TimelineAssetThumbnail: View {
         .accessibilityAction { assetSelected(asset) }
         .accessibilityActions {
             if let previewAction {
-                Button("Preview") { previewAction.open(asset, nil) }
+                Button("Preview") { previewAction.open(asset, nil, previewAssets) }
             }
         }
         .accessibilityIdentifier("asset-\(asset.id)")

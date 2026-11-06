@@ -92,30 +92,106 @@ struct TimelineAssetPreviewTests {
         #expect(abs(image.midY + preview.translation.height - source.midY) < 0.001)
     }
 
-    @Test @MainActor func pauseAndResumeDuringOpeningPreserveUserIntent() async {
-        let session = TimelineAssetPreviewSession(asset: asset(video: true, live: false), image: nil)
+    @Test @MainActor func promotionWaitsForOpeningAndTransfersTheOriginalViewerRoute() {
+        let selected = asset(video: true, live: false)
+        let route = AssetViewerRoute(selectedAsset: selected, initialAssets: [selected],
+                                     origin: .timeline(bucketID: .init(rawValue: "2026-11-01"), contentName: "Videos"))
+        let session = TimelineAssetPreviewSession(asset: selected, image: nil, viewerRoute: route)
         defer { session.close() }
-        await session.togglePlayback()
-        #expect(!session.isPlaybackIntended)
-        #expect(!session.wantsPlayback)
-        await session.togglePlayback()
+        #expect(!session.beginPromotion())
         #expect(session.isPlaybackIntended)
-        #expect(session.wantsPlayback)
+        session.completeOpening()
+        #expect(session.beginPromotion())
+        #expect(session.isPromoting)
+        #expect(!session.acceptsInput)
+        #expect(session.viewerRoute == route)
+        #expect(!session.isPlaybackIntended)
+        #expect(session.playback?.player.isMuted == true)
+        #expect(!session.beginPromotion())
+        #expect(!session.beginSourceHandoff())
     }
 
-    @Test @MainActor func dismissalRejectsDelayedPreparationAndResume() async {
+    @Test @MainActor func dismissalRejectsDelayedPreparationAndPromotion() async {
         let session = TimelineAssetPreviewSession(asset: asset(video: false, live: true), image: nil)
+        #expect(session.acceptsInput)
         session.beginDismissal()
+        #expect(!session.acceptsInput)
         session.completeOpening()
         #expect(!session.isOpeningComplete)
         await session.prepare(using: MediaLibraryController())
-        await session.togglePlayback()
+        #expect(!session.beginPromotion())
         #expect(!session.isPlaybackIntended)
         #expect(session.playback?.generation == 0)
         #expect(session.playback?.player.currentItem == nil)
         session.close()
         session.close()
         #expect(session.playback?.isClosed == true)
+    }
+
+    @Test @MainActor func sourceOwnershipSurvivesReturnUntilHandoffAndRestoresOnClose() {
+        let target = AssetViewerDismissalTarget(imageFrame: CGRect(x: 20, y: 100, width: 80, height: 80),
+                                                cornerRadius: 0, fillsFrame: true)
+        let session = TimelineAssetPreviewSession(asset: asset(video: false, live: true), image: UIImage(), target: target)
+        #expect(session.hiddenSourceAssetID == "asset")
+        #expect(!session.beginSourceHandoff())
+        session.beginDismissal()
+        #expect(session.hiddenSourceAssetID == "asset")
+        #expect(!session.acceptsInput)
+        session.updateReturnSource(.init(imageFrame: target.imageFrame.offsetBy(dx: 12, dy: -40), cornerRadius: 0, fillsFrame: true))
+        #expect(session.returnSourceOffset == CGSize(width: 12, height: -40))
+        #expect(session.beginSourceHandoff())
+        #expect(session.hiddenSourceAssetID == nil)
+        #expect(!session.beginSourceHandoff())
+        // Keep following the real cell throughout the crossfade as well.
+        session.updateReturnSource(.init(imageFrame: target.imageFrame.offsetBy(dx: 12, dy: -90), cornerRadius: 0, fillsFrame: true))
+        #expect(session.returnSourceOffset == CGSize(width: 12, height: -90))
+        session.close()
+        session.updateReturnSource(target)
+        #expect(session.returnSourceOffset == CGSize(width: 12, height: -90))
+        #expect(session.playback?.isClosed == true)
+    }
+
+    @Test @MainActor func abandonedPreviewRestoresItsSourceWithoutAffectingItsReplacement() {
+        let target = AssetViewerDismissalTarget(imageFrame: CGRect(x: 20, y: 100, width: 80, height: 80),
+                                                cornerRadius: 0, fillsFrame: true)
+        let old = TimelineAssetPreviewSession(asset: asset(video: false, live: false), image: nil, target: target)
+        let next = TimelineAssetPreviewSession(asset: asset(video: false, live: false), image: nil, target: target)
+        old.beginDismissal()
+        old.close()
+        #expect(old.hiddenSourceAssetID == nil)
+        #expect(!old.beginSourceHandoff())
+        #expect(next.hiddenSourceAssetID == "asset")
+        #expect(next.acceptsInput)
+        next.close()
+        #expect(next.hiddenSourceAssetID == nil)
+    }
+
+    @Test func sourceMovementMatchesTheCellAtLandingWithoutMovingTheExpandedPreview() {
+        let moved = CGSize(width: 12, height: -160)
+        #expect(TimelineAssetPreviewGeometry.sourceOffset(moved, progress: 1) == .zero)
+        #expect(TimelineAssetPreviewGeometry.sourceOffset(moved, progress: 0) == moved)
+        #expect(TimelineAssetPreviewGeometry.sourceOffset(moved, progress: 0.5) == CGSize(width: 6, height: -80))
+        #expect(TimelineAssetPreviewGeometry.sourceOffset(moved, progress: -0.1) == moved)
+        #expect(TimelineAssetPreviewGeometry.sourceOffset(moved, progress: 1.1) == .zero)
+    }
+
+    @Test @MainActor func dismissalRetainsDisplayedPixelsAndRejectsLateImageDelivery() {
+        let thumbnail = UIImage()
+        let preview = UIImage()
+        let lateImage = UIImage()
+        let session = TimelineAssetPreviewSession(asset: asset(video: false, live: false), image: thumbnail)
+        session.completeOpening()
+        session.receivePreviewImage(preview)
+        #expect(session.image === thumbnail)
+        #expect(session.previewImage === preview)
+
+        session.beginDismissal()
+        session.receivePreviewImage(lateImage)
+        #expect(session.image === thumbnail)
+        #expect(session.previewImage === preview)
+        session.close()
+        session.receivePreviewImage(lateImage)
+        #expect(session.previewImage === preview)
     }
 
     @Test @MainActor func motionPreparationWaitsForOpeningCompletion() async {
