@@ -10,7 +10,8 @@ struct AssetViewerOpeningDragTests {
         #expect(drag.isActive)
         #expect(!drag.openingHasSettled)
         #expect(drag.translation == CGSize(width: 8, height: 188))
-        #expect(!drag.openingSettled())
+        let canReleaseOpening = drag.openingSettled()
+        #expect(!canReleaseOpening)
         #expect(drag.isActive)
     }
 
@@ -18,15 +19,20 @@ struct AssetViewerOpeningDragTests {
         for openingFinishesFirst in [true, false] {
             var drag = AssetViewerOpeningDrag()
             drag.update(CGSize(width: 4, height: 24))
-            let generation = try #require(drag.beginCancellation())
+            let cancellationGeneration = drag.beginCancellation()
+            let generation = try #require(cancellationGeneration)
             #expect(drag.translation == .zero)
             #expect(drag.isActive)
             if openingFinishesFirst {
-                #expect(!drag.openingSettled())
-                #expect(drag.finishCancellation(generation: generation))
+                let canReleaseAfterOpening = drag.openingSettled()
+                #expect(!canReleaseAfterOpening)
+                let canReleaseAfterCancellation = drag.finishCancellation(generation: generation)
+                #expect(canReleaseAfterCancellation)
             } else {
-                #expect(!drag.finishCancellation(generation: generation))
-                #expect(drag.openingSettled())
+                let canReleaseAfterCancellation = drag.finishCancellation(generation: generation)
+                #expect(!canReleaseAfterCancellation)
+                let canReleaseAfterOpening = drag.openingSettled()
+                #expect(canReleaseAfterOpening)
             }
             #expect(!drag.isActive)
         }
@@ -35,13 +41,17 @@ struct AssetViewerOpeningDragTests {
     @Test func lateCancelCompletionCannotReleaseANewerDragOrReturn() throws {
         var drag = AssetViewerOpeningDrag()
         drag.update(CGSize(width: 4, height: 24))
-        let oldGeneration = try #require(drag.beginCancellation())
+        let oldCancellation = drag.beginCancellation()
+        let oldGeneration = try #require(oldCancellation)
         drag.update(CGSize(width: -8, height: 120))
-        #expect(!drag.finishCancellation(generation: oldGeneration))
+        let canReleaseNewDrag = drag.finishCancellation(generation: oldGeneration)
+        #expect(!canReleaseNewDrag)
         #expect(drag.translation == CGSize(width: -8, height: 120))
-        let nextGeneration = try #require(drag.beginCancellation())
+        let nextCancellation = drag.beginCancellation()
+        let nextGeneration = try #require(nextCancellation)
         drag.beginReturn()
-        #expect(!drag.finishCancellation(generation: nextGeneration))
+        let canReleaseReturn = drag.finishCancellation(generation: nextGeneration)
+        #expect(!canReleaseReturn)
         #expect(drag.isActive)
         #expect(drag.translation == .zero)
     }
@@ -52,10 +62,14 @@ struct AssetViewerOpeningDragTests {
         drag.update(CGSize(width: 0, height: -20))
         #expect(drag.isActive)
         #expect(drag.translation == .zero)
-        #expect(!drag.openingSettled())
-        let generation = try #require(drag.beginCancellation())
-        #expect(drag.beginCancellation() == nil)
-        #expect(drag.finishCancellation(generation: generation))
+        let canReleaseOpening = drag.openingSettled()
+        #expect(!canReleaseOpening)
+        let cancellation = drag.beginCancellation()
+        let generation = try #require(cancellation)
+        let repeatedCancellation = drag.beginCancellation()
+        #expect(repeatedCancellation == nil)
+        let canReleaseAfterCancellation = drag.finishCancellation(generation: generation)
+        #expect(canReleaseAfterCancellation)
     }
 
     @Test func returnRetargetsTheCropContinuouslyFromPreviewToTimeline() {
