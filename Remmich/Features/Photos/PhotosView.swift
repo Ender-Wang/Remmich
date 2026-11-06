@@ -825,8 +825,8 @@ struct PhotosView: View {
                                     AssetReturnSourceDiagnostics.sourceMoved(context: "root", userScrolling: userScrolling)
                                 }
                             #endif
-                            if userScrolling, delta != 0 {
-                                updateReturningPreviewSource()
+                            if delta != 0 {
+                                updateReturningAssetSources(updatePreview: userScrolling)
                             }
                             guard !viewerOwnsTimelineChrome else { return }
                             if let compact = viewportRuntime.chromeTracker.update(offsetDelta: delta, bottomGap: gap,
@@ -1022,7 +1022,7 @@ struct PhotosView: View {
                 #if DEBUG
                     AssetReturnSourceDiagnostics.sourceMoved(context: "scoped", userScrolling: true)
                 #endif
-                updateReturningPreviewSource()
+                updateReturningAssetSources()
             },
             assetSelected: { asset, assets in
                 presentViewer(AssetViewerRoute(
@@ -1129,15 +1129,19 @@ struct PhotosView: View {
         }
     }
 
-    private func updateReturningPreviewSource() {
-        guard let preview = assetPreview, preview.isDismissing, !preview.isPromoting else { return }
+    private func updateReturningAssetSources(updatePreview: Bool = true) {
+        let preview = assetPreview
+        let hasReturningPreview = updatePreview && preview?.isDismissing == true && preview?.isPromoting == false
+        guard hasReturningPreview || viewerPresentations?.hasReturningEntries(ownerID: viewerPresentationOwnerID) == true else { return }
         #if DEBUG
             let queuedAt = ProcessInfo.processInfo.systemUptime
         #endif
         // UIKit can report scrolling during a representable layout/update.
         // Defer publication, then measure the latest global source geometry.
         Task { @MainActor [weak preview] in
-            guard let preview, assetPreview?.id == preview.id, !preview.isClosed else { return }
+            viewerPresentations?.updateReturningSources(ownerID: viewerPresentationOwnerID)
+            guard hasReturningPreview, let preview, assetPreview?.id == preview.id, preview.isDismissing,
+                  !preview.isPromoting, !preview.isClosed else { return }
             guard let target = previewTarget(for: preview.asset) else {
                 finishPreviewLanding(preview)
                 return
@@ -1276,7 +1280,8 @@ struct PhotosView: View {
     private func assetViewer(
         route: AssetViewerRoute,
         opensFromSource: Bool,
-        presentationID: UUID? = nil
+        presentationID: UUID? = nil,
+        returnSource: AssetViewerReturnSource? = nil
     ) -> some View {
         AssetViewerView(
             route: route,
@@ -1287,6 +1292,7 @@ struct PhotosView: View {
             opensFromSource: opensFromSource,
             sourceImage: viewerSourceImage,
             sourceTarget: viewerSourceTarget,
+            returnSource: returnSource,
             memoryContentOpacity: memoryViewerContentOpacity,
             memoryRowFrame: memoryLaneFrame,
             dismissalRequest: memoryViewerDismissalRequest,
@@ -1578,8 +1584,8 @@ struct PhotosView: View {
             } else if let viewerPresentations {
                 hiddenReturningThumbnailAssetID = nil
                 hiddenLivePhotoBadgeAssetID = nil
-                viewerPresentationID = viewerPresentations.present(ownerID: viewerPresentationOwnerID, assetID: route.selectedAsset.id) { id in
-                    AnyView(assetViewer(route: route, opensFromSource: true, presentationID: id))
+                viewerPresentationID = viewerPresentations.present(ownerID: viewerPresentationOwnerID, assetID: route.selectedAsset.id) { id, source in
+                    AnyView(assetViewer(route: route, opensFromSource: true, presentationID: id, returnSource: source))
                 }
             }
         }

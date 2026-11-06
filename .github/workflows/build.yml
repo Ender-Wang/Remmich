@@ -59,7 +59,8 @@ jobs:
       - name: Build app and test bundles
         run: |
           set -o pipefail
-          xcodebuild build-for-testing -quiet \
+          xcodebuild build-for-testing \
+            -quiet \
             -project Remmich.xcodeproj \
             -scheme Remmich \
             -configuration Debug \
@@ -71,21 +72,37 @@ jobs:
             COMPILER_INDEX_STORE_ENABLE=NO \
             | xcbeautify
 
-      - name: Archive test products
+      - name: Test moving return sources and opening interruption
         run: |
-          test -d "$DERIVED_DATA_PATH/Build/Products"
-          printf '%s\n' "$GITHUB_SHA" > "$DERIVED_DATA_PATH/Build/tested-revision"
-          tar -C "$DERIVED_DATA_PATH/Build" \
-            -czf "$RUNNER_TEMP/remmich-test-products.tar.gz" \
-            Products \
-            tested-revision
+          xcodebuild test-without-building \
+            -quiet \
+            -project Remmich.xcodeproj \
+            -scheme Remmich \
+            -configuration Debug \
+            -destination "$IPHONE_DESTINATION" \
+            -derivedDataPath "$DERIVED_DATA_PATH" \
+            -resultBundlePath "$RUNNER_TEMP/RemmichReturnSourceTests.xcresult" \
+            -only-testing:RemmichTests/AssetViewerPresentationTests \
+            -only-testing:RemmichTests/AssetViewerOpeningDragTests \
+            -jobs 2 \
+            -parallel-testing-enabled NO \
+            COMPILER_INDEX_STORE_ENABLE=NO
 
-      - name: Upload test products
+      - name: Report return-source test failures
+        if: ${{ failure() }}
+        run: |
+          if [[ -d "$RUNNER_TEMP/RemmichReturnSourceTests.xcresult" ]]; then
+            xcrun xcresulttool get test-results summary \
+              --path "$RUNNER_TEMP/RemmichReturnSourceTests.xcresult" --format json
+          fi
+
+      - name: Upload return-source test results
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: remmich-test-products
-          path: ${{ runner.temp }}/remmich-test-products.tar.gz
-          if-no-files-found: error
+          name: remmich-return-source-results
+          path: ${{ runner.temp }}/RemmichReturnSourceTests.xcresult
+          if-no-files-found: ignore
           retention-days: 3
 
       - name: Shut down simulator
