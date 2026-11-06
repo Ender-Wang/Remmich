@@ -38,6 +38,7 @@ struct AssetViewerView: View {
     let returningLivePhotoBadgeChanged: (String?) -> Void
     let returningTimelineThumbnailChanged: (String?) -> Void
     let dismissalTarget: (String) -> AssetViewerDismissalTarget?
+    let returnSource: AssetViewerReturnSource?
 
     @State private var session: AssetViewerSession
     @State private var mediaViewerID = UUID()
@@ -123,6 +124,7 @@ struct AssetViewerView: View {
         opensFromSource: Bool = true,
         sourceImage: UIImage? = nil,
         sourceTarget: AssetViewerDismissalTarget? = nil,
+        returnSource: AssetViewerReturnSource? = nil,
         memoryContentOpacity: Double = 1,
         memoryRowFrame: CGRect? = nil,
         dismissalRequest: Int = 0,
@@ -142,6 +144,7 @@ struct AssetViewerView: View {
         self.opensFromSource = opensFromSource
         self.sourceImage = sourceImage
         self.sourceTarget = sourceTarget
+        self.returnSource = returnSource
         self.memoryContentOpacity = memoryContentOpacity
         self.memoryRowFrame = memoryRowFrame
         self.dismissalRequest = dismissalRequest
@@ -404,6 +407,7 @@ struct AssetViewerView: View {
                     ))
                     .scaleEffect(openingDragScale)
                     .offset(openingDragTranslation)
+                    .modifier(AssetViewerReturnSourceOffset(source: returnSource))
                     .opacity(
                         (usesNativeDismissal ? 0 : dismissalAssetOpacity)
                             * (isMemoryViewer ? memoryContentOpacity * memoryWrapOpacity : 1)
@@ -421,6 +425,7 @@ struct AssetViewerView: View {
                         )
                         .scaleEffect(openingDragScale)
                         .offset(openingDragTranslation)
+                        .modifier(AssetViewerReturnSourceOffset(source: returnSource))
                     }
 
                     // Show loading feedback throughout opening. Keep the lightweight overlay
@@ -437,8 +442,9 @@ struct AssetViewerView: View {
                         .opacity(isMemoryViewer ? memoryContentOpacity * memoryWrapOpacity : 1)
                     }
 
-                    AssetViewerNativeDismissalSurface(
-                        controller: nativeDismissalController
+                    AssetViewerTrackedNativeDismissalSurface(
+                        controller: nativeDismissalController,
+                        source: returnSource
                     )
                     .frame(width: fullRect.width, height: fullRect.height)
                     .allowsHitTesting(false)
@@ -583,6 +589,7 @@ struct AssetViewerView: View {
             beginOpeningAnimation()
         }
         .onDisappear {
+            returnSource?.stop()
             logMemoryPlayback("disappear")
             videoPlaybackSession?.close()
             openingTask?.cancel()
@@ -2023,6 +2030,7 @@ struct AssetViewerView: View {
     private func completeOpeningDragDismissal() {
         guard !isDismissing, let asset = session.selectedAsset else { return }
         let target = dismissalTarget(asset.id)
+        beginReturnSourceTracking(assetID: asset.id, target: target)
         let generation = openingGeneration + 1
         openingTask?.cancel()
         // Retarget the still-mounted opening hero, including its crop. There
@@ -2123,6 +2131,9 @@ struct AssetViewerView: View {
             return
         }
         let destination = dismissalTarget(asset.id)
+        if !isMemoryViewer {
+            beginReturnSourceTracking(assetID: asset.id, target: destination)
+        }
         let target = destination?.imageFrame.offsetBy(
             dx: -viewportOrigin.x,
             dy: -viewportOrigin.y
@@ -2259,6 +2270,11 @@ struct AssetViewerView: View {
             guard !Task.isCancelled else { return }
             closeWithoutAnimation()
         }
+    }
+
+    private func beginReturnSourceTracking(assetID: String, target: AssetViewerDismissalTarget?) {
+        let resolve = dismissalTarget
+        returnSource?.begin(target: target, current: { resolve(assetID) })
     }
 
     private func finishTimelineLanding(fillsFrame: Bool, usesNativeSurface: Bool) {
@@ -3280,8 +3296,18 @@ nonisolated struct AssetViewerTransitionClipShape: Shape {
     }
 }
 
+private struct AssetViewerTrackedNativeDismissalSurface: View {
+    let controller: AssetViewerNativeDismissalController
+    let source: AssetViewerReturnSource?
+
+    var body: some View {
+        AssetViewerNativeDismissalSurface(controller: controller, sourceOffset: source?.offset ?? .zero)
+    }
+}
+
 private struct AssetViewerNativeDismissalSurface: UIViewRepresentable {
     let controller: AssetViewerNativeDismissalController
+    let sourceOffset: CGSize
 
     func makeCoordinator() -> AssetViewerNativeDismissalController {
         controller
@@ -3298,6 +3324,7 @@ private struct AssetViewerNativeDismissalSurface: UIViewRepresentable {
 
     func updateUIView(_ uiView: UIView, context: Context) {
         context.coordinator.attach(to: uiView)
+        context.coordinator.updateSourceOffset(sourceOffset)
     }
 
     static func dismantleUIView(
@@ -3316,6 +3343,7 @@ private final class AssetViewerNativeDismissalController: NSObject {
     private let imageView = UIImageView()
     private let maskLayer = CAShapeLayer()
     private var animator: UIViewPropertyAnimator?
+    private var contentOrigin: CGPoint = .zero
 
     private(set) var isActive = false
 
@@ -3366,16 +3394,26 @@ private final class AssetViewerNativeDismissalController: NSObject {
         contentView.transform = .identity
         contentView.bounds = viewportBounds
         contentView.layer.anchorPoint = CGPoint(x: anchor.x, y: anchor.y)
-        contentView.layer.position = CGPoint(
+        contentOrigin = CGPoint(
             x: viewportSize.width * anchor.x,
             y: viewportSize.height * anchor.y
         )
+        contentView.layer.position = contentOrigin
         imageView.image = image
         imageView.frame = imageRect
         imageView.alpha = 1
         maskLayer.frame = viewportBounds
         setMaskPath(rect: imageRect, cornerRadius: 0)
         isActive = true
+    }
+
+    func updateSourceOffset(_ offset: CGSize) {
+        guard isActive else { return }
+        // The return animator owns transform; scrolling owns only position.
+        // Moving its anchor preserves the running spring and the crop mask.
+        UIView.performWithoutAnimation {
+            contentView.layer.position = CGPoint(x: contentOrigin.x + offset.width, y: contentOrigin.y + offset.height)
+        }
     }
 
     func update(
