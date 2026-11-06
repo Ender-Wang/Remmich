@@ -820,6 +820,11 @@ struct PhotosView: View {
                         scaleChanged: semanticScaleChanged,
                         transitionScaleChanged: semanticTransitionScaleChanged,
                         scrolled: { delta, gap, userScrolling in
+                            #if DEBUG
+                                if delta != 0 {
+                                    AssetReturnSourceDiagnostics.sourceMoved(context: "root", userScrolling: userScrolling)
+                                }
+                            #endif
                             if userScrolling, delta != 0 {
                                 updateReturningPreviewSource()
                             }
@@ -1013,7 +1018,12 @@ struct PhotosView: View {
             visibilityChanged: updateVisibility,
             viewportChanged: updateViewport,
             transitionNamespace: viewerNamespace,
-            sourceMoved: updateReturningPreviewSource,
+            sourceMoved: {
+                #if DEBUG
+                    AssetReturnSourceDiagnostics.sourceMoved(context: "scoped", userScrolling: true)
+                #endif
+                updateReturningPreviewSource()
+            },
             assetSelected: { asset, assets in
                 presentViewer(AssetViewerRoute(
                     selectedAsset: asset,
@@ -1100,6 +1110,11 @@ struct PhotosView: View {
     private func dismissPreview() {
         guard let preview = assetPreview, !preview.isDismissing else { return }
         let target = previewTarget(for: preview.asset)
+        #if DEBUG
+            AssetReturnSourceDiagnostics.begin(id: preview.id, kind: "preview", target: target,
+                                               current: { previewTarget(for: preview.asset) },
+                                               appliedOffset: { [weak preview] in preview?.returnSourceOffset ?? .zero })
+        #endif
         withAnimation(reduceMotion ? AssetViewerTransitionMotion.reducedMotion : AssetViewerTransitionMotion.returning,
                       completionCriteria: .removed)
         {
@@ -1116,6 +1131,9 @@ struct PhotosView: View {
 
     private func updateReturningPreviewSource() {
         guard let preview = assetPreview, preview.isDismissing, !preview.isPromoting else { return }
+        #if DEBUG
+            let queuedAt = ProcessInfo.processInfo.systemUptime
+        #endif
         // UIKit can report scrolling during a representable layout/update.
         // Defer publication, then measure the latest global source geometry.
         Task { @MainActor [weak preview] in
@@ -1127,12 +1145,18 @@ struct PhotosView: View {
             var transaction = Transaction(animation: nil)
             transaction.disablesAnimations = true
             withTransaction(transaction) { preview.updateReturnSource(target) }
+            #if DEBUG
+                AssetReturnSourceDiagnostics.previewApplied(id: preview.id, queuedAt: queuedAt)
+            #endif
         }
     }
 
     private func finishPreviewLanding(_ preview: TimelineAssetPreviewSession) {
         guard assetPreview?.id == preview.id, preview.isDismissing,
               !preview.isPromoting, !preview.sourceIsReleased else { return }
+        #if DEBUG
+            AssetReturnSourceDiagnostics.handoff(id: preview.id)
+        #endif
         withAnimation(.easeOut(duration: 0.12), completionCriteria: .removed) {
             // Source visibility and hero opacity must share this transaction
             // for the same reason as the return's state and progress.

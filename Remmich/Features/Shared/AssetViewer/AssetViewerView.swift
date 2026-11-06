@@ -583,6 +583,9 @@ struct AssetViewerView: View {
             beginOpeningAnimation()
         }
         .onDisappear {
+            #if DEBUG
+                AssetReturnSourceDiagnostics.end(id: mediaViewerID)
+            #endif
             logMemoryPlayback("disappear")
             videoPlaybackSession?.close()
             openingTask?.cancel()
@@ -2023,6 +2026,10 @@ struct AssetViewerView: View {
     private func completeOpeningDragDismissal() {
         guard !isDismissing, let asset = session.selectedAsset else { return }
         let target = dismissalTarget(asset.id)
+        #if DEBUG
+            AssetReturnSourceDiagnostics.begin(id: mediaViewerID, kind: "viewer-opening", target: target,
+                                               current: { dismissalTarget(asset.id) })
+        #endif
         let generation = openingGeneration + 1
         openingTask?.cancel()
         // Retarget the still-mounted opening hero, including its crop. There
@@ -2123,6 +2130,13 @@ struct AssetViewerView: View {
             return
         }
         let destination = dismissalTarget(asset.id)
+        #if DEBUG
+            if !isMemoryViewer {
+                AssetReturnSourceDiagnostics.begin(id: mediaViewerID,
+                                                   kind: nativeDismissalController.isActive ? "viewer-native" : "viewer-swiftui",
+                                                   target: destination, current: { dismissalTarget(asset.id) })
+            }
+        #endif
         let target = destination?.imageFrame.offsetBy(
             dx: -viewportOrigin.x,
             dy: -viewportOrigin.y
@@ -2262,6 +2276,9 @@ struct AssetViewerView: View {
     }
 
     private func finishTimelineLanding(fillsFrame: Bool, usesNativeSurface: Bool) {
+        #if DEBUG
+            AssetReturnSourceDiagnostics.handoff(id: mediaViewerID)
+        #endif
         guard fillsFrame else {
             closeWithoutAnimation()
             return

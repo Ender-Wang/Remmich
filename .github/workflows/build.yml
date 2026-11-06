@@ -59,7 +59,7 @@ jobs:
       - name: Build app and test bundles
         run: |
           set -o pipefail
-          xcodebuild build-for-testing \
+          xcodebuild build-for-testing -quiet \
             -project Remmich.xcodeproj \
             -scheme Remmich \
             -configuration Debug \

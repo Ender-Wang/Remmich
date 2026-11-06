@@ -105,6 +105,9 @@ final class TimelineAssetPreviewSession: Identifiable {
     }
 
     func close() {
+        #if DEBUG
+            AssetReturnSourceDiagnostics.end(id: id)
+        #endif
         isClosed = true
         isDismissing = true
         sourceIsReleased = true
