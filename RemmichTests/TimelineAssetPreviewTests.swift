@@ -175,6 +175,53 @@ struct TimelineAssetPreviewTests {
         #expect(TimelineAssetPreviewGeometry.sourceOffset(moved, progress: 1.1) == .zero)
     }
 
+    @Test func downwardSwipeUsesTheViewerDistanceAndFlickThresholds() {
+        var drag = TimelinePreviewDrag()
+        drag.update(CGSize(width: 2, height: 16))
+        #expect(drag.translation == CGSize(width: 2, height: 16))
+        #expect(!drag.shouldDismiss(translation: drag.translation, predictedEnd: CGSize(width: 2, height: 30)))
+        #expect(drag.shouldDismiss(translation: drag.translation, predictedEnd: CGSize(width: 2, height: 90)))
+        drag.update(CGSize(width: 10, height: 80))
+        #expect(drag.shouldDismiss(translation: drag.translation, predictedEnd: drag.translation))
+    }
+
+    @Test func upwardAndHorizontalSwipesCannotBecomeDismissals() {
+        for initial in [CGSize(width: 2, height: -30), CGSize(width: 30, height: 12)] {
+            var drag = TimelinePreviewDrag()
+            drag.update(initial)
+            drag.update(CGSize(width: 2, height: 100))
+            #expect(drag.translation == .zero)
+            #expect(!drag.shouldDismiss(translation: CGSize(width: 2, height: 100), predictedEnd: CGSize(width: 2, height: 200)))
+        }
+    }
+
+    @Test func reversingADownwardSwipeCancelsItsDismissal() {
+        var drag = TimelinePreviewDrag()
+        drag.update(CGSize(width: 0, height: 80))
+        drag.update(CGSize(width: 0, height: -10))
+        #expect(drag.translation == .zero)
+        #expect(!drag.shouldDismiss(translation: CGSize(width: 0, height: -10), predictedEnd: CGSize(width: 0, height: -80)))
+        #expect(!drag.shouldDismiss(translation: CGSize(width: 100, height: 30), predictedEnd: CGSize(width: 200, height: 90)))
+    }
+
+    @Test func draggedPreviewReturnsToTheExactSourceTransform() {
+        let translation = CGSize(width: 30, height: 140)
+        for height in [280.0, 700.0] {
+            let held = TimelineAssetPreviewGeometry.dragTransform(translation, viewportHeight: height, progress: 1)
+            let returning = TimelineAssetPreviewGeometry.dragTransform(translation, viewportHeight: height, progress: 0.5)
+            let landed = TimelineAssetPreviewGeometry.dragTransform(translation, viewportHeight: height, progress: 0)
+            #expect(held.offset == translation)
+            #expect(held.scale < 1 && held.scale >= 0.82)
+            #expect(returning.offset == CGSize(width: 15, height: 70))
+            #expect(returning.scale > held.scale && returning.scale < 1)
+            #expect(landed.offset == .zero)
+            #expect(landed.scale == 1)
+            let cancelled = TimelineAssetPreviewGeometry.dragTransform(.zero, viewportHeight: height, progress: 1)
+            #expect(cancelled.offset == .zero)
+            #expect(cancelled.scale == 1)
+        }
+    }
+
     @Test @MainActor func dismissalRetainsDisplayedPixelsAndRejectsLateImageDelivery() {
         let thumbnail = UIImage()
         let preview = UIImage()
