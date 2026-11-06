@@ -365,6 +365,7 @@ struct PhotosView: View {
     var loadingVisibilityChanged: ((Bool) -> Void)?
     var tabSelectionState: NativeTabSelectionState?
     var tabDestination: NativeTabDestination = .photos
+    var viewerPresentations: AssetViewerPresentationStore?
     let showAccount: () -> Void
 
     @Namespace private var viewerNamespace
@@ -378,6 +379,8 @@ struct PhotosView: View {
     @State private var hiddenReturningThumbnailAssetID: String?
     @State private var libraryRange: TimelineLibraryRange = .all
     @State private var viewerRoute: AssetViewerRoute?
+    @State private var viewerPresentationID: UUID?
+    @State private var viewerPresentationOwnerID = UUID()
     @State private var assetPreview: TimelineAssetPreviewSession?
     @State private var viewerSourceImage: UIImage?
     @State private var viewerSourceTarget: AssetViewerDismissalTarget?
@@ -417,6 +420,7 @@ struct PhotosView: View {
         loadingVisibilityChanged: ((Bool) -> Void)? = nil,
         tabSelectionState: NativeTabSelectionState? = nil,
         tabDestination: NativeTabDestination = .photos,
+        viewerPresentations: AssetViewerPresentationStore? = nil,
         showAccount: @escaping () -> Void
     ) {
         self.store = store
@@ -433,6 +437,7 @@ struct PhotosView: View {
         self.rootAccessibilityID = rootAccessibilityID
         self.compactChromeChanged = compactChromeChanged
         self.viewerVisibilityChanged = viewerVisibilityChanged
+        self.viewerPresentations = viewerPresentations
         self.loadingVisibilityChanged = loadingVisibilityChanged
         self.tabSelectionState = tabSelectionState
         self.tabDestination = tabDestination
@@ -474,6 +479,8 @@ struct PhotosView: View {
                               animatesContent: assetPreview == nil, action: navigateBack)
         .environment(\.timelineAssetPreviewAction, previewAction)
         .environment(\.timelineHiddenSourceAssetID, hiddenReturningThumbnailAssetID ?? assetPreview?.hiddenSourceAssetID)
+        .environment(\.timelineHiddenSourceAssetIDs, viewerPresentations?.hiddenSourceIDs(ownerID: viewerPresentationOwnerID) ?? [])
+        .environment(\.timelineHiddenBadgeAssetIDs, viewerPresentations?.hiddenBadgeIDs(ownerID: viewerPresentationOwnerID) ?? [])
         .overlay { previewOverlay }
         .sensoryFeedback(.impact(weight: .light, intensity: 0.5), trigger: assetPreview?.id) { _, new in
             new != nil
@@ -800,6 +807,8 @@ struct PhotosView: View {
                         isActive: isTabContentActivated && navigationPath.isEmpty && viewerRoute == nil,
                         hiddenThumbnailID: hiddenReturningThumbnailAssetID ?? assetPreview?.hiddenSourceAssetID,
                         hiddenLivePhotoID: hiddenLivePhotoBadgeAssetID,
+                        additionalHiddenThumbnailIDs: viewerPresentations?.hiddenSourceIDs(ownerID: viewerPresentationOwnerID) ?? [],
+                        additionalHiddenBadgeIDs: viewerPresentations?.hiddenBadgeIDs(ownerID: viewerPresentationOwnerID) ?? [],
                         selectAsset: { asset, assets in
                             presentViewer(AssetViewerRoute(selectedAsset: asset, initialAssets: assets,
                                                            origin: .timeline(bucketID: semanticBucketID(for: asset), contentName: contentName)))
@@ -1222,7 +1231,7 @@ struct PhotosView: View {
     private var fullScreenViewerRoute: Binding<AssetViewerRoute?> {
         Binding(
             get: {
-                guard let route = viewerRoute else { return nil }
+                guard viewerPresentations == nil, let route = viewerRoute else { return nil }
                 if case .memory = route.origin {
                     return nil
                 }
@@ -1242,7 +1251,8 @@ struct PhotosView: View {
 
     private func assetViewer(
         route: AssetViewerRoute,
-        opensFromSource: Bool
+        opensFromSource: Bool,
+        presentationID: UUID? = nil
     ) -> some View {
         AssetViewerView(
             route: route,
@@ -1258,12 +1268,33 @@ struct PhotosView: View {
             dismissalRequest: memoryViewerDismissalRequest,
             memoryBoundaryChanged: movePresentedMemory,
             namespace: viewerNamespace,
-            close: closeViewer,
+            close: {
+                if let presentationID, let viewerPresentations {
+                    viewerPresentations.finish(id: presentationID)
+                    if viewerPresentationID == presentationID {
+                        closeViewer()
+                    }
+                } else {
+                    closeViewer()
+                }
+            },
+            dismissalBegan: {
+                guard let presentationID, let viewerPresentations,
+                      viewerPresentations.beginReturn(id: presentationID) else { return }
+                if viewerPresentationID == presentationID {
+                    closeViewer()
+                }
+            },
             visibilityChanged: { visible in
                 if visible, let preview = assetPreview, preview.isPromoting,
                    preview.viewerRoute == route, viewerRoute == route
                 {
                     removePreview(preview)
+                }
+                // The shell derives input ownership from the active entry.
+                // A passive entry disappearing must not clear the next viewer.
+                if presentationID != nil {
+                    return
                 }
                 if !visible,
                    memoryViewerIsSwitching,
@@ -1283,12 +1314,20 @@ struct PhotosView: View {
                 }
             },
             returningLivePhotoBadgeChanged: { assetID in
+                if let presentationID, let viewerPresentations {
+                    viewerPresentations.setHiddenBadge(assetID, for: presentationID)
+                    return
+                }
                 guard case .memory = route.origin else {
                     setReturningLivePhotoBadge(assetID)
                     return
                 }
             },
             returningTimelineThumbnailChanged: { assetID in
+                if let presentationID, let viewerPresentations {
+                    viewerPresentations.setHiddenSource(assetID, for: presentationID)
+                    return
+                }
                 setReturningViewerSource(assetID, route: route)
             },
             dismissalTarget: { assetID in
@@ -1465,6 +1504,11 @@ struct PhotosView: View {
                                sourceOverride: (target: AssetViewerDismissalTarget, image: UIImage?)? = nil)
     {
         guard !hasInteractivePreview else { return }
+        if case .memory = route.origin {
+            // Adjacent memories replace the embedded viewer's route.
+        } else {
+            guard viewerRoute == nil, viewerPresentations?.activeID == nil else { return }
+        }
         retireDismissedPreview()
         switch route.origin {
         case let .scoped(scope, _):
@@ -1505,11 +1549,21 @@ struct PhotosView: View {
                 hiddenMemoryCardID = nil
             }
             viewerRoute = route
+            if case .memory = route.origin {
+                // Memories keep their embedded panel presentation.
+            } else if let viewerPresentations {
+                hiddenReturningThumbnailAssetID = nil
+                hiddenLivePhotoBadgeAssetID = nil
+                viewerPresentationID = viewerPresentations.present(ownerID: viewerPresentationOwnerID, assetID: route.selectedAsset.id) { id in
+                    AnyView(assetViewer(route: route, opensFromSource: true, presentationID: id))
+                }
+            }
         }
     }
 
     private func closeViewer() {
         viewerRoute = nil
+        viewerPresentationID = nil
         viewerSourceImage = nil
         viewerSourceTarget = nil
         hiddenMemoryCardID = nil

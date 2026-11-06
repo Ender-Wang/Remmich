@@ -569,6 +569,8 @@ struct TimelineAssetThumbnail: View {
     @Environment(\.timelineAssetPreviewAction) private var previewAction
     @Environment(\.scopedAssetTransitionContext) private var scopedTransitionContext
     @Environment(\.timelineHiddenSourceAssetID) private var hiddenSourceAssetID
+    @Environment(\.timelineHiddenSourceAssetIDs) private var hiddenSourceAssetIDs
+    @Environment(\.timelineHiddenBadgeAssetIDs) private var hiddenBadgeAssetIDs
     @Environment(\.timelinePreviewAssets) private var previewAssets
     @Environment(\.displayScale) private var displayScale
     let asset: TimelineAssetSummary
@@ -648,7 +650,7 @@ struct TimelineAssetThumbnail: View {
                         )
                         TimelineAssetOverlay(
                             asset: asset,
-                            isHidden: hiddenLivePhotoBadgeAssetID == asset.id
+                            isHidden: hiddenLivePhotoBadgeAssetID == asset.id || hiddenBadgeAssetIDs.contains(asset.id)
                         )
                         .frame(
                             width: thumbnailRect.width,
@@ -664,6 +666,10 @@ struct TimelineAssetThumbnail: View {
             .onScrollVisibilityChange(threshold: 0.5) { visible in
                 viewportChanged(asset, visible)
             }
+            // Hide only the image. The source remains a hit target while an
+            // older viewer is returning, including when reopening this asset.
+            .opacity(hiddenReturningThumbnailAssetID == asset.id || hiddenSourceAssetID == asset.id
+                || hiddenSourceAssetIDs.contains(asset.id) ? 0 : 1)
             .contentShape(.rect)
             .gesture(LongPressGesture(minimumDuration: 0.35, maximumDistance: 10)
                 .exclusively(before: TapGesture())
@@ -678,7 +684,6 @@ struct TimelineAssetThumbnail: View {
                     }
                 })
         }
-        .opacity(hiddenReturningThumbnailAssetID == asset.id || hiddenSourceAssetID == asset.id ? 0 : 1)
         .background {
             if let scopedTransitionContext {
                 ScopedAssetTransitionProbe(

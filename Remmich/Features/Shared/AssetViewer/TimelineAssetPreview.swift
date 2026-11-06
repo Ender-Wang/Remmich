@@ -11,6 +11,8 @@ nonisolated struct TimelineAssetPreviewAction: Sendable {
 extension EnvironmentValues {
     @Entry var timelineAssetPreviewAction: TimelineAssetPreviewAction?
     @Entry var timelineHiddenSourceAssetID: String?
+    @Entry var timelineHiddenSourceAssetIDs: Set<String> = []
+    @Entry var timelineHiddenBadgeAssetIDs: Set<String> = []
     @Entry var timelinePreviewAssets: [TimelineAssetSummary] = []
 }
 

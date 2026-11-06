@@ -37,6 +37,8 @@ struct TimelineSemanticCollectionView: UIViewControllerRepresentable {
     let isActive: Bool
     let hiddenThumbnailID: String?
     let hiddenLivePhotoID: String?
+    var additionalHiddenThumbnailIDs: Set<String> = []
+    var additionalHiddenBadgeIDs: Set<String> = []
     let selectAsset: (TimelineAssetSummary, [TimelineAssetSummary]) -> Void
     var previewAsset: TimelineAssetPreviewAction?
     let selectGroup: (PhotosRangeRoute, String?) -> Void
@@ -672,6 +674,8 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         if let previous, revision == value.revision, scale == value.scale,
            previous.isActive == value.isActive, previous.latestRequest == value.latestRequest,
            previous.hiddenThumbnailID == value.hiddenThumbnailID, previous.hiddenLivePhotoID == value.hiddenLivePhotoID,
+           previous.additionalHiddenThumbnailIDs == value.additionalHiddenThumbnailIDs,
+           previous.additionalHiddenBadgeIDs == value.additionalHiddenBadgeIDs,
            abs(previous.bottomClearance - value.bottomClearance) < 0.5,
            abs(previous.topClearance - value.topClearance) < 0.5,
            abs((previous.pinnedHeaderTopClearance ?? previous.topClearance)
@@ -745,7 +749,10 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
                         refreshContents: needsCatalog, alignTop: wasAtTop && !latest && !needsScale)
             }
         }
-        if hiddenThumbnailID != value.hiddenThumbnailID || hiddenLivePhotoID != value.hiddenLivePhotoID {
+        if hiddenThumbnailID != value.hiddenThumbnailID || hiddenLivePhotoID != value.hiddenLivePhotoID
+            || previous?.additionalHiddenThumbnailIDs != value.additionalHiddenThumbnailIDs
+            || previous?.additionalHiddenBadgeIDs != value.additionalHiddenBadgeIDs
+        {
             hiddenThumbnailID = value.hiddenThumbnailID
             hiddenLivePhotoID = value.hiddenLivePhotoID
             for path in collection.indexPathsForVisibleItems {
@@ -929,6 +936,8 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
                                        },
                                        hiddenLivePhotoBadgeAssetID: input.hiddenLivePhotoID,
                                        hiddenReturningThumbnailAssetID: input.hiddenThumbnailID)
+                    .environment(\.timelineHiddenSourceAssetIDs, input.additionalHiddenThumbnailIDs)
+                    .environment(\.timelineHiddenBadgeAssetIDs, input.additionalHiddenBadgeIDs)
                     .environment(\.timelineAssetPreviewAction, TimelineAssetPreviewAction { [weak self] asset, image, _ in
                         guard let self, gesture == nil, animator == nil,
                               let input = self.input, input.isActive else { return }

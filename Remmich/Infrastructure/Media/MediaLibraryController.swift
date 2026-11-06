@@ -29,6 +29,9 @@ final class MediaLibraryController {
     private var prefetcher: ImagePrefetcher?
     private var viewerPrefetcher: ImagePrefetcher?
     private var viewerPrefetchRequests: [MediaRequestDescriptor: ImageRequest] = [:]
+    @ObservationIgnored private var viewerSessionIDs: Set<UUID> = []
+    @ObservationIgnored private var pendingViewerOriginals: [String: TimelineAssetSummary] = [:]
+    @ObservationIgnored private var viewerMotionCleanup: Task<Void, Never>?
     private var residencyLoadTask: Task<Void, Never>?
     private var lastTimelinePlan = TimelineResidencyPlan.empty
     private var lastTimelineTargetPixels: MediaPixelSize?
@@ -275,6 +278,33 @@ final class MediaLibraryController {
             derivative: .original,
             targetPixels: nil
         )
+    }
+
+    func beginViewerSession(id: UUID) {
+        viewerSessionIDs.insert(id)
+    }
+
+    func endViewerSession(id: UUID, originalAssets: [TimelineAssetSummary]) {
+        guard viewerSessionIDs.remove(id) != nil else { return }
+        for asset in originalAssets {
+            pendingViewerOriginals[asset.id] = asset
+        }
+        // An outgoing hero can outlive the next viewer. Its teardown must not
+        // cancel that viewer's prefetch or evict media it is still displaying.
+        guard viewerSessionIDs.isEmpty else { return }
+        cancelViewerPrefetching()
+        removeViewerOriginalCache(for: Array(pendingViewerOriginals.values))
+        pendingViewerOriginals.removeAll()
+        scheduleViewerMotionCleanup()
+    }
+
+    private func scheduleViewerMotionCleanup() {
+        guard let downloadService else { return }
+        let previous = viewerMotionCleanup
+        viewerMotionCleanup = Task {
+            await previous?.value
+            await downloadService.removeViewerSessionDownloads()
+        }
     }
 
     func removeViewerOriginalCache(for assets: [TimelineAssetSummary]) {
@@ -582,6 +612,12 @@ final class MediaLibraryController {
         guard let url = downloadURL(assetID: assetID, derivative: .videoPlayback),
               let downloadService
         else { throw MediaDownloadService.DownloadError.invalidResponse }
+        // Finish cleanup from the preceding viewer before starting a new
+        // motion download, even when openings arrive in adjacent run loops.
+        let requestScope = scope
+        await viewerMotionCleanup?.value
+        try Task.checkCancellation()
+        guard scope == requestScope else { throw CancellationError() }
         let media = try await downloadService.viewerSessionDownload(
             cacheKey: "live-photo-\(assetID)",
             from: url,
@@ -645,6 +681,9 @@ final class MediaLibraryController {
     }
 
     func clearAll() {
+        viewerSessionIDs.removeAll()
+        pendingViewerOriginals.removeAll()
+        viewerMotionCleanup = nil
         profileImageCacheTask?.cancel()
         prefetcher?.stopPrefetching()
         cancelViewerPrefetching()
