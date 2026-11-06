@@ -320,7 +320,8 @@ struct AssetViewerView: View {
                         AssetViewerBackdrop(videoRect: session.isVideoPlayback ? selectedMediaRect : nil)
                             .modifier(AssetViewerTransitionOpacity(value: usesNativeDismissal
                                     ? 0
-                                    : (isOpening ? openingProgress * dismissalBackdropOpacity : dismissalBackdropOpacity)))
+                                    : (isOpening ? openingProgress : dismissalBackdropOpacity)))
+                            .modifier(AssetViewerTransitionOpacity(value: isOpening ? dismissalBackdropOpacity : 1))
                     }
                     if isMemoryViewer {
                         if let memoryPanelRect {
@@ -452,9 +453,10 @@ struct AssetViewerView: View {
                     .position(x: safeRect.midX, y: safeRect.midY)
                     .zIndex(1)
                     .modifier(AssetViewerTransitionOpacity(value: (isOpening
-                            ? openingProgress * dismissalBackdropOpacity * (chromeVisible ? 1 : 0)
+                            ? openingProgress * (chromeVisible ? 1 : 0)
                             : (isolatesDismissalAsset ? 0 : (chromeVisible ? 1 : 0)))
                         * (isMemoryViewer ? memoryContentOpacity : 1)))
+                    .modifier(AssetViewerTransitionOpacity(value: isOpening ? dismissalBackdropOpacity : 1))
                     .allowsHitTesting(!isolatesDismissalAsset && (chromeVisible || showsInfo))
                     .accessibilityHidden(isolatesDismissalAsset || (!chromeVisible && !showsInfo))
                 }
