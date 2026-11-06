@@ -670,10 +670,12 @@ struct TimelineAssetThumbnail: View {
                 .onEnded { result in
                     switch result {
                     case .first:
+                        AssetViewerGestureDiagnostics.traceReturn("thumbnail-long-press", assetID: asset.id)
                         let request = media.imageRequest(for: descriptor)
                         let image = request.flatMap { media.pipeline?.cache.cachedImage(for: $0)?.image }
                         previewAction?.open(asset, image, previewAssets)
                     case .second:
+                        AssetViewerGestureDiagnostics.traceReturn("thumbnail-tap", assetID: asset.id)
                         assetSelected(asset)
                     }
                 })

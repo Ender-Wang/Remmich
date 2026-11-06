@@ -21,6 +21,12 @@ final class TimelineSemanticRuntime {
     func changeScale(coarser: Bool) {
         controller?.changeScale(coarser: coarser)
     }
+
+    #if DEBUG
+        func returnTouchDetails(_ touch: UITouch) -> String {
+            controller?.returnTouchDetails(touch) ?? "collection=absent"
+        }
+    #endif
 }
 
 struct TimelineSemanticCollectionView: UIViewControllerRepresentable {
@@ -669,6 +675,10 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         }
         let previous = input
         input = value
+        if previous?.isActive != value.isActive || previous?.hiddenThumbnailID != value.hiddenThumbnailID {
+            AssetViewerGestureDiagnostics.traceReturn("collection-input", assetID: value.hiddenThumbnailID ?? "",
+                                                      details: "active=\(value.isActive) pinch=\(gesture != nil) animator=\(animator != nil)")
+        }
         if let previous, revision == value.revision, scale == value.scale,
            previous.isActive == value.isActive, previous.latestRequest == value.latestRequest,
            previous.hiddenThumbnailID == value.hiddenThumbnailID, previous.hiddenLivePhotoID == value.hiddenLivePhotoID,
@@ -918,6 +928,8 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
                                        visibilityChanged: { _, _ in }, viewportChanged: { _, _ in },
                                        transitionNamespace: input.namespace,
                                        assetSelected: { [weak self] selected in
+                                           AssetViewerGestureDiagnostics.traceReturn("collection-select", assetID: selected.id,
+                                                                                     details: "pinch=\(self?.gesture != nil) animator=\(self?.animator != nil) active=\(self?.input?.isActive == true)")
                                            guard self?.gesture == nil, self?.animator == nil else { return }
                                            input.selectAsset(selected, Array(catalog.assets[max(0, assetIndex - 80) ..< min(catalog.assets.count, assetIndex + 81)].reversed()))
                                        },
@@ -1021,6 +1033,17 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         let cell = collection.cellForItem(at: indexPath) as? TimelineSemanticCollectionCell
         input.selectGroup(catalog.groups[scale]![item.nodeIndex].route, cell?.coverAssetID)
     }
+
+    #if DEBUG
+        func returnTouchDetails(_ touch: UITouch) -> String {
+            guard let collection else { return "collection=absent" }
+            let point = touch.location(in: collection)
+            let path = collection.indexPathForItem(at: point)
+            let cell = path.flatMap { collection.cellForItem(at: $0) as? TimelineSemanticCollectionCell }
+            let hitCollection = touch.view?.isDescendant(of: collection) == true
+            return "collectionEnabled=\(collection.isUserInteractionEnabled) active=\(input?.isActive == true) hitCollection=\(hitCollection) cell=\(String((cell?.coverAssetID ?? "none").prefix(8))) pinch=\(gesture != nil) animator=\(animator != nil)"
+        }
+    #endif
 
     private func representativeIndex(_ item: TimelineSemanticProjection.Item) -> Int {
         if let catalog, let index = itemIndexes[item.id],

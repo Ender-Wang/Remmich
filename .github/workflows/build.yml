@@ -60,6 +60,7 @@ jobs:
         run: |
           set -o pipefail
           xcodebuild build-for-testing \
+            -quiet \
             -project Remmich.xcodeproj \
             -scheme Remmich \
             -configuration Debug \
@@ -70,23 +71,6 @@ jobs:
             -parallel-testing-enabled NO \
             COMPILER_INDEX_STORE_ENABLE=NO \
             | xcbeautify
-
-      - name: Archive test products
-        run: |
-          test -d "$DERIVED_DATA_PATH/Build/Products"
-          printf '%s\n' "$GITHUB_SHA" > "$DERIVED_DATA_PATH/Build/tested-revision"
-          tar -C "$DERIVED_DATA_PATH/Build" \
-            -czf "$RUNNER_TEMP/remmich-test-products.tar.gz" \
-            Products \
-            tested-revision
-
-      - name: Upload test products
-        uses: actions/upload-artifact@v4
-        with:
-          name: remmich-test-products
-          path: ${{ runner.temp }}/remmich-test-products.tar.gz
-          if-no-files-found: error
-          retention-days: 3
 
       - name: Shut down simulator
         if: ${{ always() }}

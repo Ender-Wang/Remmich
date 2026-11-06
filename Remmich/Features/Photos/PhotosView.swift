@@ -475,6 +475,16 @@ struct PhotosView: View {
         .environment(\.timelineAssetPreviewAction, previewAction)
         .environment(\.timelineHiddenSourceAssetID, hiddenReturningThumbnailAssetID ?? assetPreview?.hiddenSourceAssetID)
         .overlay { previewOverlay }
+        .background {
+            #if DEBUG
+                AssetViewerReturnTouchProbe(active: isTabContentActivated) { touch in
+                    "\(returnInputDiagnostics) \(semanticRuntime.returnTouchDetails(touch))"
+                }
+            #endif
+        }
+        .onChange(of: hasInteractivePreview) { _, active in
+            AssetViewerGestureDiagnostics.traceReturn("preview-input", details: "active=\(active) \(returnInputDiagnostics)")
+        }
         .sensoryFeedback(.impact(weight: .light, intensity: 0.5), trigger: assetPreview?.id) { _, new in
             new != nil
         }
@@ -1038,7 +1048,8 @@ struct PhotosView: View {
                     TimelineAssetPreview(session: assetPreview, media: media,
                                          viewport: CGRect(x: 0, y: top, width: available.width, height: available.height),
                                          globalOrigin: globalFrame.origin,
-                                         openViewer: { promotePreview(assetPreview, from: $0) })
+                                         openViewer: { promotePreview(assetPreview, from: $0) },
+                                         dismiss: { dismissPreview() })
                         .accessibilityAction(.escape) { dismissPreview() }
                         .accessibilityHidden(assetPreview.isDismissing)
                         .id(assetPreview.id)
@@ -1055,13 +1066,19 @@ struct PhotosView: View {
         assetPreview?.acceptsInput == true
     }
 
+    private var returnInputDiagnostics: String {
+        "preview=\(String((assetPreview?.asset.id ?? "none").prefix(8))) previewClosing=\(assetPreview?.isDismissing == true) previewInput=\(hasInteractivePreview) viewer=\(String((viewerRoute?.selectedAsset.id ?? "none").prefix(8))) tabActive=\(isTabContentActivated)"
+    }
+
     private func retireDismissedPreview() {
         guard let preview = assetPreview, preview.isDismissing, !preview.isPromoting else { return }
+        AssetViewerGestureDiagnostics.traceReturn("preview-retired-for-next-action", assetID: preview.asset.id)
         removePreview(preview)
     }
 
     private var previewAction: TimelineAssetPreviewAction {
         TimelineAssetPreviewAction { asset, image, assets in
+            AssetViewerGestureDiagnostics.traceReturn("preview-request", assetID: asset.id, details: returnInputDiagnostics)
             guard viewerRoute == nil, !hasInteractivePreview, isTabContentActivated, scenePhase == .active else { return }
             retireDismissedPreview()
             let origin: AssetViewerOrigin = navigationPath.last.map { .scoped(route: $0, contentName: contentName) }
@@ -1089,6 +1106,7 @@ struct PhotosView: View {
 
     private func dismissPreview() {
         guard let preview = assetPreview, !preview.isDismissing else { return }
+        AssetViewerGestureDiagnostics.traceReturn("preview-return-start", assetID: preview.asset.id, beginsReturn: true)
         let target = previewTarget(for: preview.asset)
         withAnimation(reduceMotion ? AssetViewerTransitionMotion.reducedMotion : AssetViewerTransitionMotion.returning,
                       completionCriteria: .removed)
@@ -1123,6 +1141,7 @@ struct PhotosView: View {
     private func finishPreviewLanding(_ preview: TimelineAssetPreviewSession) {
         guard assetPreview?.id == preview.id, preview.isDismissing,
               !preview.isPromoting, !preview.sourceIsReleased else { return }
+        AssetViewerGestureDiagnostics.traceReturn("preview-return-landed", assetID: preview.asset.id)
         withAnimation(.easeOut(duration: 0.12), completionCriteria: .removed) {
             // Source visibility and hero opacity must share this transaction
             // for the same reason as the return's state and progress.
@@ -1134,6 +1153,8 @@ struct PhotosView: View {
     }
 
     private func removePreview(_ preview: TimelineAssetPreviewSession) {
+        AssetViewerGestureDiagnostics.traceReturn("preview-remove", assetID: preview.asset.id,
+                                                  details: "current=\(assetPreview?.id == preview.id)")
         preview.close()
         guard assetPreview?.id == preview.id else { return }
         var transaction = Transaction(animation: nil)
@@ -1259,6 +1280,8 @@ struct PhotosView: View {
             namespace: viewerNamespace,
             close: closeViewer,
             visibilityChanged: { visible in
+                AssetViewerGestureDiagnostics.traceReturn("viewer-visibility", assetID: route.selectedAsset.id,
+                                                          details: "visible=\(visible) current=\(viewerRoute == route)")
                 if visible, let preview = assetPreview, preview.isPromoting,
                    preview.viewerRoute == route, viewerRoute == route
                 {
@@ -1463,6 +1486,7 @@ struct PhotosView: View {
     private func presentViewer(_ route: AssetViewerRoute,
                                sourceOverride: (target: AssetViewerDismissalTarget, image: UIImage?)? = nil)
     {
+        AssetViewerGestureDiagnostics.traceReturn("viewer-request", assetID: route.selectedAsset.id, details: returnInputDiagnostics)
         guard !hasInteractivePreview else { return }
         retireDismissedPreview()
         switch route.origin {
@@ -1508,6 +1532,7 @@ struct PhotosView: View {
     }
 
     private func closeViewer() {
+        AssetViewerGestureDiagnostics.traceReturn("viewer-route-cleared", assetID: viewerRoute?.selectedAsset.id ?? "")
         viewerRoute = nil
         viewerSourceImage = nil
         viewerSourceTarget = nil

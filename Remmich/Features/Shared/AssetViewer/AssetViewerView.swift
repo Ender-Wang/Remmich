@@ -67,6 +67,11 @@ struct AssetViewerView: View {
     @State private var openingProgress: CGFloat
     @State private var openingTask: Task<Void, Never>?
     @State private var openingGeneration = 0
+    @State private var openingDrag = AssetViewerOpeningDrag()
+    @State private var returnsThroughOpening = false
+    @State private var openingReturnTarget: AssetViewerDismissalTarget?
+    @GestureState private var verticalDragIsActive = false
+    @State private var gestureDiagnostics = AssetViewerGestureDiagnostics(context: "viewer")
     @State private var isDismissing = false
     @State private var dismissalDragTranslation = CGSize.zero
     @State private var dismissalDragStartLocation = CGPoint.zero
@@ -258,7 +263,7 @@ struct AssetViewerView: View {
                 // Opening uses the tapped cell's geometry before UIKit presents
                 // the cover. Return geometry is still measured at dismissal.
                 let openingTarget = openingIsActive
-                    ? (sourceTarget ?? dismissalTarget(route.selectedAsset.id)) : nil
+                    ? (openingReturnTarget ?? sourceTarget ?? dismissalTarget(route.selectedAsset.id)) : nil
                 let openingTransform = openingTarget.map { target in
                     AssetViewerDismissalGeometry.landingTransform(
                         imageRect: dismissalImageRect,
@@ -271,7 +276,7 @@ struct AssetViewerView: View {
                         fillsTarget: target.fillsFrame
                     )
                 }
-                let isOpening = openingTransform != nil && !isDismissing
+                let isOpening = openingTransform != nil && (!isDismissing || returnsThroughOpening)
                 let openingRemainder = isOpening ? 1 - openingProgress : 0
                 let openingClipTarget = isOpening && openingTarget?.fillsFrame == true
                     ? openingTarget?.imageFrame.offsetBy(
@@ -293,6 +298,10 @@ struct AssetViewerView: View {
                 )
                 let openingCornerRadius = (openingTarget?.cornerRadius ?? 0)
                     / max(openingTransform?.scale ?? 1, 0.04) * openingRemainder
+                let openingDragTranslation = reduceMotion ? .zero : openingDrag.translation
+                let openingDragScale = AssetViewerDismissalGeometry.scale(
+                    translationHeight: openingDragTranslation.height, viewportHeight: fullRect.height
+                )
                 let isDraggingOrLanding = isDismissalInteractionActive || isLandingDismissal
                 let usesNativeDismissal = nativeDismissalTransitionActive && !isOpening
                 let viewerMaskRect = usesNativeDismissal ? fullRect : dismissalMaskRect
@@ -312,6 +321,7 @@ struct AssetViewerView: View {
                             .modifier(AssetViewerTransitionOpacity(value: usesNativeDismissal
                                     ? 0
                                     : (isOpening ? openingProgress : dismissalBackdropOpacity)))
+                            .modifier(AssetViewerTransitionOpacity(value: isOpening ? dismissalBackdropOpacity : 1))
                     }
                     if isMemoryViewer {
                         if let memoryPanelRect {
@@ -377,18 +387,20 @@ struct AssetViewerView: View {
                         .animation(.easeOut(duration: 0.14), value: dismissalCropProgress)
                     }
                     .scaleEffect(
-                        !usesNativeDismissal && isDraggingOrLanding && !reduceMotion
+                        !usesNativeDismissal && !isOpening && isDraggingOrLanding && !reduceMotion
                             ? activeDismissalScale : openingScale,
                         anchor: isOpening || usesNativeDismissal ? .center : dismissalAnchor
                     )
                     .offset(
-                        !usesNativeDismissal && isDraggingOrLanding && !reduceMotion
+                        !usesNativeDismissal && !isOpening && isDraggingOrLanding && !reduceMotion
                             ? activeDismissalTranslation : openingTranslation
                     )
                     .clipShape(AssetViewerTransitionClipShape(
                         target: openingClipTarget ?? fullRect,
                         progress: openingClipTarget == nil ? 0 : openingRemainder
                     ))
+                    .scaleEffect(openingDragScale)
+                    .offset(openingDragTranslation)
                     .opacity(
                         (usesNativeDismissal ? 0 : dismissalAssetOpacity)
                             * (isMemoryViewer ? memoryContentOpacity * memoryWrapOpacity : 1)
@@ -404,6 +416,8 @@ struct AssetViewerView: View {
                             destinationRect: dismissalImageRect,
                             progress: openingProgress
                         )
+                        .scaleEffect(openingDragScale)
+                        .offset(openingDragTranslation)
                     }
 
                     // Show loading feedback throughout opening. Keep the lightweight overlay
@@ -442,6 +456,7 @@ struct AssetViewerView: View {
                             ? openingProgress * (chromeVisible ? 1 : 0)
                             : (isolatesDismissalAsset ? 0 : (chromeVisible ? 1 : 0)))
                         * (isMemoryViewer ? memoryContentOpacity : 1)))
+                    .modifier(AssetViewerTransitionOpacity(value: isOpening ? dismissalBackdropOpacity : 1))
                     .allowsHitTesting(!isolatesDismissalAsset && (chromeVisible || showsInfo))
                     .accessibilityHidden(isolatesDismissalAsset || (!chromeVisible && !showsInfo))
                 }
@@ -552,6 +567,11 @@ struct AssetViewerView: View {
         }
         .onChange(of: route.id) { _, _ in
             replaceMemoryRoute()
+        }
+        .onChange(of: verticalDragIsActive) { _, active in
+            if !active {
+                cancelOpeningDrag()
+            }
         }
         .onAppear {
             logMemoryPlayback("appear")
@@ -1643,7 +1663,27 @@ struct AssetViewerView: View {
         mediaRect: CGRect
     ) -> some Gesture {
         DragGesture(minimumDistance: 16)
+            .updating($verticalDragIsActive) { _, active, _ in active = true }
             .onChanged { value in
+                gestureDiagnostics.dragChanged(assetID: session.selectedAssetID,
+                                               decision: isDismissing ? "blocked-closing" : (openingIsActive ? (isMemoryViewer ? "blocked-opening" : "accepted-opening") : (zoomedAssetID != nil ? "blocked-zoom" : (abs(value.translation.height) > abs(value.translation.width) * 1.2 ? "accepted" : "blocked-direction"))),
+                                               translation: value.translation)
+                guard !isDismissing else { return }
+                if openingIsActive, !isMemoryViewer {
+                    guard openingDrag.isActive || (value.translation.height > abs(value.translation.width) * 1.2) else { return }
+                    if !openingDrag.isActive, let asset = session.selectedAsset {
+                        beginReturningTimelineTransition(for: asset)
+                    }
+                    var transaction = Transaction(animation: nil)
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) {
+                        openingDrag.update(value.translation)
+                        dismissalBackdropOpacity = AssetViewerDismissalGeometry.backgroundOpacity(
+                            translationHeight: max(0, value.translation.height), viewportHeight: viewportSize.height
+                        )
+                    }
+                    return
+                }
                 guard !openingIsActive,
                       !isDismissing,
                       zoomedAssetID == nil,
@@ -1769,6 +1809,21 @@ struct AssetViewerView: View {
                 }
             }
             .onEnded { value in
+                gestureDiagnostics.dragEnded(assetID: session.selectedAssetID,
+                                             decision: isDismissing ? "blocked-closing" : (openingDrag.isActive ? "opening-drag" : (openingIsActive ? "blocked-opening" : (zoomedAssetID != nil ? "blocked-zoom" : "routing"))),
+                                             translation: value.translation, predictedEnd: value.predictedEndTranslation)
+                guard !isDismissing else { return }
+                if openingDrag.isActive {
+                    if value.translation.height > abs(value.translation.width) * 1.2,
+                       AssetViewerDismissalGeometry.shouldComplete(translationHeight: value.translation.height,
+                                                                   predictedEndTranslationHeight: value.predictedEndTranslation.height)
+                    {
+                        completeOpeningDragDismissal()
+                    } else {
+                        cancelOpeningDrag()
+                    }
+                    return
+                }
                 guard !openingIsActive, !isDismissing else {
                     verticalDragRoute = nil
                     return
@@ -1900,16 +1955,23 @@ struct AssetViewerView: View {
     }
 
     private func beginOpeningAnimation() {
+        gestureDiagnostics.record("opening-requested", assetID: session.selectedAssetID,
+                                  details: "sourceImage=\(sourceImage != nil)")
         openingTask?.cancel()
         openingGeneration += 1
+        openingDrag = AssetViewerOpeningDrag()
+        returnsThroughOpening = false
+        openingReturnTarget = nil
         let generation = openingGeneration
         guard sourceTarget != nil || dismissalTarget(route.selectedAsset.id) != nil else {
+            gestureDiagnostics.record("opening-skipped", assetID: session.selectedAssetID, details: "reason=no-source")
             openingProgress = 1
             openingIsActive = false
             resumeMemoryAutoRotation()
             return
         }
         guard !reduceMotion else {
+            gestureDiagnostics.record("opening-skipped", assetID: session.selectedAssetID, details: "reason=reduce-motion")
             openingProgress = 1
             openingIsActive = false
             return
@@ -1917,12 +1979,14 @@ struct AssetViewerView: View {
         openingTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(16))
             guard !Task.isCancelled, openingGeneration == generation, !isDismissing else { return }
+            gestureDiagnostics.record("opening-started", assetID: session.selectedAssetID)
             if isMemoryViewer {
                 withAnimation(.easeOut(duration: 0.28)) {
                     openingProgress = 1
                 }
                 try? await Task.sleep(for: .milliseconds(300))
                 guard !Task.isCancelled, openingGeneration == generation, !isDismissing else { return }
+                gestureDiagnostics.record("opening-settled", assetID: session.selectedAssetID)
                 openingIsActive = false
                 resumeMemoryAutoRotation()
                 return
@@ -1933,12 +1997,67 @@ struct AssetViewerView: View {
                 openingProgress = 1
             } completion: {
                 guard openingGeneration == generation, openingIsActive, !isDismissing else { return }
+                gestureDiagnostics.record("opening-settled", assetID: session.selectedAssetID)
                 var transaction = Transaction(animation: nil)
                 transaction.disablesAnimations = true
                 withTransaction(transaction) {
+                    // Keep the same geometry/crop while a finger owns the
+                    // opening hero, even after its spring has settled.
+                    if openingDrag.openingSettled() {
+                        openingIsActive = false
+                    }
+                }
+            }
+        }
+    }
+
+    private func cancelOpeningDrag() {
+        guard !isDismissing, openingDrag.isActive, !openingDrag.isCancelling else { return }
+        let generation = openingDrag.generation
+        gestureDiagnostics.record("opening-drag-cancelled", assetID: session.selectedAssetID)
+        withAnimation(AssetViewerTransitionMotion.returning, completionCriteria: .removed) {
+            _ = openingDrag.beginCancellation()
+            dismissalBackdropOpacity = 1
+        } completion: {
+            guard !isDismissing else { return }
+            var transaction = Transaction(animation: nil)
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                if openingDrag.finishCancellation(generation: generation) {
                     openingIsActive = false
                 }
             }
+            if !openingDrag.isActive {
+                returningTimelineThumbnailChanged(nil)
+                returningLivePhotoBadgeChanged(nil)
+            }
+        }
+    }
+
+    private func completeOpeningDragDismissal() {
+        guard !isDismissing, let asset = session.selectedAsset else { return }
+        AssetViewerGestureDiagnostics.traceReturn("viewer-return-start", assetID: asset.id, details: "opening=true", beginsReturn: true)
+        let target = dismissalTarget(asset.id)
+        let generation = openingGeneration + 1
+        openingTask?.cancel()
+        gestureDiagnostics.record("opening-drag-return", assetID: asset.id, details: "target=\(target != nil)")
+        // Retarget the still-mounted opening hero, including its crop. There
+        // is no full-size snapshot handoff and no wait for the opening tail.
+        withAnimation(AssetViewerTransitionMotion.returning, completionCriteria: .removed) {
+            openingGeneration = generation
+            isDismissing = true
+            returnsThroughOpening = true
+            openingReturnTarget = target
+            isLandingDismissal = true
+            openingDrag.beginReturn()
+            openingProgress = target == nil ? 1 : 0
+            dismissalBackdropOpacity = 0
+            if target == nil {
+                dismissalAssetOpacity = 0
+            }
+        } completion: {
+            guard openingGeneration == generation, isDismissing else { return }
+            finishTimelineLanding(fillsFrame: target?.fillsFrame == true, usesNativeSurface: false)
         }
     }
 
@@ -2002,6 +2121,8 @@ struct AssetViewerView: View {
         mediaRect: CGRect
     ) {
         guard !isDismissing else { return }
+        AssetViewerGestureDiagnostics.traceReturn("viewer-return-start", assetID: session.selectedAssetID,
+                                                  details: "opening=false memory=\(isMemoryViewer)", beginsReturn: true)
         pauseMemoryAutoRotation()
         memoryWrapTask?.cancel()
         memoryWrapTask = nil
@@ -2157,6 +2278,8 @@ struct AssetViewerView: View {
     }
 
     private func finishTimelineLanding(fillsFrame: Bool, usesNativeSurface: Bool) {
+        AssetViewerGestureDiagnostics.traceReturn("viewer-return-landed", assetID: session.selectedAssetID,
+                                                  details: "native=\(usesNativeSurface) handoffWaitMs=200")
         if fillsFrame {
             returningTimelineThumbnailChanged(nil)
             if usesNativeSurface {
@@ -2236,7 +2359,7 @@ struct AssetViewerView: View {
     }
 
     private var isDismissalInteractionActive: Bool {
-        nativeDismissalTransitionActive || dismissalDragTranslation.height > 0
+        openingDrag.isActive || nativeDismissalTransitionActive || dismissalDragTranslation.height > 0
     }
 
     private var shouldHideStatusBar: Bool {
@@ -3138,12 +3261,16 @@ private nonisolated struct AssetViewerTransitionRoundedMask: Shape {
 }
 
 nonisolated struct AssetViewerTransitionClipShape: Shape {
-    let target: CGRect
+    var target: CGRect
     var progress: CGFloat
 
-    var animatableData: CGFloat {
-        get { progress }
-        set { progress = newValue }
+    var animatableData: AnimatableValues<CGFloat, CGFloat, CGFloat, CGFloat, CGFloat> {
+        get { AnimatableValues(progress, target.minX, target.minY, target.width, target.height) }
+        set {
+            progress = newValue.value.0
+            target = CGRect(x: newValue.value.1, y: newValue.value.2,
+                            width: newValue.value.3, height: newValue.value.4)
+        }
     }
 
     func path(in bounds: CGRect) -> Path {

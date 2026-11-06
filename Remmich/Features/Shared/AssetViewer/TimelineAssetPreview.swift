@@ -124,6 +124,13 @@ nonisolated enum TimelineAssetPreviewGeometry {
         return CGSize(width: offset.width * weight, height: offset.height * weight)
     }
 
+    static func dragTransform(_ translation: CGSize, viewportHeight: CGFloat, progress: CGFloat) -> (scale: CGFloat, offset: CGSize) {
+        let amount = min(1, max(0, progress))
+        let scale = AssetViewerDismissalGeometry.scale(translationHeight: translation.height, viewportHeight: viewportHeight)
+        return (1 + (scale - 1) * amount,
+                CGSize(width: translation.width * amount, height: translation.height * amount))
+    }
+
     static func size(in available: CGSize, aspectRatio: Double) -> CGSize {
         let ratio = aspectRatio.isFinite && aspectRatio > 0 ? aspectRatio : 1
         let width = max(0, available.width - padding * 2)
@@ -147,17 +154,42 @@ nonisolated enum TimelineAssetPreviewGeometry {
     }
 }
 
+nonisolated struct TimelinePreviewDrag {
+    private(set) var isDownward: Bool?
+    private(set) var translation: CGSize = .zero
+
+    mutating func update(_ value: CGSize) {
+        // Lock direction once the drag is recognized. An upward/horizontal
+        // gesture must not turn into a dismissal halfway through the touch.
+        if isDownward == nil {
+            isDownward = value.height > abs(value.width) * 1.2
+        }
+        guard isDownward == true else { return }
+        translation = CGSize(width: value.width, height: max(0, value.height))
+    }
+
+    func shouldDismiss(translation: CGSize, predictedEnd: CGSize) -> Bool {
+        isDownward == true && translation.height > abs(translation.width) * 1.2
+            && AssetViewerDismissalGeometry.shouldComplete(translationHeight: translation.height,
+                                                           predictedEndTranslationHeight: predictedEnd.height)
+    }
+}
+
 struct TimelineAssetPreview: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.displayScale) private var displayScale
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ScaledMetric(relativeTo: .body) private var scaledActionHeight: CGFloat = 48
     @State private var imageRetryID = 0
+    @State private var drag = TimelinePreviewDrag()
+    @State private var gestureDiagnostics = AssetViewerGestureDiagnostics(context: "preview")
+    @GestureState private var dragIsActive = false
     let session: TimelineAssetPreviewSession
     let media: MediaLibraryController
     let viewport: CGRect
     let globalOrigin: CGPoint
     let openViewer: (AssetViewerDismissalTarget) -> Void
+    let dismiss: () -> Void
 
     var body: some View {
         let horizontalActions = viewport.width > viewport.height && !dynamicTypeSize.isAccessibilitySize
@@ -179,6 +211,8 @@ struct TimelineAssetPreview: View {
                                                           targetRect: source ?? .zero, landingScale: landing.scale) : size
         let progress = reduceMotion ? 1 : session.transitionProgress
         let scale = landing.scale + (1 - landing.scale) * progress
+        let dragTransform = TimelineAssetPreviewGeometry.dragTransform(reduceMotion ? .zero : drag.translation,
+                                                                       viewportHeight: viewport.height, progress: progress)
         let pixels = MediaPixelSize(width: max(1, Int(size.width * displayScale)), height: max(1, Int(size.height * displayScale)))
         let derivative: MediaDerivative = media.activeAPIURL == nil ? .thumbnail : .preview
         ZStack(alignment: .topLeading) {
@@ -191,13 +225,13 @@ struct TimelineAssetPreview: View {
                 .contentShape(TimelinePreviewClip(sourceSize: crop,
                                                   sourceRadius: (target?.cornerRadius ?? 18) / max(landing.scale, 0.04),
                                                   progress: progress))
-                .onTapGesture {
-                    guard session.isOpeningComplete, session.acceptsInput else { return }
-                    openViewer(.init(imageFrame: frame.offsetBy(dx: globalOrigin.x, dy: globalOrigin.y),
-                                     cornerRadius: 18, fillsFrame: false))
-                }
+                .gesture(assetGesture(frame: frame))
+                // Keep the opening spring's attributes separate from direct
+                // finger updates, so an early drag cannot snap it to its end.
                 .scaleEffect(scale)
                 .offset(x: landing.translation.width * (1 - progress), y: landing.translation.height * (1 - progress))
+                .scaleEffect(dragTransform.scale)
+                .offset(dragTransform.offset)
                 .position(x: frame.midX, y: frame.midY)
                 .modifier(TimelinePreviewSourceOffset(offset: session.returnSourceOffset, progress: progress))
                 .modifier(AssetViewerTransitionOpacity(value: session.handoffOpacity))
@@ -207,12 +241,11 @@ struct TimelineAssetPreview: View {
                 .accessibilityValue(session.playback == nil ? "Still image" : (session.isPlaybackIntended ? "Playing" : "Paused"))
                 .accessibilityAddTraits(.isButton)
                 .accessibilityAction {
-                    guard session.isOpeningComplete, session.acceptsInput else { return }
-                    openViewer(.init(imageFrame: frame.offsetBy(dx: globalOrigin.x, dy: globalOrigin.y),
-                                     cornerRadius: 18, fillsFrame: false))
+                    openFullViewer(frame: frame)
                 }
                 .accessibilityHint("Double tap to open the full viewer")
                 .accessibilityIdentifier("timeline-asset-preview")
+                .zIndex(1)
             actionPanel(horizontal: horizontalActions, rowHeight: actionHeight)
                 .frame(width: layout.panel.width, height: layout.panel.height)
                 .glassEffect(.regular, in: .rect(cornerRadius: 18))
@@ -227,15 +260,26 @@ struct TimelineAssetPreview: View {
                 .accessibilityHidden(!session.isOpeningComplete || session.isDismissing)
                 .accessibilityIdentifier("timeline-preview-actions")
         }
+        .onChange(of: dragIsActive) { _, active in
+            // onEnded is not delivered when the system cancels a gesture.
+            if !active {
+                cancelDrag()
+            }
+        }
         .task {
+            gestureDiagnostics.record("opening-requested", assetID: session.asset.id,
+                                      details: "sourceImage=\(session.image != nil)")
             try? await Task.sleep(for: .milliseconds(16))
             guard !Task.isCancelled, !session.isDismissing else { return }
+            gestureDiagnostics.record("opening-started", assetID: session.asset.id)
             withAnimation(reduceMotion ? AssetViewerTransitionMotion.reducedMotion : AssetViewerTransitionMotion.opening,
                           completionCriteria: .removed)
             {
                 session.transitionProgress = 1
             } completion: {
                 guard !session.isDismissing else { return }
+                gestureDiagnostics.record("opening-settled", assetID: session.asset.id,
+                                          details: "previewImage=\(session.previewImage != nil)")
                 var transaction = Transaction(animation: nil)
                 transaction.disablesAnimations = true
                 withTransaction(transaction) {
@@ -244,6 +288,47 @@ struct TimelineAssetPreview: View {
                 Task { await session.prepare(using: media) }
             }
         }
+    }
+
+    private func assetGesture(frame: CGRect) -> some Gesture {
+        DragGesture(minimumDistance: 16, coordinateSpace: .global)
+            .updating($dragIsActive) { _, active, _ in active = true }
+            .onChanged { value in
+                gestureDiagnostics.dragChanged(assetID: session.asset.id,
+                                               decision: !session.acceptsInput ? "blocked-closing" : (!session.isOpeningComplete ? "accepted-opening" : "accepted"),
+                                               translation: value.translation)
+                guard session.acceptsInput else { return }
+                var transaction = Transaction(animation: nil)
+                transaction.disablesAnimations = true
+                withTransaction(transaction) { drag.update(value.translation) }
+            }
+            .onEnded { value in
+                gestureDiagnostics.dragEnded(assetID: session.asset.id,
+                                             decision: !session.acceptsInput ? "blocked-closing" : (drag.shouldDismiss(translation: value.translation, predictedEnd: value.predictedEndTranslation) ? "dismiss" : "cancel"),
+                                             translation: value.translation, predictedEnd: value.predictedEndTranslation)
+                guard session.acceptsInput else { return }
+                if drag.shouldDismiss(translation: value.translation, predictedEnd: value.predictedEndTranslation) {
+                    // Keep the last displayed drag transform. The shared return
+                    // spring blends it to zero as it lands on the source cell.
+                    dismiss()
+                } else {
+                    cancelDrag()
+                }
+            }
+            .exclusively(before: TapGesture().onEnded { openFullViewer(frame: frame) })
+    }
+
+    private func cancelDrag() {
+        guard session.acceptsInput, drag.isDownward != nil else { return }
+        withAnimation(reduceMotion ? AssetViewerTransitionMotion.reducedMotion : AssetViewerTransitionMotion.returning) {
+            drag = TimelinePreviewDrag()
+        }
+    }
+
+    private func openFullViewer(frame: CGRect) {
+        guard session.isOpeningComplete, session.acceptsInput, !dragIsActive else { return }
+        openViewer(.init(imageFrame: frame.offsetBy(dx: globalOrigin.x, dy: globalOrigin.y),
+                         cornerRadius: 18, fillsFrame: false))
     }
 
     private func actionPanel(horizontal: Bool, rowHeight: CGFloat) -> some View {
@@ -324,6 +409,8 @@ struct TimelineAssetPreview: View {
                 // Memory-cache completion can be synchronous inside a view
                 // update. Publish later, with the same fade as a network hit.
                 Task { @MainActor in
+                    gestureDiagnostics.record("preview-image-delivered", assetID: session.asset.id,
+                                              details: "openingComplete=\(session.isOpeningComplete) dismissing=\(session.isDismissing)")
                     withAnimation(.easeOut(duration: 0.18)) {
                         session.receivePreviewImage(response.image)
                     }
