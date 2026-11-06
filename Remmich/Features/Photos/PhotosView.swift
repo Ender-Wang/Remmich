@@ -470,7 +470,8 @@ struct PhotosView: View {
         .navigationTitle(navigationTitle)
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(hasInteractivePreview)
-        .nativeEdgeBackAction(active: viewerRoute == nil && (hasInteractivePreview || !navigationPath.isEmpty || libraryRange != .all), action: navigateBack)
+        .nativeEdgeBackAction(active: viewerRoute == nil && (hasInteractivePreview || !navigationPath.isEmpty || libraryRange != .all),
+                              animatesContent: assetPreview == nil, action: navigateBack)
         .environment(\.timelineAssetPreviewAction, previewAction)
         .environment(\.timelineHiddenSourceAssetID, hiddenReturningThumbnailAssetID ?? assetPreview?.hiddenSourceAssetID)
         .overlay { previewOverlay }
@@ -1042,14 +1043,14 @@ struct PhotosView: View {
                     Color.clear
                         .frame(width: geometry.size.width, height: geometry.size.height)
                         .contentShape(.rect)
-                        .onTapGesture { dismissPreview() }
+                        .onTapGesture { dismissPreview(trigger: "outside-tap") }
                     TimelineAssetPreview(session: assetPreview, media: media,
                                          viewport: CGRect(x: 0, y: top, width: available.width, height: available.height),
                                          globalOrigin: globalFrame.origin,
                                          openViewer: { promotePreview(assetPreview, from: $0) })
                         .onAppear { tracePreview(assetPreview, event: "overlay-appeared") }
                         .onDisappear { tracePreview(assetPreview, event: "overlay-disappeared") }
-                        .accessibilityAction(.escape) { dismissPreview() }
+                        .accessibilityAction(.escape) { dismissPreview(trigger: "accessibility-escape") }
                         .accessibilityHidden(assetPreview.isDismissing)
                         .id(assetPreview.id)
                         .transition(.identity)
@@ -1097,13 +1098,13 @@ struct PhotosView: View {
         return semanticRuntime.dismissalTarget(assetID: asset.id, aspectRatio: asset.aspectRatio)
     }
 
-    private func dismissPreview() {
+    private func dismissPreview(trigger: String = "other") {
         guard let preview = assetPreview, !preview.isDismissing else { return }
         let started = ProcessInfo.processInfo.systemUptime
         let previousFrame = preview.transitionTarget.map { String(describing: $0.imageFrame) } ?? "none"
         preview.beginDismissal()
         preview.transitionTarget = previewTarget(for: preview.asset)
-        tracePreview(preview, event: "return-requested", previousFrame: previousFrame)
+        tracePreview(preview, event: "return-requested-\(trigger)", previousFrame: previousFrame)
         withAnimation(reduceMotion ? AssetViewerTransitionMotion.reducedMotion : AssetViewerTransitionMotion.returning,
                       completionCriteria: .removed)
         {
@@ -1175,7 +1176,7 @@ struct PhotosView: View {
 
     private func navigateBack() {
         if hasInteractivePreview {
-            dismissPreview()
+            dismissPreview(trigger: "back")
             return
         }
         retireDismissedPreview()

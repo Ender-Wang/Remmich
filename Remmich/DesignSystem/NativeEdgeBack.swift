@@ -19,8 +19,11 @@ extension View {
         background(NativeEdgeBackAnchor(active: active, canBegin: canBegin, priority: priority, event: event))
     }
 
-    func nativeEdgeBackAction(active: Bool, canBegin: Bool = true, priority: Int = 100, action: @escaping () -> Void) -> some View {
-        modifier(NativeEdgeBackActionModifier(active: active, canBegin: canBegin, priority: priority, action: action))
+    func nativeEdgeBackAction(active: Bool, canBegin: Bool = true, priority: Int = 100,
+                              animatesContent: Bool = true, action: @escaping () -> Void) -> some View
+    {
+        modifier(NativeEdgeBackActionModifier(active: active, canBegin: canBegin, priority: priority,
+                                              animatesContent: animatesContent, action: action))
     }
 }
 
@@ -29,20 +32,32 @@ private struct NativeEdgeBackActionModifier: ViewModifier {
     let active: Bool
     let canBegin: Bool
     let priority: Int
+    let animatesContent: Bool
     let action: () -> Void
     @State private var progress: CGFloat = 0
 
     func body(content: Content) -> some View {
         content
-            .offset(x: reduceMotion ? 0 : progress * 100)
-            .opacity(1 - progress * 0.2)
+            .offset(x: reduceMotion || !animatesContent ? 0 : progress * 100)
+            .opacity(animatesContent ? 1 - progress * 0.2 : 1)
             .nativeEdgeBack(active: active, canBegin: canBegin, priority: priority) { event in
                 switch event.phase {
                 case .began:
                     break
                 case .changed:
-                    progress = event.progress
+                    if animatesContent {
+                        progress = event.progress
+                    }
                 case .ended:
+                    // A child transition can own its own spring and source
+                    // geometry. Keep its action outside the page-reset animation.
+                    if !animatesContent {
+                        progress = 0
+                        if event.completed {
+                            action()
+                        }
+                        return
+                    }
                     withAnimation(reduceMotion ? nil : .snappy(duration: 0.24)) {
                         progress = 0
                         if event.completed {
