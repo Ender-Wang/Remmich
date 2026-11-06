@@ -1669,6 +1669,9 @@ struct AssetViewerView: View {
                 guard !isDismissing else { return }
                 if openingIsActive, !isMemoryViewer {
                     guard openingDrag.isActive || (value.translation.height > abs(value.translation.width) * 1.2) else { return }
+                    if !openingDrag.isActive, let asset = session.selectedAsset {
+                        beginReturningTimelineTransition(for: asset)
+                    }
                     var transaction = Transaction(animation: nil)
                     transaction.disablesAnimations = true
                     withTransaction(transaction) {
@@ -2022,6 +2025,10 @@ struct AssetViewerView: View {
                     openingIsActive = false
                 }
             }
+            if !openingDrag.isActive {
+                returningTimelineThumbnailChanged(nil)
+                returningLivePhotoBadgeChanged(nil)
+            }
         }
     }
 
@@ -2045,7 +2052,6 @@ struct AssetViewerView: View {
             if target == nil {
                 dismissalAssetOpacity = 0
             }
-            beginReturningTimelineTransition(for: asset)
         } completion: {
             guard openingGeneration == generation, isDismissing else { return }
             finishTimelineLanding(fillsFrame: target?.fillsFrame == true, usesNativeSurface: false)
