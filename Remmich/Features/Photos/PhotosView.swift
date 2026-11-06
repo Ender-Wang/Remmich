@@ -1047,14 +1047,17 @@ struct PhotosView: View {
                     TimelineAssetPreview(session: assetPreview, media: media,
                                          viewport: CGRect(x: 0, y: top, width: available.width, height: available.height),
                                          globalOrigin: globalFrame.origin,
-                                         openViewer: { promotePreview(assetPreview, from: $0) })
-                        .onAppear { tracePreview(assetPreview, event: "overlay-appeared") }
-                        .onDisappear { tracePreview(assetPreview, event: "overlay-disappeared") }
-                        .accessibilityAction(.escape) { dismissPreview(trigger: "accessibility-escape") }
-                        .accessibilityHidden(assetPreview.isDismissing)
-                        .id(assetPreview.id)
-                        .transition(.identity)
-                        .zIndex(1)
+                                         openViewer: { promotePreview(assetPreview, from: $0) },
+                                         transitionEvent: { event, elapsed, transaction in
+                                             tracePreview(assetPreview, event: event, elapsedMs: elapsed, transaction: transaction)
+                                         })
+                                         .onAppear { tracePreview(assetPreview, event: "overlay-appeared") }
+                                         .onDisappear { tracePreview(assetPreview, event: "overlay-disappeared") }
+                                         .accessibilityAction(.escape) { dismissPreview(trigger: "accessibility-escape") }
+                                         .accessibilityHidden(assetPreview.isDismissing)
+                                         .id(assetPreview.id)
+                                         .transition(.identity)
+                                         .zIndex(1)
                 }
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
@@ -1158,12 +1161,15 @@ struct PhotosView: View {
     }
 
     private func tracePreview(_ preview: TimelineAssetPreviewSession, event: String, elapsedMs: Int = -1,
-                              previousFrame: String = "-")
+                              previousFrame: String = "-", transaction: Transaction? = nil)
     {
         #if DEBUG
             let frame = preview.transitionTarget.map { String(describing: $0.imageFrame) } ?? "none"
+            let uptimeMs = Int(ProcessInfo.processInfo.systemUptime * 1000)
+            let animation = transaction.map { String(describing: $0.animation) } ?? "unobserved"
+            let disabled = transaction.map { String($0.disablesAnimations) } ?? "unobserved"
             Self.logger.notice(
-                "Preview transition event=\(event, privacy: .public) session=\(preview.id.uuidString.prefix(8), privacy: .public) asset=\(preview.asset.id.prefix(8), privacy: .public) active=\(assetPreview?.id == preview.id) progress=\(Double(preview.transitionProgress)) dismissing=\(preview.isDismissing) promoting=\(preview.isPromoting) released=\(preview.sourceIsReleased) closed=\(preview.isClosed) reduceMotion=\(reduceMotion) target=\(frame, privacy: .public) previousTarget=\(previousFrame, privacy: .public) elapsedMs=\(elapsedMs)"
+                "Preview transition event=\(event, privacy: .public) session=\(preview.id.uuidString.prefix(8), privacy: .public) asset=\(preview.asset.id.prefix(8), privacy: .public) active=\(assetPreview?.id == preview.id) progress=\(Double(preview.transitionProgress)) openingComplete=\(preview.isOpeningComplete) dismissing=\(preview.isDismissing) promoting=\(preview.isPromoting) released=\(preview.sourceIsReleased) closed=\(preview.isClosed) reduceMotion=\(reduceMotion) target=\(frame, privacy: .public) previousTarget=\(previousFrame, privacy: .public) elapsedMs=\(elapsedMs) uptimeMs=\(uptimeMs) animation=\(animation, privacy: .public) animationsDisabled=\(disabled, privacy: .public) uiAnimationsEnabled=\(UIView.areAnimationsEnabled)"
             )
         #endif
     }

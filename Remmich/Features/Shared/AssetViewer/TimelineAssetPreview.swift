@@ -158,6 +158,7 @@ struct TimelineAssetPreview: View {
     let viewport: CGRect
     let globalOrigin: CGPoint
     let openViewer: (AssetViewerDismissalTarget) -> Void
+    let transitionEvent: (String, Int, Transaction?) -> Void
 
     var body: some View {
         let horizontalActions = viewport.width > viewport.height && !dynamicTypeSize.isAccessibilitySize
@@ -227,14 +228,23 @@ struct TimelineAssetPreview: View {
                 .accessibilityHidden(!session.isOpeningComplete || session.isDismissing)
                 .accessibilityIdentifier("timeline-preview-actions")
         }
+        .transaction(value: session.transitionProgress) { transaction in
+            // Record the transaction that reaches the rendered hero, not only
+            // the animation requested by its parent. This never alters it.
+            transitionEvent("render-progress", -1, transaction)
+        }
         .task {
             try? await Task.sleep(for: .milliseconds(16))
             guard !Task.isCancelled, !session.isDismissing else { return }
+            let started = ProcessInfo.processInfo.systemUptime
+            transitionEvent("opening-requested", -1, nil)
             withAnimation(reduceMotion ? AssetViewerTransitionMotion.reducedMotion : AssetViewerTransitionMotion.opening,
                           completionCriteria: .removed)
             {
                 session.transitionProgress = 1
             } completion: {
+                let elapsed = Int((ProcessInfo.processInfo.systemUptime - started) * 1000)
+                transitionEvent("opening-animation-completed", elapsed, nil)
                 guard !session.isDismissing else { return }
                 var transaction = Transaction(animation: nil)
                 transaction.disablesAnimations = true
