@@ -1105,12 +1105,16 @@ struct PhotosView: View {
         guard let preview = assetPreview, !preview.isDismissing else { return }
         let started = ProcessInfo.processInfo.systemUptime
         let previousFrame = preview.transitionTarget.map { String(describing: $0.imageFrame) } ?? "none"
-        preview.beginDismissal()
-        preview.transitionTarget = previewTarget(for: preview.asset)
+        let target = previewTarget(for: preview.asset)
         tracePreview(preview, event: "return-requested-\(trigger)", previousFrame: previousFrame)
         withAnimation(reduceMotion ? AssetViewerTransitionMotion.reducedMotion : AssetViewerTransitionMotion.returning,
                       completionCriteria: .removed)
         {
+            // These properties all invalidate the rendered preview. Publish
+            // them together so a nonanimated dismissal update cannot consume
+            // the new progress before the spring transaction reaches the view.
+            preview.beginDismissal()
+            preview.transitionTarget = target
             preview.transitionProgress = 0
         } completion: {
             let elapsed = Int((ProcessInfo.processInfo.systemUptime - started) * 1000)
@@ -1136,10 +1140,14 @@ struct PhotosView: View {
     }
 
     private func finishPreviewLanding(_ preview: TimelineAssetPreviewSession, reason: String) {
-        guard assetPreview?.id == preview.id, preview.beginSourceHandoff() else { return }
-        tracePreview(preview, event: "handoff-\(reason)")
+        guard assetPreview?.id == preview.id, preview.isDismissing,
+              !preview.isPromoting, !preview.sourceIsReleased else { return }
         withAnimation(.easeOut(duration: 0.12), completionCriteria: .removed) {
+            // Source visibility and hero opacity must share this transaction
+            // for the same reason as the return's state and progress.
+            preview.beginSourceHandoff()
             preview.handoffOpacity = 0
+            tracePreview(preview, event: "handoff-\(reason)")
         } completion: {
             removePreview(preview, reason: "handoff-completed")
         }
