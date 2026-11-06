@@ -1038,7 +1038,8 @@ struct PhotosView: View {
                     TimelineAssetPreview(session: assetPreview, media: media,
                                          viewport: CGRect(x: 0, y: top, width: available.width, height: available.height),
                                          globalOrigin: globalFrame.origin,
-                                         openViewer: { promotePreview(assetPreview, from: $0) })
+                                         openViewer: { promotePreview(assetPreview, from: $0) },
+                                         dismiss: { dismissPreview() })
                         .accessibilityAction(.escape) { dismissPreview() }
                         .accessibilityHidden(assetPreview.isDismissing)
                         .id(assetPreview.id)

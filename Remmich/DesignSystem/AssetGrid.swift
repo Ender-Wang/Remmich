@@ -665,7 +665,7 @@ struct TimelineAssetThumbnail: View {
                 viewportChanged(asset, visible)
             }
             .contentShape(.rect)
-            .gesture(LongPressGesture(minimumDuration: 0.45, maximumDistance: 10)
+            .gesture(LongPressGesture(minimumDuration: 0.35, maximumDistance: 10)
                 .exclusively(before: TapGesture())
                 .onEnded { result in
                     switch result {
