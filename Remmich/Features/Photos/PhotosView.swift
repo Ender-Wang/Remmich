@@ -620,25 +620,16 @@ struct PhotosView: View {
                 }
             }
             .onChange(of: media.scope?.cacheNamespace) {
-                if let assetPreview {
-                    tracePreview(assetPreview, event: "account-scope-changed")
-                }
                 assetPreview?.close()
                 assetPreview = nil
             }
             .onChange(of: scenePhase) { _, phase in
                 if phase != .active {
-                    if let assetPreview {
-                        tracePreview(assetPreview, event: "scene-inactive")
-                    }
                     assetPreview?.close()
                     assetPreview = nil
                 }
             }
             .onDisappear {
-                if let assetPreview {
-                    tracePreview(assetPreview, event: "timeline-disappeared")
-                }
                 assetPreview?.close()
                 assetPreview = nil
                 semanticLatestTask?.cancel()
@@ -1043,21 +1034,16 @@ struct PhotosView: View {
                     Color.clear
                         .frame(width: geometry.size.width, height: geometry.size.height)
                         .contentShape(.rect)
-                        .onTapGesture { dismissPreview(trigger: "outside-tap") }
+                        .onTapGesture { dismissPreview() }
                     TimelineAssetPreview(session: assetPreview, media: media,
                                          viewport: CGRect(x: 0, y: top, width: available.width, height: available.height),
                                          globalOrigin: globalFrame.origin,
-                                         openViewer: { promotePreview(assetPreview, from: $0) },
-                                         transitionEvent: { event, elapsed, transaction in
-                                             tracePreview(assetPreview, event: event, elapsedMs: elapsed, transaction: transaction)
-                                         })
-                                         .onAppear { tracePreview(assetPreview, event: "overlay-appeared") }
-                                         .onDisappear { tracePreview(assetPreview, event: "overlay-disappeared") }
-                                         .accessibilityAction(.escape) { dismissPreview(trigger: "accessibility-escape") }
-                                         .accessibilityHidden(assetPreview.isDismissing)
-                                         .id(assetPreview.id)
-                                         .transition(.identity)
-                                         .zIndex(1)
+                                         openViewer: { promotePreview(assetPreview, from: $0) })
+                        .accessibilityAction(.escape) { dismissPreview() }
+                        .accessibilityHidden(assetPreview.isDismissing)
+                        .id(assetPreview.id)
+                        .transition(.identity)
+                        .zIndex(1)
                 }
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
@@ -1101,12 +1087,9 @@ struct PhotosView: View {
         return semanticRuntime.dismissalTarget(assetID: asset.id, aspectRatio: asset.aspectRatio)
     }
 
-    private func dismissPreview(trigger: String = "other") {
+    private func dismissPreview() {
         guard let preview = assetPreview, !preview.isDismissing else { return }
-        let started = ProcessInfo.processInfo.systemUptime
-        let previousFrame = preview.transitionTarget.map { String(describing: $0.imageFrame) } ?? "none"
         let target = previewTarget(for: preview.asset)
-        tracePreview(preview, event: "return-requested-\(trigger)", previousFrame: previousFrame)
         withAnimation(reduceMotion ? AssetViewerTransitionMotion.reducedMotion : AssetViewerTransitionMotion.returning,
                       completionCriteria: .removed)
         {
@@ -1117,9 +1100,7 @@ struct PhotosView: View {
             preview.transitionTarget = target
             preview.transitionProgress = 0
         } completion: {
-            let elapsed = Int((ProcessInfo.processInfo.systemUptime - started) * 1000)
-            tracePreview(preview, event: "return-animation-completed", elapsedMs: elapsed)
-            finishPreviewLanding(preview, reason: "spring-completed")
+            finishPreviewLanding(preview)
         }
     }
 
@@ -1130,7 +1111,7 @@ struct PhotosView: View {
         Task { @MainActor [weak preview] in
             guard let preview, assetPreview?.id == preview.id, !preview.isClosed else { return }
             guard let target = previewTarget(for: preview.asset) else {
-                finishPreviewLanding(preview, reason: "source-unavailable-during-scroll")
+                finishPreviewLanding(preview)
                 return
             }
             var transaction = Transaction(animation: nil)
@@ -1139,7 +1120,7 @@ struct PhotosView: View {
         }
     }
 
-    private func finishPreviewLanding(_ preview: TimelineAssetPreviewSession, reason: String) {
+    private func finishPreviewLanding(_ preview: TimelineAssetPreviewSession) {
         guard assetPreview?.id == preview.id, preview.isDismissing,
               !preview.isPromoting, !preview.sourceIsReleased else { return }
         withAnimation(.easeOut(duration: 0.12), completionCriteria: .removed) {
@@ -1147,14 +1128,12 @@ struct PhotosView: View {
             // for the same reason as the return's state and progress.
             preview.beginSourceHandoff()
             preview.handoffOpacity = 0
-            tracePreview(preview, event: "handoff-\(reason)")
         } completion: {
-            removePreview(preview, reason: "handoff-completed")
+            removePreview(preview)
         }
     }
 
-    private func removePreview(_ preview: TimelineAssetPreviewSession, reason: String = "new-action") {
-        tracePreview(preview, event: "remove-\(reason)")
+    private func removePreview(_ preview: TimelineAssetPreviewSession) {
         preview.close()
         guard assetPreview?.id == preview.id else { return }
         var transaction = Transaction(animation: nil)
@@ -1164,22 +1143,7 @@ struct PhotosView: View {
 
     private func promotePreview(_ preview: TimelineAssetPreviewSession, from target: AssetViewerDismissalTarget) {
         guard assetPreview?.id == preview.id, let route = preview.viewerRoute, preview.beginPromotion() else { return }
-        tracePreview(preview, event: "promote-to-viewer")
         presentViewer(route, sourceOverride: (target, preview.previewImage ?? preview.image))
-    }
-
-    private func tracePreview(_ preview: TimelineAssetPreviewSession, event: String, elapsedMs: Int = -1,
-                              previousFrame: String = "-", transaction: Transaction? = nil)
-    {
-        #if DEBUG
-            let frame = preview.transitionTarget.map { String(describing: $0.imageFrame) } ?? "none"
-            let uptimeMs = Int(ProcessInfo.processInfo.systemUptime * 1000)
-            let animation = transaction.map { String(describing: $0.animation) } ?? "unobserved"
-            let disabled = transaction.map { String($0.disablesAnimations) } ?? "unobserved"
-            Self.logger.notice(
-                "Preview transition event=\(event, privacy: .public) session=\(preview.id.uuidString.prefix(8), privacy: .public) asset=\(preview.asset.id.prefix(8), privacy: .public) active=\(assetPreview?.id == preview.id) progress=\(Double(preview.transitionProgress)) openingComplete=\(preview.isOpeningComplete) dismissing=\(preview.isDismissing) promoting=\(preview.isPromoting) released=\(preview.sourceIsReleased) closed=\(preview.isClosed) reduceMotion=\(reduceMotion) target=\(frame, privacy: .public) previousTarget=\(previousFrame, privacy: .public) elapsedMs=\(elapsedMs) uptimeMs=\(uptimeMs) animation=\(animation, privacy: .public) animationsDisabled=\(disabled, privacy: .public) uiAnimationsEnabled=\(UIView.areAnimationsEnabled)"
-            )
-        #endif
     }
 
     private func selectRoute(_ route: PhotosRangeRoute) {
@@ -1190,7 +1154,7 @@ struct PhotosView: View {
 
     private func navigateBack() {
         if hasInteractivePreview {
-            dismissPreview(trigger: "back")
+            dismissPreview()
             return
         }
         retireDismissedPreview()
@@ -1298,7 +1262,7 @@ struct PhotosView: View {
                 if visible, let preview = assetPreview, preview.isPromoting,
                    preview.viewerRoute == route, viewerRoute == route
                 {
-                    removePreview(preview, reason: "full-viewer-visible")
+                    removePreview(preview)
                 }
                 if !visible,
                    memoryViewerIsSwitching,
