@@ -82,7 +82,7 @@ struct AssetViewerPresentationTests {
         let account = try AccountSession(apiURL: #require(URL(string: "http://127.0.0.1:1/api")), accessToken: "test",
                                          userID: UUID().uuidString, userEmail: "viewer@example.invalid", name: "Viewer test",
                                          isAdmin: false, serverVersion: AccountSession.fixture.serverVersion)
-        media.configure(session: account, activeEndpoint: nil)
+        media.configure(session: account, activeEndpoint: account.apiURL)
         defer { media.clearAll() }
         let date = Date(timeIntervalSince1970: 1_700_000_000)
         let asset = TimelineAssetSummary(id: "original", ownerID: account.userID, capturedAt: date, uploadedAt: date,

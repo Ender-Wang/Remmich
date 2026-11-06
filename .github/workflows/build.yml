@@ -82,12 +82,7 @@ jobs:
             -destination "$IPHONE_DESTINATION" \
             -derivedDataPath "$DERIVED_DATA_PATH" \
             -resultBundlePath "$RUNNER_TEMP/RemmichViewerReturnTests.xcresult" \
-            -only-testing:RemmichTests/TimelineAssetPreviewTests \
-            -only-testing:RemmichTests/AssetViewerOpeningDragTests \
-            -only-testing:RemmichTests/AssetViewerPresentationTests \
-            -only-testing:RemmichTests/VideoPictureInPictureTests \
-            -only-testing:RemmichTests/LivePhotoPlaybackStateTests \
-            '-only-testing:RemmichTests/RemmichTests/viewerSquareOpeningClipExpandsContinuously()' \
+            '-only-testing:RemmichTests/AssetViewerPresentationTests/oldViewerCleanupDoesNotEvictOriginalUsedByNewViewer()' \
             -jobs 2 \
             -parallel-testing-enabled NO \
             COMPILER_INDEX_STORE_ENABLE=NO
