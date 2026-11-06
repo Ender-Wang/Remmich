@@ -40,13 +40,17 @@ struct TimelineAssetOverlay: View {
 /// labels out with the same progress as the viewer opening animation.
 nonisolated struct AssetViewerOpeningAssetOverlay: View, Animatable {
     let asset: TimelineAssetSummary
-    let sourceRect: CGRect
+    var sourceRect: CGRect
     let destinationRect: CGRect
     var progress: CGFloat
 
-    var animatableData: CGFloat {
-        get { progress }
-        set { progress = newValue }
+    var animatableData: AnimatableValues<CGFloat, CGFloat, CGFloat, CGFloat, CGFloat> {
+        get { AnimatableValues(progress, sourceRect.minX, sourceRect.minY, sourceRect.width, sourceRect.height) }
+        set {
+            progress = newValue.value.0
+            sourceRect = CGRect(x: newValue.value.1, y: newValue.value.2,
+                                width: newValue.value.3, height: newValue.value.4)
+        }
     }
 
     var body: some View {

@@ -45,7 +45,8 @@ struct AppShellView: View {
     @State private var libraryPath = NavigationPath()
     @State private var searchPath = NavigationPath()
     @State private var showsAccount = false
-    @State private var viewerPresented = false
+    @State private var legacyViewerPresented = false
+    @State private var viewerPresentations = AssetViewerPresentationStore()
     @State private var photosContentLoading = true
     @State private var videosContentLoading = true
 
@@ -110,6 +111,7 @@ struct AppShellView: View {
                             loadingVisibilityChanged: primaryContentLoadingChanged == nil ? nil : { photosContentLoading = $0 },
                             tabSelectionState: tabSelectionState,
                             tabDestination: .photos,
+                            viewerPresentations: viewerPresentations,
                             showAccount: showAccount
                         )
                     }
@@ -145,6 +147,7 @@ struct AppShellView: View {
                             loadingVisibilityChanged: primaryContentLoadingChanged == nil ? nil : { videosContentLoading = $0 },
                             tabSelectionState: tabSelectionState,
                             tabDestination: .videos,
+                            viewerPresentations: viewerPresentations,
                             showAccount: showAccount
                         )
                     }
@@ -315,6 +318,12 @@ struct AppShellView: View {
             }
         }
         .animation(.smooth(duration: 0.35), value: showsAccount)
+        .accessibilityHidden(viewerPresentations.activeID != nil)
+        .overlay { AssetViewerPresentationOverlay(presentations: viewerPresentations) }
+        .onChange(of: viewerPresented || !viewerPresentations.entries.isEmpty) { _, presented in
+            libraryIndex.setTimelinePublicationDeferred(presented)
+        }
+        .onDisappear { viewerPresentations.removeAll() }
     }
 
     private func showAccount() {
@@ -322,13 +331,11 @@ struct AppShellView: View {
     }
 
     private func setViewerPresented(_ presented: Bool) {
-        if presented {
-            libraryIndex.setTimelinePublicationDeferred(true)
-            viewerPresented = true
-        } else {
-            viewerPresented = false
-            libraryIndex.setTimelinePublicationDeferred(false)
-        }
+        legacyViewerPresented = presented
+    }
+
+    private var viewerPresented: Bool {
+        legacyViewerPresented || viewerPresentations.activeID != nil
     }
 
     private func pinchGroupedRange(_ kind: PhotosGroupedTabKind, _ gesture: PhotosPinchGesture) {
