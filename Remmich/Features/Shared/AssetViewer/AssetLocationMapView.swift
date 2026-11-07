@@ -3,6 +3,22 @@ import Foundation
 import ImmichAPI
 import MapLibre
 import SwiftUI
+import UIKit
+
+/// Visibility affects gestures only. The Info page owns the map's lifetime.
+nonisolated struct AssetMapViewport: Equatable {
+    let visible: Bool
+    let fullyVisible: Bool
+
+    init(frame: CGRect, size: CGSize, bottomInset: CGFloat) {
+        let viewport = CGRect(origin: .zero, size: size)
+        let intersection = viewport.intersection(frame)
+        visible = !intersection.isNull && !intersection.isEmpty
+        let interactiveViewport = CGRect(x: 0, y: 0, width: size.width,
+                                         height: max(0, size.height - bottomInset))
+        fullyVisible = visible && interactiveViewport.insetBy(dx: -1, dy: -1).contains(frame)
+    }
+}
 
 struct AssetLocationMapView: View {
     static let height: CGFloat = 240
@@ -10,38 +26,34 @@ struct AssetLocationMapView: View {
     @Environment(\.colorScheme) private var colorScheme
     let coordinate: PlaceCoordinate
     let place: PlaceLocation?
-    let viewportHeight: CGFloat
+    let viewportSize: CGSize
+    let isSelected: Bool
+    let interactionEnabled: Bool
     var interactionBottomInset: CGFloat = 0
     var interactionRegionChanged: (CGRect?) -> Void = { _ in }
-    @State private var frame: CGRect = .zero
-    @State private var globalFrame: CGRect = .zero
+    @State private var position = MapPosition(scroll: .zero, global: .zero)
     @State private var failed = false
     @State private var retry = 0
 
-    private var visible: Bool {
-        frame.maxY > 0 && frame.minY < viewportHeight
+    private var viewport: AssetMapViewport {
+        AssetMapViewport(frame: position.scroll, size: viewportSize, bottomInset: interactionBottomInset)
     }
 
-    private var fullyVisible: Bool {
-        frame.minY >= -1 && frame.maxY <= viewportHeight - interactionBottomInset + 1
-    }
-
-    private var nativeMapActive: Bool {
-        visible && !failed && locations?.mapStyles?.enabled == true
-    }
-
-    private var coordinateText: String {
-        "\(coordinate.latitude.formatted(.number.precision(.fractionLength(5)))), \(coordinate.longitude.formatted(.number.precision(.fractionLength(5))))"
+    private var interactionFrame: CGRect? {
+        interactionEnabled && viewport.fullyVisible && !failed && locations?.mapStyles?.enabled == true
+            ? position.global : nil
     }
 
     var body: some View {
         ZStack {
             Color(uiColor: .secondarySystemBackground)
-            if visible, !failed, let styles = locations?.mapStyles, styles.enabled {
+            // Keep the renderer mounted for exactly as long as this Info page.
+            // Neither paging selection nor vertical visibility replaces it.
+            if !failed, let styles = locations?.mapStyles, styles.enabled {
                 NativeAssetMap(coordinate: coordinate,
                                styleURL: colorScheme == .dark ? styles.dark : styles.light,
                                language: place?.language ?? .english,
-                               interactive: fullyVisible,
+                               interactive: interactionFrame != nil,
                                title: place?.title ?? "Photo location",
                                loadFailed: { failed = true })
             } else {
@@ -56,7 +68,7 @@ struct AssetLocationMapView: View {
         }
         .frame(height: Self.height)
         .overlay(alignment: .bottom) {
-            Text(coordinateText)
+            Text("\(coordinate.latitude.formatted(.number.precision(.fractionLength(5)))), \(coordinate.longitude.formatted(.number.precision(.fractionLength(5))))")
                 .font(.caption.monospacedDigit())
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
@@ -67,21 +79,16 @@ struct AssetLocationMapView: View {
         .clipShape(.rect(cornerRadius: DesignMetrics.defaultCornerRadius))
         .onGeometryChange(for: MapPosition.self) {
             MapPosition(scroll: $0.frame(in: .named("asset-info-scroll")), global: $0.frame(in: .global))
-        } action: { position in
-            frame = position.scroll
-            globalFrame = position.global
-            interactionRegionChanged(nativeMapActive && fullyVisible ? position.global : nil)
-        }
-        .onChange(of: nativeMapActive) { _, active in
-            interactionRegionChanged(active && fullyVisible ? globalFrame : nil)
-        }
+        } action: { position = $0 }
+        .onChange(of: interactionFrame, initial: true) { _, frame in interactionRegionChanged(frame) }
         .onDisappear { interactionRegionChanged(nil) }
-        .task(id: "\(visible)|\(locations?.mapEndpoint?.absoluteString ?? "")|\(retry)") {
-            guard visible, let locations else { return }
+        .task(id: "\(isSelected)|\(locations?.mapEndpoint?.absoluteString ?? "")|\(retry)") {
+            // Validate the shared style once through the selected Info page.
+            // Neighbor pages can render the same cached configuration.
+            guard isSelected, let locations else { return }
             failed = false
-            do {
-                try await locations.loadMapStyles()
-            } catch {
+            do { try await locations.loadMapStyles() }
+            catch {
                 if !Task.isCancelled, locations.mapStyles == nil {
                     failed = true
                 }

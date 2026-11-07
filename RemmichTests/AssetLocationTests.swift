@@ -1,8 +1,33 @@
+import CoreGraphics
 import Foundation
 import Testing
 @testable import Remmich
 
 struct AssetLocationTests {
+    @Test func mapVisibilityDoesNotTreatPartialCardsAsInteractive() {
+        let size = CGSize(width: 400, height: 400)
+        let peek = AssetMapViewport(frame: CGRect(x: 16, y: 350, width: 368, height: 240),
+                                    size: size, bottomInset: 90)
+        #expect(peek.visible && !peek.fullyVisible)
+        let clippedTop = AssetMapViewport(frame: CGRect(x: 16, y: -100, width: 368, height: 240),
+                                          size: size, bottomInset: 90)
+        #expect(clippedTop.visible && !clippedTop.fullyVisible)
+        let outside = AssetMapViewport(frame: CGRect(x: 16, y: 500, width: 368, height: 240),
+                                       size: size, bottomInset: 90)
+        #expect(!outside.visible && !outside.fullyVisible)
+    }
+
+    @Test func mapInteractionExcludesControlsAndPartialLandscapeReveal() {
+        let frame = CGRect(x: 16, y: 50, width: 368, height: 240)
+        #expect(AssetMapViewport(frame: frame, size: CGSize(width: 400, height: 400),
+                                 bottomInset: 90).fullyVisible)
+        let underControls = AssetMapViewport(frame: frame.offsetBy(dx: 0, dy: 50),
+                                             size: CGSize(width: 400, height: 400), bottomInset: 90)
+        #expect(underControls.visible && !underControls.fullyVisible)
+        let narrow = AssetMapViewport(frame: frame, size: CGSize(width: 50, height: 400), bottomInset: 0)
+        #expect(narrow.visible && !narrow.fullyVisible)
+    }
+
     @Test func coordinateValidationPreservesZero() {
         #expect(PlaceCoordinate(latitude: 0, longitude: 0) != nil)
         #expect(PlaceCoordinate(latitude: nil, longitude: 1) == nil)

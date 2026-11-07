@@ -147,6 +147,7 @@ nonisolated struct AssetViewerVideoPlaybackMetadata: Equatable, Sendable {
 
 struct AssetViewerInfoView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.assetLocations) private var locations
 
     let state: AssetViewerDetailState
     let renderedImageMetadata: AssetViewerRenderedImageMetadata?
@@ -158,8 +159,10 @@ struct AssetViewerInfoView: View {
     let loadFullResolution: () -> Void
     var place: PlaceLocation?
     var showsMap = false
-    var mapViewportHeight: CGFloat = 0
     var bottomContentInset: CGFloat = 0
+    var mapViewportSize: CGSize?
+    var mapIsSelected = false
+    var mapInteractionEnabled = false
     var mapInteractionRegionChanged: (CGRect?) -> Void = { _ in }
 
     var body: some View {
@@ -170,7 +173,7 @@ struct AssetViewerInfoView: View {
                     case .idle, .loading:
                         Color.clear.frame(minHeight: 220)
                     case let .loaded(detail):
-                        details(detail)
+                        details(detail, viewportSize: mapViewportSize ?? geometry.size)
                     case let .failed(message):
                         ContentUnavailableView {
                             Label("Information Unavailable", systemImage: "exclamationmark.circle")
@@ -227,7 +230,7 @@ struct AssetViewerInfoView: View {
         return AssetLocationMapView.height + 16
     }
 
-    private func details(_ detail: AssetDetail) -> some View {
+    private func details(_ detail: AssetDetail, viewportSize: CGSize) -> some View {
         VStack(spacing: 16) {
             if let description = detail.description?.trimmingCharacters(in: .whitespacesAndNewlines),
                !description.isEmpty
@@ -354,9 +357,11 @@ struct AssetViewerInfoView: View {
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("asset-viewer-metadata-card")
             if showsMap, let coordinate = PlaceCoordinate(latitude: detail.latitude, longitude: detail.longitude) {
-                AssetLocationMapView(coordinate: coordinate, place: place, viewportHeight: mapViewportHeight,
+                AssetLocationMapView(coordinate: coordinate, place: place, viewportSize: viewportSize,
+                                     isSelected: mapIsSelected, interactionEnabled: mapInteractionEnabled,
                                      interactionBottomInset: bottomContentInset,
                                      interactionRegionChanged: mapInteractionRegionChanged)
+                    .id(locations?.namespace)
             }
         }
     }

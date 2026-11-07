@@ -606,6 +606,12 @@ struct AssetViewerView: View {
             }
             resetMemoryAutoRotation()
         }
+        .onChange(of: showsInfo) { _, shown in
+            if !shown {
+                interactiveMapFrame = nil
+            }
+        }
+        .onChange(of: locations?.namespace) { _, _ in interactiveMapFrame = nil }
         .onChange(of: route.id) { _, _ in
             replaceMemoryRoute()
         }
@@ -621,6 +627,7 @@ struct AssetViewerView: View {
             beginOpeningAnimation()
         }
         .onDisappear {
+            interactiveMapFrame = nil
             returnSource?.stop()
             logMemoryPlayback("disappear")
             videoPlaybackSession?.close()
@@ -820,6 +827,7 @@ struct AssetViewerView: View {
         let animatesFitChanges = AssetViewerMediaGeometry.animatesFitChanges(
             infoDragTranslation: infoDragTranslation
         )
+        let mapScope = locations?.namespace
         let targetInfoWidth = viewerRect.width / 2
         let infoWidth = targetInfoWidth * infoProgress
         let maxInfoHeight = max(0, viewerRect.height - 220 - infoGap)
@@ -870,11 +878,14 @@ struct AssetViewerView: View {
                         retry: { retryDetail(for: asset.id) },
                         loadFullResolution: { requestFullResolution(for: asset.id) },
                         place: asset.id == session.selectedAssetID ? currentPlace : nil,
-                        showsMap: showsInfo && !openingIsActive && !isDismissing && asset.id == session.selectedAssetID,
-                        mapViewportHeight: viewerRect.height,
-                        mapInteractionRegionChanged: {
-                            if asset.id == session.selectedAssetID {
-                                interactiveMapFrame = $0
+                        showsMap: showsInfo && !openingIsActive,
+                        mapViewportSize: CGSize(width: infoWidth, height: viewerRect.height),
+                        mapIsSelected: asset.id == session.selectedAssetID,
+                        mapInteractionEnabled: asset.id == session.selectedAssetID && pagerPhase == .idle && infoProgress >= 0.99 && !isDismissing,
+                        mapInteractionRegionChanged: { frame in
+                            guard asset.id == session.selectedAssetID, mapScope == locations?.namespace else { return }
+                            if interactiveMapFrame != frame {
+                                interactiveMapFrame = frame
                             }
                         }
                     )
@@ -903,12 +914,15 @@ struct AssetViewerView: View {
                         retry: { retryDetail(for: asset.id) },
                         loadFullResolution: { requestFullResolution(for: asset.id) },
                         place: asset.id == session.selectedAssetID ? currentPlace : nil,
-                        showsMap: showsInfo && !openingIsActive && !isDismissing && asset.id == session.selectedAssetID,
-                        mapViewportHeight: portraitInfoViewportHeight,
+                        showsMap: showsInfo && !openingIsActive,
                         bottomContentInset: mapUnderlap,
-                        mapInteractionRegionChanged: {
-                            if asset.id == session.selectedAssetID {
-                                interactiveMapFrame = $0
+                        mapViewportSize: CGSize(width: viewerRect.width, height: portraitInfoVisibleHeight),
+                        mapIsSelected: asset.id == session.selectedAssetID,
+                        mapInteractionEnabled: asset.id == session.selectedAssetID && pagerPhase == .idle && infoProgress >= 0.99 && !isDismissing,
+                        mapInteractionRegionChanged: { frame in
+                            guard asset.id == session.selectedAssetID, mapScope == locations?.namespace else { return }
+                            if interactiveMapFrame != frame {
+                                interactiveMapFrame = frame
                             }
                         }
                     )
