@@ -50,6 +50,9 @@ struct AssetLocationTests {
         let museum = try Self.decode(#"{"features":[{"properties":{"name":"Museum","osm_key":"tourism","osm_value":"museum","extent":[0,2,2,0]}}]}"#)
         #expect(!museum.needsParkContext)
         #expect(museum.location(language: .english)?.title == "Museum")
+        let unknown = try Self.decode(#"{"features":[{"properties":{"name":"Garden","osm_key":"leisure","osm_value":"garden","extent":[0,2,2,0]}}]}"#)
+        let unknownParent = try Self.decode(#"{"features":[{"properties":{"name":"Park","osm_key":"leisure","osm_value":"park","extent":[-1,3,3,-1]}}]}"#)
+        #expect(unknown.enclosingPark(in: unknownParent, coordinate: coordinate, language: .english) == nil)
     }
 
     @Test func parkFilterIsOnlyUsedForTheOptionalContextRequest() throws {

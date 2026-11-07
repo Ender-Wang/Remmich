@@ -100,11 +100,13 @@ nonisolated struct PhotonResponse: Decodable, Sendable {
     /// park extent as well as the GPS point, rather than selecting any nearby park.
     func enclosingPark(in candidates: PhotonResponse, coordinate: PlaceCoordinate, language: PlaceLanguage) -> PlaceLocation? {
         guard needsParkContext, let original = features.first?.properties,
-              let inner = bounds(original.extent) else { return nil }
+              let inner = bounds(original.extent),
+              let country = original.countrycode?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased(),
+              !country.isEmpty else { return nil }
         let parents = candidates.features.filter { feature in
             let value = feature.properties
             guard value.osm_key == "leisure", value.osm_value == "park",
-                  value.countrycode == original.countrycode,
+                  value.countrycode?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() == country,
                   let outer = bounds(value.extent), value.name?.isEmpty == false else { return false }
             return outer.west <= coordinate.longitude && coordinate.longitude <= outer.east
                 && outer.south <= coordinate.latitude && coordinate.latitude <= outer.north
