@@ -44,11 +44,11 @@ struct AssetLocationMapView: View {
             Color(uiColor: .secondarySystemBackground)
             // Retain the selected Info card's map after its first reveal. A
             // scroll/resize across the viewport edge must not recreate it.
-            if visible || hasEnteredViewport, !failed, let styles = locations?.mapStyles, styles.enabled {
+            if visible || hasEnteredViewport || mapSession.hasRenderer, !failed, let styles = locations?.mapStyles, styles.enabled {
                 NativeAssetMap(coordinate: coordinate,
                                styleURL: colorScheme == .dark ? styles.dark : styles.light,
                                language: place?.language ?? .english,
-                               interactive: fullyVisible,
+                               interactive: visible && fullyVisible,
                                title: place?.title ?? "Photo location",
                                mapSession: mapSession,
                                namespace: locations?.namespace,
@@ -153,6 +153,10 @@ final class AssetMapSession: NSObject, MLNMapViewDelegate {
     private var originals: [String: NSExpression] = [:]
     private let pin = MLNPointAnnotation()
     var loadFailed: (() -> Void)?
+
+    var hasRenderer: Bool {
+        retainedMap != nil
+    }
 
     fileprivate func attach(to host: UIView, value: NativeAssetMap) {
         guard value.canAttach() else {
