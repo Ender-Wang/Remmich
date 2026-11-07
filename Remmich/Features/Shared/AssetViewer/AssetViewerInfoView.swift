@@ -326,7 +326,7 @@ struct AssetViewerInfoView: View {
                     Divider().overlay(Color.primary.opacity(0.16))
                     Label(location, systemImage: "location.fill")
                         .font(.subheadline)
-                        .lineLimit(3, reservesSpace: true)
+                        .lineLimit(3)
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: .infinity, alignment: .center)
                         .padding(16)

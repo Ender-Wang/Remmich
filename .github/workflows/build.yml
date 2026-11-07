@@ -78,6 +78,8 @@ jobs:
             -destination "$IPHONE_DESTINATION" -derivedDataPath "$DERIVED_DATA_PATH" \
             -resultBundlePath .ci/LocationTests.xcresult \
             -only-testing:RemmichTests/AssetLocationTests \
+            -only-testing:RemmichTests/RemmichTests/restoredSessionServesCacheOnlyThumbnailsWhileValidatingRoute \
+            -only-testing:RemmichTests/RemmichTests/signOutDuringParallelRestorationRejectsLateValidation \
             -only-testing:RemmichTests/AssetViewerSessionTests \
             -only-testing:RemmichTests/AssetViewerPresentationTests \
             -jobs 2 -parallel-testing-enabled NO COMPILER_INDEX_STORE_ENABLE=NO

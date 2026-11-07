@@ -743,6 +743,7 @@ struct RemmichTests {
 
         #expect(controller.foregroundResourcesReady)
         #expect(controller.media.activeAPIURL == nil)
+        #expect(controller.locations.mapEndpoint == nil)
         #expect(controller.media.imageRequest(for: descriptor)?.options.contains(.returnCacheDataDontLoad) == true)
         await #expect(throws: TimelineReadError.routeUnavailable) {
             try await controller.timeline.bucketSummaries(query: .init())
@@ -752,6 +753,7 @@ struct RemmichTests {
         await restoration.value
 
         #expect(controller.media.activeAPIURL == AccountSession.fixture.apiURL)
+        #expect(controller.locations.mapEndpoint == AccountSession.fixture.apiURL)
         #expect(controller.media.imageRequest(for: descriptor)?.options.contains(.returnCacheDataDontLoad) == false)
     }
 
@@ -778,6 +780,7 @@ struct RemmichTests {
         #expect(controller.activeRoute == nil)
         #expect(!controller.foregroundResourcesReady)
         #expect(controller.media.pipeline == nil)
+        #expect(controller.locations.mapEndpoint == nil)
     }
 
     @Test @MainActor func savedSessionRestorationIgnoresDuplicateInitialLifecycleTriggers() async {

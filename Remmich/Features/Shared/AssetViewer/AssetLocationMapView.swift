@@ -2,9 +2,11 @@ import CoreLocation
 import Foundation
 import ImmichAPI
 import MapLibre
+import OSLog
 import SwiftUI
 
 struct AssetLocationMapView: View {
+    private static let logger = Logger(subsystem: "Remmich", category: "AssetMap")
     @Environment(\.assetLocations) private var locations
     @Environment(\.colorScheme) private var colorScheme
     let coordinate: PlaceCoordinate
@@ -28,6 +30,10 @@ struct AssetLocationMapView: View {
         visible && !failed && locations?.mapStyles?.enabled == true
     }
 
+    private var coordinateText: String {
+        "\(coordinate.latitude.formatted(.number.precision(.fractionLength(5)))), \(coordinate.longitude.formatted(.number.precision(.fractionLength(5))))"
+    }
+
     var body: some View {
         ZStack {
             Color(uiColor: .secondarySystemBackground)
@@ -42,8 +48,6 @@ struct AssetLocationMapView: View {
                 VStack(spacing: 8) {
                     Image(systemName: "map")
                     Text(failed ? "Map Unavailable" : "Asset Location").font(.subheadline)
-                    Text("\(coordinate.latitude.formatted(.number.precision(.fractionLength(5)))), \(coordinate.longitude.formatted(.number.precision(.fractionLength(5))))")
-                        .font(.caption).foregroundStyle(.secondary)
                     if failed {
                         Button("Try Again") { retry &+= 1 }
                     }
@@ -51,6 +55,15 @@ struct AssetLocationMapView: View {
             }
         }
         .frame(height: 240)
+        .overlay(alignment: .bottom) {
+            Text(coordinateText)
+                .font(.caption.monospacedDigit())
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(.regularMaterial, in: Capsule())
+                .padding(.bottom, 28)
+                .allowsHitTesting(false)
+        }
         .clipShape(.rect(cornerRadius: DesignMetrics.defaultCornerRadius))
         .onGeometryChange(for: MapPosition.self) {
             MapPosition(scroll: $0.frame(in: .named("asset-info-scroll")), global: $0.frame(in: .global))
@@ -64,10 +77,14 @@ struct AssetLocationMapView: View {
         }
         .onDisappear { interactionRegionChanged(nil) }
         .task(id: "\(visible)|\(locations?.mapEndpoint?.absoluteString ?? "")|\(retry)") {
+            Self.logger.debug("Asset map request visible=\(visible) store=\(locations != nil) endpoint=\(locations?.mapEndpoint != nil) styles=\(locations?.mapStyles != nil) viewportHeight=\(viewportHeight) frameMinY=\(frame.minY) frameMaxY=\(frame.maxY)")
             guard visible, let locations else { return }
             failed = false
-            do { try await locations.loadMapStyles() }
-            catch {
+            do {
+                try await locations.loadMapStyles()
+                Self.logger.debug("Asset map configuration ready styles=\(locations.mapStyles != nil) enabled=\(locations.mapStyles?.enabled == true)")
+            } catch {
+                Self.logger.debug("Asset map configuration failed cancelled=\(Task.isCancelled) error=\(String(describing: error), privacy: .public)")
                 if !Task.isCancelled, locations.mapStyles == nil {
                     failed = true
                 }
@@ -146,11 +163,13 @@ private struct NativeAssetMap: UIViewRepresentable {
         }
 
         func mapView(_: MLNMapView, didFinishLoading style: MLNStyle) {
+            Logger(subsystem: "Remmich", category: "AssetMap").debug("Asset map style loaded")
             originals = [:]
             localize(style)
         }
 
-        func mapViewDidFailLoadingMap(_: MLNMapView, withError _: Error) {
+        func mapViewDidFailLoadingMap(_: MLNMapView, withError error: Error) {
+            Logger(subsystem: "Remmich", category: "AssetMap").debug("Asset map rendering failed error=\(String(describing: error), privacy: .public)")
             Task { @MainActor [weak self] in self?.loadFailed?() }
         }
 

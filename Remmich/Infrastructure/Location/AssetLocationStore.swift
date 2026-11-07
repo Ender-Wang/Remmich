@@ -11,6 +11,7 @@ final class AssetLocationStore {
         let endpoint: String
         let location: PlaceLocation
         let savedAt: Date
+        let selectionVersion: Int
     }
 
     private(set) var namespace: String?
@@ -86,7 +87,7 @@ final class AssetLocationStore {
         }
         if let result {
             cache.removeAll { $0.coordinate == coordinate && $0.endpoint == settings.endpoint && $0.location.language == result.language }
-            cache.append(.init(coordinate: coordinate, endpoint: settings.endpoint, location: result, savedAt: Date()))
+            cache.append(.init(coordinate: coordinate, endpoint: settings.endpoint, location: result, savedAt: Date(), selectionVersion: 2))
             cache = Array(cache.suffix(128))
             if let data = try? JSONEncoder().encode(cache) {
                 defaults.set(data, forKey: "maps-places-cache-\(namespace)")
@@ -134,6 +135,7 @@ final class AssetLocationStore {
     private func cached(_ coordinate: PlaceCoordinate, endpoint: String, language: PlaceLanguage) -> PlaceLocation? {
         cache.last {
             $0.coordinate == coordinate && $0.endpoint == endpoint && $0.location.language == language
+                && $0.selectionVersion == 2
                 && Date().timeIntervalSince($0.savedAt) < 30 * 24 * 60 * 60
         }?.location
     }

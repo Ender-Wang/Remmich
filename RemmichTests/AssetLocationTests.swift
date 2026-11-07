@@ -28,6 +28,48 @@ struct AssetLocationTests {
         #expect(response.location(language: .english)?.address.contains("Allen Knott") == false)
     }
 
+    @Test func gongqingParkReplacesItsSmallerScenicSpot() throws {
+        let original = try Self.decode(#"{"features":[{"properties":{"name":"秋林爱晚","osm_key":"leisure","osm_value":"park","countrycode":"CN","extent":[121.5476489,31.3249553,121.5494513,31.3229076]}}]}"#)
+        let parks = try Self.decode(#"{"features":[{"properties":{"name":"秋林爱晚","osm_key":"leisure","osm_value":"park","countrycode":"CN","extent":[121.5476489,31.3249553,121.5494513,31.3229076]}},{"properties":{"name":"共青森林公园","osm_key":"leisure","osm_value":"park","countrycode":"CN","city":"上海","country":"中国","extent":[121.5409875,31.3269521,121.5550029,31.3149137]}}]}"#)
+        let coordinate = try #require(PlaceCoordinate(latitude: 31.32607, longitude: 121.54968))
+        #expect(original.needsParkContext)
+        let selected = original.enclosingPark(in: parks, coordinate: coordinate, language: .local)
+        #expect(selected?.title == "共青森林公园")
+        #expect(selected?.address == "共青森林公园 · 上海 · 中国")
+        // Crossing the outer extent must not keep assigning the enclosing park.
+        let outside = try #require(PlaceCoordinate(latitude: 31.328, longitude: 121.54968))
+        #expect(original.enclosingPark(in: parks, coordinate: outside, language: .local) == nil)
+        #expect(original.location(language: .local)?.title == "秋林爱晚")
+    }
+
+    @Test func nearbyNonEnclosingParkAndMuseumDoNotBecomeParkContext() throws {
+        let original = try Self.decode(#"{"features":[{"properties":{"name":"Garden","osm_key":"leisure","osm_value":"garden","countrycode":"GB","extent":[0,2,2,0]}}]}"#)
+        let nearby = try Self.decode(#"{"features":[{"properties":{"name":"Nearby Park","osm_key":"leisure","osm_value":"park","countrycode":"GB","extent":[1,3,3,1]}},{"properties":{"name":"Invalid Park","osm_key":"leisure","osm_value":"park","countrycode":"GB","extent":[0,3,3]}}]}"#)
+        let coordinate = try #require(PlaceCoordinate(latitude: 1.5, longitude: 1.5))
+        #expect(original.enclosingPark(in: nearby, coordinate: coordinate, language: .english) == nil)
+        let museum = try Self.decode(#"{"features":[{"properties":{"name":"Museum","osm_key":"tourism","osm_value":"museum","extent":[0,2,2,0]}}]}"#)
+        #expect(!museum.needsParkContext)
+        #expect(museum.location(language: .english)?.title == "Museum")
+    }
+
+    @Test func parkFilterIsOnlyUsedForTheOptionalContextRequest() throws {
+        let coordinate = try #require(PlaceCoordinate(latitude: 31.32607, longitude: 121.54968))
+        let endpoint = try MapsPlacesPreferences.endpointURL("https://nas.example/photon")
+        let general = PhotonPlaceClient.request(coordinate, endpoint: endpoint, language: .english)
+        let context = PhotonPlaceClient.request(coordinate, endpoint: endpoint, language: .local, parksOnly: true)
+        let items = try #require(URLComponents(url: #require(context.url), resolvingAgainstBaseURL: false)?.queryItems)
+        #expect(items.first { $0.name == "osm_tag" }?.value == "leisure:park")
+        #expect(items.first { $0.name == "limit" }?.value == "10")
+        #expect(items.first { $0.name == "lat" }?.value == "31.32607")
+        #expect(items.first { $0.name == "lang" }?.value == "default")
+        #expect(general.url?.query?.contains("osm_tag") == false)
+        #expect(context.value(forHTTPHeaderField: "Authorization") == nil)
+    }
+
+    private nonisolated static func decode(_ json: String) throws -> PhotonResponse {
+        try JSONDecoder().decode(PhotonResponse.self, from: Data(json.utf8))
+    }
+
     @Test func instancePrefixIsRetainedAndRequestHasNoCredentials() throws {
         let endpoint = try MapsPlacesPreferences.endpointURL(" https://nas.example/services/photon/ ")
         let coordinate = try #require(PlaceCoordinate(latitude: 31.2167366667, longitude: 121.5484183333))

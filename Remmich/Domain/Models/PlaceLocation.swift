@@ -74,6 +74,8 @@ nonisolated struct PhotonResponse: Decodable, Sendable {
         struct Properties: Decodable, Sendable {
             let name: String?
             let osm_key: String?
+            let osm_value: String?
+            let extent: [Double]?
             let district: String?
             let locality: String?
             let city: String?
@@ -87,6 +89,40 @@ nonisolated struct PhotonResponse: Decodable, Sendable {
     }
 
     let features: [Feature]
+
+    var needsParkContext: Bool {
+        guard let value = features.first?.properties else { return false }
+        return value.osm_key == "leisure" && ["park", "garden", "nature_reserve"].contains(value.osm_value ?? "")
+            && bounds(value.extent) != nil
+    }
+
+    /// Photon extents are bounding boxes, not exact boundaries. Require a nested
+    /// park extent as well as the GPS point, rather than selecting any nearby park.
+    func enclosingPark(in candidates: PhotonResponse, coordinate: PlaceCoordinate, language: PlaceLanguage) -> PlaceLocation? {
+        guard needsParkContext, let original = features.first?.properties,
+              let inner = bounds(original.extent) else { return nil }
+        let parents = candidates.features.filter { feature in
+            let value = feature.properties
+            guard value.osm_key == "leisure", value.osm_value == "park",
+                  value.countrycode == original.countrycode,
+                  let outer = bounds(value.extent), value.name?.isEmpty == false else { return false }
+            return outer.west <= coordinate.longitude && coordinate.longitude <= outer.east
+                && outer.south <= coordinate.latitude && coordinate.latitude <= outer.north
+                && outer.west <= inner.west && outer.east >= inner.east
+                && outer.south <= inner.south && outer.north >= inner.north
+                && outer.area > inner.area
+        }
+        // Prefer the closest enclosing level, rather than an unrelated large area.
+        guard let parent = parents.min(by: { bounds($0.properties.extent)!.area < bounds($1.properties.extent)!.area }) else { return nil }
+        return PhotonResponse(features: [parent]).location(language: language)
+    }
+
+    private func bounds(_ extent: [Double]?) -> (west: Double, north: Double, east: Double, south: Double, area: Double)? {
+        guard let extent, extent.count == 4, extent.allSatisfy(\.isFinite),
+              extent[0] < extent[2], extent[3] < extent[1],
+              extent[0] >= -180, extent[2] <= 180, extent[3] >= -90, extent[1] <= 90 else { return nil }
+        return (extent[0], extent[1], extent[2], extent[3], (extent[2] - extent[0]) * (extent[1] - extent[3]))
+    }
 
     func location(language: PlaceLanguage) -> PlaceLocation? {
         // Do not promote an arbitrary later POI when the best match is a road.
