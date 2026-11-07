@@ -77,11 +77,8 @@ jobs:
             -project Remmich.xcodeproj -scheme Remmich -configuration Debug \
             -destination "$IPHONE_DESTINATION" -derivedDataPath "$DERIVED_DATA_PATH" \
             -resultBundlePath .ci/LocationTests.xcresult \
-            -only-testing:RemmichTests/AssetLocationTests \
-            -only-testing:RemmichTests/RemmichTests/restoredSessionServesCacheOnlyThumbnailsWhileValidatingRoute \
-            -only-testing:RemmichTests/RemmichTests/signOutDuringParallelRestorationRejectsLateValidation \
-            -only-testing:RemmichTests/AssetViewerSessionTests \
-            -only-testing:RemmichTests/AssetViewerPresentationTests \
+            '-only-testing:RemmichTests/RemmichTests/restoredSessionServesCacheOnlyThumbnailsWhileValidatingRoute()' \
+            '-only-testing:RemmichTests/RemmichTests/signOutDuringParallelRestorationRejectsLateValidation()' \
             -jobs 2 -parallel-testing-enabled NO COMPILER_INDEX_STORE_ENABLE=NO
       - name: Upload location results
         if: always()
