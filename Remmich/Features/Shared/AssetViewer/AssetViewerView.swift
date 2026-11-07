@@ -58,8 +58,7 @@ struct AssetViewerView: View {
     @State private var selectedPlaceAssetID: String?
     @State private var selectedPlaceRevision: Int?
     @State private var interactiveMapFrame: CGRect?
-    @State private var mapSlotTop: CGFloat?
-    @State private var mapSlotAssetID: String?
+    @State private var mapPresentation = AssetMapPresentation()
     @State private var lastMapCoordinate: PlaceCoordinate?
     @State private var mapFailed = false
     @State private var cachedDetailMissAssetIDs: Set<String> = []
@@ -733,10 +732,14 @@ struct AssetViewerView: View {
                 logMemoryPlayback("position")
                 schedulePagerSelectionSync(assetID)
             }
-            .onScrollPhaseChange { _, phase in
+            .onScrollPhaseChange { oldPhase, phase in
+                if oldPhase == .idle, phase != .idle {
+                    mapPresentation.beginPaging()
+                }
                 pagerPhase = phase
                 logMemoryPlayback("scroll-phase")
                 if phase == .idle {
+                    mapPresentation.endPaging(finalID: pagerPosition ?? session.selectedAssetID)
                     if isMemoryViewer,
                        let assetID = pagerPosition,
                        assetID == session.selectedAssetID
@@ -753,7 +756,7 @@ struct AssetViewerView: View {
             .simultaneousGesture(memoryAssetInteractionGesture(mediaRect: selectedMediaRect))
 
             viewerMapOverlay(pageSize: pageSize, viewportOrigin: viewportOrigin,
-                             viewerRect: viewerRect, mediaRect: selectedMediaRect,
+                             viewerRect: viewerRect,
                              isLandscape: isLandscape, infoProgress: infoProgress)
 
             if let videoPlaybackSession,
@@ -895,7 +898,7 @@ struct AssetViewerView: View {
                         loadFullResolution: { requestFullResolution(for: asset.id) },
                         place: asset.id == session.selectedAssetID ? currentPlace : nil,
                         showsMap: showsInfo && !openingIsActive && !isDismissing,
-                        mapIsSelected: asset.id == session.selectedAssetID,
+                        mapViewportSize: CGSize(width: infoWidth, height: viewerRect.height),
                         mapSlotPositionChanged: { updateMapSlot($0, assetID: asset.id, scope: mapScope) }
                     )
                     .frame(width: targetInfoWidth)
@@ -925,7 +928,7 @@ struct AssetViewerView: View {
                         place: asset.id == session.selectedAssetID ? currentPlace : nil,
                         showsMap: showsInfo && !openingIsActive && !isDismissing,
                         bottomContentInset: mapUnderlap,
-                        mapIsSelected: asset.id == session.selectedAssetID,
+                        mapViewportSize: CGSize(width: viewerRect.width, height: portraitInfoVisibleHeight),
                         mapSlotPositionChanged: { updateMapSlot($0, assetID: asset.id, scope: mapScope) }
                     )
                     .frame(height: portraitInfoViewportHeight)
@@ -959,69 +962,51 @@ struct AssetViewerView: View {
     }
 
     private func viewerMapOverlay(pageSize: CGSize, viewportOrigin: CGPoint,
-                                  viewerRect: CGRect, mediaRect: CGRect,
+                                  viewerRect: CGRect,
                                   isLandscape: Bool, infoProgress: CGFloat) -> some View
     {
-        let contentWidth = isLandscape ? viewerRect.width / 2 : viewerRect.width
         let underlap = !isLandscape && selectedPlaceCoordinate != nil ? max(0, pageSize.height - viewerRect.maxY) : 0
-        let infoHeight = min(max(0, viewerRect.height - 220 - infoGap), infoContentHeight(for: session.selectedAssetID))
-        let viewport = isLandscape
-            ? CGRect(x: viewerRect.maxX - contentWidth * infoProgress, y: viewerRect.minY,
-                     width: contentWidth * infoProgress, height: viewerRect.height)
-            : CGRect(x: viewerRect.minX, y: mediaRect.maxY + infoGap * infoProgress,
-                     width: contentWidth, height: (infoHeight + underlap) * infoProgress)
-        let geometry = mapSlotTop.map {
-            AssetMapViewportGeometry(mapTop: $0 - viewportOrigin.y, viewport: viewport,
-                                     contentWidth: contentWidth, bottomInset: underlap)
-        }
+        let viewport = CGRect(x: viewerRect.minX, y: viewerRect.minY, width: viewerRect.width,
+                              height: pageSize.height - viewerRect.minY)
         let canShow = showsInfo && !openingIsActive && !isDismissing
-        let hasCurrentLocation = selectedPlaceCoordinate != nil
-        let canInteract = canShow && hasCurrentLocation && mapSlotAssetID == session.selectedAssetID
-            && infoProgress >= 0.99 && geometry?.isFullyVisible == true
-        let interactionFrame = canInteract && !mapFailed && locations?.mapStyles?.enabled == true
-            ? geometry?.mapFrame.offsetBy(dx: viewportOrigin.x, dy: viewportOrigin.y) : nil
+        let mapAssetID = pagerPosition ?? session.selectedAssetID
+        let coordinates: [String: PlaceCoordinate] = Dictionary(uniqueKeysWithValues: pagerWindowAssets.compactMap { asset in
+            guard case let .loaded(detail) = detailState(for: asset.id),
+                  let coordinate = PlaceCoordinate(latitude: detail.latitude, longitude: detail.longitude) else { return nil }
+            return (asset.id, coordinate)
+        })
 
         return Group {
-            if canShow, let coordinate = selectedPlaceCoordinate ?? lastMapCoordinate, let geometry {
-                // Keep this native subtree mounted, including through missing-GPS
-                // pages. Only visibility changes; pager pages never reparent it.
-                AssetLocationMapView(coordinate: coordinate, place: currentPlace,
-                                     visible: hasCurrentLocation && geometry.isVisible,
-                                     fullyVisible: canInteract, failed: $mapFailed)
-                    .id(locations?.namespace)
-                    .frame(width: geometry.mapFrame.width, height: geometry.mapFrame.height)
-                    .mask(alignment: .topLeading) {
-                        Rectangle()
-                            .frame(width: geometry.maskFrame.width, height: geometry.maskFrame.height)
-                            .offset(x: geometry.maskFrame.minX, y: geometry.maskFrame.minY)
-                    }
-                    .position(x: geometry.mapFrame.midX, y: geometry.mapFrame.midY)
-                    .opacity(hasCurrentLocation && geometry.isVisible ? 1 : 0)
-                    .allowsHitTesting(canInteract)
-                    .accessibilityHidden(!hasCurrentLocation || !geometry.isVisible)
-            }
-        }
-        .onChange(of: interactionFrame, initial: true) { _, frame in
-            if interactiveMapFrame != frame {
-                interactiveMapFrame = frame
+            if canShow {
+                AssetLocationMapOverlay(presentation: mapPresentation, assetID: mapAssetID,
+                                        coordinates: coordinates, fallbackCoordinate: lastMapCoordinate,
+                                        place: mapAssetID == session.selectedAssetID ? currentPlace : nil,
+                                        origin: viewportOrigin, viewport: viewport, bottomInset: underlap,
+                                        contentWidth: isLandscape ? viewerRect.width / 2 : viewerRect.width,
+                                        interactive: infoProgress >= 0.99 && pagerPhase == .idle,
+                                        failed: $mapFailed,
+                                        interactionChanged: { frame in
+                                            if interactiveMapFrame != frame {
+                                                interactiveMapFrame = frame
+                                            }
+                                        })
+                                        .id(locations?.namespace)
             }
         }
     }
 
-    private func updateMapSlot(_ top: CGFloat, assetID: String, scope: String?) {
-        guard showsInfo, !openingIsActive, !isDismissing, top.isFinite,
-              scope == locations?.namespace, assetID == session.selectedAssetID else { return }
-        if mapSlotTop != top {
-            mapSlotTop = top
+    private func updateMapSlot(_ layout: AssetMapSlotLayout?, assetID: String, scope: String?) {
+        guard showsInfo, !openingIsActive, !isDismissing, scope == locations?.namespace else { return }
+        if let layout, !layout.frame.minX.isFinite || !layout.frame.minY.isFinite {
+            return
         }
-        if mapSlotAssetID != assetID {
-            mapSlotAssetID = assetID
+        if mapPresentation.slots[assetID] != layout {
+            mapPresentation.slots[assetID] = layout
         }
     }
 
     private func resetMapPresentation() {
-        mapSlotTop = nil
-        mapSlotAssetID = nil
+        mapPresentation.reset()
         lastMapCoordinate = nil
         mapFailed = false
         interactiveMapFrame = nil

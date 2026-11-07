@@ -159,8 +159,8 @@ struct AssetViewerInfoView: View {
     var place: PlaceLocation?
     var showsMap = false
     var bottomContentInset: CGFloat = 0
-    var mapIsSelected = false
-    var mapSlotPositionChanged: (CGFloat) -> Void = { _ in }
+    var mapViewportSize: CGSize?
+    var mapSlotPositionChanged: (AssetMapSlotLayout?) -> Void = { _ in }
 
     var body: some View {
         GeometryReader { geometry in
@@ -170,7 +170,7 @@ struct AssetViewerInfoView: View {
                     case .idle, .loading:
                         Color.clear.frame(minHeight: 220)
                     case let .loaded(detail):
-                        details(detail)
+                        details(detail, viewportSize: mapViewportSize ?? geometry.size)
                     case let .failed(message):
                         ContentUnavailableView {
                             Label("Information Unavailable", systemImage: "exclamationmark.circle")
@@ -227,7 +227,7 @@ struct AssetViewerInfoView: View {
         return AssetLocationMapView.height + 16
     }
 
-    private func details(_ detail: AssetDetail) -> some View {
+    private func details(_ detail: AssetDetail, viewportSize: CGSize) -> some View {
         VStack(spacing: 16) {
             if let description = detail.description?.trimmingCharacters(in: .whitespacesAndNewlines),
                !description.isEmpty
@@ -354,7 +354,7 @@ struct AssetViewerInfoView: View {
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("asset-viewer-metadata-card")
             if showsMap, PlaceCoordinate(latitude: detail.latitude, longitude: detail.longitude) != nil {
-                AssetLocationMapSlot(isSelected: mapIsSelected, positionChanged: mapSlotPositionChanged)
+                AssetLocationMapSlot(viewportSize: viewportSize, positionChanged: mapSlotPositionChanged)
             }
         }
     }
