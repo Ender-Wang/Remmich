@@ -41,6 +41,7 @@ final class AppSessionController {
     }
 
     let media = MediaLibraryController()
+    let locations: AssetLocationStore
     let timeline: ImmichTimelineRepository
     let assetDetails: any AssetDetailReading
     let photos: PhotosTimelineStore
@@ -91,6 +92,7 @@ final class AppSessionController {
         timeline: ImmichTimelineRepository = .init()
     ) {
         self.timeline = timeline
+        locations = AssetLocationStore(defaults: libraryIndexPreferences)
         libraryTransfers = transfers
         self.libraryIndexStore = libraryIndexStore
         let syncSource = transfers == nil ? timeline : ImmichTimelineRepository(transfers: transfers)
@@ -181,6 +183,7 @@ final class AppSessionController {
             let task = Task {
                 await persistentAssetDetails.configure(session: session)
                 guard preparationIsCurrent(generation), case let .signedIn(current) = state, current == session else { return }
+                locations.configure(scope: MediaAccountScope(session: session))
                 media.configure(session: session, activeEndpoint: activeRoute?.endpoint)
                 await bootstrapLocalLibrary(session: session)
                 guard preparationIsCurrent(generation), case let .signedIn(updated) = state, updated == session else { return }
@@ -233,6 +236,7 @@ final class AppSessionController {
         if ProcessInfo.processInfo.arguments.contains("-ui-testing-signed-in") {
             let session = AccountSession.fixture
             await persistentAssetDetails.configure(session: session)
+            locations.configure(scope: MediaAccountScope(session: session))
             media.configure(session: session, activeEndpoint: session.apiURL)
             if await configureTimelines(session: session, endpoint: session.apiURL) {
                 photos.routeDidChange(isReachable: true)
@@ -282,6 +286,7 @@ final class AppSessionController {
             if !inBackground {
                 await persistentAssetDetails.configure(session: session)
                 guard preparationIsCurrent(generation) else { return }
+                locations.configure(scope: MediaAccountScope(session: session))
                 media.configure(session: session, activeEndpoint: nil)
                 Self.startupLogger.info(
                     "Media pipeline configured elapsedMs=\(Self.elapsedMilliseconds(since: startupStartedAt))"
@@ -401,6 +406,7 @@ final class AppSessionController {
             validatedNetworkPathSignature = lastNetworkPathSignature
             await persistentAssetDetails.configure(session: session)
             guard preparationIsCurrent(generation) else { return }
+            locations.configure(scope: MediaAccountScope(session: session))
             media.configure(session: session, activeEndpoint: session.apiURL)
             let routeChanged = await configureTimelines(
                 session: session,
@@ -481,6 +487,7 @@ final class AppSessionController {
         validatedNetworkPathSignature = nil
         connectionProfile = .init()
         libraryIndex.suspend()
+        locations.reset()
         media.clearAll()
         photos.reset()
         videos.reset()
@@ -869,6 +876,7 @@ final class AppSessionController {
     private func configureTimelines(session: AccountSession, endpoint: URL?) async -> Bool {
         let generation = preparationGeneration
         let changed = await timeline.configure(session: session, activeEndpoint: endpoint)
+        locations.configureMap(session: session, endpoint: endpoint)
         guard preparationIsCurrent(generation) else { return false }
         await librarySyncSource.configure(session: session, activeEndpoint: endpoint)
         guard preparationIsCurrent(generation) else { return false }

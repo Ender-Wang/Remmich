@@ -5,10 +5,10 @@ nonisolated struct AssetViewerContextPresentation: Equatable, Sendable {
     let capturedAt: Date
     let location: String?
 
-    init(asset: TimelineAssetSummary, detail: AssetDetail?) {
+    init(asset: TimelineAssetSummary, detail: AssetDetail?, place: PlaceLocation? = nil) {
         assetID = asset.id
         capturedAt = detail?.capturedAt ?? asset.captureLocalDate
-        location = Self.normalizedLocation(from: detail)
+        location = place?.title ?? Self.normalizedLocation(from: detail)
     }
 
     private static func normalizedLocation(from detail: AssetDetail?) -> String? {

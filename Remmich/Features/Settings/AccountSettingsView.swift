@@ -9,6 +9,7 @@ struct AccountSettingsView: View {
         case index = "Index"
         case cache = "Cache & Storage"
         case appearance = "App icon"
+        case mapsPlaces = "Maps & Places"
     }
 
     private struct StatusNote {
@@ -412,7 +413,7 @@ struct AccountSettingsView: View {
         case .connection: ("network", Self.connectionColor, "\(activeRoute?.kind.rawValue.capitalized ?? "No route") · \(routeStatusLabel)")
         case .index: ("list.bullet.rectangle", Self.indexColor, "")
         case .cache: ("externaldrive", Self.cacheColor, "")
-        case .home, .appearance: ("", .clear, "")
+        case .home, .appearance, .mapsPlaces: ("", .clear, "")
         }
     }
 
@@ -717,6 +718,7 @@ struct AccountSettingsView: View {
         case .index: indexPage
         case .cache: cachePage
         case .appearance: iconPage
+        case .mapsPlaces: MapsPlacesSettingsView()
         }
     }
 
@@ -864,6 +866,11 @@ struct AccountSettingsView: View {
             profileValueRow("Immich Server", value: session.serverVersion.description, symbol: "server.rack")
             Button { navigate(to: .connection) } label: {
                 profileValueRow("Connection", value: connectionSummary, symbol: "network", showsChevron: true)
+            }
+            .buttonStyle(.plain)
+            sectionCaption("PREFERENCES").padding(.top, 24)
+            Button { navigate(to: .mapsPlaces) } label: {
+                profileValueRow("Maps & Places", value: "", symbol: "map", showsChevron: true)
             }
             .buttonStyle(.plain)
             sectionCaption("SESSION").padding(.top, 24)

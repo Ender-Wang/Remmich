@@ -324,6 +324,7 @@ struct AppShellView: View {
             libraryIndex.setTimelinePublicationDeferred(presented)
         }
         .onDisappear { viewerPresentations.removeAll() }
+        .environment(\.assetLocations, sessionController?.locations)
     }
 
     private func showAccount() {

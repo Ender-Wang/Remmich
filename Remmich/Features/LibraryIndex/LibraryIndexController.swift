@@ -673,6 +673,7 @@ final class LibraryIndexController {
             try await thumbnailCache.removeAccount(namespace: scope.cacheNamespace)
             try await store.removeAccount(namespace: scope.cacheNamespace)
             AccountCachePreferences.remove(from: preferences, namespace: scope.cacheNamespace)
+            AssetLocationStore.remove(defaults: preferences, namespace: scope.cacheNamespace)
             await media?.removeProfileImageCache(namespace: scope.cacheNamespace)
             let accounts = try await store.storedAccounts()
             storedAccounts = accounts
@@ -698,6 +699,7 @@ final class LibraryIndexController {
         preferences.removeObject(forKey: "library-index-last-success-\(namespace)")
         preferences.removeObject(forKey: "library-transfer-cache-intent-\(namespace)")
         AccountCachePreferences.remove(from: preferences, namespace: namespace)
+        AssetLocationStore.remove(defaults: preferences, namespace: namespace)
         guard namespace != scope?.cacheNamespace else {
             await deleteCurrentAccountData()
             return

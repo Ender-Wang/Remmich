@@ -156,6 +156,9 @@ struct AssetViewerInfoView: View {
     let contentHeightChanged: (CGFloat) -> Void
     let retry: () -> Void
     let loadFullResolution: () -> Void
+    var place: PlaceLocation?
+    var showsMap = false
+    var mapViewportHeight: CGFloat = 0
 
     var body: some View {
         GeometryReader { geometry in
@@ -197,6 +200,7 @@ struct AssetViewerInfoView: View {
                 )
             }
             .scrollIndicators(.hidden)
+            .coordinateSpace(name: "asset-info-scroll")
             .scrollBounceBehavior(.basedOnSize)
         }
         .onPreferenceChange(AssetViewerInfoContentHeightKey.self, perform: contentHeightChanged)
@@ -321,16 +325,26 @@ struct AssetViewerInfoView: View {
                     Divider().overlay(Color.primary.opacity(0.16))
                     Label(location, systemImage: "location.fill")
                         .font(.subheadline)
+                        .lineLimit(3, reservesSpace: true)
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: .infinity, alignment: .center)
                         .padding(16)
                         .accessibilityIdentifier("asset-viewer-location")
+                }
+                if PlaceCoordinate(latitude: detail.latitude, longitude: detail.longitude) != nil {
+                    Link("Place data © OpenStreetMap · Photon", destination: URL(string: "https://www.openstreetmap.org/copyright")!)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .padding(.bottom, 12)
                 }
             }
             .background(infoSurface)
             .clipShape(.rect(cornerRadius: DesignMetrics.defaultCornerRadius))
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("asset-viewer-metadata-card")
+            if showsMap, let coordinate = PlaceCoordinate(latitude: detail.latitude, longitude: detail.longitude) {
+                AssetLocationMapView(coordinate: coordinate, place: place, viewportHeight: mapViewportHeight)
+            }
         }
     }
 
@@ -497,6 +511,9 @@ struct AssetViewerInfoView: View {
     }
 
     private func locationSummary(for detail: AssetDetail) -> String? {
+        if let place {
+            return place.address
+        }
         let values = [detail.city, detail.state, detail.country]
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
