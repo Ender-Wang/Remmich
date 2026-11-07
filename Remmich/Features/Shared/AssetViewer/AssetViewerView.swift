@@ -27,6 +27,7 @@ struct AssetViewerView: View {
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.assetLocations) private var locations
+    @State private var mapSession = AssetMapSession()
 
     let route: AssetViewerRoute
     let media: MediaLibraryController
@@ -606,6 +607,12 @@ struct AssetViewerView: View {
             }
             resetMemoryAutoRotation()
         }
+        .onChange(of: showsInfo) { _, shown in
+            if !shown {
+                mapSession.reset()
+            }
+        }
+        .onChange(of: locations?.namespace) { _, _ in mapSession.reset() }
         .onChange(of: route.id) { _, _ in
             replaceMemoryRoute()
         }
@@ -621,6 +628,7 @@ struct AssetViewerView: View {
             beginOpeningAnimation()
         }
         .onDisappear {
+            mapSession.reset()
             returnSource?.stop()
             logMemoryPlayback("disappear")
             videoPlaybackSession?.close()
@@ -872,6 +880,8 @@ struct AssetViewerView: View {
                         place: asset.id == session.selectedAssetID ? currentPlace : nil,
                         showsMap: showsInfo && !openingIsActive && !isDismissing && asset.id == session.selectedAssetID,
                         mapViewportHeight: viewerRect.height,
+                        mapSession: mapSession,
+                        mapIsCurrent: { asset.id == session.selectedAssetID && showsInfo && !isDismissing && !openingIsActive },
                         mapInteractionRegionChanged: {
                             if asset.id == session.selectedAssetID {
                                 interactiveMapFrame = $0
@@ -906,6 +916,8 @@ struct AssetViewerView: View {
                         showsMap: showsInfo && !openingIsActive && !isDismissing && asset.id == session.selectedAssetID,
                         mapViewportHeight: portraitInfoViewportHeight,
                         bottomContentInset: mapUnderlap,
+                        mapSession: mapSession,
+                        mapIsCurrent: { asset.id == session.selectedAssetID && showsInfo && !isDismissing && !openingIsActive },
                         mapInteractionRegionChanged: {
                             if asset.id == session.selectedAssetID {
                                 interactiveMapFrame = $0
