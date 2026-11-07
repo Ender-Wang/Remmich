@@ -12,11 +12,21 @@ struct MapsPlacesSettingsView: View {
         VStack(alignment: .leading, spacing: 20) {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Place-name Service").font(.headline)
-                TextField("Photon URL", text: $endpoint)
+                TextField("Photon URL", text: $endpoint, axis: .vertical)
                     .keyboardType(.URL)
+                    .textContentType(.URL)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.plain)
+                    .lineLimit(1 ... 5)
+                    .font(.subheadline)
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.white.opacity(0.08), in: .rect(cornerRadius: DesignMetrics.defaultCornerRadius))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: DesignMetrics.defaultCornerRadius)
+                            .strokeBorder(.white.opacity(0.25), lineWidth: 1)
+                    }
                     .accessibilityIdentifier("photon-url")
                 Text("Use the public Photon service or your own instance.")
                     .font(.footnote).foregroundStyle(.secondary)

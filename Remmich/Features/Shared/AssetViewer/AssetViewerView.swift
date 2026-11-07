@@ -824,7 +824,7 @@ struct AssetViewerView: View {
         let infoWidth = targetInfoWidth * infoProgress
         let maxInfoHeight = max(0, viewerRect.height - 220 - infoGap)
         let selectedInfoContentHeight = infoContentHeight(for: session.selectedAssetID)
-        let targetInfoHeight = min(maxInfoHeight, max(220, selectedInfoContentHeight))
+        let targetInfoHeight = min(maxInfoHeight, selectedInfoContentHeight)
         let infoHeight = targetInfoHeight * infoProgress
         // Keep the original metadata position, but let its scroll content extend
         // behind the floating bottom controls so the appended map can peek out.

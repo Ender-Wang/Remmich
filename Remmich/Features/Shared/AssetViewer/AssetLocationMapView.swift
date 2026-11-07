@@ -7,7 +7,6 @@ import SwiftUI
 
 struct AssetLocationMapView: View {
     static let height: CGFloat = 240
-    private static let logger = Logger(subsystem: "Remmich", category: "AssetMap")
     @Environment(\.assetLocations) private var locations
     @Environment(\.colorScheme) private var colorScheme
     let coordinate: PlaceCoordinate
@@ -19,6 +18,7 @@ struct AssetLocationMapView: View {
     @State private var globalFrame: CGRect = .zero
     @State private var failed = false
     @State private var retry = 0
+    @State private var hasEnteredViewport = false
 
     private var visible: Bool {
         frame.maxY > 0 && frame.minY < viewportHeight
@@ -39,7 +39,9 @@ struct AssetLocationMapView: View {
     var body: some View {
         ZStack {
             Color(uiColor: .secondarySystemBackground)
-            if visible, !failed, let styles = locations?.mapStyles, styles.enabled {
+            // Retain the selected Info card's map after its first reveal. A
+            // scroll/resize across the viewport edge must not recreate it.
+            if visible || hasEnteredViewport, !failed, let styles = locations?.mapStyles, styles.enabled {
                 NativeAssetMap(coordinate: coordinate,
                                styleURL: colorScheme == .dark ? styles.dark : styles.light,
                                language: place?.language ?? .english,
@@ -79,14 +81,12 @@ struct AssetLocationMapView: View {
         }
         .onDisappear { interactionRegionChanged(nil) }
         .task(id: "\(visible)|\(locations?.mapEndpoint?.absoluteString ?? "")|\(retry)") {
-            Self.logger.debug("Asset map request visible=\(visible) store=\(locations != nil) endpoint=\(locations?.mapEndpoint != nil) styles=\(locations?.mapStyles != nil) viewportHeight=\(viewportHeight) frameMinY=\(frame.minY) frameMaxY=\(frame.maxY)")
             guard visible, let locations else { return }
+            hasEnteredViewport = true
             failed = false
             do {
                 try await locations.loadMapStyles()
-                Self.logger.debug("Asset map configuration ready styles=\(locations.mapStyles != nil) enabled=\(locations.mapStyles?.enabled == true)")
             } catch {
-                Self.logger.debug("Asset map configuration failed cancelled=\(Task.isCancelled) error=\(String(describing: error), privacy: .public)")
                 if !Task.isCancelled, locations.mapStyles == nil {
                     failed = true
                 }
@@ -120,6 +120,7 @@ private struct NativeAssetMap: UIViewRepresentable {
         view.isRotateEnabled = false
         view.isPitchEnabled = false
         context.coordinator.update(view, value: self)
+        context.coordinator.recordLifecycle("created")
         return view
     }
 
@@ -128,20 +129,32 @@ private struct NativeAssetMap: UIViewRepresentable {
     }
 
     static func dismantleUIView(_ view: MLNMapView, coordinator: Coordinator) {
+        coordinator.recordLifecycle("removed")
         view.delegate = nil
         coordinator.loadFailed = nil
     }
 
     final class Coordinator: NSObject, MLNMapViewDelegate {
+        #if DEBUG
+            private let diagnosticID = String(UUID().uuidString.prefix(8))
+            private static let logger = Logger(subsystem: "io.github.ender-wang.Remmich", category: "AssetMapLifecycle")
+        #endif
         private var coordinate: PlaceCoordinate?
         private var language: PlaceLanguage = .english
         private var originals: [String: NSExpression] = [:]
         private let pin = MLNPointAnnotation()
         var loadFailed: (() -> Void)?
 
+        func recordLifecycle(_ event: String) {
+            #if DEBUG
+                Self.logger.debug("Asset map lifecycle id=\(diagnosticID, privacy: .public) event=\(event, privacy: .public)")
+            #endif
+        }
+
         func update(_ view: MLNMapView, value: NativeAssetMap) {
             loadFailed = value.loadFailed
             if view.styleURL != value.styleURL {
+                recordLifecycle("style-requested")
                 originals = [:]
                 view.styleURL = value.styleURL
             }
@@ -165,13 +178,12 @@ private struct NativeAssetMap: UIViewRepresentable {
         }
 
         func mapView(_: MLNMapView, didFinishLoading style: MLNStyle) {
-            Logger(subsystem: "Remmich", category: "AssetMap").debug("Asset map style loaded")
+            recordLifecycle("style-loaded")
             originals = [:]
             localize(style)
         }
 
-        func mapViewDidFailLoadingMap(_: MLNMapView, withError error: Error) {
-            Logger(subsystem: "Remmich", category: "AssetMap").debug("Asset map rendering failed error=\(String(describing: error), privacy: .public)")
+        func mapViewDidFailLoadingMap(_: MLNMapView, withError _: Error) {
             Task { @MainActor [weak self] in self?.loadFailed?() }
         }
 

@@ -118,7 +118,7 @@ Milestones track implementation and help set expectations for upcoming work. **0
 | M2 | ✅ Done | Sign-in, Keychain restoration, endpoint failover, and the typed read-only API boundary |
 | M3 | ✅ Done | Shared media loading, caching, prefetching, and bounded memory use |
 | M4 | ✅ Done | Real server-backed Photos timeline |
-| M5 | In progress | Semantic zoom, date cards, memories, Videos, viewers, and long-press preview are implemented; Photon locations/settings and maps are undergoing verification; Save/Share/Download and final verification remain |
+| M5 | In progress | Semantic zoom, date cards, memories, Videos, viewers, long-press preview, Photon locations/settings, and asset maps are implemented; Save/Share/Download and final verification remain |
 | M6 | Planned | Server-backed read-only Albums browsing |
 | M7 | Planned | Server-backed read-only Library collections |
 | M8 | Planned | Server-backed Search with native filters |
