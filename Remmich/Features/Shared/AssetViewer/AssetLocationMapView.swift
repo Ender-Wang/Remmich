@@ -147,7 +147,8 @@ private struct NativeAssetMap: UIViewRepresentable {
 
         func recordLifecycle(_ event: String) {
             #if DEBUG
-                Self.logger.debug("Asset map lifecycle id=\(diagnosticID, privacy: .public) event=\(event, privacy: .public)")
+                let id = diagnosticID
+                Self.logger.debug("Asset map lifecycle id=\(id, privacy: .public) event=\(event, privacy: .public)")
             #endif
         }
 
