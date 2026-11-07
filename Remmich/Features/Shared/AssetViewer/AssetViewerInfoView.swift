@@ -156,6 +156,11 @@ struct AssetViewerInfoView: View {
     let contentHeightChanged: (CGFloat) -> Void
     let retry: () -> Void
     let loadFullResolution: () -> Void
+    var place: PlaceLocation?
+    var showsMap = false
+    var mapViewportHeight: CGFloat = 0
+    var bottomContentInset: CGFloat = 0
+    var mapInteractionRegionChanged: (CGRect?) -> Void = { _ in }
 
     var body: some View {
         GeometryReader { geometry in
@@ -187,16 +192,18 @@ struct AssetViewerInfoView: View {
                     GeometryReader { contentGeometry in
                         Color.clear.preference(
                             key: AssetViewerInfoContentHeightKey.self,
-                            value: contentGeometry.size.height
+                            value: max(0, contentGeometry.size.height - mapAppendixHeight)
                         )
                     }
                 }
+                .padding(.bottom, bottomContentInset)
                 .frame(
                     minHeight: geometry.size.height,
                     alignment: anchorsContentToBottom ? .bottom : .top
                 )
             }
             .scrollIndicators(.hidden)
+            .coordinateSpace(name: "asset-info-scroll")
             .scrollBounceBehavior(.basedOnSize)
         }
         .onPreferenceChange(AssetViewerInfoContentHeightKey.self, perform: contentHeightChanged)
@@ -210,6 +217,14 @@ struct AssetViewerInfoView: View {
         case .idle, .loading: true
         case .loaded, .failed: false
         }
+    }
+
+    private var mapAppendixHeight: CGFloat {
+        guard showsMap, case let .loaded(detail) = state,
+              PlaceCoordinate(latitude: detail.latitude, longitude: detail.longitude) != nil else { return 0 }
+        // The map is appended to the scroll content; it must not resize the
+        // metadata panel or move the photo when Info first opens.
+        return AssetLocationMapView.height + 16
     }
 
     private func details(_ detail: AssetDetail) -> some View {
@@ -321,16 +336,28 @@ struct AssetViewerInfoView: View {
                     Divider().overlay(Color.primary.opacity(0.16))
                     Label(location, systemImage: "location.fill")
                         .font(.subheadline)
+                        .lineLimit(3)
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: .infinity, alignment: .center)
                         .padding(16)
                         .accessibilityIdentifier("asset-viewer-location")
+                }
+                if PlaceCoordinate(latitude: detail.latitude, longitude: detail.longitude) != nil {
+                    Link("Place data © OpenStreetMap · Photon", destination: URL(string: "https://www.openstreetmap.org/copyright")!)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .padding(.bottom, 12)
                 }
             }
             .background(infoSurface)
             .clipShape(.rect(cornerRadius: DesignMetrics.defaultCornerRadius))
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("asset-viewer-metadata-card")
+            if showsMap, let coordinate = PlaceCoordinate(latitude: detail.latitude, longitude: detail.longitude) {
+                AssetLocationMapView(coordinate: coordinate, place: place, viewportHeight: mapViewportHeight,
+                                     interactionBottomInset: bottomContentInset,
+                                     interactionRegionChanged: mapInteractionRegionChanged)
+            }
         }
     }
 
@@ -497,6 +524,9 @@ struct AssetViewerInfoView: View {
     }
 
     private func locationSummary(for detail: AssetDetail) -> String? {
+        if let place {
+            return place.address
+        }
         let values = [detail.city, detail.state, detail.country]
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }

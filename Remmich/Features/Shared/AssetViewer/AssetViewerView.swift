@@ -3,6 +3,13 @@ import OSLog
 import SwiftUI
 import UIKit
 
+private struct PlaceLoadRequest: Equatable {
+    let assetID: String
+    let coordinate: PlaceCoordinate?
+    let revision: Int
+    let dismissing: Bool
+}
+
 struct AssetViewerDismissalTarget {
     let imageFrame: CGRect
     let cornerRadius: CGFloat
@@ -19,6 +26,7 @@ struct AssetViewerView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.assetLocations) private var locations
 
     let route: AssetViewerRoute
     let media: MediaLibraryController
@@ -46,6 +54,10 @@ struct AssetViewerView: View {
     @State private var chromeVisible = true
     @State private var showsInfo = false
     @State private var detailStates: [String: AssetViewerDetailState] = [:]
+    @State private var selectedPlace: PlaceLocation?
+    @State private var selectedPlaceAssetID: String?
+    @State private var selectedPlaceRevision: Int?
+    @State private var interactiveMapFrame: CGRect?
     @State private var cachedDetailMissAssetIDs: Set<String> = []
     @State private var refreshedDetailAssetIDs: Set<String> = []
     @State private var renderedImageMetadataByAssetID: [String: AssetViewerRenderedImageMetadata] = [:]
@@ -531,6 +543,25 @@ struct AssetViewerView: View {
         .onChange(of: selectedAssetDetail) {
             updateVideoNowPlayingTitle()
         }
+        .task(id: PlaceLoadRequest(assetID: session.selectedAssetID,
+                                   coordinate: selectedPlaceCoordinate,
+                                   revision: locations?.revision ?? 0,
+                                   dismissing: isDismissing))
+        {
+            selectedPlace = nil
+            selectedPlaceAssetID = nil
+            guard !isDismissing, let coordinate = selectedPlaceCoordinate, let locations else { return }
+            let assetID = session.selectedAssetID
+            let revision = locations.revision
+            do {
+                let place = try await locations.resolve(coordinate)
+                guard !Task.isCancelled, !isDismissing, session.selectedAssetID == assetID,
+                      locations.revision == revision else { return }
+                selectedPlace = place
+                selectedPlaceAssetID = assetID
+                selectedPlaceRevision = revision
+            } catch { /* Keep the existing complete locality fallback. */ }
+        }
         .onChange(of: viewerPreviewTargetPixels) {
             seedVideoNowPlayingArtwork()
         }
@@ -556,6 +587,7 @@ struct AssetViewerView: View {
             await preloadCachedAssetDetails(pagerWindowAssets.map(\.id))
         }
         .onChange(of: session.selectedAssetID) { _, newAssetID in
+            interactiveMapFrame = nil
             logMemoryPlayback("selection")
             videoFirstFrameReady = false
             chromeVisible = true
@@ -794,6 +826,11 @@ struct AssetViewerView: View {
         let selectedInfoContentHeight = infoContentHeight(for: session.selectedAssetID)
         let targetInfoHeight = min(maxInfoHeight, selectedInfoContentHeight)
         let infoHeight = targetInfoHeight * infoProgress
+        // Keep the original metadata position, but let its scroll content extend
+        // behind the floating bottom controls so the appended map can peek out.
+        let mapUnderlap = selectedPlaceCoordinate != nil ? max(0, pageSize.height - viewerRect.maxY) : 0
+        let portraitInfoViewportHeight = targetInfoHeight + mapUnderlap
+        let portraitInfoVisibleHeight = infoHeight + mapUnderlap * infoProgress
         let gap = infoGap * infoProgress
         let portraitMediaHeight = max(220, viewerRect.height - infoHeight - gap)
         let mediaRect = isLandscape
@@ -831,7 +868,15 @@ struct AssetViewerView: View {
                         anchorsContentToBottom: true,
                         contentHeightChanged: { updateInfoContentHeight($0, for: asset.id) },
                         retry: { retryDetail(for: asset.id) },
-                        loadFullResolution: { requestFullResolution(for: asset.id) }
+                        loadFullResolution: { requestFullResolution(for: asset.id) },
+                        place: asset.id == session.selectedAssetID ? currentPlace : nil,
+                        showsMap: showsInfo && !openingIsActive && !isDismissing && asset.id == session.selectedAssetID,
+                        mapViewportHeight: viewerRect.height,
+                        mapInteractionRegionChanged: {
+                            if asset.id == session.selectedAssetID {
+                                interactiveMapFrame = $0
+                            }
+                        }
                     )
                     .frame(width: targetInfoWidth)
                 }
@@ -856,15 +901,24 @@ struct AssetViewerView: View {
                         anchorsContentToBottom: false,
                         contentHeightChanged: { updateInfoContentHeight($0, for: asset.id) },
                         retry: { retryDetail(for: asset.id) },
-                        loadFullResolution: { requestFullResolution(for: asset.id) }
+                        loadFullResolution: { requestFullResolution(for: asset.id) },
+                        place: asset.id == session.selectedAssetID ? currentPlace : nil,
+                        showsMap: showsInfo && !openingIsActive && !isDismissing && asset.id == session.selectedAssetID,
+                        mapViewportHeight: portraitInfoViewportHeight,
+                        bottomContentInset: mapUnderlap,
+                        mapInteractionRegionChanged: {
+                            if asset.id == session.selectedAssetID {
+                                interactiveMapFrame = $0
+                            }
+                        }
                     )
-                    .frame(height: targetInfoHeight)
+                    .frame(height: portraitInfoViewportHeight)
                 }
-                .frame(width: viewerRect.width, height: infoHeight, alignment: .top)
+                .frame(width: viewerRect.width, height: portraitInfoVisibleHeight, alignment: .top)
                 .clipped()
                 .position(
                     x: viewerRect.midX,
-                    y: mediaRect.maxY + gap + infoHeight / 2
+                    y: mediaRect.maxY + gap + portraitInfoVisibleHeight / 2
                 )
                 .opacity(showsMediaBackground ? 1 : 0)
                 .allowsHitTesting(
@@ -1529,8 +1583,18 @@ struct AssetViewerView: View {
 
     private var selectedAssetContextPresentation: AssetViewerContextPresentation? {
         session.selectedAsset.map {
-            AssetViewerContextPresentation(asset: $0, detail: selectedAssetDetail)
+            AssetViewerContextPresentation(asset: $0, detail: selectedAssetDetail, place: currentPlace)
         }
+    }
+
+    private var currentPlace: PlaceLocation? {
+        guard selectedPlaceAssetID == session.selectedAssetID,
+              selectedPlaceRevision == locations?.revision else { return nil }
+        return selectedPlace
+    }
+
+    private var selectedPlaceCoordinate: PlaceCoordinate? {
+        PlaceCoordinate(latitude: selectedAssetDetail?.latitude, longitude: selectedAssetDetail?.longitude)
     }
 
     private var bottomActions: some View {
@@ -1672,7 +1736,7 @@ struct AssetViewerView: View {
         DragGesture(minimumDistance: 16)
             .updating($verticalDragIsActive) { _, active, _ in active = true }
             .onChanged { value in
-                guard !isDismissing else { return }
+                guard !isDismissing, interactiveMapFrame?.offsetBy(dx: -viewportOrigin.x, dy: -viewportOrigin.y).contains(value.startLocation) != true else { return }
                 if openingIsActive, !isMemoryViewer {
                     guard openingDrag.isActive || (value.translation.height > abs(value.translation.width) * 1.2) else { return }
                     if !openingDrag.isActive, let asset = session.selectedAsset {
@@ -1814,6 +1878,10 @@ struct AssetViewerView: View {
             }
             .onEnded { value in
                 guard !isDismissing else { return }
+                guard interactiveMapFrame?.offsetBy(dx: -viewportOrigin.x, dy: -viewportOrigin.y).contains(value.startLocation) != true else {
+                    verticalDragRoute = nil
+                    return
+                }
                 if openingDrag.isActive {
                     if value.translation.height > abs(value.translation.width) * 1.2,
                        AssetViewerDismissalGeometry.shouldComplete(translationHeight: value.translation.height,

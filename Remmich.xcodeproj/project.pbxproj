@@ -10,6 +10,7 @@
 		A2B3C4D5E6F708192A3B4C5D /* ImmichAPI in Frameworks */ = {isa = PBXBuildFile; productRef = A2B3C4D5E6F708192A3B4C5E /* ImmichAPI */; };
 		B3C4D5E6F708192A3B4C5D6E /* Nuke in Frameworks */ = {isa = PBXBuildFile; productRef = B6C7D8E9F001122334455667 /* Nuke */; };
 		B4C5D6E7F8091A2B3C4D5E6F /* NukeUI in Frameworks */ = {isa = PBXBuildFile; productRef = B7C8D9E0F112233445566778 /* NukeUI */; };
+		C10000000000000000000001 /* MapLibre in Frameworks */ = {isa = PBXBuildFile; productRef = C10000000000000000000002 /* MapLibre */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -58,6 +59,7 @@
 			isa = PBXFrameworksBuildPhase;
 			files = (
 				B4C5D6E7F8091A2B3C4D5E6F /* NukeUI in Frameworks */,
+				C10000000000000000000001 /* MapLibre in Frameworks */,
 				B3C4D5E6F708192A3B4C5D6E /* Nuke in Frameworks */,
 				A2B3C4D5E6F708192A3B4C5D /* ImmichAPI in Frameworks */,
 			);
@@ -111,6 +113,7 @@
 				A2B3C4D5E6F708192A3B4C5E /* ImmichAPI */,
 				B6C7D8E9F001122334455667 /* Nuke */,
 				B7C8D9E0F112233445566778 /* NukeUI */,
+				C10000000000000000000002 /* MapLibre */,
 			);
 			productName = Remmich;
 			productReference = F84699443066C25E00C68930 /* Remmich.app */;
@@ -168,6 +171,7 @@
 			packageReferences = (
 				A2B3C4D5E6F708192A3B4C5F /* XCLocalSwiftPackageReference "Packages/ImmichAPI" */,
 				B5C6D7E8F901A2B3C4D5E6F7 /* XCRemoteSwiftPackageReference "Nuke" */,
+				C10000000000000000000003 /* XCRemoteSwiftPackageReference "maplibre-gl-native-distribution" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = F84699453066C25E00C68930 /* Products */;
@@ -550,6 +554,14 @@
 				minimumVersion = 13.0.6;
 			};
 		};
+		C10000000000000000000003 /* XCRemoteSwiftPackageReference "maplibre-gl-native-distribution" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/maplibre/maplibre-gl-native-distribution";
+			requirement = {
+				kind = exactVersion;
+				version = 7.0.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -567,6 +579,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = B5C6D7E8F901A2B3C4D5E6F7 /* XCRemoteSwiftPackageReference "Nuke" */;
 			productName = NukeUI;
+		};
+		C10000000000000000000002 /* MapLibre */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C10000000000000000000003 /* XCRemoteSwiftPackageReference "maplibre-gl-native-distribution" */;
+			productName = MapLibre;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

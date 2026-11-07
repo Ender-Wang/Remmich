@@ -266,7 +266,8 @@ struct AppShellView: View {
                         SearchView(assets: PreviewFixtures.assets, showAccount: showAccount)
                     }
                 }
-            )
+            ),
+            locations: sessionController?.locations
         )
         .nativeEdgeBackRoot()
         .ignoresSafeArea(.container, edges: .all)
@@ -324,6 +325,7 @@ struct AppShellView: View {
             libraryIndex.setTimelinePublicationDeferred(presented)
         }
         .onDisappear { viewerPresentations.removeAll() }
+        .environment(\.assetLocations, sessionController?.locations)
     }
 
     private func showAccount() {

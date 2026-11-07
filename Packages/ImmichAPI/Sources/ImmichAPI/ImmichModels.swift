@@ -5,6 +5,12 @@ public enum ImmichCredential: Hashable, Sendable {
     case apiKey(String)
 }
 
+public struct ImmichMapStyles: Codable, Hashable, Sendable {
+    public let light: URL
+    public let dark: URL
+    public let enabled: Bool
+}
+
 public struct ImmichServerVersion: Codable, Hashable, Sendable, CustomStringConvertible {
     public let major: Int
     public let minor: Int
