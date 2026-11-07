@@ -264,7 +264,7 @@ final class AssetMapSession: NSObject, MLNMapViewDelegate {
 
     func mapViewDidFailLoadingMap(_ mapView: MLNMapView, withError _: Error) {
         Task { @MainActor [weak self, weak mapView] in
-            guard let self, let mapView, retainedMap === mapView, host != nil else { return }
+            guard let self, let mapView, retainedMap === mapView else { return }
             let reportFailure = loadFailed
             reset()
             reportFailure?()
