@@ -160,7 +160,7 @@ struct AssetLocationMapOverlay: View {
             ? liveGeometry?.mapFrame.offsetBy(dx: origin.x, dy: origin.y) : nil
         ZStack {
             // A missing-GPS page hides the map without destroying its renderer.
-            if let coordinate = coordinate ?? fallbackCoordinate {
+            if let coordinate = coordinate ?? fallbackCoordinate ?? presentation.liveCoordinate {
                 AssetLocationMapView(coordinate: coordinate,
                                      place: resolvedAssetID == targetID && resolvedRevision == locations?.revision ? resolvedPlace : (targetID == assetID ? place : nil),
                                      visible: visible, fullyVisible: canInteract, failed: $failed,
