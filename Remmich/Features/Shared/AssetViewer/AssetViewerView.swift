@@ -824,10 +824,13 @@ struct AssetViewerView: View {
         let infoWidth = targetInfoWidth * infoProgress
         let maxInfoHeight = max(0, viewerRect.height - 220 - infoGap)
         let selectedInfoContentHeight = infoContentHeight(for: session.selectedAssetID)
-        // Reserve only a map peek initially; the Info scroll reveals the rest.
-        let mapOverflow: CGFloat = showsInfo && selectedPlaceCoordinate != nil ? 184 : 0
-        let targetInfoHeight = min(maxInfoHeight, max(220, selectedInfoContentHeight - mapOverflow))
+        let targetInfoHeight = min(maxInfoHeight, max(220, selectedInfoContentHeight))
         let infoHeight = targetInfoHeight * infoProgress
+        // Keep the original metadata position, but let its scroll content extend
+        // behind the floating bottom controls so the appended map can peek out.
+        let mapUnderlap = selectedPlaceCoordinate != nil ? max(0, pageSize.height - viewerRect.maxY) : 0
+        let portraitInfoViewportHeight = targetInfoHeight + mapUnderlap
+        let portraitInfoVisibleHeight = infoHeight + mapUnderlap * infoProgress
         let gap = infoGap * infoProgress
         let portraitMediaHeight = max(220, viewerRect.height - infoHeight - gap)
         let mediaRect = isLandscape
@@ -901,20 +904,21 @@ struct AssetViewerView: View {
                         loadFullResolution: { requestFullResolution(for: asset.id) },
                         place: asset.id == session.selectedAssetID ? currentPlace : nil,
                         showsMap: showsInfo && !openingIsActive && !isDismissing && asset.id == session.selectedAssetID,
-                        mapViewportHeight: targetInfoHeight,
+                        mapViewportHeight: portraitInfoViewportHeight,
+                        bottomContentInset: mapUnderlap,
                         mapInteractionRegionChanged: {
                             if asset.id == session.selectedAssetID {
                                 interactiveMapFrame = $0
                             }
                         }
                     )
-                    .frame(height: targetInfoHeight)
+                    .frame(height: portraitInfoViewportHeight)
                 }
-                .frame(width: viewerRect.width, height: infoHeight, alignment: .top)
+                .frame(width: viewerRect.width, height: portraitInfoVisibleHeight, alignment: .top)
                 .clipped()
                 .position(
                     x: viewerRect.midX,
-                    y: mediaRect.maxY + gap + infoHeight / 2
+                    y: mediaRect.maxY + gap + portraitInfoVisibleHeight / 2
                 )
                 .opacity(showsMediaBackground ? 1 : 0)
                 .allowsHitTesting(

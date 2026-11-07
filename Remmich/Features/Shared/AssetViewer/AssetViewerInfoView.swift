@@ -159,6 +159,7 @@ struct AssetViewerInfoView: View {
     var place: PlaceLocation?
     var showsMap = false
     var mapViewportHeight: CGFloat = 0
+    var bottomContentInset: CGFloat = 0
     var mapInteractionRegionChanged: (CGRect?) -> Void = { _ in }
 
     var body: some View {
@@ -191,10 +192,11 @@ struct AssetViewerInfoView: View {
                     GeometryReader { contentGeometry in
                         Color.clear.preference(
                             key: AssetViewerInfoContentHeightKey.self,
-                            value: contentGeometry.size.height
+                            value: max(0, contentGeometry.size.height - mapAppendixHeight)
                         )
                     }
                 }
+                .padding(.bottom, bottomContentInset)
                 .frame(
                     minHeight: geometry.size.height,
                     alignment: anchorsContentToBottom ? .bottom : .top
@@ -215,6 +217,14 @@ struct AssetViewerInfoView: View {
         case .idle, .loading: true
         case .loaded, .failed: false
         }
+    }
+
+    private var mapAppendixHeight: CGFloat {
+        guard showsMap, case let .loaded(detail) = state,
+              PlaceCoordinate(latitude: detail.latitude, longitude: detail.longitude) != nil else { return 0 }
+        // The map is appended to the scroll content; it must not resize the
+        // metadata panel or move the photo when Info first opens.
+        return AssetLocationMapView.height + 16
     }
 
     private func details(_ detail: AssetDetail) -> some View {
@@ -345,6 +355,7 @@ struct AssetViewerInfoView: View {
             .accessibilityIdentifier("asset-viewer-metadata-card")
             if showsMap, let coordinate = PlaceCoordinate(latitude: detail.latitude, longitude: detail.longitude) {
                 AssetLocationMapView(coordinate: coordinate, place: place, viewportHeight: mapViewportHeight,
+                                     interactionBottomInset: bottomContentInset,
                                      interactionRegionChanged: mapInteractionRegionChanged)
             }
         }

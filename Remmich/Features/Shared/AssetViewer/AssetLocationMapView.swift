@@ -6,12 +6,14 @@ import OSLog
 import SwiftUI
 
 struct AssetLocationMapView: View {
+    static let height: CGFloat = 240
     private static let logger = Logger(subsystem: "Remmich", category: "AssetMap")
     @Environment(\.assetLocations) private var locations
     @Environment(\.colorScheme) private var colorScheme
     let coordinate: PlaceCoordinate
     let place: PlaceLocation?
     let viewportHeight: CGFloat
+    var interactionBottomInset: CGFloat = 0
     var interactionRegionChanged: (CGRect?) -> Void = { _ in }
     @State private var frame: CGRect = .zero
     @State private var globalFrame: CGRect = .zero
@@ -23,7 +25,7 @@ struct AssetLocationMapView: View {
     }
 
     private var fullyVisible: Bool {
-        frame.minY >= -1 && frame.maxY <= viewportHeight + 1
+        frame.minY >= -1 && frame.maxY <= viewportHeight - interactionBottomInset + 1
     }
 
     private var nativeMapActive: Bool {
@@ -54,7 +56,7 @@ struct AssetLocationMapView: View {
                 }
             }
         }
-        .frame(height: 240)
+        .frame(height: Self.height)
         .overlay(alignment: .bottom) {
             Text(coordinateText)
                 .font(.caption.monospacedDigit())
