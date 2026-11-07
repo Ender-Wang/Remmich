@@ -158,11 +158,9 @@ struct AssetViewerInfoView: View {
     let loadFullResolution: () -> Void
     var place: PlaceLocation?
     var showsMap = false
-    var mapViewportHeight: CGFloat = 0
     var bottomContentInset: CGFloat = 0
-    var mapSession: AssetMapSession?
-    var mapIsCurrent: () -> Bool = { true }
-    var mapInteractionRegionChanged: (CGRect?) -> Void = { _ in }
+    var mapIsSelected = false
+    var mapSlotPositionChanged: (CGFloat) -> Void = { _ in }
 
     var body: some View {
         GeometryReader { geometry in
@@ -355,10 +353,8 @@ struct AssetViewerInfoView: View {
             .clipShape(.rect(cornerRadius: DesignMetrics.defaultCornerRadius))
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("asset-viewer-metadata-card")
-            if showsMap, let mapSession, let coordinate = PlaceCoordinate(latitude: detail.latitude, longitude: detail.longitude) {
-                AssetLocationMapView(coordinate: coordinate, place: place, viewportHeight: mapViewportHeight, mapSession: mapSession, isCurrent: mapIsCurrent,
-                                     interactionBottomInset: bottomContentInset,
-                                     interactionRegionChanged: mapInteractionRegionChanged)
+            if showsMap, PlaceCoordinate(latitude: detail.latitude, longitude: detail.longitude) != nil {
+                AssetLocationMapSlot(isSelected: mapIsSelected, positionChanged: mapSlotPositionChanged)
             }
         }
     }

@@ -3,6 +3,35 @@ import Testing
 @testable import Remmich
 
 struct AssetLocationTests {
+    @Test func mapViewportClipsWithoutResizingTheRenderer() {
+        let viewport = CGRect(x: 20, y: 300, width: 400, height: 400)
+        let peek = AssetMapViewportGeometry(mapTop: 650, viewport: viewport, contentWidth: 400, bottomInset: 90)
+        #expect(peek.mapFrame == CGRect(x: 36, y: 650, width: 368, height: 240))
+        #expect(peek.maskFrame == CGRect(x: 0, y: 0, width: 368, height: 50))
+        #expect(peek.isVisible && !peek.isFullyVisible)
+        let clippedTop = AssetMapViewportGeometry(mapTop: 200, viewport: viewport, contentWidth: 400, bottomInset: 90)
+        #expect(clippedTop.maskFrame == CGRect(x: 0, y: 100, width: 368, height: 140))
+        #expect(clippedTop.mapFrame.size == peek.mapFrame.size)
+        let outside = AssetMapViewportGeometry(mapTop: 800, viewport: viewport, contentWidth: 400, bottomInset: 90)
+        #expect(!outside.isVisible && !outside.isFullyVisible)
+        #expect(outside.maskFrame == .zero)
+        #expect(outside.mapFrame.size == peek.mapFrame.size)
+    }
+
+    @Test func mapInteractionExcludesControlsAndPartialLandscapeReveal() {
+        let viewport = CGRect(x: 20, y: 300, width: 400, height: 400)
+        let ready = AssetMapViewportGeometry(mapTop: 350, viewport: viewport, contentWidth: 400, bottomInset: 90)
+        #expect(ready.isFullyVisible)
+        let underControls = AssetMapViewportGeometry(mapTop: 400, viewport: viewport, contentWidth: 400, bottomInset: 90)
+        #expect(underControls.isVisible && !underControls.isFullyVisible)
+        #expect(underControls.maskFrame.height == 240)
+        let narrow = AssetMapViewportGeometry(mapTop: 350, viewport: CGRect(x: 20, y: 300, width: 50, height: 400),
+                                              contentWidth: 200, bottomInset: 0)
+        #expect(narrow.mapFrame.width == 168)
+        #expect(narrow.maskFrame.width == 34)
+        #expect(narrow.isVisible && !narrow.isFullyVisible)
+    }
+
     @Test func coordinateValidationPreservesZero() {
         #expect(PlaceCoordinate(latitude: 0, longitude: 0) != nil)
         #expect(PlaceCoordinate(latitude: nil, longitude: 1) == nil)

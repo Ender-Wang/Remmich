@@ -5,54 +5,79 @@ import MapLibre
 import OSLog
 import SwiftUI
 
+/// All placement and clipping use viewer-root coordinates, independently of the
+/// horizontally moving pager pages. The map itself never changes UIKit hosts.
+nonisolated struct AssetMapViewportGeometry: Equatable {
+    static let mapHeight: CGFloat = 240
+    let mapFrame: CGRect
+    let maskFrame: CGRect
+    let isVisible: Bool
+    let isFullyVisible: Bool
+
+    init(mapTop: CGFloat, viewport: CGRect, contentWidth: CGFloat, bottomInset: CGFloat) {
+        mapFrame = CGRect(x: viewport.minX + 16, y: mapTop,
+                          width: max(0, contentWidth - 32), height: Self.mapHeight)
+        let clipped = mapFrame.intersection(viewport)
+        isVisible = !clipped.isNull && !clipped.isEmpty
+        maskFrame = isVisible ? clipped.offsetBy(dx: -mapFrame.minX, dy: -mapFrame.minY) : .zero
+        let interactiveViewport = CGRect(x: viewport.minX, y: viewport.minY,
+                                         width: viewport.width, height: max(0, viewport.height - bottomInset))
+        isFullyVisible = isVisible && interactiveViewport.insetBy(dx: -1, dy: -1).contains(mapFrame)
+    }
+}
+
+/// Reserves space inside each Info scroll view without owning a native map.
+struct AssetLocationMapSlot: View {
+    let isSelected: Bool
+    let positionChanged: (CGFloat) -> Void
+    @State private var top: CGFloat?
+
+    var body: some View {
+        Color.clear
+            .frame(height: AssetMapViewportGeometry.mapHeight)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { value in
+                top = value
+                if isSelected {
+                    positionChanged(value)
+                }
+            }
+            .onChange(of: isSelected) { _, selected in
+                if selected, let top {
+                    positionChanged(top)
+                }
+            }
+    }
+}
+
 struct AssetLocationMapView: View {
-    static let height: CGFloat = 240
+    static let height = AssetMapViewportGeometry.mapHeight
     @Environment(\.assetLocations) private var locations
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let coordinate: PlaceCoordinate
     let place: PlaceLocation?
-    let viewportHeight: CGFloat
-    let mapSession: AssetMapSession
-    let isCurrent: () -> Bool
-    var interactionBottomInset: CGFloat = 0
-    var interactionRegionChanged: (CGRect?) -> Void = { _ in }
-    @State private var frame: CGRect = .zero
-    @State private var globalFrame: CGRect = .zero
-    @State private var failed = false
+    let visible: Bool
+    let fullyVisible: Bool
+    @Binding var failed: Bool
     @State private var retry = 0
     @State private var hasEnteredViewport = false
-
-    private var visible: Bool {
-        frame.maxY > 0 && frame.minY < viewportHeight
-    }
-
-    private var fullyVisible: Bool {
-        frame.minY >= -1 && frame.maxY <= viewportHeight - interactionBottomInset + 1
-    }
-
-    private var nativeMapActive: Bool {
-        visible && !failed && locations?.mapStyles?.enabled == true
-    }
 
     private var coordinateText: String {
         "\(coordinate.latitude.formatted(.number.precision(.fractionLength(5)))), \(coordinate.longitude.formatted(.number.precision(.fractionLength(5))))"
     }
 
     var body: some View {
-        let expectedNamespace = locations?.namespace
         ZStack {
             Color(uiColor: .secondarySystemBackground)
-            // Retain the selected Info card's map after its first reveal. A
-            // scroll/resize across the viewport edge must not recreate it.
-            if visible || hasEnteredViewport || mapSession.hasRenderer, !failed, let styles = locations?.mapStyles, styles.enabled {
+            if visible || hasEnteredViewport, !failed, let styles = locations?.mapStyles, styles.enabled {
                 NativeAssetMap(coordinate: coordinate,
                                styleURL: colorScheme == .dark ? styles.dark : styles.light,
                                language: place?.language ?? .english,
                                interactive: visible && fullyVisible,
+                               animatesCamera: !reduceMotion,
                                title: place?.title ?? "Photo location",
-                               mapSession: mapSession,
-                               namespace: locations?.namespace,
-                               canAttach: { isCurrent() && locations?.namespace == expectedNamespace },
                                loadFailed: { [failure = $failed] in failure.wrappedValue = true })
             } else {
                 VStack(spacing: 8) {
@@ -75,24 +100,12 @@ struct AssetLocationMapView: View {
                 .allowsHitTesting(false)
         }
         .clipShape(.rect(cornerRadius: DesignMetrics.defaultCornerRadius))
-        .onGeometryChange(for: MapPosition.self) {
-            MapPosition(scroll: $0.frame(in: .named("asset-info-scroll")), global: $0.frame(in: .global))
-        } action: { position in
-            frame = position.scroll
-            globalFrame = position.global
-            interactionRegionChanged(nativeMapActive && fullyVisible ? position.global : nil)
-        }
-        .onChange(of: nativeMapActive) { _, active in
-            interactionRegionChanged(active && fullyVisible ? globalFrame : nil)
-        }
-        .onDisappear { interactionRegionChanged(nil) }
         .task(id: "\(visible)|\(locations?.mapEndpoint?.absoluteString ?? "")|\(retry)") {
             guard visible, let locations else { return }
             hasEnteredViewport = true
             failed = false
-            do {
-                try await locations.loadMapStyles()
-            } catch {
+            do { try await locations.loadMapStyles() }
+            catch {
                 if !Task.isCancelled, locations.mapStyles == nil {
                     failed = true
                 }
@@ -102,184 +115,106 @@ struct AssetLocationMapView: View {
     }
 }
 
-private nonisolated struct MapPosition: Equatable {
-    let scroll: CGRect
-    let global: CGRect
-}
-
 private struct NativeAssetMap: UIViewRepresentable {
     let coordinate: PlaceCoordinate
     let styleURL: URL
     let language: PlaceLanguage
     let interactive: Bool
+    let animatesCamera: Bool
     let title: String
-    let mapSession: AssetMapSession
-    let namespace: String?
-    let canAttach: () -> Bool
     let loadFailed: () -> Void
 
-    func makeCoordinator() -> AssetMapSession {
-        mapSession
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
     }
 
-    func makeUIView(context: Context) -> UIView {
-        let host = UIView()
-        context.coordinator.attach(to: host, value: self)
-        return host
+    func makeUIView(context: Context) -> MLNMapView {
+        let view = MLNMapView(frame: .zero, styleURL: styleURL)
+        view.delegate = context.coordinator
+        view.showsUserLocation = false
+        view.isRotateEnabled = false
+        view.isPitchEnabled = false
+        context.coordinator.update(view, value: self)
+        context.coordinator.recordLifecycle("created")
+        return view
     }
 
-    func updateUIView(_ host: UIView, context: Context) {
-        context.coordinator.attach(to: host, value: self)
+    func updateUIView(_ view: MLNMapView, context: Context) {
+        context.coordinator.update(view, value: self)
     }
 
-    static func dismantleUIView(_ host: UIView, coordinator: AssetMapSession) {
-        coordinator.detach(from: host)
-    }
-}
-
-/// One renderer for the open viewer's Info panel. Pager pages own only lightweight
-/// hosts; a late teardown from the outgoing page cannot detach the incoming map.
-@MainActor
-final class AssetMapSession: NSObject, MLNMapViewDelegate {
-    private var retainedMap: MLNMapView?
-    private weak var host: UIView?
-    private var namespace: String?
-    #if DEBUG
-        private var diagnosticID = ""
-        private static let logger = Logger(subsystem: "io.github.ender-wang.Remmich", category: "AssetMapLifecycle")
-    #endif
-    private var coordinate: PlaceCoordinate?
-    private var language: PlaceLanguage = .english
-    private var originals: [String: NSExpression] = [:]
-    private let pin = MLNPointAnnotation()
-    var loadFailed: (() -> Void)?
-
-    var hasRenderer: Bool {
-        retainedMap != nil
+    static func dismantleUIView(_ view: MLNMapView, coordinator: Coordinator) {
+        coordinator.recordLifecycle("removed")
+        view.delegate = nil
+        coordinator.loadFailed = nil
     }
 
-    fileprivate func attach(to host: UIView, value: NativeAssetMap) {
-        guard value.canAttach() else {
-            detach(from: host)
-            return
-        }
-        if namespace != value.namespace {
-            reset()
-            namespace = value.namespace
-        }
-        let view: MLNMapView
-        if let retainedMap {
-            view = retainedMap
-        } else {
-            view = MLNMapView(frame: .zero, styleURL: value.styleURL)
-            view.delegate = self
-            view.showsUserLocation = false
-            view.isRotateEnabled = false
-            view.isPitchEnabled = false
-            retainedMap = view
-            #if DEBUG
-                diagnosticID = String(UUID().uuidString.prefix(8))
-            #endif
-            recordLifecycle("created")
-        }
-        if self.host !== host {
-            view.removeFromSuperview()
-            host.addSubview(view)
-            view.translatesAutoresizingMaskIntoConstraints = false
-            NSLayoutConstraint.activate([
-                view.leadingAnchor.constraint(equalTo: host.leadingAnchor),
-                view.trailingAnchor.constraint(equalTo: host.trailingAnchor),
-                view.topAnchor.constraint(equalTo: host.topAnchor),
-                view.bottomAnchor.constraint(equalTo: host.bottomAnchor),
-            ])
-            self.host = host
-            recordLifecycle("host-attached")
-        }
-        update(view, value: value)
-    }
-
-    fileprivate func detach(from host: UIView) {
-        guard self.host === host else { return }
-        retainedMap?.removeFromSuperview()
-        self.host = nil
-        loadFailed = nil
-        recordLifecycle("host-detached")
-    }
-
-    func reset() {
-        if let retainedMap {
-            retainedMap.delegate = nil
-            retainedMap.removeFromSuperview()
-            recordLifecycle("removed")
-        }
-        retainedMap = nil
-        host = nil
-        loadFailed = nil
-        namespace = nil
-        coordinate = nil
-        language = .english
-        originals = [:]
-    }
-
-    func recordLifecycle(_ event: String) {
+    final class Coordinator: NSObject, MLNMapViewDelegate {
         #if DEBUG
-            let id = diagnosticID
-            Self.logger.debug("Asset map lifecycle id=\(id, privacy: .public) event=\(event, privacy: .public)")
+            private let diagnosticID = String(UUID().uuidString.prefix(8))
+            private static let logger = Logger(subsystem: "io.github.ender-wang.Remmich", category: "AssetMapLifecycle")
         #endif
-    }
+        private var coordinate: PlaceCoordinate?
+        private var language: PlaceLanguage = .english
+        private var originals: [String: NSExpression] = [:]
+        private let pin = MLNPointAnnotation()
+        var loadFailed: (() -> Void)?
 
-    private func update(_ view: MLNMapView, value: NativeAssetMap) {
-        loadFailed = value.loadFailed
-        if view.styleURL != value.styleURL {
-            recordLifecycle("style-requested")
+        func recordLifecycle(_ event: String) {
+            #if DEBUG
+                let id = diagnosticID
+                Self.logger.debug("Asset map lifecycle id=\(id, privacy: .public) event=\(event, privacy: .public)")
+            #endif
+        }
+
+        func update(_ view: MLNMapView, value: NativeAssetMap) {
+            loadFailed = value.loadFailed
+            if view.styleURL != value.styleURL {
+                recordLifecycle("style-requested")
+                originals = [:]
+                view.styleURL = value.styleURL
+            }
+            view.isScrollEnabled = value.interactive
+            view.isZoomEnabled = value.interactive
+            if coordinate != value.coordinate {
+                let firstPosition = coordinate == nil
+                recordLifecycle("coordinate-updated")
+                coordinate = value.coordinate
+                pin.coordinate = CLLocationCoordinate2D(latitude: value.coordinate.latitude, longitude: value.coordinate.longitude)
+                if view.annotations?.isEmpty != false {
+                    view.addAnnotation(pin)
+                }
+                view.setCenter(pin.coordinate, zoomLevel: firstPosition ? 13 : view.zoomLevel,
+                               animated: !firstPosition && value.animatesCamera)
+            }
+            pin.title = value.title
+            if language != value.language {
+                language = value.language
+                if let style = view.style {
+                    localize(style)
+                }
+            }
+        }
+
+        func mapView(_: MLNMapView, didFinishLoading style: MLNStyle) {
+            recordLifecycle("style-loaded")
             originals = [:]
-            view.styleURL = value.styleURL
+            localize(style)
         }
-        view.isScrollEnabled = value.interactive
-        view.isZoomEnabled = value.interactive
-        if coordinate != value.coordinate {
-            recordLifecycle("coordinate-updated")
-            coordinate = value.coordinate
-            pin.coordinate = CLLocationCoordinate2D(latitude: value.coordinate.latitude, longitude: value.coordinate.longitude)
-            if view.annotations?.isEmpty != false {
-                view.addAnnotation(pin)
+
+        func mapViewDidFailLoadingMap(_: MLNMapView, withError _: Error) {
+            Task { @MainActor [weak self] in self?.loadFailed?() }
+        }
+
+        private func localize(_ style: MLNStyle) {
+            for case let layer as MLNSymbolStyleLayer in style.layers {
+                guard let text = originals[layer.identifier] ?? layer.text,
+                      String(describing: text.mgl_jsonExpressionObject).contains("name") else { continue }
+                originals[layer.identifier] = text
+                let keys = language == .english ? ["name:en", "name", "pgf:name"] : ["name", "pgf:name", "name:en"]
+                let expression: [Any] = ["coalesce"] + keys.map { ["get", $0] as Any }
+                layer.text = NSExpression(mglJSONObject: expression)
             }
-            view.setCenter(pin.coordinate, zoomLevel: 13, animated: false)
-        }
-        pin.title = value.title
-        if language != value.language {
-            language = value.language
-            if let style = view.style {
-                localize(style)
-            }
-        }
-    }
-
-    func mapView(_ mapView: MLNMapView, didFinishLoading style: MLNStyle) {
-        guard retainedMap === mapView else { return }
-        recordLifecycle("style-loaded")
-        originals = [:]
-        localize(style)
-    }
-
-    func mapViewDidFailLoadingMap(_ mapView: MLNMapView, withError _: Error) {
-        Task { @MainActor [weak self, weak mapView] in
-            guard let self, let mapView, retainedMap === mapView else { return }
-            let reportFailure = loadFailed
-            reset()
-            reportFailure?()
-        }
-    }
-
-    private func localize(_ style: MLNStyle) {
-        for case let layer as MLNSymbolStyleLayer in style.layers {
-            guard let text = originals[layer.identifier] ?? layer.text,
-                  String(describing: text.mgl_jsonExpressionObject).contains("name") else { continue }
-            originals[layer.identifier] = text
-            // Keep the server's source, fonts, colors, and non-name labels.
-            let keys = language == .english ? ["name:en", "name", "pgf:name"] : ["name", "pgf:name", "name:en"]
-            let expression: [Any] = ["coalesce"] + keys.map { ["get", $0] as Any }
-            layer.text = NSExpression(mglJSONObject: expression)
         }
     }
 }
