@@ -53,7 +53,7 @@ For now, follow [Build and run](CONTRIBUTING.md#build-and-run) to build from sou
 - Expand an asset from its thumbnail and return smoothly to its place, including within date-group timelines.
 - Hold a timeline asset for 0.35 seconds to open a centered preview; swipe down, tap outside, or use the Back gesture to dismiss it, including while it is opening or loading.
 - Preview Live Photos and videos once with muted playback; tap the preview to expand into the full viewer. Share and Download in the preview panel are reserved for future export support.
-- Swipe down during full-viewer opening to return immediately, and open another asset while the previous return animation finishes.
+- Swipe down during full-viewer opening to return immediately, and open another asset or scroll while the previous return animation follows its thumbnail.
 - Pick a photo from the filmstrip; short rows stay centered, and longer rows follow your selection.
 - Revisit memories above both the Photos and Videos timelines.
 - When today has no memories, check up to three upcoming days and label the earliest available day.
@@ -102,7 +102,7 @@ For now, follow [Build and run](CONTRIBUTING.md#build-and-run) to build from sou
 - **Local originals and export:** Save to Photos, Share/Export, and Download are still in development; their viewer controls are disabled. Thumbnail caching does not retain original photos or playable videos.
 - **Albums, Library collections, and Search:** these destinations currently show demo data. Server-backed browsing and search are planned.
 - **Offline video:** cached posters and asset information can be viewed offline; video playback requires a reachable server.
-- **Map browsing:** a map-based location view is still planned.
+- **Asset locations and maps:** landmark location titles are next, followed by a map below the asset Info panel using the server's configured basemap.
 
 ## Milestones
 
@@ -115,7 +115,7 @@ Milestones track implementation and help set expectations for upcoming work. **0
 | M2 | ✅ Done | Sign-in, Keychain restoration, endpoint failover, and the typed read-only API boundary |
 | M3 | ✅ Done | Shared media loading, caching, prefetching, and bounded memory use |
 | M4 | ✅ Done | Real server-backed Photos timeline |
-| M5 | In progress | Semantic zoom, date cards, memories, Videos, and viewers are implemented; map browsing, Save/Share/Download, and final verification remain |
+| M5 | In progress | Semantic zoom, date cards, memories, Videos, viewers, and long-press preview are implemented; landmark titles, maps, Save/Share/Download, and final verification remain |
 | M6 | Planned | Server-backed read-only Albums browsing |
 | M7 | Planned | Server-backed read-only Library collections |
 | M8 | Planned | Server-backed Search with native filters |
