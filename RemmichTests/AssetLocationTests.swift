@@ -104,6 +104,11 @@ struct AssetLocationTests {
         #expect(store.namespace == scope("second").cacheNamespace)
     }
 
+    @Test @MainActor func aValidRegionalInstancePassesWithoutChinaCoverage() async throws {
+        let store = AssetLocationStore(client: EmptyRegionalPlaceClient())
+        #expect(try await store.test(endpoint: "https://nas.example/photon"))
+    }
+
     @MainActor private func scope(_ user: String) -> MediaAccountScope {
         .init(session: AccountSession(apiURL: URL(string: "https://immich.example/api")!, accessToken: "test",
                                       userID: user, userEmail: "test@example.com", name: "Test", isAdmin: false,
@@ -115,6 +120,12 @@ struct AssetLocationTests {
             ? #"{"features":[{"properties":{"name":"Century Park","osm_key":"leisure","district":"Huamu","city":"Pudong","state":"Shanghai","country":"China","countrycode":"CN"}}]}"#
             : #"{"features":[{"properties":{"name":"世纪公园","osm_key":"leisure","district":"花木街道","city":"浦东新区","state":"上海市","country":"中国","countrycode":"CN"}}]}"#
         return try JSONDecoder().decode(PhotonResponse.self, from: Data(json.utf8))
+    }
+}
+
+private actor EmptyRegionalPlaceClient: PlaceLookingUp {
+    func lookup(_: PlaceCoordinate, endpoint _: URL, language _: PlaceLanguage) async throws -> PlaceLocation? {
+        nil
     }
 }
 

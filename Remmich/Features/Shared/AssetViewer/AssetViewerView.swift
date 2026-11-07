@@ -57,6 +57,7 @@ struct AssetViewerView: View {
     @State private var selectedPlace: PlaceLocation?
     @State private var selectedPlaceAssetID: String?
     @State private var selectedPlaceRevision: Int?
+    @State private var interactiveMapFrame: CGRect?
     @State private var cachedDetailMissAssetIDs: Set<String> = []
     @State private var refreshedDetailAssetIDs: Set<String> = []
     @State private var renderedImageMetadataByAssetID: [String: AssetViewerRenderedImageMetadata] = [:]
@@ -866,7 +867,8 @@ struct AssetViewerView: View {
                         loadFullResolution: { requestFullResolution(for: asset.id) },
                         place: asset.id == session.selectedAssetID ? currentPlace : nil,
                         showsMap: showsInfo && !openingIsActive && !isDismissing && asset.id == session.selectedAssetID,
-                        mapViewportHeight: viewerRect.height
+                        mapViewportHeight: viewerRect.height,
+                        mapInteractionRegionChanged: { interactiveMapFrame = $0 }
                     )
                     .frame(width: targetInfoWidth)
                 }
@@ -894,7 +896,8 @@ struct AssetViewerView: View {
                         loadFullResolution: { requestFullResolution(for: asset.id) },
                         place: asset.id == session.selectedAssetID ? currentPlace : nil,
                         showsMap: showsInfo && !openingIsActive && !isDismissing && asset.id == session.selectedAssetID,
-                        mapViewportHeight: targetInfoHeight
+                        mapViewportHeight: targetInfoHeight,
+                        mapInteractionRegionChanged: { interactiveMapFrame = $0 }
                     )
                     .frame(height: targetInfoHeight)
                 }
@@ -1720,7 +1723,7 @@ struct AssetViewerView: View {
         DragGesture(minimumDistance: 16)
             .updating($verticalDragIsActive) { _, active, _ in active = true }
             .onChanged { value in
-                guard !isDismissing else { return }
+                guard !isDismissing, interactiveMapFrame?.offsetBy(dx: -viewportOrigin.x, dy: -viewportOrigin.y).contains(value.startLocation) != true else { return }
                 if openingIsActive, !isMemoryViewer {
                     guard openingDrag.isActive || (value.translation.height > abs(value.translation.width) * 1.2) else { return }
                     if !openingDrag.isActive, let asset = session.selectedAsset {
@@ -1862,6 +1865,10 @@ struct AssetViewerView: View {
             }
             .onEnded { value in
                 guard !isDismissing else { return }
+                guard interactiveMapFrame?.offsetBy(dx: -viewportOrigin.x, dy: -viewportOrigin.y).contains(value.startLocation) != true else {
+                    verticalDragRoute = nil
+                    return
+                }
                 if openingDrag.isActive {
                     if value.translation.height > abs(value.translation.width) * 1.2,
                        AssetViewerDismissalGeometry.shouldComplete(translationHeight: value.translation.height,

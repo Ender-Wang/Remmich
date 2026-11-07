@@ -19,6 +19,7 @@ final class AssetLocationStore {
     private(set) var mapStyles: ImmichMapStyles?
     private(set) var mapEndpoint: URL?
     @ObservationIgnored private var mapSession: AccountSession?
+    @ObservationIgnored private var validatedMapEndpoint: URL?
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let client: any PlaceLookingUp
     @ObservationIgnored private var cache: [CacheEntry] = []
@@ -36,6 +37,7 @@ final class AssetLocationStore {
         mapStyles = Self.read(ImmichMapStyles.self, defaults: defaults, key: "maps-places-styles-\(scope.cacheNamespace)")
         mapEndpoint = nil
         mapSession = nil
+        validatedMapEndpoint = nil
         revision &+= 1
     }
 
@@ -46,6 +48,7 @@ final class AssetLocationStore {
         mapStyles = nil
         mapEndpoint = nil
         mapSession = nil
+        validatedMapEndpoint = nil
         revision &+= 1
     }
 
@@ -95,22 +98,28 @@ final class AssetLocationStore {
     func test(endpoint: String) async throws -> Bool {
         let url = try MapsPlacesPreferences.endpointURL(endpoint)
         let sample = PlaceCoordinate(latitude: 31.2167366667, longitude: 121.5484183333)!
-        return try await client.lookup(sample, endpoint: url, language: .english) != nil
+        // A regional instance can be healthy without covering this sample.
+        _ = try await client.lookup(sample, endpoint: url, language: .english)
+        return true
     }
 
     func configureMap(session: AccountSession, endpoint: URL?) {
         guard namespace == MediaAccountScope(session: session).cacheNamespace else { return }
+        if mapEndpoint != endpoint || mapSession != session {
+            validatedMapEndpoint = nil
+        }
         mapSession = session
         mapEndpoint = endpoint
     }
 
     func loadMapStyles() async throws {
-        guard mapStyles == nil, let mapSession, let mapEndpoint, let namespace else { return }
+        guard let mapSession, let mapEndpoint, let namespace, validatedMapEndpoint != mapEndpoint else { return }
         let client = ImmichClient.routeCheckClient(apiURL: mapEndpoint, credential: .bearer(mapSession.accessToken))
         let styles = try await client.mapStyles()
         try Task.checkCancellation()
         guard self.namespace == namespace, self.mapEndpoint == mapEndpoint else { throw CancellationError() }
         mapStyles = styles
+        validatedMapEndpoint = mapEndpoint
         if let data = try? JSONEncoder().encode(styles) {
             defaults.set(data, forKey: "maps-places-styles-\(namespace)")
         }

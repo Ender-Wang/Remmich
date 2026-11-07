@@ -227,6 +227,7 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
     let months: AnyView
     let weeks: AnyView
     let search: AnyView
+    var locations: AssetLocationStore?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -328,7 +329,7 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
             destination: NativeTabDestination,
             ignoresContainerSafeArea: Bool = false
         ) -> TabContentHostingController {
-            let controller = TabContentHostingController(rootView: rootView)
+            let controller = TabContentHostingController(rootView: hostedRoot(rootView))
             if ignoresContainerSafeArea {
                 controller.safeAreaRegions = .keyboard
             }
@@ -336,6 +337,10 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
                 self?.scheduleContentActivation(destination)
             }
             return controller
+        }
+
+        private func hostedRoot(_ view: AnyView) -> AnyView {
+            AnyView(view.environment(\.assetLocations, parent.locations))
         }
 
         private lazy var photosTab = UITab(
@@ -431,23 +436,23 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
 
             let mediaLayoutChanged = previous.tabBarTop != next.tabBarTop
             if previous.photosScrollRequest != next.photosScrollRequest {
-                photosController.rootView = next.photos
+                photosController.rootView = hostedRoot(next.photos)
             }
             if previous.videosScrollRequest != next.videosScrollRequest {
-                videosController.rootView = next.videos
+                videosController.rootView = hostedRoot(next.videos)
             }
             if didResolveLibrary,
                previous.libraryContentRevision != next.libraryContentRevision
             {
-                libraryController.rootView = next.library
+                libraryController.rootView = hostedRoot(next.library)
             }
             if mediaLayoutChanged
                 || previous.groupedScrollRequests != next.groupedScrollRequests
                 || previous.groupedMediaOwner != next.groupedMediaOwner
             {
-                yearsController.rootView = next.years
-                monthsController.rootView = next.months
-                weeksController.rootView = next.weeks
+                yearsController.rootView = hostedRoot(next.years)
+                monthsController.rootView = hostedRoot(next.months)
+                weeksController.rootView = hostedRoot(next.weeks)
             }
 
             guard let controller else { return }

@@ -266,7 +266,8 @@ struct AppShellView: View {
                         SearchView(assets: PreviewFixtures.assets, showAccount: showAccount)
                     }
                 }
-            )
+            ),
+            locations: sessionController?.locations
         )
         .nativeEdgeBackRoot()
         .ignoresSafeArea(.container, edges: .all)

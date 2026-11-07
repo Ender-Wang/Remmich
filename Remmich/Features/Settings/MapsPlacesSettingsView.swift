@@ -102,6 +102,7 @@ struct MapsPlacesSettingsView: View {
 
     private var countryCodes: [String] {
         Locale.Region.isoRegions.map(\.identifier)
+            .filter { $0.count == 2 && $0.allSatisfy(\.isLetter) }
             .filter { !((locations?.preferences.localCountries ?? []).contains($0)) }
             .filter { search.isEmpty || countryName($0).localizedCaseInsensitiveContains(search) || $0.localizedCaseInsensitiveContains(search) }
             .sorted { countryName($0).localizedStandardCompare(countryName($1)) == .orderedAscending }

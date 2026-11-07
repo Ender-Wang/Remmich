@@ -876,8 +876,8 @@ final class AppSessionController {
     private func configureTimelines(session: AccountSession, endpoint: URL?) async -> Bool {
         let generation = preparationGeneration
         let changed = await timeline.configure(session: session, activeEndpoint: endpoint)
-        locations.configureMap(session: session, endpoint: endpoint)
         guard preparationIsCurrent(generation) else { return false }
+        locations.configureMap(session: session, endpoint: endpoint)
         await librarySyncSource.configure(session: session, activeEndpoint: endpoint)
         guard preparationIsCurrent(generation) else { return false }
         if let endpoint {

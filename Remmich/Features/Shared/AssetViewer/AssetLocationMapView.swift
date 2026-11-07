@@ -1,5 +1,6 @@
 import CoreLocation
 import Foundation
+import ImmichAPI
 import MapLibre
 import SwiftUI
 
@@ -9,6 +10,7 @@ struct AssetLocationMapView: View {
     let coordinate: PlaceCoordinate
     let place: PlaceLocation?
     let viewportHeight: CGFloat
+    var interactionRegionChanged: (CGRect?) -> Void = { _ in }
     @State private var frame: CGRect = .zero
     @State private var failed = false
     @State private var retry = 0
@@ -24,12 +26,13 @@ struct AssetLocationMapView: View {
     var body: some View {
         ZStack {
             Color(uiColor: .secondarySystemBackground)
-            if visible, let styles = locations?.mapStyles, styles.enabled {
+            if visible, !failed, let styles = locations?.mapStyles, styles.enabled {
                 NativeAssetMap(coordinate: coordinate,
                                styleURL: colorScheme == .dark ? styles.dark : styles.light,
                                language: place?.language ?? .english,
                                interactive: fullyVisible,
-                               title: place?.title ?? "Photo location")
+                               title: place?.title ?? "Photo location",
+                               loadFailed: { failed = true })
             } else {
                 VStack(spacing: 8) {
                     Image(systemName: "map")
@@ -44,13 +47,19 @@ struct AssetLocationMapView: View {
         }
         .frame(height: 240)
         .clipShape(.rect(cornerRadius: DesignMetrics.defaultCornerRadius))
-        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("asset-info-scroll")) } action: { frame = $0 }
+        .onGeometryChange(for: MapPosition.self) {
+            MapPosition(scroll: $0.frame(in: .named("asset-info-scroll")), global: $0.frame(in: .global))
+        } action: { position in
+            frame = position.scroll
+            interactionRegionChanged(fullyVisible ? position.global : nil)
+        }
+        .onDisappear { interactionRegionChanged(nil) }
         .task(id: "\(visible)|\(locations?.mapEndpoint?.absoluteString ?? "")|\(retry)") {
             guard visible, let locations else { return }
             failed = false
             do { try await locations.loadMapStyles() }
             catch {
-                if !Task.isCancelled {
+                if !Task.isCancelled, locations.mapStyles == nil {
                     failed = true
                 }
             }
@@ -59,12 +68,18 @@ struct AssetLocationMapView: View {
     }
 }
 
+private struct MapPosition: Equatable {
+    let scroll: CGRect
+    let global: CGRect
+}
+
 private struct NativeAssetMap: UIViewRepresentable {
     let coordinate: PlaceCoordinate
     let styleURL: URL
     let language: PlaceLanguage
     let interactive: Bool
     let title: String
+    let loadFailed: () -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -84,8 +99,9 @@ private struct NativeAssetMap: UIViewRepresentable {
         context.coordinator.update(view, value: self)
     }
 
-    static func dismantleUIView(_ view: MLNMapView, coordinator _: Coordinator) {
+    static func dismantleUIView(_ view: MLNMapView, coordinator: Coordinator) {
         view.delegate = nil
+        coordinator.loadFailed = nil
     }
 
     final class Coordinator: NSObject, MLNMapViewDelegate {
@@ -93,8 +109,10 @@ private struct NativeAssetMap: UIViewRepresentable {
         private var language: PlaceLanguage = .english
         private var originals: [String: NSExpression] = [:]
         private let pin = MLNPointAnnotation()
+        var loadFailed: (() -> Void)?
 
         func update(_ view: MLNMapView, value: NativeAssetMap) {
+            loadFailed = value.loadFailed
             if view.styleURL != value.styleURL {
                 originals = [:]
                 view.styleURL = value.styleURL
@@ -121,6 +139,10 @@ private struct NativeAssetMap: UIViewRepresentable {
         func mapView(_: MLNMapView, didFinishLoading style: MLNStyle) {
             originals = [:]
             localize(style)
+        }
+
+        func mapViewDidFailLoadingMap(_: MLNMapView, withError _: Error) {
+            Task { @MainActor [weak self] in self?.loadFailed?() }
         }
 
         private func localize(_ style: MLNStyle) {

@@ -159,6 +159,7 @@ struct AssetViewerInfoView: View {
     var place: PlaceLocation?
     var showsMap = false
     var mapViewportHeight: CGFloat = 0
+    var mapInteractionRegionChanged: (CGRect?) -> Void = { _ in }
 
     var body: some View {
         GeometryReader { geometry in
@@ -343,7 +344,8 @@ struct AssetViewerInfoView: View {
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("asset-viewer-metadata-card")
             if showsMap, let coordinate = PlaceCoordinate(latitude: detail.latitude, longitude: detail.longitude) {
-                AssetLocationMapView(coordinate: coordinate, place: place, viewportHeight: mapViewportHeight)
+                AssetLocationMapView(coordinate: coordinate, place: place, viewportHeight: mapViewportHeight,
+                                     interactionRegionChanged: mapInteractionRegionChanged)
             }
         }
     }
