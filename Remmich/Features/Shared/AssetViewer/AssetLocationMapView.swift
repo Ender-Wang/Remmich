@@ -12,6 +12,7 @@ struct AssetLocationMapView: View {
     let viewportHeight: CGFloat
     var interactionRegionChanged: (CGRect?) -> Void = { _ in }
     @State private var frame: CGRect = .zero
+    @State private var globalFrame: CGRect = .zero
     @State private var failed = false
     @State private var retry = 0
 
@@ -21,6 +22,10 @@ struct AssetLocationMapView: View {
 
     private var fullyVisible: Bool {
         frame.minY >= -1 && frame.maxY <= viewportHeight + 1
+    }
+
+    private var nativeMapActive: Bool {
+        visible && !failed && locations?.mapStyles?.enabled == true
     }
 
     var body: some View {
@@ -51,7 +56,11 @@ struct AssetLocationMapView: View {
             MapPosition(scroll: $0.frame(in: .named("asset-info-scroll")), global: $0.frame(in: .global))
         } action: { position in
             frame = position.scroll
-            interactionRegionChanged(fullyVisible ? position.global : nil)
+            globalFrame = position.global
+            interactionRegionChanged(nativeMapActive && fullyVisible ? position.global : nil)
+        }
+        .onChange(of: nativeMapActive) { _, active in
+            interactionRegionChanged(active && fullyVisible ? globalFrame : nil)
         }
         .onDisappear { interactionRegionChanged(nil) }
         .task(id: "\(visible)|\(locations?.mapEndpoint?.absoluteString ?? "")|\(retry)") {
@@ -68,7 +77,7 @@ struct AssetLocationMapView: View {
     }
 }
 
-private struct MapPosition: Equatable {
+private nonisolated struct MapPosition: Equatable {
     let scroll: CGRect
     let global: CGRect
 }

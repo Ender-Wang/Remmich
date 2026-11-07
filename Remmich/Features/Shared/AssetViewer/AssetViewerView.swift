@@ -587,6 +587,7 @@ struct AssetViewerView: View {
             await preloadCachedAssetDetails(pagerWindowAssets.map(\.id))
         }
         .onChange(of: session.selectedAssetID) { _, newAssetID in
+            interactiveMapFrame = nil
             logMemoryPlayback("selection")
             videoFirstFrameReady = false
             chromeVisible = true
@@ -868,7 +869,11 @@ struct AssetViewerView: View {
                         place: asset.id == session.selectedAssetID ? currentPlace : nil,
                         showsMap: showsInfo && !openingIsActive && !isDismissing && asset.id == session.selectedAssetID,
                         mapViewportHeight: viewerRect.height,
-                        mapInteractionRegionChanged: { interactiveMapFrame = $0 }
+                        mapInteractionRegionChanged: {
+                            if asset.id == session.selectedAssetID {
+                                interactiveMapFrame = $0
+                            }
+                        }
                     )
                     .frame(width: targetInfoWidth)
                 }
@@ -897,7 +902,11 @@ struct AssetViewerView: View {
                         place: asset.id == session.selectedAssetID ? currentPlace : nil,
                         showsMap: showsInfo && !openingIsActive && !isDismissing && asset.id == session.selectedAssetID,
                         mapViewportHeight: targetInfoHeight,
-                        mapInteractionRegionChanged: { interactiveMapFrame = $0 }
+                        mapInteractionRegionChanged: {
+                            if asset.id == session.selectedAssetID {
+                                interactiveMapFrame = $0
+                            }
+                        }
                     )
                     .frame(height: targetInfoHeight)
                 }

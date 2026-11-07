@@ -50,6 +50,8 @@ For now, follow [Build and run](CONTRIBUTING.md#build-and-run) to build from sou
 ### 📸 Photos and memories
 
 - View photos with zoom, Live Photo motion playback, and detailed asset information.
+- See Photon place names in the viewer header and asset information, with locality fallback when a lookup is unavailable.
+- Pull up Info to reveal the asset's map using your Immich server's configured basemap; pull farther to reveal the full map and pan or zoom.
 - Expand an asset from its thumbnail and return smoothly to its place, including within date-group timelines.
 - Hold a timeline asset for 0.35 seconds to open a centered preview; swipe down, tap outside, or use the Back gesture to dismiss it, including while it is opening or loading.
 - Preview Live Photos and videos once with muted playback; tap the preview to expand into the full viewer. Share and Download in the preview panel are reserved for future export support.
@@ -96,13 +98,14 @@ For now, follow [Build and run](CONTRIBUTING.md#build-and-run) to build from sou
 - Switch saved accounts in **Profile → Account** without signing in again while their sessions remain valid. Each account keeps its own connection settings, index, cache, and pause choices.
 - Configure Primary and Fallback server addresses, with authenticated failover, live response times, and shared retained data for verified aliases of the same account.
 - Manage Account, Connection, Index, and Cache & Storage from the profile panel opened through your avatar.
+- Open **Account → Maps & Places** to use the public Photon instance or your own URL, and choose **English** or **Local** place names per country. English is the default.
 
 ## Current limitations
 
 - **Local originals and export:** Save to Photos, Share/Export, and Download are still in development; their viewer controls are disabled. Thumbnail caching does not retain original photos or playable videos.
 - **Albums, Library collections, and Search:** these destinations currently show demo data. Server-backed browsing and search are planned.
 - **Offline video:** cached posters and asset information can be viewed offline; video playback requires a reachable server.
-- **Asset locations and maps:** landmark location titles are next, followed by a map below the asset Info panel using the server's configured basemap.
+- **Asset locations and maps:** maps require valid asset GPS and an enabled, compatible Immich map source. Place names and translated map labels depend on the provider's available data.
 
 ## Milestones
 
@@ -115,7 +118,7 @@ Milestones track implementation and help set expectations for upcoming work. **0
 | M2 | ✅ Done | Sign-in, Keychain restoration, endpoint failover, and the typed read-only API boundary |
 | M3 | ✅ Done | Shared media loading, caching, prefetching, and bounded memory use |
 | M4 | ✅ Done | Real server-backed Photos timeline |
-| M5 | In progress | Semantic zoom, date cards, memories, Videos, viewers, and long-press preview are implemented; landmark titles, maps, Save/Share/Download, and final verification remain |
+| M5 | In progress | Semantic zoom, date cards, memories, Videos, viewers, and long-press preview are implemented; Photon locations/settings and maps are undergoing verification; Save/Share/Download and final verification remain |
 | M6 | Planned | Server-backed read-only Albums browsing |
 | M7 | Planned | Server-backed read-only Library collections |
 | M8 | Planned | Server-backed Search with native filters |
@@ -135,6 +138,7 @@ Remmich connects to [Immich](https://github.com/immich-app/immich) through the l
 | Library | Resolved version | Purpose |
 | --- | --- | --- |
 | [Nuke / NukeUI](https://github.com/kean/Nuke) | 13.0.6 | Image loading, caching, prefetching, and SwiftUI image views |
+| [MapLibre Native](https://github.com/maplibre/maplibre-gl-native-distribution) | 7.0.0 | Native asset maps using Immich's configured styles |
 | [Swift OpenAPI Runtime](https://github.com/apple/swift-openapi-runtime) | 1.12.1 | Runtime support for the generated API client |
 | [Swift OpenAPI URLSession](https://github.com/apple/swift-openapi-urlsession) | 1.3.1 | URLSession transport for API requests |
 | [Swift HTTP Types](https://github.com/apple/swift-http-types) | 1.8.0 | HTTP request, response, and header types |
