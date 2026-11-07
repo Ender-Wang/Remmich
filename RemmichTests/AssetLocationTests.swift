@@ -4,63 +4,28 @@ import Testing
 @testable import Remmich
 
 struct AssetLocationTests {
-    @Test func mapFollowsTheEnteringCardBeforeThePagerCommitsSelection() {
-        let viewport = CGRect(x: 0, y: 300, width: 400, height: 400)
-        func slot(_ x: CGFloat) -> AssetMapSlotLayout {
-            .init(frame: CGRect(x: x + 16, y: 500, width: 368, height: 240),
-                  viewport: CGRect(x: x, y: 300, width: 400, height: 400))
-        }
-        let forward = ["a": slot(-10), "b": slot(390), "c": slot(-410)]
-        #expect(AssetMapPagingTarget.resolve(preferredID: "a", outgoingID: "a", slots: forward,
-                                             coordinateIDs: ["a", "b", "c"], viewport: viewport) == "b")
-        let reversed = ["a": slot(10), "b": slot(410), "c": slot(-390)]
-        #expect(AssetMapPagingTarget.resolve(preferredID: "a", outgoingID: "a", slots: reversed,
-                                             coordinateIDs: ["a", "b", "c"], viewport: viewport) == "c")
-        #expect(AssetMapPagingTarget.resolve(preferredID: "a", outgoingID: "a", slots: ["a": slot(0), "b": slot(400)],
-                                             coordinateIDs: ["a", "b"], viewport: viewport) == "a")
-        #expect(AssetMapPagingTarget.resolve(preferredID: "b", outgoingID: nil, slots: forward,
-                                             coordinateIDs: ["a", "b"], viewport: viewport) == "b")
-        // A missing-GPS incoming page must never borrow another page's location.
-        #expect(AssetMapPagingTarget.resolve(preferredID: "b", outgoingID: "a", slots: forward,
-                                             coordinateIDs: ["a"], viewport: viewport) == "a")
-    }
-
-    @Test func slidingMapClipsToItsMovingInfoViewport() {
-        let geometry = AssetMapViewportGeometry(mapTop: 500,
-                                                viewport: CGRect(x: 0, y: 300, width: 150, height: 400),
-                                                contentWidth: 400, bottomInset: 0, mapLeft: -234)
-        #expect(geometry.mapFrame == CGRect(x: -234, y: 500, width: 368, height: 240))
-        #expect(geometry.maskFrame == CGRect(x: 234, y: 0, width: 134, height: 200))
-        #expect(geometry.isVisible && !geometry.isFullyVisible)
-    }
-
-    @Test func mapViewportClipsWithoutResizingTheRenderer() {
-        let viewport = CGRect(x: 20, y: 300, width: 400, height: 400)
-        let peek = AssetMapViewportGeometry(mapTop: 650, viewport: viewport, contentWidth: 400, bottomInset: 90)
-        #expect(peek.mapFrame == CGRect(x: 36, y: 650, width: 368, height: 240))
-        #expect(peek.maskFrame == CGRect(x: 0, y: 0, width: 368, height: 50))
-        #expect(peek.isVisible && !peek.isFullyVisible)
-        let clippedTop = AssetMapViewportGeometry(mapTop: 200, viewport: viewport, contentWidth: 400, bottomInset: 90)
-        #expect(clippedTop.maskFrame == CGRect(x: 0, y: 100, width: 368, height: 140))
-        #expect(clippedTop.mapFrame.size == peek.mapFrame.size)
-        let outside = AssetMapViewportGeometry(mapTop: 800, viewport: viewport, contentWidth: 400, bottomInset: 90)
-        #expect(!outside.isVisible && !outside.isFullyVisible)
-        #expect(outside.maskFrame == .zero)
-        #expect(outside.mapFrame.size == peek.mapFrame.size)
+    @Test func mapVisibilityDoesNotTreatPartialCardsAsInteractive() {
+        let size = CGSize(width: 400, height: 400)
+        let peek = AssetMapViewport(frame: CGRect(x: 16, y: 350, width: 368, height: 240),
+                                    size: size, bottomInset: 90)
+        #expect(peek.visible && !peek.fullyVisible)
+        let clippedTop = AssetMapViewport(frame: CGRect(x: 16, y: -100, width: 368, height: 240),
+                                          size: size, bottomInset: 90)
+        #expect(clippedTop.visible && !clippedTop.fullyVisible)
+        let outside = AssetMapViewport(frame: CGRect(x: 16, y: 500, width: 368, height: 240),
+                                       size: size, bottomInset: 90)
+        #expect(!outside.visible && !outside.fullyVisible)
     }
 
     @Test func mapInteractionExcludesControlsAndPartialLandscapeReveal() {
-        let viewport = CGRect(x: 20, y: 300, width: 400, height: 400)
-        let ready = AssetMapViewportGeometry(mapTop: 350, viewport: viewport, contentWidth: 400, bottomInset: 90)
-        #expect(ready.isFullyVisible)
-        let underControls = AssetMapViewportGeometry(mapTop: 400, viewport: viewport, contentWidth: 400, bottomInset: 90)
-        #expect(underControls.isVisible && !underControls.isFullyVisible)
-        #expect(underControls.maskFrame.height == 240)
-        let narrow = AssetMapViewportGeometry(mapTop: 350, viewport: CGRect(x: 20, y: 300, width: 50, height: 400),
-                                              contentWidth: 200, bottomInset: 0)
-        #expect(narrow.mapFrame.width == 168)
-        #expect(narrow.maskFrame.width == 34)
-        #expect(narrow.isVisible && !narrow.isFullyVisible)
+        let frame = CGRect(x: 16, y: 50, width: 368, height: 240)
+        #expect(AssetMapViewport(frame: frame, size: CGSize(width: 400, height: 400),
+                                 bottomInset: 90).fullyVisible)
+        let underControls = AssetMapViewport(frame: frame.offsetBy(dx: 0, dy: 50),
+                                             size: CGSize(width: 400, height: 400), bottomInset: 90)
+        #expect(underControls.visible && !underControls.fullyVisible)
+        let narrow = AssetMapViewport(frame: frame, size: CGSize(width: 50, height: 400), bottomInset: 0)
+        #expect(narrow.visible && !narrow.fullyVisible)
     }
 
     @Test func coordinateValidationPreservesZero() {

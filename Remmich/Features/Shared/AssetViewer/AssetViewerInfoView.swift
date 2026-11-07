@@ -147,6 +147,7 @@ nonisolated struct AssetViewerVideoPlaybackMetadata: Equatable, Sendable {
 
 struct AssetViewerInfoView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.assetLocations) private var locations
 
     let state: AssetViewerDetailState
     let renderedImageMetadata: AssetViewerRenderedImageMetadata?
@@ -160,7 +161,9 @@ struct AssetViewerInfoView: View {
     var showsMap = false
     var bottomContentInset: CGFloat = 0
     var mapViewportSize: CGSize?
-    var mapSlotPositionChanged: (AssetMapSlotLayout?) -> Void = { _ in }
+    var mapIsSelected = false
+    var mapInteractionEnabled = false
+    var mapInteractionRegionChanged: (CGRect?) -> Void = { _ in }
 
     var body: some View {
         GeometryReader { geometry in
@@ -353,8 +356,12 @@ struct AssetViewerInfoView: View {
             .clipShape(.rect(cornerRadius: DesignMetrics.defaultCornerRadius))
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("asset-viewer-metadata-card")
-            if showsMap, PlaceCoordinate(latitude: detail.latitude, longitude: detail.longitude) != nil {
-                AssetLocationMapSlot(viewportSize: viewportSize, positionChanged: mapSlotPositionChanged)
+            if showsMap, let coordinate = PlaceCoordinate(latitude: detail.latitude, longitude: detail.longitude) {
+                AssetLocationMapView(coordinate: coordinate, place: place, viewportSize: viewportSize,
+                                     isSelected: mapIsSelected, interactionEnabled: mapInteractionEnabled,
+                                     interactionBottomInset: bottomContentInset,
+                                     interactionRegionChanged: mapInteractionRegionChanged)
+                    .id(locations?.namespace)
             }
         }
     }
