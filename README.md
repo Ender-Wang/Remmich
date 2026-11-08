@@ -100,6 +100,8 @@ For now, follow [Build and run](CONTRIBUTING.md#build-and-run) to build from sou
 - Configure Primary and Fallback server addresses, with authenticated failover, live response times, and shared retained data for verified aliases of the same account.
 - Manage Account, Connection, Index, and Cache & Storage from the profile panel opened through your avatar.
 - Open **Account → Maps & Places** to use the public Photon instance or your own URL, and choose **English** or **Local** place names per country. English is the default.
+- Place names share the account's offline metadata cache. Cached names remain available offline; provider or country-language changes refresh only the required place data. The public Photon service fetches places only when viewed. A custom instance also supports automatic caching and Rebuild, with pause/retry and place failures included in Cache & Storage diagnostics.
+- Successful place lookups have no time-based expiry. GPS, provider, language or selection-policy changes can require a new lookup; successful “no result” responses are retried after one day when eligible.
 
 ## Current limitations
 

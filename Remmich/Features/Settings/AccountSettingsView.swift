@@ -483,8 +483,8 @@ struct AccountSettingsView: View {
     private func syncCardSummary(for page: SettingsPage) -> ProfileCardSummary {
         let completed: Int
         let total: Int
-        let isComplete: Bool
-        let status: String
+        var isComplete: Bool
+        var status: String
         if page == .index {
             completed = displayedIndexCompletedCount
             total = displayedIndexTotalCount
@@ -514,6 +514,18 @@ struct AccountSettingsView: View {
             case .paused: "Paused"
             case .upToDate: "Up to date"
             case .failed: "Needs attention"
+            }
+        }
+        if page == .cache, libraryIndex.automaticPlacesAllowed {
+            if libraryIndex.placeProgress.failed > 0 || libraryIndex.placeStorageError != nil {
+                status = "Places need attention"
+                isComplete = false
+            } else if libraryIndex.placesAreRunning {
+                status = "Caching places…"
+                isComplete = false
+            } else if libraryIndex.placeProgress.pending > 0 {
+                status = "Places pending"
+                isComplete = false
             }
         }
         let percentage = total > 0
@@ -1118,9 +1130,9 @@ struct AccountSettingsView: View {
 
     private var cachePage: some View {
         VStack(alignment: .leading, spacing: 0) {
-            sectionCaption("OFFLINE THUMBNAILS & METADATA")
+            sectionCaption("OFFLINE THUMBNAILS, METADATA & PLACES")
             VStack(alignment: .leading, spacing: 10) {
-                syncHeading(thumbnailCacheStatusPresentation, active: libraryIndex.thumbnailWarmingStatus == .warming,
+                syncHeading(cacheHeadingPresentation, active: libraryIndex.thumbnailWarmingStatus == .warming || libraryIndex.placesAreRunning,
                             diagnostics: libraryIndex.thumbnailFailureDiagnostics)
                 if let reason = libraryIndex.thumbnailWarmingWaitingReason {
                     Text(reason.message).font(.footnote).foregroundStyle(.secondary)
@@ -1133,6 +1145,15 @@ struct AccountSettingsView: View {
                 VStack(spacing: 0) {
                     statistic("Cached thumbnails", cacheThumbnailCount.formatted())
                     statistic("Cached metadata records", (libraryIndex.thumbnailWarmingEligibleCount > 0 ? libraryIndex.thumbnailWarmingMetadataCount : 0).formatted())
+                    statistic("Cached place tags", "\(libraryIndex.placeProgress.resolved.formatted()) / \(libraryIndex.placeProgress.eligible.formatted()) GPS assets")
+                    statistic("Place caching", libraryIndex.automaticPlacesAllowed ? "Custom instance" : "When viewed · Public Photon")
+                    if libraryIndex.automaticPlacesAllowed {
+                        statistic("Place tags pending", libraryIndex.placeProgress.pending.formatted())
+                        statistic("Place tags failed", libraryIndex.placeProgress.failed.formatted())
+                        if libraryIndex.placeProgress.demandOnly > 0 {
+                            statistic("Places fetched when viewed", libraryIndex.placeProgress.demandOnly.formatted())
+                        }
+                    }
                     statistic("Cached storage", ByteCountFormatter.string(fromByteCount: cacheByteCount, countStyle: .file))
                     if let estimate = thumbnailCacheSizeEstimate {
                         statistic("Estimated cache storage / 10K assets", estimate.replacingOccurrences(of: " / 10K assets", with: ""))
@@ -1159,7 +1180,7 @@ struct AccountSettingsView: View {
             Toggle(isOn: Binding(
                 get: { libraryIndex.thumbnailWarmingEnabled }, set: { libraryIndex.setThumbnailWarmingEnabled($0) }
             )) {
-                Label("Auto-cache thumbnails & metadata", systemImage: "externaldrive")
+                Label("Auto-cache thumbnails, metadata & places", systemImage: "externaldrive")
                     .font(.subheadline)
             }
             .frame(minHeight: 50)
@@ -1310,7 +1331,13 @@ struct AccountSettingsView: View {
     }
 
     private var cachePhase: SyncWorkPhase {
-        switch libraryIndex.thumbnailWarmingStatus {
+        if libraryIndex.thumbnailWarmingStatus == .warming || libraryIndex.placesAreRunning {
+            return .running
+        }
+        if libraryIndex.placeProgress.failed > 0 || libraryIndex.placeStorageError != nil {
+            return .failed
+        }
+        return switch libraryIndex.thumbnailWarmingStatus {
         case .off: .off
         case .waiting: .waiting
         case .warming: .running
@@ -1318,6 +1345,16 @@ struct AccountSettingsView: View {
         case .upToDate: .upToDate
         case .failed: .failed
         }
+    }
+
+    private var cacheHeadingPresentation: StatusPresentation {
+        if libraryIndex.placeProgress.failed > 0 || libraryIndex.placeStorageError != nil {
+            return .init(systemImage: "exclamationmark.triangle.fill", tint: .orange, accessibilityValue: "Places need attention")
+        }
+        if libraryIndex.placesAreRunning, libraryIndex.thumbnailWarmingStatus != .warming {
+            return .init(systemImage: "arrow.triangle.2.circlepath", tint: Self.cacheColor, accessibilityValue: "Caching places")
+        }
+        return thumbnailCacheStatusPresentation
     }
 
     private var retainedAccounts: [StoredLibraryAccount] {

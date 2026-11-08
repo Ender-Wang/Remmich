@@ -56,7 +56,8 @@ struct AssetViewerView: View {
     @State private var detailStates: [String: AssetViewerDetailState] = [:]
     @State private var selectedPlace: PlaceLocation?
     @State private var selectedPlaceAssetID: String?
-    @State private var selectedPlaceRevision: Int?
+    @State private var selectedPlaceGPS: PlaceCoordinate?
+    @State private var selectedPlaceScope: String?
     @State private var interactiveMapFrame: CGRect?
     @State private var cachedDetailMissAssetIDs: Set<String> = []
     @State private var refreshedDetailAssetIDs: Set<String> = []
@@ -548,18 +549,21 @@ struct AssetViewerView: View {
                                    revision: locations?.revision ?? 0,
                                    dismissing: isDismissing))
         {
-            selectedPlace = nil
-            selectedPlaceAssetID = nil
+            if selectedPlaceAssetID != session.selectedAssetID || selectedPlaceGPS != selectedPlaceCoordinate || selectedPlaceScope != locations?.namespace {
+                selectedPlace = nil
+                selectedPlaceAssetID = nil
+            }
             guard !isDismissing, let coordinate = selectedPlaceCoordinate, let locations else { return }
             let assetID = session.selectedAssetID
             let revision = locations.revision
             do {
-                let place = try await locations.resolve(coordinate)
+                let place = try await locations.resolve(coordinate, assetID: assetID)
                 guard !Task.isCancelled, !isDismissing, session.selectedAssetID == assetID,
                       locations.revision == revision else { return }
                 selectedPlace = place
                 selectedPlaceAssetID = assetID
-                selectedPlaceRevision = revision
+                selectedPlaceGPS = coordinate
+                selectedPlaceScope = locations.namespace
             } catch { /* Keep the existing complete locality fallback. */ }
         }
         .onChange(of: viewerPreviewTargetPixels) {
@@ -1602,9 +1606,12 @@ struct AssetViewerView: View {
     }
 
     private var currentPlace: PlaceLocation? {
-        guard selectedPlaceAssetID == session.selectedAssetID,
-              selectedPlaceRevision == locations?.revision else { return nil }
-        return selectedPlace
+        if selectedPlaceAssetID == session.selectedAssetID, selectedPlaceGPS == selectedPlaceCoordinate,
+           selectedPlaceScope == locations?.namespace, let selectedPlace
+        {
+            return selectedPlace
+        }
+        return selectedAssetDetail?.cachedPlace
     }
 
     private var selectedPlaceCoordinate: PlaceCoordinate? {

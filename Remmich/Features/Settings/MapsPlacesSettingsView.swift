@@ -28,7 +28,9 @@ struct MapsPlacesSettingsView: View {
                             .strokeBorder(.white.opacity(0.25), lineWidth: 1)
                     }
                     .accessibilityIdentifier("photon-url")
-                Text("Use the public Photon service or your own instance.")
+                Text(locations?.automaticCachingAllowed == true
+                    ? "Places are cached with asset metadata. Missing or outdated tags refresh automatically when auto-cache is enabled."
+                    : "Public Photon: places are fetched only when you view an asset. Automatic and rebuild requests are disabled for this service.")
                     .font(.footnote).foregroundStyle(.secondary)
                 HStack {
                     Button(isTesting ? "Testing…" : "Test & Save") { isTesting = true }

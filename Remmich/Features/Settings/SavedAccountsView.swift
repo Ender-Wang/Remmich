@@ -137,7 +137,7 @@ struct SavedAccountsView: View {
         let preferences = controller.libraryIndex.cachePreferences(namespace: entry.id)
         let enabled = preferences.enabled || controller.libraryIndex.hasManualCacheIntent(namespace: entry.id)
         let status = preferences.paused ? "Paused" : (!enabled ? "Off" : (data.indexedAssetCount > 0 && data.cachedAssetCount >= data.indexedAssetCount ? "Up to date" : "Incomplete"))
-        return "Cache: \(percentage(data.cachedAssetCount, data.indexedAssetCount)) · \(status) · \(data.thumbnailCount.formatted()) thumbnails · \(data.metadataCount.formatted()) metadata · \(ByteCountFormatter.string(fromByteCount: data.thumbnailBytes, countStyle: .file)) thumbnails"
+        return "Cache: \(percentage(data.cachedAssetCount, data.indexedAssetCount)) · Thumbnails/metadata: \(status) · \(data.thumbnailCount.formatted()) thumbnails · \(data.metadataCount.formatted()) metadata · \(ByteCountFormatter.string(fromByteCount: data.thumbnailBytes, countStyle: .file)) thumbnails"
     }
 
     private func updateActiveSummary() {
@@ -158,6 +158,9 @@ struct SavedAccountsView: View {
         case .failed: "Needs attention"
         }
         activeIndex = "Index: \(percentage(index.indexedAssetCount, index.expectedAssetCount)) · \(indexStatus) · \(index.indexedAssetCount.formatted()) / \(index.expectedAssetCount.formatted()) assets"
-        activeCache = "Cache: \(percentage(index.thumbnailWarmingCachedCount, index.thumbnailWarmingEligibleCount)) · \(cacheStatus) · \(index.thumbnailWarmingThumbnailCount.formatted()) thumbnails · \(index.thumbnailWarmingMetadataCount.formatted()) metadata · \(ByteCountFormatter.string(fromByteCount: index.thumbnailWarmingCachedBytes, countStyle: .file)) thumbnails"
+        let places = index.automaticPlacesAllowed
+            ? "Places: \(index.placeProgress.resolved)/\(index.placeProgress.eligible) · \(index.placeProgress.pending) pending · \(index.placeProgress.failed) failed"
+            : "Places: when viewed"
+        activeCache = "Cache: \(percentage(index.thumbnailWarmingCachedCount, index.thumbnailWarmingEligibleCount)) · \(cacheStatus) · \(index.thumbnailWarmingThumbnailCount.formatted()) thumbnails · \(index.thumbnailWarmingMetadataCount.formatted()) metadata · \(ByteCountFormatter.string(fromByteCount: index.thumbnailWarmingCachedBytes, countStyle: .file)) thumbnails · \(places)"
     }
 }

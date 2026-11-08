@@ -1,6 +1,6 @@
 import Foundation
 
-nonisolated enum PlaceLanguage: String, Codable, CaseIterable, Sendable {
+nonisolated enum PlaceLanguage: String, Codable, CaseIterable, Hashable, Sendable {
     case english = "English"
     case local = "Local"
 
@@ -21,7 +21,7 @@ nonisolated struct PlaceCoordinate: Codable, Hashable, Sendable {
     }
 }
 
-nonisolated struct PlaceLocation: Codable, Equatable, Sendable {
+nonisolated struct PlaceLocation: Codable, Hashable, Sendable {
     let title: String
     let address: String
     let countryCode: String
@@ -52,20 +52,43 @@ nonisolated struct MapsPlacesPreferences: Codable, Equatable, Sendable {
     }
 }
 
-nonisolated enum PlaceLookupError: LocalizedError {
+nonisolated enum PlaceLookupError: LocalizedError, Equatable {
     case invalidEndpoint
     case invalidResponse
+    case automaticPublicService
+    case httpStatus(Int, retryAfter: TimeInterval?)
+    case contextFailed(PlaceLocation, message: String, retryAfter: TimeInterval?)
+
+    var retryDelay: TimeInterval? {
+        if case let .httpStatus(_, delay) = self {
+            return delay
+        }
+        if case let .contextFailed(_, _, delay) = self {
+            return delay
+        }
+        return nil
+    }
 
     var errorDescription: String? {
         switch self {
         case .invalidEndpoint: "Enter an HTTP or HTTPS instance URL without credentials, a query, or a fragment."
         case .invalidResponse: "The instance did not return a valid Photon response."
+        case .automaticPublicService: "The public Photon service allows viewer lookups only; automatic place caching was skipped."
+        case let .httpStatus(status, _): "Photon returned HTTP \(status)."
+        case let .contextFailed(_, message, _): "The address is available, but landmark context failed: \(message)"
         }
     }
 }
 
 nonisolated protocol PlaceLookingUp: Sendable {
     func lookup(_ coordinate: PlaceCoordinate, endpoint: URL, language: PlaceLanguage) async throws -> PlaceLocation?
+    func lookup(_ coordinate: PlaceCoordinate, endpoint: URL, language: PlaceLanguage, automatic: Bool) async throws -> PlaceLocation?
+}
+
+extension PlaceLookingUp {
+    nonisolated func lookup(_ coordinate: PlaceCoordinate, endpoint: URL, language: PlaceLanguage, automatic _: Bool) async throws -> PlaceLocation? {
+        try await lookup(coordinate, endpoint: endpoint, language: language)
+    }
 }
 
 /// Decode all address components from one language-specific response.

@@ -31,7 +31,7 @@ actor CachedAssetDetailReader: AssetDetailReading {
         guard let scope else { return nil }
         let requestGeneration = generation
         do {
-            let detail = try await store.cachedAssetDetail(id: id, scope: scope)
+            let detail = try await store.cachedAssetMetadata(id: id, scope: scope)
             guard !Task.isCancelled, requestGeneration == generation, self.scope == scope else { return nil }
             return detail
         } catch {
@@ -55,6 +55,8 @@ actor CachedAssetDetailReader: AssetDetailReading {
             )
         }
         guard !Task.isCancelled, requestGeneration == generation, self.scope == scope else { throw CancellationError() }
-        return detail
+        let composed = try? await store.cachedAssetMetadata(id: id, scope: scope)
+        guard !Task.isCancelled, requestGeneration == generation, self.scope == scope else { throw CancellationError() }
+        return composed ?? detail
     }
 }
