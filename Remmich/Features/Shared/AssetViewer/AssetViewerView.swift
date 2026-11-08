@@ -68,6 +68,8 @@ struct AssetViewerView: View {
     @State private var videoRoutePickerPresented = false
     @State private var resumesVideoAfterCancelledDismissal = false
     @State private var verticalDragRoute: AssetViewerVerticalDragRoute?
+    @State private var viewerDragAxis: AssetViewerDragAxis?
+    @State private var memoryDragAxis: AssetViewerDragAxis?
     @State private var infoScrollDismissalBlocked = false
     @State private var fullResolutionRequestIDs: [String: Int] = [:]
     @State private var fullResolutionLoadErrors: [String: String] = [:]
@@ -623,6 +625,7 @@ struct AssetViewerView: View {
         }
         .onChange(of: verticalDragIsActive) { _, active in
             if !active {
+                viewerDragAxis = nil
                 cancelOpeningDrag()
             }
         }
@@ -722,6 +725,7 @@ struct AssetViewerView: View {
                 !session.allowsHorizontalPaging
                     || zoomedAssetID == session.selectedAssetID
                     || isDismissalInteractionActive || openingIsActive
+                    || viewerDragAxis == .vertical
             )
             .onChange(of: pagerPosition) { _, assetID in
                 logMemoryPlayback("position")
@@ -899,6 +903,7 @@ struct AssetViewerView: View {
                             infoScrollDismissalBlocked = blocked
                         }
                     )
+                    .environment(\.isScrollEnabled, true)
                     .frame(width: targetInfoWidth)
                 }
                 .frame(width: infoWidth, height: viewerRect.height, alignment: .leading)
@@ -940,6 +945,7 @@ struct AssetViewerView: View {
                             infoScrollDismissalBlocked = blocked
                         }
                     )
+                    .environment(\.isScrollEnabled, true)
                     .frame(height: portraitInfoViewportHeight)
                 }
                 .frame(width: viewerRect.width, height: portraitInfoVisibleHeight, alignment: .top)
@@ -1121,11 +1127,16 @@ struct AssetViewerView: View {
                 guard isMemoryViewer,
                       selectedRenderedImageRect(in: mediaRect).contains(value.startLocation)
                 else { return }
+                memoryDragAxis = AssetViewerDragAxis.resolve(value.translation, lockedAxis: memoryDragAxis)
                 setMemoryAssetPressActive(true)
             }
             .onEnded { value in
                 guard isMemoryViewer else { return }
                 setMemoryAssetPressActive(false)
+                let axis = memoryDragAxis
+                memoryDragAxis = nil
+                guard axis == .horizontal, zoomedAssetID == nil,
+                      !openingIsActive, !isDismissing else { return }
                 moveToAdjacentMemoryIfNeeded(
                     mediaRect: mediaRect,
                     value: value
@@ -1768,6 +1779,8 @@ struct AssetViewerView: View {
             .updating($verticalDragIsActive) { _, active, _ in active = true }
             .onChanged { value in
                 guard !isDismissing, interactiveMapFrame?.offsetBy(dx: -viewportOrigin.x, dy: -viewportOrigin.y).contains(value.startLocation) != true else { return }
+                viewerDragAxis = AssetViewerDragAxis.resolve(value.translation, lockedAxis: viewerDragAxis)
+                guard viewerDragAxis == .vertical else { return }
                 if openingIsActive, !isMemoryViewer {
                     guard openingDrag.isActive || (value.translation.height > abs(value.translation.width) * 1.2) else { return }
                     if !openingDrag.isActive, let asset = session.selectedAsset {
@@ -1786,7 +1799,7 @@ struct AssetViewerView: View {
                 guard !openingIsActive,
                       !isDismissing,
                       zoomedAssetID == nil,
-                      abs(value.translation.height) > abs(value.translation.width) * 1.2
+                      viewerDragAxis == .vertical
                 else { return }
                 if isMemoryViewer {
                     pauseMemoryAutoRotation()
@@ -1910,13 +1923,15 @@ struct AssetViewerView: View {
                 }
             }
             .onEnded { value in
+                let axis = viewerDragAxis ?? AssetViewerDragAxis.resolve(value.translation)
+                defer { viewerDragAxis = nil }
                 guard !isDismissing else { return }
                 guard interactiveMapFrame?.offsetBy(dx: -viewportOrigin.x, dy: -viewportOrigin.y).contains(value.startLocation) != true else {
                     verticalDragRoute = nil
                     return
                 }
                 if openingDrag.isActive {
-                    if value.translation.height > abs(value.translation.width) * 1.2,
+                    if axis == .vertical, value.translation.height > 0,
                        AssetViewerDismissalGeometry.shouldComplete(translationHeight: value.translation.height,
                                                                    predictedEndTranslationHeight: value.predictedEndTranslation.height)
                     {
@@ -1926,7 +1941,7 @@ struct AssetViewerView: View {
                     }
                     return
                 }
-                guard !openingIsActive, !isDismissing else {
+                guard !openingIsActive, !isDismissing, axis == .vertical else {
                     verticalDragRoute = nil
                     return
                 }
@@ -1946,7 +1961,7 @@ struct AssetViewerView: View {
                     settleInfoGesture(visible: showsInfo)
                     return
                 }
-                let isVertical = abs(value.translation.height) > abs(value.translation.width) * 1.2
+                let isVertical = axis == .vertical
                 let drivesDismissal = isVertical
                     && dragRoute == .viewerDismissal
                     && (value.translation.height > 0
@@ -3229,6 +3244,28 @@ nonisolated enum AssetViewerDismissalGeometry {
         predictedEndTranslationHeight: CGFloat
     ) -> Bool {
         translationHeight >= 18 || predictedEndTranslationHeight >= 60
+    }
+}
+
+nonisolated enum AssetViewerDragAxis {
+    case horizontal
+    case vertical
+
+    static func resolve(_ translation: CGSize, lockedAxis: Self? = nil) -> Self? {
+        if let lockedAxis {
+            return lockedAxis
+        }
+        let x = abs(translation.width)
+        let y = abs(translation.height)
+        // The memory press recognizer starts at touch-down; ignore tiny jitter.
+        guard max(x, y) >= 16 else { return nil }
+        if y > x * 1.2 {
+            return .vertical
+        }
+        if x > y * 1.2 {
+            return .horizontal
+        }
+        return nil
     }
 }
 

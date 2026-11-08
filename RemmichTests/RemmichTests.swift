@@ -1578,6 +1578,18 @@ struct RemmichTests {
         ) == .viewerDismissal)
     }
 
+    @Test func viewerSwipeKeepsItsFirstClearAxisThroughThumbArc() {
+        #expect(AssetViewerDragAxis.resolve(CGSize(width: 1, height: 0)) == nil)
+        #expect(AssetViewerDragAxis.resolve(CGSize(width: 0, height: -1)) == nil)
+        #expect(AssetViewerDragAxis.resolve(CGSize(width: -18, height: -18)) == nil)
+        let vertical = AssetViewerDragAxis.resolve(CGSize(width: -8, height: -24))
+        #expect(vertical == .vertical)
+        #expect(AssetViewerDragAxis.resolve(CGSize(width: -130, height: -90), lockedAxis: vertical) == .vertical)
+        let horizontal = AssetViewerDragAxis.resolve(CGSize(width: -24, height: -8))
+        #expect(horizontal == .horizontal)
+        #expect(AssetViewerDragAxis.resolve(CGSize(width: -90, height: -130), lockedAxis: horizontal) == .horizontal)
+    }
+
     @Test func memoryViewerAcceptsUpwardAndDownwardDismissalDrags() {
         let mediaRect = CGRect(x: 40, y: 276, width: 322, height: 474)
         let start = CGPoint(x: 201, y: 500)
