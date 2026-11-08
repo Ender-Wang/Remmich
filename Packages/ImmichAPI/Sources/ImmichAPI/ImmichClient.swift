@@ -60,16 +60,16 @@ public actor ImmichClient {
 
     public func mapStyles() async throws -> ImmichMapStyles {
         do {
-            let client = makeClient()
-            async let configuration = client.getServerConfig(.init())
-            async let capabilities = client.getServerFeatures(.init())
-            let config = try await Self.config(from: configuration)
-            let features = try await Self.features(from: capabilities)
-            guard let light = URL(string: config.mapLightStyleUrl),
-                  let dark = URL(string: config.mapDarkStyleUrl),
+            let config: Components.Schemas.UserConfigDto
+            switch try await makeClient().getUserConfig(.init()) {
+            case let .ok(response): config = try response.body.json
+            case let .undocumented(statusCode, _): throw Self.map(status: statusCode)
+            }
+            guard let light = URL(string: config.map.lightStyle),
+                  let dark = URL(string: config.map.darkStyle),
                   [light, dark].allSatisfy({ ["https", "http"].contains($0.scheme?.lowercased() ?? "") && $0.host != nil })
             else { throw ImmichAPIError.invalidResponse }
-            return .init(light: light, dark: dark, enabled: features.map)
+            return .init(light: light, dark: dark, enabled: config.map.enabled)
         } catch { throw Self.map(error) }
     }
 

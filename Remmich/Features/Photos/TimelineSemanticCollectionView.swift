@@ -964,7 +964,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             let placeholderImage = handoffImages[item.id]
             let coverVisibility = TimelineSemanticCoverVisibility(isVisible: coversVisible)
             cell.setHostedContent(
-                TimelineSemanticObservedVisibility(visibility: coverVisibility) { [weak cell] visible in
+                TimelineSemanticObservedVisibility(visibility: coverVisibility) { [weak self, weak cell] visible in
                     PhotosRangeCard(title: group.route.navigationTitle, count: group.assets.count,
                                     systemImage: "calendar", assets: covers, media: input.media,
                                     motion: motion, externallyVisible: visible,

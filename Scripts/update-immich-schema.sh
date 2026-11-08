@@ -10,7 +10,7 @@ if [ ! -f "$SOURCE" ]; then
     exit 1
 fi
 
-cp "$SOURCE" "$DESTINATION"
+python3 "$REPOSITORY_ROOT/Scripts/prepare-immich-schema.py" "$SOURCE" "$DESTINATION"
 (
     cd "$REPOSITORY_ROOT"
     shasum -a 256 "Packages/ImmichAPI/Sources/ImmichAPI/openapi.json"

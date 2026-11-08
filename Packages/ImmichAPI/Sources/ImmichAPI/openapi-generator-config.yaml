@@ -2,4 +2,19 @@ generate:
   - types
   - client
 accessModifier: internal
+filter:
+  operations:
+    - pingServer
+    - getServerVersion
+    - getServerConfig
+    - getServerFeatures
+    - getUserConfig
+    - login
+    - logout
+    - getMyUser
+    - getTimeBuckets
+    - getTimeBucket
+    - searchAssets
+    - getAssetInfo
+    - searchMemories
 

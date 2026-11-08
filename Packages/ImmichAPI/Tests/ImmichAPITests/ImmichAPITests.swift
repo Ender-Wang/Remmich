@@ -351,6 +351,52 @@ struct TimelineReadContractTests {
     }
 }
 
+@Suite("Authenticated map configuration")
+struct MapConfigurationTests {
+    @Test(arguments: [true, false])
+    func readsMapSettingsFromUserConfig(enabled: Bool) async throws {
+        let client = try ImmichClient(
+            apiURL: #require(URL(string: "https://photos.example.com/api")),
+            credential: .bearer("secret"),
+            transport: MapConfigurationTransport(enabled: enabled)
+        )
+        let styles = try await client.mapStyles()
+        #expect(styles.light.absoluteString == "https://maps.example.com/light.json")
+        #expect(styles.dark.absoluteString == "https://maps.example.com/dark.json")
+        #expect(styles.enabled == enabled)
+    }
+}
+
+private struct MapConfigurationTransport: ClientTransport {
+    let enabled: Bool
+
+    func send(
+        _ request: HTTPRequest,
+        body _: HTTPBody?,
+        baseURL _: URL,
+        operationID: String
+    ) async throws -> (HTTPResponse, HTTPBody?) {
+        #expect(operationID == "getUserConfig")
+        #expect(request.method == .get)
+        #expect(request.headerFields[.authorization] == "Bearer secret")
+        let json = #"""
+        {
+          "ffmpeg":{"realtime":{"enabled":false,"resolutions":[],"videoCodecs":[]}},
+          "image":{"fullsize":{"enabled":true},"preview":{"size":1440},"thumbnail":{"size":250}},
+          "machineLearning":{"enabled":true,"clip":{"enabled":true},"duplicateDetection":{"enabled":true},"facialRecognition":{"enabled":true,"minFaces":3},"ocr":{"enabled":true}},
+          "map":{"enabled":\#(enabled),"lightStyle":"https://maps.example.com/light.json","darkStyle":"https://maps.example.com/dark.json"},
+          "oauth":{"enabled":false,"autoLaunch":false,"buttonText":"OAuth"},
+          "passwordLogin":{"enabled":true},"reverseGeocoding":{"enabled":true},
+          "server":{"externalDomain":"","loginPageMessage":"","publicUsers":false},
+          "theme":{"customCss":""},"trash":{"enabled":true,"days":30},"user":{"deleteDelay":7}
+        }
+        """#
+        var response = HTTPResponse(status: .ok)
+        response.headerFields[.contentType] = "application/json"
+        return (response, HTTPBody(json))
+    }
+}
+
 @Suite("Onboarding operation audit")
 struct OnboardingOperationAuditTests {
     @Test func recordsOnlyApprovedOperations() async throws {
