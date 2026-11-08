@@ -74,10 +74,10 @@ struct AssetLocationMapView: View {
             }
         }
         .frame(height: Self.height)
-        .overlay(alignment: .bottom) {
+        .overlay(alignment: .bottomTrailing) {
             if failed || locations?.mapStyles?.enabled != true {
                 Text(AssetMapCoordinateFormatting.string(coordinate))
-                    .font(.caption2.monospacedDigit())
+                    .font(.caption2.weight(.bold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.65)
@@ -134,13 +134,10 @@ private struct NativeAssetMap: UIViewRepresentable {
         view.isPitchEnabled = false
         let label = context.coordinator.coordinateLabel
         view.addSubview(label)
-        let center = label.centerXAnchor.constraint(equalTo: view.centerXAnchor)
-        center.priority = .init(999)
         NSLayoutConstraint.activate([
-            center,
             label.centerYAnchor.constraint(equalTo: view.attributionButton.centerYAnchor),
             label.leadingAnchor.constraint(greaterThanOrEqualTo: view.logoView.trailingAnchor, constant: 6),
-            label.trailingAnchor.constraint(lessThanOrEqualTo: view.attributionButton.leadingAnchor, constant: -6),
+            label.trailingAnchor.constraint(equalTo: view.attributionButton.leadingAnchor, constant: -6),
         ])
         context.coordinator.update(view, value: self)
         return view
@@ -159,12 +156,12 @@ private struct NativeAssetMap: UIViewRepresentable {
         let coordinateLabel: UILabel = {
             let label = UILabel()
             label.translatesAutoresizingMaskIntoConstraints = false
-            label.font = UIFontMetrics(forTextStyle: .caption2).scaledFont(for: .monospacedDigitSystemFont(ofSize: 11, weight: .regular))
+            label.font = UIFontMetrics(forTextStyle: .caption2).scaledFont(for: .systemFont(ofSize: 11, weight: .bold))
             label.adjustsFontForContentSizeCategory = true
             label.adjustsFontSizeToFitWidth = true
             label.minimumScaleFactor = 0.65
             label.textColor = .label
-            label.textAlignment = .center
+            label.textAlignment = .right
             label.backgroundColor = .clear
             label.isUserInteractionEnabled = false
             label.accessibilityLabel = "GPS coordinates"
