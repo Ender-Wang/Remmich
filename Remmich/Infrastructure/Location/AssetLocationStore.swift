@@ -125,7 +125,6 @@ import SwiftUI
             guard let record = try await store.desiredPlace(assetID: assetID, scope: scope),
                   record.key.coordinate == coordinate, sessionID == token else { return nil }
             if record.isFresh(at: .now) {
-                Self.logger.debug("Place cache hit language=\(record.key.language.rawValue, privacy: .public) outcome=\(record.outcome.rawValue, privacy: .public)")
                 return record.location
             }
             do {
@@ -160,7 +159,6 @@ import SwiftUI
                     // Reset demand failures for the next view; never issue a public batch.
                     _ = try await store.pendingPlaces(scope: scope, retryFailed: true, now: .now)
                 }
-                Self.logger.debug("Place cache bulk skipped reason=public-service-or-no-account")
                 await reloadProgress()
                 return
             }
@@ -220,15 +218,12 @@ import SwiftUI
             guard let lease = try await store.beginPlace(key, scope: scope, sessionID: token, automatic: automatic, now: .now) else {
                 return try await store.cachedPlace(key, scope: scope)?.location
             }
-            let started = Date()
-            Self.logger.info("Place request started automatic=\(automatic) language=\(key.language.rawValue, privacy: .public)")
             do {
                 let result = try await client.lookup(key.coordinate, endpoint: key.endpoint, language: key.language, automatic: automatic)
                 try Task.checkCancellation()
                 guard token == sessionID else { throw CancellationError() }
                 let accepted = try await store.finishPlace(key, scope: scope, sessionID: token, lease: lease,
                                                            location: result, error: nil, onDemandOnly: false, retryDelay: nil, now: .now)
-                Self.logger.info("Place request finished accepted=\(accepted) found=\(result != nil) elapsedMs=\(Int(Date().timeIntervalSince(started) * 1000))")
                 return accepted ? result : nil
             } catch {
                 if Task.isCancelled || error is CancellationError || token != sessionID {
@@ -244,7 +239,7 @@ import SwiftUI
                 _ = try await store.finishPlace(key, scope: scope, sessionID: token, lease: lease,
                                                 location: partial, error: error.localizedDescription,
                                                 onDemandOnly: failure == .automaticPublicService, retryDelay: failure?.retryDelay, now: .now)
-                Self.logger.info("Place request failed automatic=\(automatic) category=\(String(describing: type(of: error)), privacy: .public)")
+                Self.logger.warning("Place request failed automatic=\(automatic) category=\(String(describing: type(of: error)), privacy: .public)")
                 await reloadProgress()
                 if let partial {
                     return partial

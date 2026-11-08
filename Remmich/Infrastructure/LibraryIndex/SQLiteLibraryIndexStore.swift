@@ -1,9 +1,7 @@
 import Foundation
-import OSLog
 import SQLite3
 
 actor SQLiteLibraryIndexStore: LibraryIndexStoring {
-    private nonisolated static let placeLogger = Logger(subsystem: "io.github.ender-wang.Remmich", category: "PlaceCache")
     static let currentSchemaVersion = 8
 
     private let databaseURL: URL
@@ -618,8 +616,6 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
 
     /// Place enrichment shares metadata ownership and never stores Immich credentials.
     func configurePlaces(scope: MediaAccountScope, preferences: MapsPlacesPreferences, sessionID: String) async throws {
-        let started = Date()
-        var scannedAssets = 0
         let database = try preparedDatabase(scope: scope)
         let encoded = try Self.encode(preferences)
         try database.transaction {
@@ -640,13 +636,9 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
                 for (id, coordinate) in assets {
                     try reconcilePlaceAsset(id, coordinate: coordinate, scope: scope, database: database)
                 }
-                scannedAssets = assets.count
             }
             try pruneUnusedPlaces(scope: scope, database: database)
         }
-        let mainBytes = metadataFileBytes(at: databaseURL)
-        let walBytes = metadataFileBytes(at: URL(fileURLWithPath: databaseURL.path + "-wal"))
-        Self.placeLogger.info("Place metadata prepared scannedAssets=\(scannedAssets) mainBytes=\(mainBytes) walBytes=\(walBytes) elapsedMs=\(Int(Date().timeIntervalSince(started) * 1000))")
     }
 
     func deactivatePlaces(scope: MediaAccountScope, sessionID: String) async throws {
@@ -733,9 +725,9 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
                 let delay = max(retryDelay ?? 0, min(86400, 60 * pow(2, Double(attempts - 1))))
                 if let location {
                     try database.execute("""
-                    UPDATE place_lookups SET location_json=?, outcome='found', fetched_at=?, expires_at=?
+                    UPDATE place_lookups SET location_json=?, outcome='found', fetched_at=?, expires_at=NULL
                     WHERE scope=? AND lookup_id=?
-                    """, [.text(Self.encode(location)), .date(now), .date(now), .text(scope.cacheNamespace), .text(key.id)])
+                    """, [.text(Self.encode(location)), .date(now), .text(scope.cacheNamespace), .text(key.id)])
                 }
                 try database.execute("""
                 UPDATE place_lookups SET work_state=?, retry_after=?, last_error=?, lease=NULL
@@ -748,7 +740,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
                 fetched_at=?, expires_at=?, retry_after=NULL, last_error=NULL, attempts=0, lease=NULL
                 WHERE scope=? AND lookup_id=?
                 """, [.optionalText(location.map { try Self.encode($0) }), .text(location == nil ? "noResult" : "found"),
-                      .date(now), .date(now.addingTimeInterval(location == nil ? 86400 : 30 * 86400)),
+                      .date(now), .optionalDate(location == nil ? now.addingTimeInterval(86400) : nil),
                       .text(scope.cacheNamespace), .text(key.id)])
                 // Country discovery may select a Local variant for all sharing assets.
                 let ids = try database.query("SELECT asset_id FROM asset_places WHERE scope=? AND lookup_id=? AND desired=1",
@@ -780,7 +772,9 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
         let records = try database.query("""
         SELECT \(Self.placeColumns) FROM place_lookups p WHERE scope=?
         AND EXISTS(SELECT 1 FROM asset_places a WHERE a.scope=p.scope AND a.lookup_id=p.lookup_id AND a.desired=1)
-        AND (outcome='unresolved' OR expires_at <= ?)
+        AND (outcome='unresolved' OR work_state='failed'
+             OR (outcome='noResult' AND (expires_at IS NULL OR expires_at <= ?))
+             OR (outcome='found' AND work_state!='idle'))
         AND work_state NOT IN ('running','onDemand') AND attempts < 5
         AND (retry_after IS NULL OR retry_after <= ?)
         ORDER BY fetched_at ASC LIMIT 128
@@ -802,7 +796,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
         var progress = PlaceCacheProgress()
         for (outcome, work, expiry, endpoint, keyJSON, attempts, retry, error, count, ids) in records {
             progress.eligible += count
-            if outcome != "unresolved", let expiry, expiry > now {
+            if work == "idle", outcome == "found" || (outcome == "noResult" && expiry.map { $0 > now } == true) {
                 progress.resolved += count
             } else if work == "failed" {
                 progress.failed += count
@@ -885,7 +879,8 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
     private func pruneUnusedPlaces(scope: MediaAccountScope, database: SQLiteConnection) throws {
         try database.execute("""
         DELETE FROM asset_places WHERE scope=? AND desired=0 AND lookup_id IN
-        (SELECT lookup_id FROM place_lookups WHERE scope=? AND (expires_at IS NULL OR expires_at <= ?))
+        (SELECT lookup_id FROM place_lookups WHERE scope=?
+         AND NOT(outcome='found' AND work_state='idle') AND (expires_at IS NULL OR expires_at <= ?))
         """, [.text(scope.cacheNamespace), .text(scope.cacheNamespace), .date(Date())])
         try database.execute("""
         DELETE FROM place_lookups WHERE scope=? AND NOT EXISTS(
@@ -1138,12 +1133,10 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
 
     private func metadataFileBytes() -> Int64 {
         [databaseURL, URL(fileURLWithPath: databaseURL.path + "-wal")]
-            .reduce(Int64(0)) { $0 + metadataFileBytes(at: $1) }
-    }
-
-    private func metadataFileBytes(at url: URL) -> Int64 {
-        let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
-        return (attributes?[.size] as? NSNumber)?.int64Value ?? 0
+            .reduce(Int64(0)) { total, url in
+                let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+                return total + ((attributes?[.size] as? NSNumber)?.int64Value ?? 0)
+            }
     }
 
     private func database() throws -> SQLiteConnection {

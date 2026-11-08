@@ -110,6 +110,33 @@ struct PlaceMetadataCacheTests {
         #expect(try await reopened.pendingPlaces(scope: scope, retryFailed: true, now: now).count == 1)
     }
 
+    @Test(arguments: [false, true])
+    func successfulPlacesHaveNoAgeExpiryAndRemainReusableAcrossSettingsChanges(publicService: Bool) async throws {
+        let f = try PlaceCacheFixture()
+        defer { f.cleanup() }
+        let preferences = publicService ? MapsPlacesPreferences() : settings
+        try await f.seed(scope: scope)
+        try await f.store.configurePlaces(scope: scope, preferences: preferences, sessionID: "one")
+        let key = try #require(try await f.store.desiredPlace(assetID: "asset", scope: scope)?.key)
+        let lease = try #require(try await f.store.beginPlace(key, scope: scope, sessionID: "one", automatic: !publicService, now: .now))
+        #expect(try await finish(f, key, lease: lease))
+        let later = Date().addingTimeInterval(10 * 365 * 86400)
+        let record = try #require(try await f.store.cachedPlace(key, scope: scope))
+        #expect(record.expiresAt == nil)
+        #expect(record.isFresh(at: later))
+        // Existing successful rows with old expiry timestamps obey the new rule too.
+        try f.sql("UPDATE place_lookups SET expires_at=0 WHERE outcome='found'")
+        let reopened = SQLiteLibraryIndexStore(databaseURL: f.databaseURL)
+        #expect(try await reopened.cachedPlace(key, scope: scope)?.isFresh(at: later) == true)
+        #expect(try await reopened.beginPlace(key, scope: scope, sessionID: "one", automatic: false, now: later) == nil)
+        #expect(try await reopened.pendingPlaces(scope: scope, retryFailed: true, now: later).isEmpty)
+        #expect(try await reopened.placeProgress(scope: scope, now: later).resolved == 1)
+        try await reopened.configurePlaces(scope: scope, preferences: .init(endpoint: "https://other.example"), sessionID: "one")
+        try await reopened.configurePlaces(scope: scope, preferences: preferences, sessionID: "one")
+        #expect(try await reopened.cachedPlace(key, scope: scope)?.isFresh(at: later) == true)
+        #expect(try await reopened.cachedAssetMetadata(id: "asset", scope: scope)?.cachedPlace == location)
+    }
+
     @Test func publicServiceIsDemandOnlyAndDeletedAccountCannotBeRecreatedByLateCompletion() async throws {
         let f = try PlaceCacheFixture()
         defer { f.cleanup() }
@@ -156,6 +183,7 @@ struct PlaceMetadataCacheTests {
                                               error: nil, onDemandOnly: false, retryDelay: nil, now: now))
         #expect(try await f.store.placeProgress(scope: scope, now: now).resolved == 1)
         #expect(try await f.store.pendingPlaces(scope: scope, retryFailed: false, now: now.addingTimeInterval(86401)).count == 1)
+        #expect(try await f.store.placeProgress(scope: scope, now: now.addingTimeInterval(86401)).pending == 1)
     }
 
     @Test func recoverableContextFailureKeepsTheUsableAddressAndRetry() async throws {
@@ -169,6 +197,8 @@ struct PlaceMetadataCacheTests {
                                               error: "Park context unavailable", onDemandOnly: false, retryDelay: nil, now: .now))
         #expect(try await f.store.cachedAssetMetadata(id: "asset", scope: scope)?.cachedPlace == location)
         #expect(try await f.store.placeProgress(scope: scope, now: .now).failed == 1)
+        #expect(try await f.store.cachedPlace(key, scope: scope)?.isFresh(at: .now) == false)
+        #expect(try await f.store.pendingPlaces(scope: scope, retryFailed: false, now: Date().addingTimeInterval(61)).count == 1)
     }
 
     @Test func interruptedFifthAttemptRemainsEligibleAfterRelaunch() async throws {

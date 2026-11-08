@@ -43,7 +43,12 @@ nonisolated struct CachedPlaceLookup: Codable, Equatable, Sendable {
     var error: String?
 
     func isFresh(at date: Date) -> Bool {
-        outcome != .unresolved && (expiresAt.map { $0 > date } ?? false)
+        guard work == .idle else { return false }
+        switch outcome {
+        case .found: return true
+        case .noResult: return expiresAt.map { $0 > date } ?? false
+        case .unresolved: return false
+        }
     }
 }
 

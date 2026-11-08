@@ -337,12 +337,13 @@ struct AssetViewerInfoView: View {
 
                 if let location = locationSummary(for: detail) {
                     Divider().overlay(Color.primary.opacity(0.16))
-                    Label(location, systemImage: "location.fill")
+                    Text("\(Image(systemName: "location.fill")) \(location)")
                         .font(.subheadline)
                         .lineLimit(3)
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: .infinity, alignment: .center)
                         .padding(16)
+                        .accessibilityLabel(location)
                         .accessibilityIdentifier("asset-viewer-location")
                 }
                 if PlaceCoordinate(latitude: detail.latitude, longitude: detail.longitude) != nil {
