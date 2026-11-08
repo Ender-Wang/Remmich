@@ -294,6 +294,7 @@ nonisolated protocol LibraryIndexStoring: Sendable {
     func beginPlace(_ key: PlaceCacheKey, scope: MediaAccountScope, sessionID: String, automatic: Bool, now: Date) async throws -> String?
     func finishPlace(_ key: PlaceCacheKey, scope: MediaAccountScope, sessionID: String, lease: String, location: PlaceLocation?, error: String?, onDemandOnly: Bool, retryDelay: TimeInterval?, now: Date) async throws -> Bool
     func cancelPlace(_ key: PlaceCacheKey, scope: MediaAccountScope, lease: String) async throws
+    func rebuildPlaces(scope: MediaAccountScope, sessionID: String) async throws
     func pendingPlaces(scope: MediaAccountScope, retryFailed: Bool, now: Date) async throws -> [CachedPlaceLookup]
     func nextPlaceRetry(scope: MediaAccountScope) async throws -> Date?
     func placeProgress(scope: MediaAccountScope, now: Date) async throws -> PlaceCacheProgress

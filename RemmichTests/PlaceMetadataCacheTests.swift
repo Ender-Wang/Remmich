@@ -46,6 +46,49 @@ struct PlaceMetadataCacheTests {
         #expect(PhotonPlaceClient.retryDelay("invalid") == nil)
     }
 
+    @Test(arguments: ["https://places.example", "https://photon.komoot.io"])
+    func rebuildRefreshesCustomSuccessesButPreservesPublicResults(endpoint: String) async throws {
+        let f = try PlaceCacheFixture()
+        defer { f.cleanup() }
+        try await f.seed(scope: scope)
+        try await f.seed(scope: scope, id: "same")
+        try await f.seed(scope: scope, id: "empty", longitude: 122)
+        try await f.store.configurePlaces(scope: scope, preferences: .init(endpoint: endpoint), sessionID: "one")
+        let key = try #require(try await f.store.desiredPlace(assetID: "asset", scope: scope)?.key)
+        let lease = try #require(try await f.store.beginPlace(key, scope: scope, sessionID: "one", automatic: false, now: .now))
+        #expect(try await finish(f, key, lease: lease))
+        let empty = try #require(try await f.store.desiredPlace(assetID: "empty", scope: scope)?.key)
+        let emptyLease = try #require(try await f.store.beginPlace(empty, scope: scope, sessionID: "one", automatic: false, now: .now))
+        #expect(try await f.store.finishPlace(empty, scope: scope, sessionID: "one", lease: emptyLease, location: nil,
+                                              error: nil, onDemandOnly: false, retryDelay: nil, now: .now))
+        try await f.store.rebuildPlaces(scope: scope, sessionID: "obsolete")
+        #expect(try await f.store.cachedPlace(key, scope: scope)?.isFresh(at: .now) == true)
+        try await f.store.rebuildPlaces(scope: scope, sessionID: "one")
+        let publicService = PlaceCacheKey.isPublicService(key.endpoint)
+        #expect(try await f.store.cachedPlace(key, scope: scope)?.isFresh(at: .now) == publicService)
+        #expect(try await f.store.cachedPlace(empty, scope: scope)?.isFresh(at: .now) == publicService)
+        #expect(try await f.store.cachedAssetMetadata(id: "asset", scope: scope)?.cachedPlace == location)
+        #expect(try await f.store.cachedAssetDetail(id: "asset", scope: scope)?.city == "Server city")
+        let reopened = SQLiteLibraryIndexStore(databaseURL: f.databaseURL)
+        let pending = try await reopened.pendingPlaces(scope: scope, retryFailed: false, now: .now)
+        #expect(pending.count == (publicService ? 0 : 2))
+        if !publicService {
+            let replacement = PlaceLocation(title: "Updated park", address: "Updated park", countryCode: "CN", language: .english)
+            let refreshLease = try #require(try await reopened.beginPlace(key, scope: scope, sessionID: "one", automatic: true, now: .now))
+            #expect(try await reopened.finishPlace(key, scope: scope, sessionID: "one", lease: refreshLease, location: nil,
+                                                   error: "Connection lost", onDemandOnly: false, retryDelay: nil, now: .now))
+            #expect(try await reopened.cachedAssetMetadata(id: "asset", scope: scope)?.cachedPlace == location)
+            let failure = try await reopened.placeProgress(scope: scope, now: .now)
+            #expect(failure.failed == 2)
+            #expect(failure.diagnostics.contains { $0.contains("Stage: Photon places") && $0.contains("Connection lost") })
+            _ = try await reopened.pendingPlaces(scope: scope, retryFailed: true, now: .now)
+            let retryLease = try #require(try await reopened.beginPlace(key, scope: scope, sessionID: "one", automatic: true, now: .now))
+            #expect(try await reopened.finishPlace(key, scope: scope, sessionID: "one", lease: retryLease, location: replacement,
+                                                   error: nil, onDemandOnly: false, retryDelay: nil, now: .now))
+            #expect(try await reopened.cachedAssetMetadata(id: "same", scope: scope)?.cachedPlace == replacement)
+        }
+    }
+
     @Test func exactCoordinatesDeduplicateWithoutRoundingAndRawMetadataSurvives() async throws {
         let f = try PlaceCacheFixture()
         defer { f.cleanup() }
