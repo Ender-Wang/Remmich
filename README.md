@@ -19,14 +19,10 @@ Remmich is a SwiftUI, UIKit, and AVKit client for your self-hosted Immich librar
 
 **0.5.0 is an early release focused on Photos, Videos, and the media viewer.** Save to Photos, Share/Export, and Download are still in development. Albums, Search, and Library collections currently show demo data. The account and profile settings use your real Immich account.
 
+See the **[Roadmap](#roadmap)** for upcoming features, remaining verification and the feature timeline from the project's first commit.
+
 <p align="center">
-  <a href=".github/assets/screenshots/photos-timeline.webp"><img src=".github/assets/screenshots/photos-timeline.webp" alt="Photos timeline with memories and natural-aspect thumbnails" width="19%" /></a>
-  <a href=".github/assets/screenshots/photo-viewer.webp"><img src=".github/assets/screenshots/photo-viewer.webp" alt="Photo viewer with a thumbnail filmstrip and native controls" width="19%" /></a>
-  <a href=".github/assets/screenshots/videos-timeline.webp"><img src=".github/assets/screenshots/videos-timeline.webp" alt="Videos timeline grouped by date, with duration labels" width="19%" /></a>
-  <a href=".github/assets/screenshots/date-cards.webp"><img src=".github/assets/screenshots/date-cards.webp" alt="Video date cards with large covers and asset counts" width="19%" /></a>
-  <a href=".github/assets/screenshots/profile.webp"><img src=".github/assets/screenshots/profile.webp" alt="Profile panel with Account, Connection, Index, and Cache &amp; Storage cards" width="19%" /></a>
-  <br />
-  <sub>Photos timeline · Photo viewer · Videos timeline · Video cards · Profile</sub>
+  <img src=".github/assets/screenshots/gallery-desktop.svg" alt="Remmich onboarding, timeline, asset viewer, Info, map, date cards and profile, each with its own caption" width="100%" />
 </p>
 
 ## Install
@@ -39,70 +35,14 @@ For now, follow [Build and run](CONTRIBUTING.md#build-and-run) to build from sou
 
 ## Features
 
-### 🔍 Semantic zoom and date cards
-
-- Pinch through **Square → Natural → Days → Weeks → Months → Years**.
-- Photos and date cards move and resize with the gesture, keeping your place as you zoom between individual photos and yearly overviews.
-- Browse date cards with large cover images; tap one to open that period at its latest assets, then return to your place in the main timeline.
-- Browse separate Photos and Videos timelines, with refresh, retry, and scroll-position restoration.
-- Native scroll indicators track the full known timeline while thumbnails load as you browse.
-
-### 📸 Photos and memories
-
-- View photos with zoom, Live Photo motion playback, and detailed asset information.
-- See Photon place names in the viewer header and asset information, with locality fallback when a lookup is unavailable.
-- When a matching enclosing park, garden, or nature reserve is available, show the specific landmark first, followed by its enclosing area—for example, **犀牛铜像 · 静安公园**.
-- Pull up Info to reveal the asset's map using your Immich server's configured basemap; pull farther to reveal the full map and pan or zoom.
-- See signed decimal GPS coordinates beside the map's bottom-right Info button, with bold text that follows the app theme.
-- Expand an asset from its thumbnail and return smoothly to its place, including within date-group timelines.
-- Hold a timeline asset for 0.35 seconds to open a centered preview; swipe down, tap outside, or use the Back gesture to dismiss it, including while it is opening or loading.
-- Preview Live Photos and videos once with muted playback; tap the preview to expand into the full viewer. Share and Download in the preview panel are reserved for future export support.
-- Swipe down during full-viewer opening to return immediately, and open another asset or scroll while the previous return animation follows its thumbnail.
-- Pick a photo from the filmstrip; short rows stay centered, and longer rows follow your selection.
-- Revisit memories above both the Photos and Videos timelines.
-- When today has no memories, check up to three upcoming days and label the earliest available day.
-- Memory-card covers crossfade while keeping their slow zoom.
-- Swipe through memory items and continue to the previous or next memory in the viewer.
-
-### 🎬 Video playback
-
-- Open the selected video in AVKit using authenticated HTTP byte-range streaming.
-- Play, pause, and seek in portrait and landscape layouts, with visible buffering status.
-- Double-tap the video to play or pause; single-tap to show or hide playback controls.
-- Continue a playing video in native Picture in Picture when you go Home, with automatic PiP enabled in iOS.
-- Return the same video to its inline player when reopening Remmich from the background.
-- Use iOS Now Playing controls for full-viewer videos; Live Photo motion and muted timeline previews stay separate.
-- See the video caption or filename and its poster in system playback UI, with Remmich identified in the title.
-- See an animated loading logo from the opening transition until the first video frame. It fades in during preparation and fades out when playback is ready.
-- The player area stays black during opening and playback in both themes; surrounding app chrome and Info follow the app theme.
-
-### 👆 Navigation and appearance
-
-- Swipe left or right between the app's main pages and through photos and memory items in the viewer.
-- Swipe inward from the left screen edge to go Back or dismiss the current app-owned presentation.
-- Return to the page you came from with Back, including **Account → Connection → Account**.
-- Use adaptive layouts, Liquid Glass, and profile cards that expand into their pages and shrink back on return.
-- Touch and hold the profile logo to choose **Spiral**, **Spaced**, or **Mosaic** as your Home Screen icon. In-app branding follows the selected icon and respects Reduce Motion.
-
-### 💾 Offline browsing and storage
-
-- Keep a local timeline index, cached thumbnails, and cached asset information for offline browsing.
-- Refresh the local index when items are removed from the server, including months that become empty.
-- See cached timeline thumbnails on a cold launch while the app checks its connection, including when the server is unreachable.
-- Enable automatic thumbnail and metadata caching.
-- Index, metadata, and thumbnail transfers use a shared durable background queue, so queued transfers can continue after leaving the app and be recovered on relaunch. iOS still controls transfer execution and later scheduled sync opportunities. Recent successful syncs avoid repeated checks when you reopen the app.
-- Monitor sync progress, pause or resume work, retry failures, inspect diagnostics, and manage local caches from **Index** and **Cache & Storage**.
-- See live index and cache percentages with their current status directly on the Profile cards.
-
-### 🔐 Account and connection
-
-- Restore your sign-in session from Keychain when you reopen the app.
-- Switch saved accounts in **Profile → Account** without signing in again while their sessions remain valid. Each account keeps its own connection settings, index, cache, and pause choices.
-- Configure Primary and Fallback server addresses, with authenticated failover, live response times, and shared retained data for verified aliases of the same account.
-- Manage Account, Connection, Index, and Cache & Storage from the profile panel opened through your avatar.
-- Open **Account → Maps & Places** to use the public Photon instance or your own URL, and choose **English** or **Local** place names per country. English is the default.
-- Place names share the account's offline metadata cache. Cached names remain available offline; provider or country-language changes refresh only the required place data. The public Photon service fetches places only when viewed. A custom instance also supports automatic caching; explicit Rebuild refreshes its stored places, retaining usable same-GPS names if fetching fails. Pause/retry and place failures are included in Cache & Storage diagnostics.
-- Successful place lookups have no time-based expiry. GPS, provider, language or selection-policy changes can require a new lookup; successful “no result” responses are retried after one day when eligible.
+- **🔍 Timelines:** Separate Photos and Videos timelines with pinch-to-zoom, date cards and saved browsing positions.
+- **📸 Photos and memories:** Zoomable photos, Live Photo playback, filmstrip navigation and rotating memories.
+- **👆 Quick preview:** Long-press to preview, tap to open, and swipe down to dismiss with interruptible transitions.
+- **🗺️ Places and maps:** Photon landmarks, per-country language preferences and asset maps below Info.
+- **🎬 Video:** Native playback, Picture in Picture and iOS Now Playing with titles and artwork.
+- **💾 Offline browsing:** Cached timelines, thumbnails, asset information and place names, with background sync and cache controls.
+- **🔐 Accounts and connections:** Saved-account switching, separate account caches and Primary/Fallback server addresses.
+- **✨ Native appearance:** Adaptive iPhone/iPad layouts, Liquid Glass, swipe navigation and alternate app icons.
 
 ## Current limitations
 
@@ -113,7 +53,7 @@ For now, follow [Build and run](CONTRIBUTING.md#build-and-run) to build from sou
 
 ## Milestones
 
-Milestones track implementation and help set expectations for upcoming work. **0.5.0 includes the implemented parts of M5; M5 remains in progress.**
+Milestones track implementation and help set expectations for upcoming work. **0.5.0 includes the implemented parts of M5; M5 remains in progress.** The [Roadmap](#roadmap) expands this summary with planned features and dated achievements.
 
 | Milestone | Status | Scope and expectations |
 | --- | --- | --- |
@@ -128,6 +68,115 @@ Milestones track implementation and help set expectations for upcoming work. **0
 | M8 | Planned | Server-backed Search with native filters |
 | M9 | Planned | Further improvements and verification for iPad, accessibility, resilience, and performance |
 | M10 | Planned | Broader real-device release verification, CI-built IPAs, and sideloading distribution; AltStore is under consideration |
+
+## Roadmap
+
+Updated **November 8, 2026**. The timeline runs from future plans at the top, through **Now**, to older achievements below. Future work follows milestone order toward the present without invented dates; conditional options are grouped with their related milestone. Each completed milestone uses its latest implementation checkpoint date; related earlier work is included in its description and commit links. These are repository dates, not App Store availability or release dates. Implemented features may include local commits awaiting publication. Planned work has no promised delivery date.
+
+![Remmich zigzag timeline: future milestones M10 toward M5, Now at the latest achievement, then earlier features down to the September 2026 foundation. Icons mark the joints of the central line.](.github/assets/roadmap-timeline.svg)
+
+### Now and next
+
+| Priority | Feature | Status | Intended outcome |
+| --- | --- | --- | --- |
+| Next · M5 | Save to Photos, Share and Download | Planned | Export local copies from the viewer and preview action panel, with progress, cancellation and recoverable errors. Current controls are disabled. |
+| M6 | Real Albums | Planned | Browse server-backed owned/shared albums and open their assets in the shared viewer. Albums currently shows demo data. |
+| M7 | Library collections | Planned | Read-only Favorites, Archive, People, Places, Memories and Folders, according to server capabilities. Library collections currently use demo data; account/settings already use real data. |
+| M8 | Search and filters | Planned | Server-backed search with supported people, place, date, media and camera filters. Search currently uses demo data. |
+| M9 | Wider native polish and resilience | Planned | Broader iPad, accessibility, interruption, offline and performance coverage across the completed workflows. |
+| M10 | Release verification and distribution | Planned | Broader real-device verification and sideloading distribution; AltStore remains under consideration. |
+
+These are the current implementation priorities, not separate committed release versions. Shared links, partner content and Locked Folder need capability/authentication validation before inclusion; Trash browsing remains undecided. Uploading or modifying the Immich library is outside Remmich's read-only scope.
+
+### Verification still open
+
+- **Custom Photon instance:** batch caching and explicit Cache Rebuild are implemented, but the maintainer has not yet run the NAS Rebuild end to end on a physical device. Public-server demand fetching and landmark names have device acceptance. The latest Rebuild [focused CI passed](https://github.com/Ender-Wang/Remmich/actions/runs/42461148263).
+- **Release coverage:** broader devices, orientations, accessibility and network/interruption cases remain release checks. Feature implementation and the recorded device acceptance do not imply every release scenario has passed.
+
+<details>
+<summary><strong>Timeline details and commit references</strong></summary>
+
+### Feature timeline
+
+#### November 8, 2026 · Places join the offline cache
+
+Photon place results now share the existing account metadata database, retry controls and copied-error report. Viewing an asset reads cached places first. Custom instances support automatic enrichment and explicit Rebuild refresh; the public service remains demand-only. A failed refresh retains a usable same-GPS name. Detail-first landmark names can include an enclosing park, garden or reserve.
+
+[Cache integration](https://github.com/Ender-Wang/Remmich/commit/4f62646) · [Enclosing-area names](https://github.com/Ender-Wang/Remmich/commit/47a5bc9) · [Rebuild refresh](https://github.com/Ender-Wang/Remmich/commit/49d8399)
+
+#### November 7, 2026 · Localized places and maps
+
+Photon landmarks appear in the viewer header and Info. Account → Maps & Places offers a custom Photon URL and per-country English/Local preferences, defaulting to English. Pull Info up to reveal the asset's MapLibre map using the Immich basemap. Maps stay with their Info pages through scrolling and paging, with decimal GPS coordinates beside attribution controls. Local names and map labels depend on source coverage.
+
+[Places, settings and maps](https://github.com/Ender-Wang/Remmich/commit/37ba357) · [Info-owned map lifecycle](https://github.com/Ender-Wang/Remmich/commit/1785dd9) · [GPS caption refinement, November 8](https://github.com/Ender-Wang/Remmich/commit/44a002b)
+
+#### November 6, 2026 · Long-press preview and interruptible transitions
+
+Hold a timeline asset to preview it; Live Photos and videos play once, muted. Tap the preview to expand into the full viewer. Swipe down, tap outside or use Back to dismiss. Opening and returning transitions allow interruption, immediate reopening and timeline scrolling while a returning image follows its cell. The preview action panel reserves Share/Download for future exports.
+
+[Preview](https://github.com/Ender-Wang/Remmich/commit/a2f296d) · [Shared transitions and tap-to-open](https://github.com/Ender-Wang/Remmich/commit/63f51a4) · [Swipe-down](https://github.com/Ender-Wang/Remmich/commit/66a5835) · [Interruption](https://github.com/Ender-Wang/Remmich/commit/c7c74d7) · [Scroll-following returns](https://github.com/Ender-Wang/Remmich/commit/02d8e45)
+
+#### November 5, 2026 · Offline startup, memories and system playback
+
+Cached thumbnails load independently of connection discovery. Memories check today and up to three upcoming days, with crossfading covers. Full-viewer video reports its title/artwork to Now Playing and restores inline playback when returning from PiP.
+
+[Offline startup](https://github.com/Ender-Wang/Remmich/commit/45ed683) · [Upcoming memories](https://github.com/Ender-Wang/Remmich/commit/0ddb7c3) · [PiP restoration](https://github.com/Ender-Wang/Remmich/commit/2d9af5a) · [Now Playing artwork](https://github.com/Ender-Wang/Remmich/commit/2bec8f1)
+
+#### November 3, 2026 · Durable sync and saved accounts
+
+Library index, thumbnail and metadata work gains durable foreground/background transfers, subject to iOS scheduling. Primary/Fallback connection settings show response times. Switch saved accounts without signing in again while their sessions remain valid, retaining separate indexes, caches and settings. Landing/sign-in and profile progress controls are redesigned.
+
+[Background sync](https://github.com/Ender-Wang/Remmich/commit/18af9c0) · [Durable transfers](https://github.com/Ender-Wang/Remmich/commit/e5b9c9c) · [Connection controls](https://github.com/Ender-Wang/Remmich/commit/30ad90c) · [Account switching](https://github.com/Ender-Wang/Remmich/commit/9b5b6b2)
+
+#### November 1, 2026 · Streaming video, PiP and personal appearance
+
+Authenticated byte-range streaming and a viewer-owned player replace the earlier video path. Native controls, buffering feedback and playback-paced loading support portrait/landscape viewing. Automatic Picture in Picture arrives November 1. Profile cards expand into settings; animated branding and alternate Home Screen icons add personal appearance choices.
+
+[Streaming](https://github.com/Ender-Wang/Remmich/commit/a81e633) · [Playback session](https://github.com/Ender-Wang/Remmich/commit/b716ebc) · [Buffer pacing](https://github.com/Ender-Wang/Remmich/commit/897e2ee) · [PiP](https://github.com/Ender-Wang/Remmich/commit/cdb768e) · [Icons](https://github.com/Ender-Wang/Remmich/commit/dbdc905) · [Profile](https://github.com/Ender-Wang/Remmich/commit/ce422ab)
+
+#### October 28, 2026 · Interactive memories and semantic zoom
+
+An interactive memory viewer adds autoplay, paging and returning to the memory card. The shared Photos/Videos timeline gains continuous semantic zoom through Square, Natural, Day, Week, Month and Year, followed by sticky date headers and smoother visual handoffs.
+
+[Memory viewer](https://github.com/Ender-Wang/Remmich/commit/05bcb55) · [Semantic zoom](https://github.com/Ender-Wang/Remmich/commit/4f845fc) · [Sticky dates](https://github.com/Ender-Wang/Remmich/commit/48fe412)
+
+#### October 25, 2026 · Native navigation and richer offline viewing
+
+Swipe between app pages and animate tab selections. Viewer Info becomes available offline alongside cached thumbnails; cache pause/thermal feedback, Live Photo sound controls and explicit full-resolution loading follow.
+
+[Page swipes](https://github.com/Ender-Wang/Remmich/commit/5d3f9ce) · [Offline Info](https://github.com/Ender-Wang/Remmich/commit/c04b8e9) · [Pause](https://github.com/Ender-Wang/Remmich/commit/1506db8) · [Live Photo sound](https://github.com/Ender-Wang/Remmich/commit/d604e94) · [Full resolution](https://github.com/Ender-Wang/Remmich/commit/0fa7935)
+
+#### October 22, 2026 · Persistent index and managed cache
+
+An account-scoped SQLite index, incremental synchronization, thumbnail inventory and storage controls enable local timeline bootstrap. Later changes prioritize visible thumbnails and preserve timeline position through rotation.
+
+[Persistent index](https://github.com/Ender-Wang/Remmich/commit/f45676c) · [Incremental sync](https://github.com/Ender-Wang/Remmich/commit/bdb715c) · [Cache management](https://github.com/Ender-Wang/Remmich/commit/81209f9) · [Local bootstrap](https://github.com/Ender-Wang/Remmich/commit/f140dcc) · [Visible-image priority](https://github.com/Ender-Wang/Remmich/commit/afd7a1f)
+
+#### October 17, 2026 · Memories, editorial date cards and the viewer
+
+Year-stacked memories, natural-aspect grids and editorial date-group mosaics join the timeline. A shared native asset pager adds still-image zoom, initial video playback and read-only asset information.
+
+[Memory stacks](https://github.com/Ender-Wang/Remmich/commit/0e9e9d3) · [Date-card layouts](https://github.com/Ender-Wang/Remmich/commit/f200d3b) · [Viewer](https://github.com/Ender-Wang/Remmich/commit/c133a8b) · [Info](https://github.com/Ender-Wang/Remmich/commit/7608528)
+
+#### October 14, 2026 · Timeline browsing and the Videos tab
+
+Latest-at-bottom Photos, return-to-latest, saved layout preferences and date-range navigation establish the browsing model. Videos gains its own timeline, and date cards open directly into scoped asset grids. The original pinch implementation is later replaced by October's semantic zoom.
+
+[Latest at bottom](https://github.com/Ender-Wang/Remmich/commit/d505b8b) · [Preferences](https://github.com/Ender-Wang/Remmich/commit/ebc3994) · [Videos](https://github.com/Ender-Wang/Remmich/commit/0764ac0) · [Date drill-down](https://github.com/Ender-Wang/Remmich/commit/9dbf5bc)
+
+#### October 8, 2026 · Real Photos and shared media loading
+
+Authenticated media loading, caching and prefetching support the server-backed Photos timeline. Route-aware state, Immich date variants and adaptive grid work establish the first real browsing milestone.
+
+[Media pipeline](https://github.com/Ender-Wang/Remmich/commit/17f85e7) · [Photos timeline](https://github.com/Ender-Wang/Remmich/commit/9933d4d) · [Date variants](https://github.com/Ender-Wang/Remmich/commit/a28eba2)
+
+#### September 30, 2026 · Project foundation
+
+The project begins with a reproducible Xcode baseline, adaptive native shell and secure read-only Immich connection. Keychain session restoration, endpoint discovery/failover and continuous integration establish the foundation. Initial non-Photos destinations use fixture data.
+
+[First commit](https://github.com/Ender-Wang/Remmich/commit/8f0049f) · [Native shell](https://github.com/Ender-Wang/Remmich/commit/52eb1ae) · [Connection foundation](https://github.com/Ender-Wang/Remmich/commit/b3c2737) · [Endpoint switching](https://github.com/Ender-Wang/Remmich/commit/9fa7860)
+
+</details>
 
 ## Read-only by design
 
