@@ -75,7 +75,15 @@ struct PlaceMetadataCacheTests {
         if !publicService {
             let replacement = PlaceLocation(title: "Updated park", address: "Updated park", countryCode: "CN", language: .english)
             let refreshLease = try #require(try await reopened.beginPlace(key, scope: scope, sessionID: "one", automatic: true, now: .now))
-            #expect(try await reopened.finishPlace(key, scope: scope, sessionID: "one", lease: refreshLease, location: replacement,
+            #expect(try await reopened.finishPlace(key, scope: scope, sessionID: "one", lease: refreshLease, location: nil,
+                                                   error: "Connection lost", onDemandOnly: false, retryDelay: nil, now: .now))
+            #expect(try await reopened.cachedAssetMetadata(id: "asset", scope: scope)?.cachedPlace == location)
+            let failure = try await reopened.placeProgress(scope: scope, now: .now)
+            #expect(failure.failed == 2)
+            #expect(failure.diagnostics.contains { $0.contains("Stage: Photon places") && $0.contains("Connection lost") })
+            _ = try await reopened.pendingPlaces(scope: scope, retryFailed: true, now: .now)
+            let retryLease = try #require(try await reopened.beginPlace(key, scope: scope, sessionID: "one", automatic: true, now: .now))
+            #expect(try await reopened.finishPlace(key, scope: scope, sessionID: "one", lease: retryLease, location: replacement,
                                                    error: nil, onDemandOnly: false, retryDelay: nil, now: .now))
             #expect(try await reopened.cachedAssetMetadata(id: "same", scope: scope)?.cachedPlace == replacement)
         }

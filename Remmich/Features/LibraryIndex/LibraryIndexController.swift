@@ -624,10 +624,12 @@ final class LibraryIndexController {
     func rebuildThumbnailCache() {
         guard let scope else { return }
         stopPlaceWork()
+        cancelThumbnailWarming(reason: "rebuild")
         resumeThumbnailWarming()
+        let preparingRun = warmingRunID
         Task {
             await locations?.prepareCacheRebuild()
-            guard self.scope == scope, !thumbnailWarmingPaused else { return }
+            guard self.scope == scope, warmingRunID == preparingRun, !thumbnailWarmingPaused else { return }
             warmThumbnails(manual: true, rebuild: true, resetTransfers: true)
         }
     }
