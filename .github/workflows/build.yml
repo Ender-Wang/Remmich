@@ -78,7 +78,7 @@ jobs:
             -destination "$IPHONE_DESTINATION" -derivedDataPath "$DERIVED_DATA_PATH" \
             -resultBundlePath .ci/MapLayoutTests.xcresult \
             -only-testing:RemmichTests/TimelineAssetOverlayTests \
-            -only-testing:RemmichTests/TimelineSemanticZoomTests \
+            -only-testing:RemmichTests/OnboardingServerDefaultsTests \
             -jobs 2 -parallel-testing-enabled NO COMPILER_INDEX_STORE_ENABLE=NO
       - name: Upload map layout results
         if: always()
