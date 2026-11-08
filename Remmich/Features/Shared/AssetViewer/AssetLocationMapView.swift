@@ -1,6 +1,5 @@
 import CoreLocation
 import Foundation
-import ImmichAPI
 import MapLibre
 import SwiftUI
 import UIKit

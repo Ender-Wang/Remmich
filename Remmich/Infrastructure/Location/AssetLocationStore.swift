@@ -9,7 +9,7 @@ import SwiftUI
     private(set) var namespace: String?
     private(set) var preferences = MapsPlacesPreferences()
     private(set) var revision = 0
-    private(set) var mapStyles: ImmichMapStyles?
+    private(set) var mapStyles: AssetMapStyles?
     private(set) var mapEndpoint: URL?
     private(set) var progress = PlaceCacheProgress()
     private(set) var lastStorageError: String?
@@ -47,7 +47,7 @@ import SwiftUI
         self.scope = scope
         namespace = scope.cacheNamespace
         preferences = Self.read(MapsPlacesPreferences.self, defaults: defaults, key: "maps-places-preferences-\(scope.cacheNamespace)") ?? .init()
-        mapStyles = Self.read(ImmichMapStyles.self, defaults: defaults, key: "maps-places-styles-\(scope.cacheNamespace)")
+        mapStyles = Self.read(AssetMapStyles.self, defaults: defaults, key: "maps-places-styles-\(scope.cacheNamespace)")
         defaults.removeObject(forKey: "maps-places-cache-\(scope.cacheNamespace)")
         revision &+= 1
         persistConfiguration()
@@ -347,7 +347,8 @@ import SwiftUI
     func loadMapStyles() async throws {
         guard let mapSession, let mapEndpoint, let namespace, validatedMapEndpoint != mapEndpoint else { return }
         let client = ImmichClient.routeCheckClient(apiURL: mapEndpoint, credential: .bearer(mapSession.accessToken))
-        let styles = try await client.mapStyles()
+        let response = try await client.mapStyles()
+        let styles = AssetMapStyles(light: response.light, dark: response.dark, enabled: response.enabled)
         try Task.checkCancellation()
         guard self.namespace == namespace, self.mapEndpoint == mapEndpoint else { throw CancellationError() }
         mapStyles = styles

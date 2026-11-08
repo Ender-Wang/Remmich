@@ -1,5 +1,11 @@
 import Foundation
 
+nonisolated struct AssetMapStyles: Codable, Hashable, Sendable {
+    let light: URL
+    let dark: URL
+    let enabled: Bool
+}
+
 nonisolated enum PlaceLanguage: String, Codable, CaseIterable, Hashable, Sendable {
     case english = "English"
     case local = "Local"
