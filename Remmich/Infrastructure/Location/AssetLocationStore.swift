@@ -150,6 +150,21 @@ import SwiftUI
         return try await store.cachedAssetMetadata(id: assetID, scope: scope)?.cachedPlace
     }
 
+    func prepareCacheRebuild() async {
+        let token = sessionID
+        do {
+            try await configuration?.value
+            guard let scope, token == sessionID, automaticCachingAllowed else { return }
+            try await store.rebuildPlaces(scope: scope, sessionID: token)
+            guard token == sessionID else { return }
+            await reloadProgress()
+        } catch {
+            if token == sessionID {
+                lastStorageError = error.localizedDescription
+            }
+        }
+    }
+
     func refreshCachedPlaces(retryFailed: Bool, shouldContinue: @escaping @MainActor () -> Bool) async {
         let token = sessionID
         do {

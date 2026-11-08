@@ -760,6 +760,25 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
                              [.text(scope.cacheNamespace), .text(key.id), .text(lease)])
     }
 
+    func rebuildPlaces(scope: MediaAccountScope, sessionID: String) async throws {
+        let database = try preparedDatabase()
+        try database.transaction {
+            guard try database.scalarText("SELECT session_id FROM place_accounts WHERE scope=?", [.text(scope.cacheNamespace)]) == sessionID else { return }
+            let records = try database.query("""
+            SELECT \(Self.placeColumns) FROM place_lookups p WHERE scope=? AND work_state!='running'
+            AND EXISTS(SELECT 1 FROM asset_places a WHERE a.scope=p.scope AND a.lookup_id=p.lookup_id AND a.desired=1)
+            """, [.text(scope.cacheNamespace)], map: Self.readPlace)
+            for record in records where !PlaceCacheKey.isPublicService(record.key.endpoint) {
+                // Keep the last usable address while refreshing; active requests already fetch fresh data.
+                try database.execute("""
+                UPDATE place_lookups SET work_state='pending', attempts=0, retry_after=NULL, last_error=NULL, lease=NULL,
+                    outcome=CASE WHEN location_json IS NULL THEN 'unresolved' ELSE outcome END
+                WHERE scope=? AND lookup_id=?
+                """, [.text(scope.cacheNamespace), .text(record.key.id)])
+            }
+        }
+    }
+
     func pendingPlaces(scope: MediaAccountScope, retryFailed: Bool, now: Date) async throws -> [CachedPlaceLookup] {
         let database = try preparedDatabase()
         if retryFailed {
