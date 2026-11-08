@@ -6,7 +6,7 @@ The [README](README.md) describes the available features, current limitations, a
 
 - Xcode 27 or later; the current source has been compiled with Xcode 27.2.
 - The app uses Swift 6 language mode (`SWIFT_VERSION = 6.0`). The local API package requires Swift tools 6.2 or later; the verified Xcode 27.2 toolchain uses Swift 6.4.2.
-- SwiftFormat matching [.swiftformat-version](.swiftformat-version). The [build workflow](.github/workflows/build.yml) contains the pinned download and checksum-verification steps.
+- SwiftFormat is optional for local builds; the latest release is recommended, with no required version. The [build workflow](.github/workflows/build.yml) downloads the latest release for formatting checks.
 - To run the app on a device, iOS/iPadOS 26.6 or later and an account on your Immich server.
 
 Swift packages resolve through Xcode. The local API package's generator and runtime dependencies are pinned in [Package.swift](Packages/ImmichAPI/Package.swift); schema provenance is recorded [alongside the package](Packages/ImmichAPI/SCHEMA-PROVENANCE.md).
@@ -19,7 +19,7 @@ cd Remmich
 open Remmich.xcodeproj
 ```
 
-1. Install the pinned SwiftFormat version and let Xcode resolve the packages. Xcode may ask you to trust the Swift OpenAPI Generator build-tool plugin.
+1. Optionally install SwiftFormat with `brew install swiftformat` and let Xcode resolve the packages. Xcode may ask you to trust the Swift OpenAPI Generator build-tool plugin.
 2. Select the **Remmich** scheme and your device, choose your signing team, and use a unique bundle identifier if your team requires one.
 3. Build and run. Sign in with your Immich server address and credentials, then configure a Primary address and optional Fallback addresses in **Profile → Connection** if needed.
 

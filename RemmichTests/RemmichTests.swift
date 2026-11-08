@@ -225,7 +225,8 @@ struct RemmichTests {
             .filter { $0.pathExtension == "swift" } ?? []
 
         for file in files {
-            #expect(try String(contentsOf: file, encoding: .utf8).contains("import ImmichAPI") == false)
+            #expect(try String(contentsOf: file, encoding: .utf8).contains("import ImmichAPI") == false,
+                    "Feature must not import ImmichAPI: \(file.path)")
         }
     }
 
