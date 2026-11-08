@@ -164,6 +164,9 @@ struct AssetViewerInfoView: View {
     var mapIsSelected = false
     var mapInteractionEnabled = false
     var mapInteractionRegionChanged: (CGRect?) -> Void = { _ in }
+    var scrollDismissalBlockedChanged: (Bool) -> Void = { _ in }
+    @State private var scrollAwayFromTop = false
+    @State private var scrollInteractionActive = false
 
     var body: some View {
         GeometryReader { geometry in
@@ -208,8 +211,31 @@ struct AssetViewerInfoView: View {
             .scrollIndicators(.hidden)
             .coordinateSpace(name: "asset-info-scroll")
             .scrollBounceBehavior(.basedOnSize)
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                geometry.contentOffset.y + geometry.contentInsets.top > 1
+            } action: { _, awayFromTop in
+                scrollAwayFromTop = awayFromTop
+                if !scrollInteractionActive {
+                    scrollDismissalBlockedChanged(awayFromTop)
+                }
+            }
+            .onScrollPhaseChange { _, phase, context in
+                if phase == .interacting {
+                    // Keep ownership for the whole swipe, even if it reaches top.
+                    scrollInteractionActive = true
+                    scrollDismissalBlockedChanged(context.geometry.contentOffset.y + context.geometry.contentInsets.top > 1)
+                } else if phase == .idle {
+                    scrollInteractionActive = false
+                    scrollDismissalBlockedChanged(context.geometry.contentOffset.y + context.geometry.contentInsets.top > 1)
+                }
+            }
         }
         .onPreferenceChange(AssetViewerInfoContentHeightKey.self, perform: contentHeightChanged)
+        .onChange(of: mapIsSelected) { _, selected in
+            if selected {
+                scrollDismissalBlockedChanged(scrollAwayFromTop)
+            }
+        }
         .background(Color(uiColor: .systemBackground))
         .foregroundStyle(.primary)
         .accessibilityIdentifier("asset-viewer-info-panel")

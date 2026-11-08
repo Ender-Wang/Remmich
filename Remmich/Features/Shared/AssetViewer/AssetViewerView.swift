@@ -68,6 +68,7 @@ struct AssetViewerView: View {
     @State private var videoRoutePickerPresented = false
     @State private var resumesVideoAfterCancelledDismissal = false
     @State private var verticalDragRoute: AssetViewerVerticalDragRoute?
+    @State private var infoScrollDismissalBlocked = false
     @State private var fullResolutionRequestIDs: [String: Int] = [:]
     @State private var fullResolutionLoadErrors: [String: String] = [:]
     @State private var livePhotoMotionByteCounts: [String: Int] = [:]
@@ -592,6 +593,7 @@ struct AssetViewerView: View {
         }
         .onChange(of: session.selectedAssetID) { _, newAssetID in
             interactiveMapFrame = nil
+            infoScrollDismissalBlocked = false
             logMemoryPlayback("selection")
             videoFirstFrameReady = false
             chromeVisible = true
@@ -891,6 +893,10 @@ struct AssetViewerView: View {
                             if interactiveMapFrame != frame {
                                 interactiveMapFrame = frame
                             }
+                        },
+                        scrollDismissalBlockedChanged: { blocked in
+                            guard asset.id == session.selectedAssetID else { return }
+                            infoScrollDismissalBlocked = blocked
                         }
                     )
                     .frame(width: targetInfoWidth)
@@ -928,6 +934,10 @@ struct AssetViewerView: View {
                             if interactiveMapFrame != frame {
                                 interactiveMapFrame = frame
                             }
+                        },
+                        scrollDismissalBlockedChanged: { blocked in
+                            guard asset.id == session.selectedAssetID else { return }
+                            infoScrollDismissalBlocked = blocked
                         }
                     )
                     .frame(height: portraitInfoViewportHeight)
@@ -1787,11 +1797,13 @@ struct AssetViewerView: View {
                     startLocation: value.startLocation,
                     mediaRect: mediaRect,
                     showsInfo: showsInfo,
+                    infoScrollDismissalBlocked: infoScrollDismissalBlocked,
                     allowsUpwardDismissal: isMemoryViewer
                 )
                 if verticalDragRoute == nil {
                     verticalDragRoute = dragRoute
                 }
+                guard dragRoute != .infoScroll else { return }
                 var transaction = Transaction()
                 transaction.disablesAnimations = true
                 let drivesDismissal = dragRoute == .viewerDismissal
@@ -1924,9 +1936,11 @@ struct AssetViewerView: View {
                     startLocation: value.startLocation,
                     mediaRect: mediaRect,
                     showsInfo: showsInfo,
+                    infoScrollDismissalBlocked: infoScrollDismissalBlocked,
                     allowsUpwardDismissal: isMemoryViewer
                 )
                 verticalDragRoute = nil
+                guard dragRoute != .infoScroll else { return }
                 guard zoomedAssetID == nil else {
                     cancelDismissalInteraction()
                     settleInfoGesture(visible: showsInfo)
@@ -3225,10 +3239,14 @@ nonisolated enum AssetViewerVerticalDragRouting {
         startLocation: CGPoint,
         mediaRect: CGRect,
         showsInfo: Bool,
+        infoScrollDismissalBlocked: Bool = false,
         allowsUpwardDismissal: Bool = false
     ) -> AssetViewerVerticalDragRoute {
         if let lockedRoute {
             return lockedRoute
+        }
+        if showsInfo, !mediaRect.contains(startLocation), infoScrollDismissalBlocked {
+            return .infoScroll
         }
         guard translationHeight > 0
             || (allowsUpwardDismissal && translationHeight < 0)
@@ -3242,6 +3260,7 @@ nonisolated enum AssetViewerVerticalDragRouting {
 nonisolated enum AssetViewerVerticalDragRoute: Equatable {
     case viewerDismissal
     case infoPanel
+    case infoScroll
 }
 
 nonisolated enum AssetViewerMemoryInteractionGeometry {

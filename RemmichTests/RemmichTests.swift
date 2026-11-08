@@ -1556,6 +1556,28 @@ struct RemmichTests {
         ) == .infoPanel)
     }
 
+    @Test func scrolledInfoOwnsSwipeUntilNextGestureAtTop() {
+        let media = CGRect(x: 0, y: 0, width: 400, height: 400)
+        let panel = CGPoint(x: 200, y: 500)
+        let route = AssetViewerVerticalDragRouting.resolve(
+            lockedRoute: nil, translationHeight: 80, startLocation: panel,
+            mediaRect: media, showsInfo: true, infoScrollDismissalBlocked: true
+        )
+        #expect(route == .infoScroll)
+        #expect(AssetViewerVerticalDragRouting.resolve(
+            lockedRoute: route, translationHeight: 200, startLocation: panel,
+            mediaRect: media, showsInfo: true, infoScrollDismissalBlocked: false
+        ) == .infoScroll)
+        #expect(AssetViewerVerticalDragRouting.resolve(
+            lockedRoute: nil, translationHeight: 80, startLocation: panel,
+            mediaRect: media, showsInfo: true, infoScrollDismissalBlocked: false
+        ) == .infoPanel)
+        #expect(AssetViewerVerticalDragRouting.resolve(
+            lockedRoute: nil, translationHeight: 80, startLocation: CGPoint(x: 200, y: 200),
+            mediaRect: media, showsInfo: true, infoScrollDismissalBlocked: true
+        ) == .viewerDismissal)
+    }
+
     @Test func memoryViewerAcceptsUpwardAndDownwardDismissalDrags() {
         let mediaRect = CGRect(x: 40, y: 276, width: 322, height: 474)
         let start = CGPoint(x: 201, y: 500)
