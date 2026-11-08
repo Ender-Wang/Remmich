@@ -880,7 +880,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
         try database.execute("""
         DELETE FROM asset_places WHERE scope=? AND desired=0 AND lookup_id IN
         (SELECT lookup_id FROM place_lookups WHERE scope=?
-         AND NOT(outcome='found' AND work_state='idle') AND (expires_at IS NULL OR expires_at <= ?))
+         AND NOT(outcome='found' AND location_json IS NOT NULL) AND (expires_at IS NULL OR expires_at <= ?))
         """, [.text(scope.cacheNamespace), .text(scope.cacheNamespace), .date(Date())])
         try database.execute("""
         DELETE FROM place_lookups WHERE scope=? AND NOT EXISTS(

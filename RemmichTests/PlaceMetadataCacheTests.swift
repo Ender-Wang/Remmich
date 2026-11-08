@@ -199,6 +199,11 @@ struct PlaceMetadataCacheTests {
         #expect(try await f.store.placeProgress(scope: scope, now: .now).failed == 1)
         #expect(try await f.store.cachedPlace(key, scope: scope)?.isFresh(at: .now) == false)
         #expect(try await f.store.pendingPlaces(scope: scope, retryFailed: false, now: Date().addingTimeInterval(61)).count == 1)
+        try await f.store.configurePlaces(scope: scope, preferences: .init(endpoint: "https://other.example"), sessionID: "one")
+        #expect(try await f.store.cachedAssetMetadata(id: "asset", scope: scope)?.cachedPlace == location)
+        try await f.store.configurePlaces(scope: scope, preferences: settings, sessionID: "one")
+        #expect(try await f.store.cachedPlace(key, scope: scope)?.work == .failed)
+        #expect(try await f.store.pendingPlaces(scope: scope, retryFailed: false, now: Date().addingTimeInterval(61)).count == 1)
     }
 
     @Test func interruptedFifthAttemptRemainsEligibleAfterRelaunch() async throws {
