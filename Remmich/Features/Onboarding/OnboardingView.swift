@@ -53,7 +53,7 @@ struct OnboardingView: View {
     }
 
     private var canConnect: Bool {
-        !address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isBusy
+        !isBusy
     }
 
     private var canSignIn: Bool {
@@ -90,6 +90,11 @@ struct OnboardingView: View {
             .background { OnboardingBackdrop() }
         }
         .accessibilityIdentifier("onboarding-root")
+        .onChange(of: server?.apiURL, initial: true) { _, url in
+            guard let url, OnboardingServerDefaults.isDemo(url) else { return }
+            email = OnboardingServerDefaults.demoEmail
+            password = OnboardingServerDefaults.demoPassword
+        }
         .alert("Unencrypted Connection", isPresented: $showsHTTPWarning) {
             Button("Cancel", role: .cancel) {}
             Button("Continue", role: .destructive) { connect() }
@@ -184,7 +189,7 @@ struct OnboardingView: View {
     private var serverContent: some View {
         VStack(alignment: .leading, spacing: 18) {
             field(label: "Server address", symbol: "link") {
-                TextField("https://photos.example.com:2283", text: $address)
+                TextField(OnboardingServerDefaults.demoAddress, text: $address)
                     .textContentType(.URL)
                     .textInputAutocapitalization(.never)
                     .keyboardType(.URL)
@@ -195,6 +200,9 @@ struct OnboardingView: View {
                     .accessibilityIdentifier("server-address")
             }
             primaryButton(isChecking ? "Checking server…" : "Continue", enabled: canConnect, action: requestConnection)
+            Text("Leave the address empty to try the Immich demo.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
             if !controller.isAddingAccount, !controller.savedAccounts.isEmpty || !controller.libraryIndex.storedAccounts.isEmpty {
                 SavedAccountsView(controller: controller, currentSession: nil)
             }
@@ -211,7 +219,7 @@ struct OnboardingView: View {
             Text("Immich Server · \(server.version.description)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            if !server.loginPageMessage.isEmpty {
+            if !OnboardingServerDefaults.isDemo(server.apiURL), !server.loginPageMessage.isEmpty {
                 ServerLoginMessageView(html: server.loginPageMessage,
                                        baseURL: server.apiURL.deletingLastPathComponent().appendingPathComponent(""))
             }
@@ -289,7 +297,11 @@ struct OnboardingView: View {
 
     private func connect() {
         guard canConnect else { return }
-        Task { await controller.connect(address: address) }
+        let resolvedAddress = OnboardingServerDefaults.address(address)
+        address = resolvedAddress
+        email = ""
+        password = ""
+        Task { await controller.connect(address: resolvedAddress) }
     }
 
     private func signIn(_ server: ServerDetails) {
@@ -307,6 +319,23 @@ struct OnboardingView: View {
             return
         }
         controller.resetOnboarding()
+    }
+}
+
+nonisolated enum OnboardingServerDefaults {
+    static let demoAddress = "https://demo.immich.app"
+    static let demoEmail = "demo@immich.app"
+    static let demoPassword = "demo"
+
+    static func address(_ input: String) -> String {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? demoAddress : trimmed
+    }
+
+    static func isDemo(_ url: URL) -> Bool {
+        url.scheme?.lowercased() == "https" && url.host()?.lowercased() == "demo.immich.app"
+            && (url.port == nil || url.port == 443) && url.user == nil && url.password == nil
+            && ["", "/", "/api", "/api/"].contains(url.path)
     }
 }
 
