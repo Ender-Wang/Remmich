@@ -1646,6 +1646,7 @@ struct AssetViewerView: View {
                     systemImage: AssetViewerExportAction.share.systemImage,
                     label: AssetViewerExportAction.share.title,
                     identifier: "asset-viewer-share",
+                    symbolOffsetY: -2,
                     enabled: AssetViewerExportAction.share.isEnabled
                 ) {}
 
@@ -1664,6 +1665,8 @@ struct AssetViewerView: View {
 
                     Button {} label: {
                         Image(systemName: AssetViewerExportAction.download.systemImage)
+                            // Balance the arrow's lower visual weight against Info.
+                            .offset(y: -3)
                             .frame(width: controlHitSize, height: controlHitSize)
                     }
                     .disabled(!AssetViewerExportAction.download.isEnabled)
@@ -1692,6 +1695,7 @@ struct AssetViewerView: View {
         systemImage: String,
         label: String,
         identifier: String,
+        symbolOffsetY: CGFloat = 0,
         enabled: Bool = true,
         action: @escaping () -> Void
     ) -> some View {
@@ -1699,6 +1703,7 @@ struct AssetViewerView: View {
             systemImage: systemImage,
             label: label,
             identifier: identifier,
+            symbolOffsetY: symbolOffsetY,
             action: action
         )
         .disabled(!enabled)
@@ -1709,6 +1714,7 @@ struct AssetViewerView: View {
         systemImage: String,
         label: String,
         identifier: String,
+        symbolOffsetY: CGFloat = 0,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
@@ -1718,6 +1724,7 @@ struct AssetViewerView: View {
 
                 Image(systemName: systemImage)
                     .font(.title2.weight(.semibold))
+                    .offset(y: symbolOffsetY)
                     .frame(width: controlVisualSize, height: controlVisualSize)
                     .glassEffect(.regular, in: Circle())
             }
