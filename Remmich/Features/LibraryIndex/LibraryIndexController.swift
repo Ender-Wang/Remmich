@@ -265,8 +265,12 @@ final class LibraryIndexController {
         refreshPlaces()
         await placeTask?.value
         guard !Task.isCancelled, scope == expectedScope else { return false }
-        return (!thumbnailWarmingEnabled && pendingThumbnailRequest == nil) || thumbnailWarmingPaused || thumbnailWarmingStatus == .upToDate
+        let ordinaryComplete = (!thumbnailWarmingEnabled && pendingThumbnailRequest == nil) || thumbnailWarmingPaused || thumbnailWarmingStatus == .upToDate
             || thumbnailWarmingCachedCount == indexedAssetCount
+        let manualPlaceIntent = scope.map { hasManualCacheIntent(namespace: $0.cacheNamespace) } ?? false
+        let placesComplete = !automaticPlacesAllowed || !(thumbnailWarmingEnabled || manualPlaceIntent) || thumbnailWarmingPaused
+            || (placeProgress.pending == 0 && placeProgress.failed == 0 && placeStorageError == nil)
+        return ordinaryComplete && placesComplete
     }
 
     func setTimelinePublicationDeferred(_ deferred: Bool) {
@@ -1183,7 +1187,7 @@ final class LibraryIndexController {
     private func refreshPlaces(manual: Bool = false, retryFailed: Bool = false) {
         guard let locations, let scope, scope.cacheNamespace == locations.namespace,
               !backgroundRefreshOnly, placeTask == nil,
-              thumbnailWarmingEnabled || manual, !thumbnailWarmingPaused,
+              thumbnailWarmingEnabled || manual || hasManualCacheIntent(namespace: scope.cacheNamespace), !thumbnailWarmingPaused,
               resourceConditions().waitReason == nil else { return }
         let run = UUID()
         placeRunID = run
@@ -1197,6 +1201,11 @@ final class LibraryIndexController {
             guard let self, placeRunID == run else { return }
             placeTask = nil
             placesAreRunning = false
+            if warmingTask == nil, thumbnailWarmingStatus == .upToDate || thumbnailWarmingStatus == .off,
+               !locations.automaticCachingAllowed || (locations.progress.pending == 0 && locations.progress.failed == 0 && locations.lastStorageError == nil)
+            {
+                preferences.removeObject(forKey: "library-transfer-cache-intent-\(scope.cacheNamespace)")
+            }
             if let report = try? await store.storageReport(scope: scope), self.scope == scope {
                 storageReport = report
             }
@@ -1330,7 +1339,14 @@ final class LibraryIndexController {
                 guard currentWarmingRunID == warmingRunID, !Task.isCancelled else { return }
                 if unavailableCount == 0 {
                     await transfers?.finishCachePass(namespace: scope.cacheNamespace)
-                    preferences.removeObject(forKey: "library-transfer-cache-intent-\(scope.cacheNamespace)")
+                    await locations?.reloadProgress()
+                    guard currentWarmingRunID == warmingRunID, !Task.isCancelled, self.scope == scope else { return }
+                    if automaticPlacesAllowed, placeProgress.pending > 0 || placeProgress.failed > 0 || placeStorageError != nil {
+                        // Images are committed; resume only unfinished work after relaunch.
+                        preferences.set("sync", forKey: "library-transfer-cache-intent-\(scope.cacheNamespace)")
+                    } else {
+                        preferences.removeObject(forKey: "library-transfer-cache-intent-\(scope.cacheNamespace)")
+                    }
                     thumbnailWarmingStatus = thumbnailWarmingEnabled ? .upToDate : .off
                     thumbnailWarmingFailedAt = nil
                 } else {

@@ -1150,6 +1150,9 @@ struct AccountSettingsView: View {
                     if libraryIndex.automaticPlacesAllowed {
                         statistic("Place tags pending", libraryIndex.placeProgress.pending.formatted())
                         statistic("Place tags failed", libraryIndex.placeProgress.failed.formatted())
+                        if libraryIndex.placeProgress.demandOnly > 0 {
+                            statistic("Places fetched when viewed", libraryIndex.placeProgress.demandOnly.formatted())
+                        }
                     }
                     statistic("Cached storage", ByteCountFormatter.string(fromByteCount: cacheByteCount, countStyle: .file))
                     if let estimate = thumbnailCacheSizeEstimate {
@@ -1177,7 +1180,7 @@ struct AccountSettingsView: View {
             Toggle(isOn: Binding(
                 get: { libraryIndex.thumbnailWarmingEnabled }, set: { libraryIndex.setThumbnailWarmingEnabled($0) }
             )) {
-                Label("Auto-cache thumbnails & metadata", systemImage: "externaldrive")
+                Label("Auto-cache thumbnails, metadata & places", systemImage: "externaldrive")
                     .font(.subheadline)
             }
             .frame(minHeight: 50)
@@ -1328,14 +1331,11 @@ struct AccountSettingsView: View {
     }
 
     private var cachePhase: SyncWorkPhase {
-        if libraryIndex.thumbnailWarmingStatus == .warming {
+        if libraryIndex.thumbnailWarmingStatus == .warming || libraryIndex.placesAreRunning {
             return .running
         }
         if libraryIndex.placeProgress.failed > 0 || libraryIndex.placeStorageError != nil {
             return .failed
-        }
-        if libraryIndex.placesAreRunning {
-            return .running
         }
         return switch libraryIndex.thumbnailWarmingStatus {
         case .off: .off

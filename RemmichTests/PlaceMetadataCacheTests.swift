@@ -40,6 +40,12 @@ struct PlaceMetadataCacheTests {
     private let settings = MapsPlacesPreferences(endpoint: "https://places.example")
     private let location = PlaceLocation(title: "Park", address: "Park · Shanghai · China", countryCode: "CN", language: .english)
 
+    @Test func throttleDelayAcceptsSecondsAndHTTPDates() {
+        #expect(PhotonPlaceClient.retryDelay("120") == 120)
+        #expect(PhotonPlaceClient.retryDelay("Thu, 01 Jan 1970 00:02:00 GMT", now: Date(timeIntervalSince1970: 0)) == 120)
+        #expect(PhotonPlaceClient.retryDelay("invalid") == nil)
+    }
+
     @Test func exactCoordinatesDeduplicateWithoutRoundingAndRawMetadataSurvives() async throws {
         let f = try PlaceCacheFixture()
         defer { f.cleanup() }
@@ -163,6 +169,33 @@ struct PlaceMetadataCacheTests {
                                               error: "Park context unavailable", onDemandOnly: false, retryDelay: nil, now: .now))
         #expect(try await f.store.cachedAssetMetadata(id: "asset", scope: scope)?.cachedPlace == location)
         #expect(try await f.store.placeProgress(scope: scope, now: .now).failed == 1)
+    }
+
+    @Test func interruptedFifthAttemptRemainsEligibleAfterRelaunch() async throws {
+        let f = try PlaceCacheFixture()
+        defer { f.cleanup() }
+        try await f.seed(scope: scope)
+        try await f.store.configurePlaces(scope: scope, preferences: settings, sessionID: "one")
+        try f.sql("UPDATE place_lookups SET attempts=4")
+        let key = try #require(try await f.store.desiredPlace(assetID: "asset", scope: scope)?.key)
+        _ = try #require(try await f.store.beginPlace(key, scope: scope, sessionID: "one", automatic: true, now: .now))
+        try await f.store.deactivatePlaces(scope: scope, sessionID: "one")
+        try await f.store.configurePlaces(scope: scope, preferences: settings, sessionID: "two")
+        #expect(try await f.store.beginPlace(key, scope: scope, sessionID: "two", automatic: true, now: .now) != nil)
+    }
+
+    @Test func selectionVersionChangeQueuesCurrentKeyWithoutChangingRawMetadata() async throws {
+        let f = try PlaceCacheFixture()
+        defer { f.cleanup() }
+        try await f.seed(scope: scope)
+        try await f.store.configurePlaces(scope: scope, preferences: settings, sessionID: "one")
+        let key = try #require(try await f.store.desiredPlace(assetID: "asset", scope: scope)?.key)
+        let obsolete = try PlaceCacheKey(endpoint: key.endpoint, coordinate: key.coordinate, language: .english, version: 1)
+        let json = try String(decoding: JSONEncoder().encode(obsolete), as: UTF8.self).replacingOccurrences(of: "'", with: "''")
+        try f.sql("UPDATE place_accounts SET selection_version=1; UPDATE place_lookups SET lookup_id='\(obsolete.id)', key_json='\(json)'; UPDATE asset_places SET lookup_id='\(obsolete.id)';")
+        try await f.store.configurePlaces(scope: scope, preferences: settings, sessionID: "two")
+        #expect(try await f.store.desiredPlace(assetID: "asset", scope: scope)?.key.version == PlaceCacheKey.selectionVersion)
+        #expect(try await f.store.cachedAssetDetail(id: "asset", scope: scope)?.city == "Server city")
     }
 
     private func finish(_ f: PlaceCacheFixture, _ key: PlaceCacheKey, lease: String) async throws -> Bool {

@@ -48,7 +48,7 @@ actor PhotonPlaceClient: PlaceLookingUp {
             throw PlaceLookupError.automaticPublicService
         }
         guard response.statusCode == 200 else {
-            throw PlaceLookupError.httpStatus(response.statusCode, retryAfter: response.value(forHTTPHeaderField: "Retry-After").flatMap(TimeInterval.init))
+            throw PlaceLookupError.httpStatus(response.statusCode, retryAfter: Self.retryDelay(response.value(forHTTPHeaderField: "Retry-After")))
         }
         guard data.count <= 1_048_576 else { throw PlaceLookupError.invalidResponse }
         return try JSONDecoder().decode(PhotonResponse.self, from: data)
@@ -69,6 +69,18 @@ actor PhotonPlaceClient: PlaceLookingUp {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("Remmich/0.5 (+https://github.com/Ender-Wang/Remmich)", forHTTPHeaderField: "User-Agent")
         return request
+    }
+
+    nonisolated static func retryDelay(_ header: String?, now: Date = .now) -> TimeInterval? {
+        guard let header else { return nil }
+        if let seconds = TimeInterval(header), seconds.isFinite {
+            return max(0, seconds)
+        }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        return formatter.date(from: header).map { max(0, $0.timeIntervalSince(now)) }
     }
 }
 

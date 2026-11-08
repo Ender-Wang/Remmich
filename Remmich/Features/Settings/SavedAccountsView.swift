@@ -137,7 +137,7 @@ struct SavedAccountsView: View {
         let preferences = controller.libraryIndex.cachePreferences(namespace: entry.id)
         let enabled = preferences.enabled || controller.libraryIndex.hasManualCacheIntent(namespace: entry.id)
         let status = preferences.paused ? "Paused" : (!enabled ? "Off" : (data.indexedAssetCount > 0 && data.cachedAssetCount >= data.indexedAssetCount ? "Up to date" : "Incomplete"))
-        return "Cache: \(percentage(data.cachedAssetCount, data.indexedAssetCount)) · \(status) · \(data.thumbnailCount.formatted()) thumbnails · \(data.metadataCount.formatted()) metadata · \(ByteCountFormatter.string(fromByteCount: data.thumbnailBytes, countStyle: .file)) thumbnails"
+        return "Cache: \(percentage(data.cachedAssetCount, data.indexedAssetCount)) · Thumbnails/metadata: \(status) · \(data.thumbnailCount.formatted()) thumbnails · \(data.metadataCount.formatted()) metadata · \(ByteCountFormatter.string(fromByteCount: data.thumbnailBytes, countStyle: .file)) thumbnails"
     }
 
     private func updateActiveSummary() {

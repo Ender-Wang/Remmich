@@ -9,7 +9,8 @@ nonisolated struct PlaceCacheKey: Codable, Hashable, Sendable {
 
     init(endpoint: URL, coordinate: PlaceCoordinate, language: PlaceLanguage, version: Int = selectionVersion) throws {
         var components = try URLComponents(url: MapsPlacesPreferences.endpointURL(endpoint.absoluteString), resolvingAgainstBaseURL: false)!
-        components.host = components.host?.lowercased()
+        components.scheme = components.scheme?.lowercased()
+        components.host = components.host?.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
         if components.port == (components.scheme == "https" ? 443 : 80) {
             components.port = nil
         }
@@ -51,5 +52,6 @@ nonisolated struct PlaceCacheProgress: Equatable, Sendable {
     var resolved = 0
     var pending = 0
     var failed = 0
+    var demandOnly = 0
     var diagnostics: [String] = []
 }

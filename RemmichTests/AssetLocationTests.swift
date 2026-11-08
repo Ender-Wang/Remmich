@@ -236,6 +236,43 @@ struct AssetLocationTests {
         #expect(try await fixture.store.cachedAssetMetadata(id: "asset", scope: account)?.cachedPlace?.title == "Century Park")
     }
 
+    @Test @MainActor func restoredManualPlaceIntentResumesAfterResourceRecoveryWithAutoCacheOff() async throws {
+        let fixture = try PlaceCacheFixture()
+        defer { fixture.cleanup() }
+        let session = SavedSessionRegistryTests.session("manual-places")
+        let actualScope = MediaAccountScope(session: session)
+        let defaults = try #require(UserDefaults(suiteName: UUID().uuidString))
+        let client = LocationTestClient()
+        let locations = AssetLocationStore(defaults: defaults, client: client, store: fixture.store, requestInterval: .zero)
+        try await fixture.seed(scope: actualScope)
+        locations.configure(scope: actualScope)
+        var settings = locations.preferences
+        settings.endpoint = "https://places.example"
+        try locations.save(settings)
+        defaults.set("sync", forKey: "library-transfer-cache-intent-\(actualScope.cacheNamespace)")
+        var conditions = LibraryCacheResourceConditions(lowPowerMode: true, thermalState: .nominal)
+        let controller = LibraryIndexController(source: EmptyPlaceTimeline(), store: fixture.store,
+                                                locations: locations, cacheRootURL: fixture.directory.appending(path: "images"),
+                                                resourceConditions: { conditions }, preferences: defaults)
+        try await controller.restoreBackgroundState(session: session, includeCacheState: false)
+        await controller.refreshStatistics()
+        #expect(await client.calls.isEmpty)
+        conditions.lowPowerMode = false
+        controller.resourceConditionsChanged(isAppActive: true)
+        for _ in 0 ..< 200 {
+            if locations.progress.resolved == 1, !controller.placesAreRunning {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(await client.calls == [.english])
+        #expect(locations.progress.resolved == 1)
+        #expect(!controller.thumbnailWarmingEnabled)
+        #expect(!controller.hasManualCacheIntent(namespace: actualScope.cacheNamespace))
+        controller.suspend()
+        locations.reset()
+    }
+
     @MainActor private func scope(_ user: String) -> MediaAccountScope {
         .init(session: AccountSession(apiURL: URL(string: "https://immich.example/api")!, accessToken: "test",
                                       userID: user, userEmail: "test@example.com", name: "Test", isAdmin: false,
@@ -253,6 +290,20 @@ struct AssetLocationTests {
 private actor EmptyRegionalPlaceClient: PlaceLookingUp {
     func lookup(_: PlaceCoordinate, endpoint _: URL, language _: PlaceLanguage) async throws -> PlaceLocation? {
         nil
+    }
+}
+
+private struct EmptyPlaceTimeline: TimelineReading {
+    func bucketSummaries(query _: TimelineQuery) async throws -> [TimelineBucketSummary] {
+        []
+    }
+
+    func assets(in _: TimelineBucketID, query _: TimelineQuery) async throws -> [TimelineAssetSummary] {
+        []
+    }
+
+    func memories() async throws -> [TimelineMemorySummary] {
+        []
     }
 }
 

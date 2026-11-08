@@ -581,7 +581,6 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
                 ]
             )
             try reconcilePlaceAsset(detail.id, coordinate: PlaceCoordinate(latitude: detail.latitude, longitude: detail.longitude), scope: scope, database: database)
-            try pruneUnusedPlaces(scope: scope, database: database)
             try pruneUnusedDetailStrings(scope: scope, database: database)
         }
     }
@@ -622,14 +621,15 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
         try database.transaction {
             let prior = try database.scalarText("SELECT preferences FROM place_accounts WHERE scope = ?", [.text(scope.cacheNamespace)])
             let priorSession = try database.scalarText("SELECT session_id FROM place_accounts WHERE scope = ?", [.text(scope.cacheNamespace)])
+            let priorVersion = try database.scalarInt64("SELECT selection_version FROM place_accounts WHERE scope = ?", [.text(scope.cacheNamespace)])
             try database.execute("""
-            INSERT INTO place_accounts(scope, preferences, session_id) VALUES(?, ?, ?)
-            ON CONFLICT(scope) DO UPDATE SET preferences=excluded.preferences, session_id=excluded.session_id
-            """, [.text(scope.cacheNamespace), .text(encoded), .text(sessionID)])
+            INSERT INTO place_accounts(scope, preferences, session_id, selection_version) VALUES(?, ?, ?, ?)
+            ON CONFLICT(scope) DO UPDATE SET preferences=excluded.preferences, session_id=excluded.session_id, selection_version=excluded.selection_version
+            """, [.text(scope.cacheNamespace), .text(encoded), .text(sessionID), .int(PlaceCacheKey.selectionVersion)])
             if priorSession != sessionID {
-                try database.execute("UPDATE place_lookups SET work_state='pending', lease=NULL WHERE scope=? AND work_state='running'", [.text(scope.cacheNamespace)])
+                try database.execute("UPDATE place_lookups SET work_state='pending', attempts=MAX(0,attempts-1), lease=NULL WHERE scope=? AND work_state='running'", [.text(scope.cacheNamespace)])
             }
-            if try prior.map({ try Self.decode(MapsPlacesPreferences.self, from: $0) }) != preferences {
+            if try prior.map({ try Self.decode(MapsPlacesPreferences.self, from: $0) }) != preferences || priorVersion != Int64(PlaceCacheKey.selectionVersion) {
                 let assets = try database.query("SELECT asset_id, latitude, longitude FROM asset_details WHERE scope=?", [.text(scope.cacheNamespace)]) {
                     ($0.text(0), PlaceCoordinate(latitude: $0.optionalDouble(1), longitude: $0.optionalDouble(2)))
                 }
@@ -646,7 +646,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
         try database.transaction {
             guard try database.scalarText("SELECT session_id FROM place_accounts WHERE scope=?", [.text(scope.cacheNamespace)]) == sessionID else { return }
             try database.execute("UPDATE place_accounts SET session_id=NULL WHERE scope=?", [.text(scope.cacheNamespace)])
-            try database.execute("UPDATE place_lookups SET work_state='pending', lease=NULL WHERE scope=? AND work_state='running'", [.text(scope.cacheNamespace)])
+            try database.execute("UPDATE place_lookups SET work_state='pending', attempts=MAX(0,attempts-1), lease=NULL WHERE scope=? AND work_state='running'", [.text(scope.cacheNamespace)])
         }
     }
 
@@ -693,8 +693,8 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
                                                      [.text(scope.cacheNamespace), .text(key.id)], map: Self.readPlace),
                   !record.isFresh(at: now), record.work != .running,
                   !automatic || (!PlaceCacheKey.isPublicService(key.endpoint) && record.work != .onDemand),
-                  record.retryAfter.map({ $0 <= now }) ?? true,
-                  record.attempts < 5 else { return }
+                  (!automatic && record.work == .onDemand) || (record.retryAfter.map { $0 <= now } ?? true),
+                  (!automatic && record.work == .onDemand) || record.attempts < 5 else { return }
             let token = UUID().uuidString
             try database.execute("""
             UPDATE place_lookups SET work_state='running', attempts=attempts+1, lease=?
@@ -800,7 +800,9 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
                 progress.failed += count
                 let key = try Self.decode(PlaceCacheKey.self, from: keyJSON)
                 progress.diagnostics.append("Stage: Photon places\nAssets: \(ids)\nEndpoint: \(endpoint)\nLanguage: \(key.language.rawValue)\nAttempts: \(attempts)\nRetry after: \(retry?.ISO8601Format() ?? "manual retry")\nFailure: \(error ?? "unknown")")
-            } else if work != "onDemand" {
+            } else if work == "onDemand" {
+                progress.demandOnly += count
+            } else {
                 progress.pending += count
             }
         }
@@ -836,6 +838,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
 
     private func reconcilePlaceAsset(_ assetID: String, coordinate: PlaceCoordinate?, scope: MediaAccountScope, database: SQLiteConnection) throws {
         let namespace = scope.cacheNamespace
+        let priorKeys = try database.query("SELECT lookup_id FROM asset_places WHERE scope=? AND asset_id=?", [.text(namespace), .text(assetID)]) { $0.text(0) }
         // Variants remain reusable, but no association may survive a GPS change.
         if let coordinate {
             try database.execute("""
@@ -844,8 +847,10 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
             """, [.text(namespace), .text(assetID), .text(namespace), .double(coordinate.latitude), .double(coordinate.longitude)])
         } else {
             try database.execute("DELETE FROM asset_places WHERE scope=? AND asset_id=?", [.text(namespace), .text(assetID)])
+            try pruneDetachedPlaces(priorKeys, scope: scope, database: database)
             return
         }
+        try pruneDetachedPlaces(priorKeys, scope: scope, database: database)
         guard let coordinate,
               let json = try database.scalarText("SELECT preferences FROM place_accounts WHERE scope=?", [.text(namespace)]) else { return }
         let preferences = try Self.decode(MapsPlacesPreferences.self, from: json)
@@ -878,6 +883,15 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
         DELETE FROM place_lookups WHERE scope=? AND NOT EXISTS(
             SELECT 1 FROM asset_places a WHERE a.scope=place_lookups.scope AND a.lookup_id=place_lookups.lookup_id)
         """, [.text(scope.cacheNamespace)])
+    }
+
+    private func pruneDetachedPlaces(_ keys: [String], scope: MediaAccountScope, database: SQLiteConnection) throws {
+        for key in keys {
+            try database.execute("""
+            DELETE FROM place_lookups WHERE scope=? AND lookup_id=? AND NOT EXISTS(
+                SELECT 1 FROM asset_places a WHERE a.scope=place_lookups.scope AND a.lookup_id=place_lookups.lookup_id)
+            """, [.text(scope.cacheNamespace), .text(key)])
+        }
     }
 
     func storageReport(scope: MediaAccountScope) async throws -> LibraryIndexStorageReport {
@@ -1321,7 +1335,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
         try database.execute("""
         CREATE TABLE IF NOT EXISTS place_accounts(
             scope TEXT PRIMARY KEY REFERENCES scopes(scope) ON DELETE CASCADE,
-            preferences TEXT NOT NULL, session_id TEXT
+            preferences TEXT NOT NULL, session_id TEXT, selection_version INTEGER NOT NULL
         )
         """)
         try database.execute("""
@@ -1347,6 +1361,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
         try database.execute("CREATE UNIQUE INDEX IF NOT EXISTS asset_places_desired ON asset_places(scope, asset_id) WHERE desired = 1")
         try database.execute("CREATE INDEX IF NOT EXISTS asset_places_lookup ON asset_places(scope, lookup_id, desired)")
         try database.execute("CREATE INDEX IF NOT EXISTS place_work ON place_lookups(scope, work_state, retry_after)")
+        try database.execute("CREATE INDEX IF NOT EXISTS place_coordinates ON place_lookups(scope, latitude, longitude, endpoint, fetched_at)")
     }
 
     private func ensureScope(_ scope: MediaAccountScope, database: SQLiteConnection) throws {

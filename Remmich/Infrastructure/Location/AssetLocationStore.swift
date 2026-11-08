@@ -116,15 +116,6 @@ import SwiftUI
         }
     }
 
-    func cachedMetadata(id: String) async throws -> AssetDetail? {
-        try await configuration?.value
-        guard let scope else { return nil }
-        let token = sessionID
-        let detail = try await store.cachedAssetMetadata(id: id, scope: scope)
-        guard token == sessionID else { throw CancellationError() }
-        return detail
-    }
-
     func resolve(_ coordinate: PlaceCoordinate, assetID: String) async throws -> PlaceLocation? {
         try await configuration?.value
         guard let scope else { return nil }
@@ -137,7 +128,14 @@ import SwiftUI
                 Self.logger.debug("Place cache hit language=\(record.key.language.rawValue, privacy: .public) outcome=\(record.outcome.rawValue, privacy: .public)")
                 return record.location
             }
-            _ = try await fetch(record.key, scope: scope, token: token, automatic: false)
+            do {
+                _ = try await fetch(record.key, scope: scope, token: token, automatic: false)
+            } catch let error as LibraryIndexStoreError {
+                if token == sessionID {
+                    lastStorageError = error.localizedDescription
+                }
+                throw error
+            }
             await reloadProgress()
             guard token == sessionID else { throw CancellationError() }
             if let updated = try await store.desiredPlace(assetID: assetID, scope: scope), updated.key == record.key {
@@ -158,10 +156,15 @@ import SwiftUI
         do {
             try await configuration?.value
             guard let scope, automaticCachingAllowed else {
+                if retryFailed, let scope {
+                    // Reset demand failures for the next view; never issue a public batch.
+                    _ = try await store.pendingPlaces(scope: scope, retryFailed: true, now: .now)
+                }
                 Self.logger.debug("Place cache bulk skipped reason=public-service-or-no-account")
                 await reloadProgress()
                 return
             }
+            Self.logger.info("Place cache pass started retryFailed=\(retryFailed)")
             var resetFailures = retryFailed
             while !Task.isCancelled, token == sessionID, shouldContinue() {
                 let pending = try await store.pendingPlaces(scope: scope, retryFailed: resetFailures, now: .now)
@@ -176,6 +179,7 @@ import SwiftUI
                     guard !Task.isCancelled, token == sessionID, shouldContinue() else { break }
                     do { _ = try await fetch(record.key, scope: scope, token: token, automatic: true) }
                     catch is CancellationError { throw CancellationError() }
+                    catch let error as LibraryIndexStoreError { throw error }
                     catch { /* Failure is durable; continue the next independent lookup. */ }
                     await reloadProgress()
                     try await Task.sleep(for: requestInterval)
@@ -189,6 +193,8 @@ import SwiftUI
         }
         if token == sessionID {
             await reloadProgress()
+            let report = progress
+            Self.logger.info("Place cache pass finished cancelled=\(Task.isCancelled) eligible=\(report.eligible) resolved=\(report.resolved) pending=\(report.pending) failed=\(report.failed)")
         }
     }
 
@@ -197,6 +203,11 @@ import SwiftUI
         let consumer = UUID()
         if let shared = requests[requestID] {
             requests[requestID]?.consumers.insert(consumer)
+            if !automatic, let index = waitingRequests.firstIndex(where: { $0.id == shared.id }) {
+                var waiting = waitingRequests.remove(at: index)
+                waiting.automatic = false
+                waitingRequests.insert(waiting, at: waitingRequests.firstIndex(where: \.automatic) ?? waitingRequests.endIndex)
+            }
             return try await consume(shared.task, requestID: requestID, id: shared.id, consumer: consumer)
         }
         let id = UUID()
