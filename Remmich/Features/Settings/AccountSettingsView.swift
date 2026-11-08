@@ -952,6 +952,7 @@ struct AccountSettingsView: View {
             Text(title).foregroundStyle(.secondary)
             Spacer(minLength: 4)
             Text(value).fontWeight(.medium).multilineTextAlignment(.trailing).textSelection(.enabled)
+                .layoutPriority(1)
         }
         .font(.footnote).monospacedDigit().padding(.vertical, 4)
     }
@@ -1064,6 +1065,7 @@ struct AccountSettingsView: View {
                         }
                     }
                     .monospacedDigit().foregroundStyle(.secondary)
+                    .layoutPriority(1)
                     .id(sample.phase)
                     .transition(.opacity)
                     .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: sample.phase)
@@ -1207,7 +1209,7 @@ struct AccountSettingsView: View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text("\(percentage)%").fontWeight(.semibold)
             Spacer(minLength: 4)
-            Text(count).multilineTextAlignment(.trailing)
+            Text(count).multilineTextAlignment(.trailing).layoutPriority(1)
         }
         .font(.caption).monospacedDigit()
     }
@@ -1369,6 +1371,8 @@ struct AccountSettingsView: View {
     ) -> some View {
         LabeledContent {
             Text(value)
+                .multilineTextAlignment(.trailing)
+                .layoutPriority(1)
         } label: {
             settingsLabel(label, systemImage: systemImage)
         }

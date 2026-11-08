@@ -50,7 +50,11 @@ struct MapsPlacesSettingsView: View {
             Divider()
             VStack(alignment: .leading, spacing: 12) {
                 Text("Place-name Language").font(.headline)
-                LabeledContent("Default", value: "English")
+                LabeledContent {
+                    Text("English").layoutPriority(1)
+                } label: {
+                    Text("Default")
+                }
                 Text("Applies to the full location and address. Add a country to use its local place names.")
                     .font(.footnote).foregroundStyle(.secondary)
                 ForEach((locations?.preferences.localCountries ?? []).sorted(), id: \.self) { code in
@@ -62,6 +66,7 @@ struct MapsPlacesSettingsView: View {
                         }
                         .labelsHidden()
                         .pickerStyle(.menu)
+                        .layoutPriority(1)
                     }
                 }
                 Button("Add Country", systemImage: "plus") { showsCountries = true }
