@@ -190,7 +190,7 @@ Remmich connects to [Immich](https://github.com/immich-app/immich) through the l
 
 | Library | Resolved version | Purpose |
 | --- | --- | --- |
-| [Nuke / NukeUI](https://github.com/kean/Nuke) | 13.0.6 | Image loading, caching, prefetching, and SwiftUI image views |
+| [Nuke / NukeUI](https://github.com/kean/Nuke) | 13.2.2 | Image loading, caching, prefetching, and SwiftUI image views |
 | [MapLibre Native](https://github.com/maplibre/maplibre-gl-native-distribution) | 7.0.0 | Native asset maps using Immich's configured styles |
 | [Swift OpenAPI Runtime](https://github.com/apple/swift-openapi-runtime) | 1.12.1 | Runtime support for the generated API client |
 | [Swift OpenAPI URLSession](https://github.com/apple/swift-openapi-urlsession) | 1.3.1 | URLSession transport for API requests |

@@ -1,5 +1,5 @@
 {
-  "originHash" : "be88afbba275e55ef2cf869bb842ed2e83690e1e31af25e1a62d4d4afc3f8bf2",
+  "originHash" : "519fe4ae307a64dc6f840926aea8f52efb0c9893f849f31f10653a6ccd01a558",
   "pins" : [
     {
       "identity" : "maplibre-gl-native-distribution",
@@ -15,8 +15,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/kean/Nuke.git",
       "state" : {
-        "revision" : "63a8fcbd6621340a2410bc3e9575ac97058615f4",
-        "version" : "13.0.6"
+        "revision" : "67493b99728ad1fc9fdaa3c7c8269e27a8a5e89b",
+        "version" : "13.2.2"
       }
     },
     {
@@ -51,8 +51,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-collections",
       "state" : {
-        "revision" : "98ef3c98609a1e31b7e157b5b619579001a789d6",
-        "version" : "1.7.1"
+        "revision" : "f96b909e1a9e469620bc5037c1e24e00153f376f",
+        "version" : "1.7.5"
       }
     },
     {
