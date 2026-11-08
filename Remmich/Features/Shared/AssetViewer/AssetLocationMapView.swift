@@ -74,7 +74,7 @@ struct AssetLocationMapView: View {
             }
         }
         .frame(height: Self.height)
-        .overlay(alignment: .bottom) {
+        .overlay(alignment: .bottomTrailing) {
             if failed || locations?.mapStyles?.enabled != true {
                 Text(AssetMapCoordinateFormatting.string(coordinate))
                     .font(.caption2.weight(.bold))
@@ -134,13 +134,10 @@ private struct NativeAssetMap: UIViewRepresentable {
         view.isPitchEnabled = false
         let label = context.coordinator.coordinateLabel
         view.addSubview(label)
-        let center = label.centerXAnchor.constraint(equalTo: view.centerXAnchor)
-        center.priority = .init(999)
         NSLayoutConstraint.activate([
-            center,
             label.centerYAnchor.constraint(equalTo: view.attributionButton.centerYAnchor),
             label.leadingAnchor.constraint(greaterThanOrEqualTo: view.logoView.trailingAnchor, constant: 6),
-            label.trailingAnchor.constraint(lessThanOrEqualTo: view.attributionButton.leadingAnchor, constant: -6),
+            label.trailingAnchor.constraint(equalTo: view.attributionButton.leadingAnchor, constant: -6),
         ])
         context.coordinator.update(view, value: self)
         return view
@@ -164,7 +161,7 @@ private struct NativeAssetMap: UIViewRepresentable {
             label.adjustsFontSizeToFitWidth = true
             label.minimumScaleFactor = 0.65
             label.textColor = .label
-            label.textAlignment = .center
+            label.textAlignment = .right
             label.backgroundColor = .clear
             label.isUserInteractionEnabled = false
             label.accessibilityLabel = "GPS coordinates"
