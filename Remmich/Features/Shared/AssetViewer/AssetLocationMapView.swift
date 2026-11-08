@@ -77,7 +77,7 @@ struct AssetLocationMapView: View {
         .overlay(alignment: .bottom) {
             if failed || locations?.mapStyles?.enabled != true {
                 Text(AssetMapCoordinateFormatting.string(coordinate))
-                    .font(.system(size: 11, weight: .bold))
+                    .font(.caption2.weight(.bold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.65)
