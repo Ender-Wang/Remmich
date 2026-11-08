@@ -5,9 +5,9 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct TimelineAssetOverlayTests {
-    @Test(arguments: [false, true])
-    func openingOverlayFadesContinuouslyInsteadOfDisappearing(video: Bool) throws {
-        let asset = Self.asset(video: video)
+    @Test(arguments: [false, true], [false, true])
+    func openingOverlayFadesContinuouslyInsteadOfDisappearing(video: Bool, favorite: Bool) throws {
+        let asset = Self.asset(video: video, favorite: favorite)
         let start = try coverage(AssetViewerOpeningAssetOverlay(
             asset: asset, sourceRect: source, destinationRect: destination, progress: 0
         ))
@@ -33,15 +33,18 @@ struct TimelineAssetOverlayTests {
         #expect(visible > 1000)
     }
 
-    @Test func ordinaryPhotoHasNoTransitionOverlay() {
+    @Test(arguments: [false, true])
+    func ordinaryPhotoOnlyNeedsTransitionOverlayWhenFavorite(favorite: Bool) throws {
         var asset = Self.asset(video: false)
         asset = TimelineAssetSummary(
             id: asset.id, ownerID: asset.ownerID, capturedAt: asset.capturedAt, uploadedAt: asset.uploadedAt,
             localOffsetHours: 0, mediaKind: .image, durationMilliseconds: nil, aspectRatio: 1,
-            isFavorite: false, visibility: .timeline, livePhotoVideoID: nil, stack: nil,
+            isFavorite: favorite, visibility: .timeline, livePhotoVideoID: nil, stack: nil,
             projectionType: nil, thumbhash: nil, thumbnailRevision: asset.thumbnailRevision
         )
-        #expect(!TimelineAssetOverlay.isVisible(for: asset))
+        #expect(TimelineAssetOverlay.isVisible(for: asset) == favorite)
+        let visible = try coverage(TimelineAssetOverlay(asset: asset).frame(width: 120, height: 120))
+        #expect(favorite ? visible > 0 : visible == 0)
     }
 
     private var source: CGRect {
@@ -73,13 +76,13 @@ struct TimelineAssetOverlayTests {
         return stride(from: 0, to: bytes.count, by: 4).reduce(0) { $0 + Double(bytes[$1]) }
     }
 
-    private static func asset(video: Bool) -> TimelineAssetSummary {
+    private static func asset(video: Bool, favorite: Bool = false) -> TimelineAssetSummary {
         let date = Date(timeIntervalSince1970: 1000)
         return .init(
             id: video ? "video" : "live", ownerID: "owner", capturedAt: date, uploadedAt: date,
             localOffsetHours: 0, mediaKind: video ? .video : .image,
             durationMilliseconds: video ? 12000 : nil, aspectRatio: 1,
-            isFavorite: false, visibility: .timeline, livePhotoVideoID: video ? nil : "motion",
+            isFavorite: favorite, visibility: .timeline, livePhotoVideoID: video ? nil : "motion",
             stack: nil, projectionType: nil, thumbhash: nil, thumbnailRevision: date
         )
     }

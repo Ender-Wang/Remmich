@@ -8,12 +8,20 @@ struct TimelineAssetOverlay: View {
     var hiddenLivePhotoBadgeAssetID: String?
 
     static func isVisible(for asset: TimelineAssetSummary) -> Bool {
-        TimelineAssetBadgeOverlay.isVisible(for: asset) || asset.mediaKind == .video
+        asset.isFavorite || TimelineAssetBadgeOverlay.isVisible(for: asset) || asset.mediaKind == .video
     }
 
     var body: some View {
         ZStack {
             TimelineAssetBadgeOverlay(asset: asset, hiddenLivePhotoBadgeAssetID: hiddenLivePhotoBadgeAssetID)
+            if asset.isFavorite {
+                Image(systemName: "heart")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding([.top, .trailing], 3)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                    .shadow(radius: 3)
+            }
             if asset.mediaKind == .video {
                 Text(Self.duration(asset.durationMilliseconds))
                     .font(.caption2.weight(.semibold))
