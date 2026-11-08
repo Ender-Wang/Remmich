@@ -13,4 +13,6 @@ The generator configuration includes only operations used by the wrapper and the
 
 Map configuration uses authenticated `getUserConfig`. `getServerConfig` and `getServerFeatures` remain intentionally in use during pre-login validation. In this snapshot, `getPublicConfig` does not expose initialization/onboarding/maintenance state or the full feature set. `getUserConfig` requires authentication. Preserve the startup checks until a complete replacement is available; the two validation call-site deprecation warnings therefore remain visible.
 
+Migration was rechecked and deferred on 2026-11-08. Upstream `main`'s OpenAPI document version `3.4.0-rc.0` still exposes initialization/admin-onboarding state through `ServerConfigDto`, not `PublicConfigDto`; separate admin-onboarding reads require authentication. The [upstream web server-config manager](https://github.com/immich-app/immich/blob/main/web/src/lib/managers/server-config-manager.svelte.ts) also still calls `getServerConfig`. Keep the current calls until an appropriate replacement is available.
+
 Run `Scripts/update-immich-schema.sh` from the Remmich repository root to refresh the snapshot deliberately. Review and update this provenance record in the same change.

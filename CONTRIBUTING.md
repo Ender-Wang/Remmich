@@ -317,6 +317,10 @@ Scripts/update-immich-schema.sh path/to/immich-openapi-specs.json
 
 Review the schema change and update [its provenance record](Packages/ImmichAPI/SCHEMA-PROVENANCE.md) together. Let the pinned OpenAPI Generator plugin generate the client from that input.
 
+The updater prepares the snapshot with `Scripts/prepare-immich-schema.py`, removing unused deprecated flat search fields and legacy response pagination. The generator configuration includes only operations used by the wrapper and their dependencies. When adding an operation, update that list too. Keep modern filters/cursor pagination intact and never edit DerivedData-generated Swift files.
+
+Map settings use authenticated `/config`. Pre-login validation still uses deprecated `/server/config` and `/server/features`: the replacement public configuration does not provide all the existing startup checks. Their warnings remain visible until a supported migration can preserve those checks; see the provenance record for details.
+
 Generate native branding layers from the committed Icon Composer SVGs:
 
 ```bash
