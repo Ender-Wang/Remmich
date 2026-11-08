@@ -301,8 +301,10 @@ struct LibraryIndexStoreTests {
         #expect(try await store.snapshot(scope: scope)?.assets.map(\.id) == ["first", "second"])
 
         let abandoned = try await store.beginGeneration(scope: scope)
+        // Reclaim actual asset pages; a tiny row-only fixture cannot promise a
+        // monotonic file size after VACUUM repacks the enlarged schema/indexes.
         try await store.upsert(
-            assets: [Self.asset(id: "abandoned")],
+            assets: (0 ..< 256).map { Self.asset(id: "abandoned-\($0)") },
             generation: abandoned,
             scope: scope
         )
@@ -310,7 +312,7 @@ struct LibraryIndexStoreTests {
             try await store.finishMaintenanceIfNeeded(scope: scope)
         )
         #expect(maintenance.removedGenerations == 1)
-        #expect(maintenance.removedAssetRows == 3)
+        #expect(maintenance.removedAssetRows == 258)
         #expect(maintenance.metadataBytesAfter <= maintenance.metadataBytesBefore)
         #expect(maintenance.didCompact)
         #expect(try await store.snapshot(scope: scope)?.generation == second)

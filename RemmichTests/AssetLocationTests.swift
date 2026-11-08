@@ -241,6 +241,20 @@ struct AssetLocationTests {
         defer { fixture.cleanup() }
         let session = SavedSessionRegistryTests.session("manual-places")
         let actualScope = MediaAccountScope(session: session)
+        let asset = LibraryIndexAssetRecord(id: "asset", ownerID: session.userID, kind: .image, livePhotoVideoID: nil,
+                                            capturedAt: .now, uploadedAt: .now, updatedAt: Date(timeIntervalSince1970: 100), checksum: nil,
+                                            width: nil, height: nil, aspectRatio: 1, durationMilliseconds: nil, isFavorite: false,
+                                            visibility: "timeline", isTrashed: false, isOffline: false, bucketKey: "2026-11-01", dayKey: "2026-11-01",
+                                            weekKey: "2026-W44", monthKey: "2026-11", yearKey: "2026")
+        let generation = try await fixture.store.beginGeneration(scope: actualScope)
+        try await fixture.store.upsert(assets: [asset], generation: generation, scope: actualScope)
+        _ = try await fixture.store.acceptGeneration(generation, watermark: nil, historicalCursor: nil, expectedAssetCount: 1, scope: actualScope)
+        let image = fixture.directory.appending(path: "images/\(actualScope.cacheNamespace)/thumbnail/asset.jpg")
+        try FileManager.default.createDirectory(at: image.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data([1]).write(to: image)
+        try await fixture.store.upsert(derivatives: [.init(assetID: "asset", derivative: .thumbnail, pixelSize: nil,
+                                                           sourceRevision: asset.updatedAt.ISO8601Format(), relativeFileKey: "thumbnail/asset.jpg", byteCount: 1,
+                                                           digest: "fixture", isVerified: true, lastAccessedAt: .now, completedAt: .now)], scope: actualScope)
         let defaults = try #require(UserDefaults(suiteName: UUID().uuidString))
         let client = LocationTestClient()
         let locations = AssetLocationStore(defaults: defaults, client: client, store: fixture.store, requestInterval: .zero)
@@ -254,7 +268,8 @@ struct AssetLocationTests {
         let controller = LibraryIndexController(source: EmptyPlaceTimeline(), store: fixture.store,
                                                 locations: locations, cacheRootURL: fixture.directory.appending(path: "images"),
                                                 resourceConditions: { conditions }, preferences: defaults)
-        try await controller.restoreBackgroundState(session: session, includeCacheState: false)
+        try await controller.restoreBackgroundState(session: session)
+        #expect(controller.thumbnailWarmingStatus == .upToDate)
         await controller.refreshStatistics()
         #expect(await client.calls.isEmpty)
         conditions.lowPowerMode = false
