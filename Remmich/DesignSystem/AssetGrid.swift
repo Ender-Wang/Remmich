@@ -632,14 +632,6 @@ struct TimelineAssetThumbnail: View {
                 }
             )
             .frame(width: proxy.size.width, height: proxy.size.height)
-            .overlay(alignment: .topTrailing) {
-                if asset.isFavorite {
-                    Image(systemName: "heart.fill")
-                        .foregroundStyle(.white)
-                        .padding(7)
-                        .shadow(radius: 2)
-                }
-            }
             .overlay {
                 if TimelineAssetOverlay.isVisible(for: asset) {
                     GeometryReader { overlayGeometry in

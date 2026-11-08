@@ -1567,7 +1567,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         makeTransitionChromePlan(
             role: "badge",
             identity: asset.id,
-            signature: "\(asset.livePhotoVideoID != nil)|\(asset.projectionType ?? "")|\(asset.stack?.assetCount ?? 0)|\(asset.mediaKind == .video)|\(asset.durationMilliseconds ?? -1)|\(input?.hiddenLivePhotoID == asset.id)",
+            signature: "\(asset.isFavorite)|\(asset.livePhotoVideoID != nil)|\(asset.projectionType ?? "")|\(asset.stack?.assetCount ?? 0)|\(asset.mediaKind == .video)|\(asset.durationMilliseconds ?? -1)|\(input?.hiddenLivePhotoID == asset.id)",
             size: size,
             content: TimelineAssetOverlay(
                 asset: asset,
