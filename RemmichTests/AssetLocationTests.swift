@@ -114,55 +114,67 @@ struct AssetLocationTests {
     @Test @MainActor func defaultsAndCountryOverridesRefreshTheWholeResult() async throws {
         let defaults = try #require(UserDefaults(suiteName: UUID().uuidString))
         let client = LocationTestClient()
-        let store = AssetLocationStore(defaults: defaults, client: client)
+        let fixture = try PlaceCacheFixture()
+        defer { fixture.cleanup() }
+        let store = AssetLocationStore(defaults: defaults, client: client, store: fixture.store)
+        try await fixture.seed(scope: scope("first"), latitude: 31.2167366667, longitude: 121.5484183333)
         store.configure(scope: scope("first"))
         let coordinate = try #require(PlaceCoordinate(latitude: 31.2167366667, longitude: 121.5484183333))
-        #expect(try await store.resolve(coordinate)?.title == "Century Park")
-        #expect(try await store.resolve(coordinate)?.title == "Century Park")
+        #expect(try await store.resolve(coordinate, assetID: "asset")?.title == "Century Park")
+        #expect(try await store.resolve(coordinate, assetID: "asset")?.title == "Century Park")
         #expect(await client.calls == [.english])
         var settings = store.preferences
         settings.localCountries.insert("CN")
         try store.save(settings)
-        #expect(try await store.resolve(coordinate)?.title == "世纪公园")
+        #expect(try await store.resolve(coordinate, assetID: "asset")?.title == "世纪公园")
         #expect(await client.calls == [.english, .local])
         settings.localCountries.remove("CN")
         try store.save(settings)
-        #expect(try await store.resolve(coordinate)?.title == "Century Park")
+        #expect(try await store.resolve(coordinate, assetID: "asset")?.title == "Century Park")
         #expect(await client.calls == [.english, .local])
     }
 
     @Test @MainActor func persistedCacheAndPreferencesStayWithTheirAccountAndCanBeCleared() async throws {
         let defaults = try #require(UserDefaults(suiteName: UUID().uuidString))
         let client = LocationTestClient()
-        let store = AssetLocationStore(defaults: defaults, client: client)
+        let fixture = try PlaceCacheFixture()
+        defer { fixture.cleanup() }
+        let store = AssetLocationStore(defaults: defaults, client: client, store: fixture.store)
         let first = scope("first"), second = scope("second")
+        try await fixture.seed(scope: first)
+        try await fixture.seed(scope: second)
         let coordinate = try #require(PlaceCoordinate(latitude: 31, longitude: 121))
         store.configure(scope: first)
         var settings = store.preferences
         settings.localCountries = ["CN"]
         try store.save(settings)
-        #expect(try await store.resolve(coordinate)?.language == .local)
+        #expect(try await store.resolve(coordinate, assetID: "asset")?.language == .local)
         store.configure(scope: second)
         #expect(store.preferences.localCountries.isEmpty)
-        #expect(try await store.resolve(coordinate)?.language == .english)
+        #expect(try await store.resolve(coordinate, assetID: "asset")?.language == .english)
         store.configure(scope: first)
         #expect(store.preferences.localCountries == ["CN"])
-        #expect(try await store.resolve(coordinate)?.language == .local)
+        #expect(try await store.resolve(coordinate, assetID: "asset")?.language == .local)
         #expect(await client.calls == [.english, .local, .english])
         store.reset()
+        try await fixture.store.clearAssetDetails(scope: first)
+        try await fixture.seed(scope: first)
         AssetLocationStore.remove(defaults: defaults, namespace: first.cacheNamespace)
         store.configure(scope: first)
         #expect(store.preferences.localCountries.isEmpty)
-        #expect(try await store.resolve(coordinate)?.language == .english)
+        #expect(try await store.resolve(coordinate, assetID: "asset")?.language == .english)
         #expect(await client.calls == [.english, .local, .english, .english])
     }
 
     @Test @MainActor func lateLookupCannotPublishIntoAnotherAccount() async throws {
         let client = LocationTestClient(paused: true)
-        let store = try AssetLocationStore(defaults: #require(UserDefaults(suiteName: UUID().uuidString)), client: client)
+        let fixture = try PlaceCacheFixture()
+        defer { fixture.cleanup() }
+        try await fixture.seed(scope: scope("first"))
+        let store = try AssetLocationStore(defaults: #require(UserDefaults(suiteName: UUID().uuidString)), client: client, store: fixture.store)
         store.configure(scope: scope("first"))
         let coordinate = try #require(PlaceCoordinate(latitude: 31, longitude: 121))
-        let task = Task { try await store.resolve(coordinate) }
+        let task = Task { try await store.resolve(coordinate, assetID: "asset") }
         while await client.calls.isEmpty {
             await Task.yield()
         }
@@ -178,6 +190,50 @@ struct AssetLocationTests {
     @Test @MainActor func aValidRegionalInstancePassesWithoutChinaCoverage() async throws {
         let store = AssetLocationStore(client: EmptyRegionalPlaceClient())
         #expect(try await store.test(endpoint: "https://nas.example/photon"))
+    }
+
+    @Test @MainActor func sharedViewerCancellationDoesNotCancelAnotherConsumer() async throws {
+        let fixture = try PlaceCacheFixture()
+        defer { fixture.cleanup() }
+        let account = scope("shared")
+        try await fixture.seed(scope: account)
+        try await fixture.seed(scope: account, id: "same")
+        let client = LocationTestClient(paused: true)
+        let locations = try AssetLocationStore(defaults: #require(UserDefaults(suiteName: UUID().uuidString)), client: client, store: fixture.store)
+        locations.configure(scope: account)
+        let coordinate = try #require(PlaceCoordinate(latitude: 31, longitude: 121))
+        let first = Task { try await locations.resolve(coordinate, assetID: "asset") }
+        while await client.calls.isEmpty {
+            await Task.yield()
+        }
+        let second = Task { try await locations.resolve(coordinate, assetID: "same") }
+        // Let the second consumer join the first request before cancelling it.
+        try await Task.sleep(for: .milliseconds(20))
+        first.cancel()
+        await client.resume()
+        #expect(try await second.value?.title == "Century Park")
+        do { _ = try await first.value; Issue.record("Cancelled viewer should stop waiting") }
+        catch { #expect(error is CancellationError) }
+        #expect(await client.calls == [.english])
+    }
+
+    @Test @MainActor func publicBulkIsSkippedButCustomBulkCompletesCachedGPSWithoutImmich() async throws {
+        let fixture = try PlaceCacheFixture()
+        defer { fixture.cleanup() }
+        let account = scope("bulk")
+        try await fixture.seed(scope: account)
+        let client = LocationTestClient()
+        let locations = try AssetLocationStore(defaults: #require(UserDefaults(suiteName: UUID().uuidString)), client: client, store: fixture.store, requestInterval: .zero)
+        locations.configure(scope: account)
+        await locations.refreshCachedPlaces(retryFailed: true) { true }
+        #expect(await client.calls.isEmpty)
+        var preferences = locations.preferences
+        preferences.endpoint = "https://places.example"
+        try locations.save(preferences)
+        await locations.refreshCachedPlaces(retryFailed: false) { true }
+        #expect(await client.calls == [.english])
+        #expect(locations.progress.resolved == 1)
+        #expect(try await fixture.store.cachedAssetMetadata(id: "asset", scope: account)?.cachedPlace?.title == "Century Park")
     }
 
     @MainActor private func scope(_ user: String) -> MediaAccountScope {

@@ -92,7 +92,7 @@ final class AppSessionController {
         timeline: ImmichTimelineRepository = .init()
     ) {
         self.timeline = timeline
-        locations = AssetLocationStore(defaults: libraryIndexPreferences)
+        locations = AssetLocationStore(defaults: libraryIndexPreferences, store: libraryIndexStore)
         libraryTransfers = transfers
         self.libraryIndexStore = libraryIndexStore
         let syncSource = transfers == nil ? timeline : ImmichTimelineRepository(transfers: transfers)
@@ -102,6 +102,7 @@ final class AppSessionController {
             store: libraryIndexStore,
             media: media,
             assetDetails: syncSource,
+            locations: locations,
             transfers: transfers,
             preferences: libraryIndexPreferences
         )

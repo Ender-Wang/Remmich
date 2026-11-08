@@ -158,6 +158,9 @@ struct SavedAccountsView: View {
         case .failed: "Needs attention"
         }
         activeIndex = "Index: \(percentage(index.indexedAssetCount, index.expectedAssetCount)) · \(indexStatus) · \(index.indexedAssetCount.formatted()) / \(index.expectedAssetCount.formatted()) assets"
-        activeCache = "Cache: \(percentage(index.thumbnailWarmingCachedCount, index.thumbnailWarmingEligibleCount)) · \(cacheStatus) · \(index.thumbnailWarmingThumbnailCount.formatted()) thumbnails · \(index.thumbnailWarmingMetadataCount.formatted()) metadata · \(ByteCountFormatter.string(fromByteCount: index.thumbnailWarmingCachedBytes, countStyle: .file)) thumbnails"
+        let places = index.automaticPlacesAllowed
+            ? "Places: \(index.placeProgress.resolved)/\(index.placeProgress.eligible) · \(index.placeProgress.pending) pending · \(index.placeProgress.failed) failed"
+            : "Places: when viewed"
+        activeCache = "Cache: \(percentage(index.thumbnailWarmingCachedCount, index.thumbnailWarmingEligibleCount)) · \(cacheStatus) · \(index.thumbnailWarmingThumbnailCount.formatted()) thumbnails · \(index.thumbnailWarmingMetadataCount.formatted()) metadata · \(ByteCountFormatter.string(fromByteCount: index.thumbnailWarmingCachedBytes, countStyle: .file)) thumbnails · \(places)"
     }
 }

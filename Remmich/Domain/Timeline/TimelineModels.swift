@@ -180,6 +180,7 @@ nonisolated struct AssetDetail: Hashable, Identifiable, Sendable {
     let city: String?
     let state: String?
     let country: String?
+    var cachedPlace: PlaceLocation?
 }
 
 nonisolated struct TimelineCaptureDay: Hashable, Identifiable, Sendable {

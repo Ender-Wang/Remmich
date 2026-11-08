@@ -2,7 +2,7 @@ import Foundation
 import SQLite3
 
 actor SQLiteLibraryIndexStore: LibraryIndexStoring {
-    static let currentSchemaVersion = 7
+    static let currentSchemaVersion = 8
 
     private let databaseURL: URL
     private var connection: SQLiteConnection?
@@ -283,6 +283,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
                 """,
                 [.text(scope.cacheNamespace), .text(scope.cacheNamespace), .int64(generation)]
             )
+            try pruneUnusedPlaces(scope: scope, database: database)
             try pruneUnusedDetailStrings(scope: scope, database: database)
         }
         return .init(
@@ -579,6 +580,8 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
                     .optionalInt64(stateID), .optionalInt64(countryID), .date(Date()),
                 ]
             )
+            try reconcilePlaceAsset(detail.id, coordinate: PlaceCoordinate(latitude: detail.latitude, longitude: detail.longitude), scope: scope, database: database)
+            try pruneUnusedPlaces(scope: scope, database: database)
             try pruneUnusedDetailStrings(scope: scope, database: database)
         }
     }
@@ -590,6 +593,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
                 "DELETE FROM asset_details WHERE scope = ?",
                 [.text(scope.cacheNamespace)]
             )
+            try pruneUnusedPlaces(scope: scope, database: database)
             try pruneUnusedDetailStrings(scope: scope, database: database)
         }
     }
@@ -609,6 +613,271 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
                 try upsert(derivative: derivative, scope: scope, database: database)
             }
         }
+    }
+
+    /// Place enrichment shares metadata ownership and never stores Immich credentials.
+    func configurePlaces(scope: MediaAccountScope, preferences: MapsPlacesPreferences, sessionID: String) async throws {
+        let database = try preparedDatabase(scope: scope)
+        let encoded = try Self.encode(preferences)
+        try database.transaction {
+            let prior = try database.scalarText("SELECT preferences FROM place_accounts WHERE scope = ?", [.text(scope.cacheNamespace)])
+            let priorSession = try database.scalarText("SELECT session_id FROM place_accounts WHERE scope = ?", [.text(scope.cacheNamespace)])
+            try database.execute("""
+            INSERT INTO place_accounts(scope, preferences, session_id) VALUES(?, ?, ?)
+            ON CONFLICT(scope) DO UPDATE SET preferences=excluded.preferences, session_id=excluded.session_id
+            """, [.text(scope.cacheNamespace), .text(encoded), .text(sessionID)])
+            if priorSession != sessionID {
+                try database.execute("UPDATE place_lookups SET work_state='pending', lease=NULL WHERE scope=? AND work_state='running'", [.text(scope.cacheNamespace)])
+            }
+            if try prior.map({ try Self.decode(MapsPlacesPreferences.self, from: $0) }) != preferences {
+                let assets = try database.query("SELECT asset_id, latitude, longitude FROM asset_details WHERE scope=?", [.text(scope.cacheNamespace)]) {
+                    ($0.text(0), PlaceCoordinate(latitude: $0.optionalDouble(1), longitude: $0.optionalDouble(2)))
+                }
+                for (id, coordinate) in assets {
+                    try reconcilePlaceAsset(id, coordinate: coordinate, scope: scope, database: database)
+                }
+            }
+            try pruneUnusedPlaces(scope: scope, database: database)
+        }
+    }
+
+    func deactivatePlaces(scope: MediaAccountScope, sessionID: String) async throws {
+        let database = try preparedDatabase()
+        try database.transaction {
+            guard try database.scalarText("SELECT session_id FROM place_accounts WHERE scope=?", [.text(scope.cacheNamespace)]) == sessionID else { return }
+            try database.execute("UPDATE place_accounts SET session_id=NULL WHERE scope=?", [.text(scope.cacheNamespace)])
+            try database.execute("UPDATE place_lookups SET work_state='pending', lease=NULL WHERE scope=? AND work_state='running'", [.text(scope.cacheNamespace)])
+        }
+    }
+
+    func cachedAssetMetadata(id: String, scope: MediaAccountScope) async throws -> AssetDetail? {
+        guard var detail = try await cachedAssetDetail(id: id, scope: scope) else { return nil }
+        let desired = try await desiredPlace(assetID: id, scope: scope)
+        if let desired, desired.isFresh(at: .now) {
+            detail.cachedPlace = desired.location
+        } else if let coordinate = PlaceCoordinate(latitude: detail.latitude, longitude: detail.longitude) {
+            let database = try preparedDatabase(scope: scope)
+            detail.cachedPlace = try database.queryOne("""
+            SELECT p.location_json FROM place_lookups p
+            JOIN asset_places a ON a.scope=p.scope AND a.lookup_id=p.lookup_id
+            WHERE a.scope=? AND a.asset_id=? AND p.latitude=? AND p.longitude=? AND p.location_json IS NOT NULL
+            ORDER BY p.fetched_at DESC LIMIT 1
+            """, [.text(scope.cacheNamespace), .text(id), .double(coordinate.latitude), .double(coordinate.longitude)]) {
+                try Self.decode(PlaceLocation.self, from: $0.text(0))
+            }
+        }
+        return detail
+    }
+
+    func desiredPlace(assetID: String, scope: MediaAccountScope) async throws -> CachedPlaceLookup? {
+        let database = try preparedDatabase()
+        return try database.queryOne("""
+        SELECT \(Self.placeColumns) FROM place_lookups p
+        JOIN asset_places a ON a.scope=p.scope AND a.lookup_id=p.lookup_id
+        WHERE a.scope=? AND a.asset_id=? AND a.desired=1
+        """, [.text(scope.cacheNamespace), .text(assetID)], map: Self.readPlace)
+    }
+
+    func cachedPlace(_ key: PlaceCacheKey, scope: MediaAccountScope) async throws -> CachedPlaceLookup? {
+        let database = try preparedDatabase()
+        return try database.queryOne("SELECT \(Self.placeColumns) FROM place_lookups p WHERE scope=? AND lookup_id=?",
+                                     [.text(scope.cacheNamespace), .text(key.id)], map: Self.readPlace)
+    }
+
+    func beginPlace(_ key: PlaceCacheKey, scope: MediaAccountScope, sessionID: String, automatic: Bool, now: Date) async throws -> String? {
+        let database = try preparedDatabase()
+        var lease: String?
+        try database.transaction {
+            guard try placeIsOwned(key, scope: scope, sessionID: sessionID, database: database),
+                  let record = try database.queryOne("SELECT \(Self.placeColumns) FROM place_lookups p WHERE scope=? AND lookup_id=?",
+                                                     [.text(scope.cacheNamespace), .text(key.id)], map: Self.readPlace),
+                  !record.isFresh(at: now), record.work != .running,
+                  !automatic || (!PlaceCacheKey.isPublicService(key.endpoint) && record.work != .onDemand),
+                  record.retryAfter.map({ $0 <= now }) ?? true,
+                  record.attempts < 5 else { return }
+            let token = UUID().uuidString
+            try database.execute("""
+            UPDATE place_lookups SET work_state='running', attempts=attempts+1, lease=?
+            WHERE scope=? AND lookup_id=?
+            """, [.text(token), .text(scope.cacheNamespace), .text(key.id)])
+            lease = token
+        }
+        return lease
+    }
+
+    func finishPlace(_ key: PlaceCacheKey, scope: MediaAccountScope, sessionID: String, lease: String,
+                     location: PlaceLocation?, error: String?, onDemandOnly: Bool,
+                     retryDelay: TimeInterval?, now: Date) async throws -> Bool
+    {
+        let database = try preparedDatabase()
+        var accepted = false
+        try database.transaction {
+            guard try database.scalarText("SELECT lease FROM place_lookups WHERE scope=? AND lookup_id=?",
+                                          [.text(scope.cacheNamespace), .text(key.id)]) == lease else { return }
+            guard try placeIsOwned(key, scope: scope, sessionID: sessionID, database: database) else {
+                try database.execute("UPDATE place_lookups SET work_state='pending', attempts=MAX(0,attempts-1), lease=NULL WHERE scope=? AND lookup_id=? AND lease=?",
+                                     [.text(scope.cacheNamespace), .text(key.id), .text(lease)])
+                return
+            }
+            let attempts = try database.scalarInt64("SELECT attempts FROM place_lookups WHERE scope=? AND lookup_id=?",
+                                                    [.text(scope.cacheNamespace), .text(key.id)]) ?? 1
+            if let error {
+                let delay = max(retryDelay ?? 0, min(86400, 60 * pow(2, Double(attempts - 1))))
+                if let location {
+                    try database.execute("""
+                    UPDATE place_lookups SET location_json=?, outcome='found', fetched_at=?, expires_at=?
+                    WHERE scope=? AND lookup_id=?
+                    """, [.text(Self.encode(location)), .date(now), .date(now), .text(scope.cacheNamespace), .text(key.id)])
+                }
+                try database.execute("""
+                UPDATE place_lookups SET work_state=?, retry_after=?, last_error=?, lease=NULL
+                WHERE scope=? AND lookup_id=?
+                """, [.text(onDemandOnly ? "onDemand" : "failed"), .date(now.addingTimeInterval(delay)), .text(error),
+                      .text(scope.cacheNamespace), .text(key.id)])
+            } else {
+                try database.execute("""
+                UPDATE place_lookups SET location_json=?, outcome=?, work_state='idle',
+                fetched_at=?, expires_at=?, retry_after=NULL, last_error=NULL, attempts=0, lease=NULL
+                WHERE scope=? AND lookup_id=?
+                """, [.optionalText(location.map { try Self.encode($0) }), .text(location == nil ? "noResult" : "found"),
+                      .date(now), .date(now.addingTimeInterval(location == nil ? 86400 : 30 * 86400)),
+                      .text(scope.cacheNamespace), .text(key.id)])
+                // Country discovery may select a Local variant for all sharing assets.
+                let ids = try database.query("SELECT asset_id FROM asset_places WHERE scope=? AND lookup_id=? AND desired=1",
+                                             [.text(scope.cacheNamespace), .text(key.id)]) { $0.text(0) }
+                for id in ids {
+                    try reconcilePlaceAsset(id, coordinate: key.coordinate, scope: scope, database: database)
+                }
+            }
+            accepted = true
+        }
+        return accepted
+    }
+
+    func cancelPlace(_ key: PlaceCacheKey, scope: MediaAccountScope, lease: String) async throws {
+        let database = try preparedDatabase()
+        try database.execute("UPDATE place_lookups SET work_state='pending', attempts=MAX(0,attempts-1), lease=NULL WHERE scope=? AND lookup_id=? AND lease=?",
+                             [.text(scope.cacheNamespace), .text(key.id), .text(lease)])
+    }
+
+    func pendingPlaces(scope: MediaAccountScope, retryFailed: Bool, now: Date) async throws -> [CachedPlaceLookup] {
+        let database = try preparedDatabase()
+        if retryFailed {
+            try database.execute("""
+                                 UPDATE place_lookups SET attempts=0, retry_after=NULL WHERE scope=? AND work_state='failed'
+                                 AND EXISTS(SELECT 1 FROM asset_places a WHERE a.scope=place_lookups.scope AND a.lookup_id=place_lookups.lookup_id AND a.desired=1)
+                                 """,
+                                 [.text(scope.cacheNamespace)])
+        }
+        let records = try database.query("""
+        SELECT \(Self.placeColumns) FROM place_lookups p WHERE scope=?
+        AND EXISTS(SELECT 1 FROM asset_places a WHERE a.scope=p.scope AND a.lookup_id=p.lookup_id AND a.desired=1)
+        AND (outcome='unresolved' OR expires_at <= ?)
+        AND work_state NOT IN ('running','onDemand') AND attempts < 5
+        AND (retry_after IS NULL OR retry_after <= ?)
+        ORDER BY fetched_at ASC LIMIT 128
+        """, [.text(scope.cacheNamespace), .date(now), .date(now)], map: Self.readPlace)
+        return records.filter { !PlaceCacheKey.isPublicService($0.key.endpoint) }
+    }
+
+    func placeProgress(scope: MediaAccountScope, now: Date) async throws -> PlaceCacheProgress {
+        let database = try preparedDatabase()
+        let records = try database.query("""
+        SELECT p.outcome, p.work_state, p.expires_at, p.endpoint, p.key_json, p.attempts, p.retry_after, p.last_error,
+               (SELECT COUNT(*) FROM asset_places a WHERE a.scope=p.scope AND a.lookup_id=p.lookup_id AND a.desired=1),
+               (SELECT GROUP_CONCAT(a.asset_id) FROM asset_places a WHERE a.scope=p.scope AND a.lookup_id=p.lookup_id AND a.desired=1)
+        FROM place_lookups p WHERE scope=?
+        AND EXISTS(SELECT 1 FROM asset_places a WHERE a.scope=p.scope AND a.lookup_id=p.lookup_id AND a.desired=1)
+        """, [.text(scope.cacheNamespace)]) { row in
+            (row.text(0), row.text(1), row.optionalDate(2), row.text(3), row.text(4), row.int(5), row.optionalDate(6), row.optionalText(7), row.int(8), row.text(9))
+        }
+        var progress = PlaceCacheProgress()
+        for (outcome, work, expiry, endpoint, keyJSON, attempts, retry, error, count, ids) in records {
+            progress.eligible += count
+            if outcome != "unresolved", let expiry, expiry > now {
+                progress.resolved += count
+            } else if work == "failed" {
+                progress.failed += count
+                let key = try Self.decode(PlaceCacheKey.self, from: keyJSON)
+                progress.diagnostics.append("Stage: Photon places\nAssets: \(ids)\nEndpoint: \(endpoint)\nLanguage: \(key.language.rawValue)\nAttempts: \(attempts)\nRetry after: \(retry?.ISO8601Format() ?? "manual retry")\nFailure: \(error ?? "unknown")")
+            } else if work != "onDemand" {
+                progress.pending += count
+            }
+        }
+        return progress
+    }
+
+    func nextPlaceRetry(scope: MediaAccountScope) async throws -> Date? {
+        let database = try preparedDatabase()
+        return try database.queryOne("""
+        SELECT MIN(retry_after) FROM place_lookups p WHERE scope=? AND work_state='failed' AND attempts<5
+        AND EXISTS(SELECT 1 FROM asset_places a WHERE a.scope=p.scope AND a.lookup_id=p.lookup_id AND a.desired=1)
+        """, [.text(scope.cacheNamespace)]) { $0.optionalDate(0) } ?? nil
+    }
+
+    private static let placeColumns = "p.key_json, p.location_json, p.outcome, p.work_state, p.fetched_at, p.expires_at, p.attempts, p.retry_after, p.last_error"
+
+    private static func readPlace(_ row: SQLiteRow) throws -> CachedPlaceLookup {
+        try .init(key: decode(PlaceCacheKey.self, from: row.text(0)),
+                  location: row.optionalText(1).map { try decode(PlaceLocation.self, from: $0) },
+                  outcome: CachedPlaceLookup.Outcome(rawValue: row.text(2)) ?? .unresolved,
+                  work: CachedPlaceLookup.WorkState(rawValue: row.text(3)) ?? .pending,
+                  fetchedAt: row.optionalDate(4), expiresAt: row.optionalDate(5),
+                  attempts: row.int(6), retryAfter: row.optionalDate(7), error: row.optionalText(8))
+    }
+
+    private func placeIsOwned(_ key: PlaceCacheKey, scope: MediaAccountScope, sessionID: String, database: SQLiteConnection) throws -> Bool {
+        guard try database.scalarText("SELECT session_id FROM place_accounts WHERE scope=?", [.text(scope.cacheNamespace)]) == sessionID else { return false }
+        return try (database.scalarInt64("""
+        SELECT COUNT(*) FROM asset_places a JOIN asset_details d ON a.scope=d.scope AND a.asset_id=d.asset_id
+        WHERE a.scope=? AND a.lookup_id=? AND a.desired=1 AND d.latitude=? AND d.longitude=?
+        """, [.text(scope.cacheNamespace), .text(key.id), .double(key.coordinate.latitude), .double(key.coordinate.longitude)]) ?? 0) > 0
+    }
+
+    private func reconcilePlaceAsset(_ assetID: String, coordinate: PlaceCoordinate?, scope: MediaAccountScope, database: SQLiteConnection) throws {
+        let namespace = scope.cacheNamespace
+        // Variants remain reusable, but no association may survive a GPS change.
+        if let coordinate {
+            try database.execute("""
+            DELETE FROM asset_places WHERE scope=? AND asset_id=? AND lookup_id NOT IN
+            (SELECT lookup_id FROM place_lookups WHERE scope=? AND latitude=? AND longitude=?)
+            """, [.text(namespace), .text(assetID), .text(namespace), .double(coordinate.latitude), .double(coordinate.longitude)])
+        } else {
+            try database.execute("DELETE FROM asset_places WHERE scope=? AND asset_id=?", [.text(namespace), .text(assetID)])
+            return
+        }
+        guard let coordinate,
+              let json = try database.scalarText("SELECT preferences FROM place_accounts WHERE scope=?", [.text(namespace)]) else { return }
+        let preferences = try Self.decode(MapsPlacesPreferences.self, from: json)
+        let endpoint = try MapsPlacesPreferences.endpointURL(preferences.endpoint)
+        let known = try database.queryOne("""
+        SELECT location_json FROM place_lookups WHERE scope=? AND latitude=? AND longitude=? AND endpoint=? AND location_json IS NOT NULL
+        ORDER BY fetched_at DESC LIMIT 1
+        """, [.text(namespace), .double(coordinate.latitude), .double(coordinate.longitude), .text(PlaceCacheKey(endpoint: endpoint, coordinate: coordinate, language: .english).endpoint.absoluteString)]) {
+            try Self.decode(PlaceLocation.self, from: $0.text(0)).countryCode
+        }
+        let key = try PlaceCacheKey(endpoint: endpoint, coordinate: coordinate, language: preferences.language(countryCode: known ?? ""))
+        try database.execute("""
+        INSERT OR IGNORE INTO place_lookups(scope,lookup_id,key_json,latitude,longitude,endpoint)
+        VALUES(?,?,?,?,?,?)
+        """, [.text(namespace), .text(key.id), .text(Self.encode(key)), .double(coordinate.latitude),
+              .double(coordinate.longitude), .text(key.endpoint.absoluteString)])
+        try database.execute("UPDATE asset_places SET desired=0 WHERE scope=? AND asset_id=?", [.text(namespace), .text(assetID)])
+        try database.execute("""
+        INSERT INTO asset_places(scope,asset_id,lookup_id,desired) VALUES(?,?,?,1)
+        ON CONFLICT(scope,asset_id,lookup_id) DO UPDATE SET desired=1
+        """, [.text(namespace), .text(assetID), .text(key.id)])
+    }
+
+    private func pruneUnusedPlaces(scope: MediaAccountScope, database: SQLiteConnection) throws {
+        try database.execute("""
+        DELETE FROM asset_places WHERE scope=? AND desired=0 AND lookup_id IN
+        (SELECT lookup_id FROM place_lookups WHERE scope=? AND (expires_at IS NULL OR expires_at <= ?))
+        """, [.text(scope.cacheNamespace), .text(scope.cacheNamespace), .date(Date())])
+        try database.execute("""
+        DELETE FROM place_lookups WHERE scope=? AND NOT EXISTS(
+            SELECT 1 FROM asset_places a WHERE a.scope=place_lookups.scope AND a.lookup_id=place_lookups.lookup_id)
+        """, [.text(scope.cacheNamespace)])
     }
 
     func storageReport(scope: MediaAccountScope) async throws -> LibraryIndexStorageReport {
@@ -769,7 +1038,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
         try prepareSchema(database)
         try database.transaction {
             for table in [
-                "account_endpoint_aliases", "asset_details", "asset_detail_strings", "derivatives", "grouped_catalogs",
+                "asset_places", "place_lookups", "place_accounts", "account_endpoint_aliases", "asset_details", "asset_detail_strings", "derivatives", "grouped_catalogs",
                 "assets", "generations", "sync_state", "scopes",
             ] {
                 try database.execute(
@@ -834,9 +1103,14 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
     }
 
     private func preparedDatabase(scope: MediaAccountScope) throws -> SQLiteConnection {
+        let database = try preparedDatabase()
+        try ensureScope(scope, database: database)
+        return database
+    }
+
+    private func preparedDatabase() throws -> SQLiteConnection {
         let database = try database()
         try prepareSchema(database)
-        try ensureScope(scope, database: database)
         return database
     }
 
@@ -864,6 +1138,13 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
     private func prepareSchema(_ database: SQLiteConnection) throws {
         let version = try Int(database.scalarInt64("PRAGMA user_version") ?? 0)
         if version == Self.currentSchemaVersion {
+            return
+        }
+        if version == 7 {
+            try database.transaction {
+                try createPlaceSchema(database)
+                try database.execute("PRAGMA user_version = \(Self.currentSchemaVersion)")
+            }
             return
         }
         guard version == 0 else {
@@ -1031,8 +1312,41 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
                 FOREIGN KEY(scope) REFERENCES scopes(scope) ON DELETE CASCADE
             )
             """)
+            try createPlaceSchema(database)
             try database.execute("PRAGMA user_version = \(Self.currentSchemaVersion)")
         }
+    }
+
+    private func createPlaceSchema(_ database: SQLiteConnection) throws {
+        try database.execute("""
+        CREATE TABLE IF NOT EXISTS place_accounts(
+            scope TEXT PRIMARY KEY REFERENCES scopes(scope) ON DELETE CASCADE,
+            preferences TEXT NOT NULL, session_id TEXT
+        )
+        """)
+        try database.execute("""
+        CREATE TABLE IF NOT EXISTS place_lookups(
+            scope TEXT NOT NULL REFERENCES scopes(scope) ON DELETE CASCADE,
+            lookup_id TEXT NOT NULL, key_json TEXT NOT NULL,
+            latitude REAL NOT NULL, longitude REAL NOT NULL, endpoint TEXT NOT NULL,
+            location_json TEXT, outcome TEXT NOT NULL DEFAULT 'unresolved',
+            work_state TEXT NOT NULL DEFAULT 'pending', fetched_at REAL, expires_at REAL,
+            attempts INTEGER NOT NULL DEFAULT 0, retry_after REAL, last_error TEXT, lease TEXT,
+            PRIMARY KEY(scope, lookup_id)
+        )
+        """)
+        try database.execute("""
+        CREATE TABLE IF NOT EXISTS asset_places(
+            scope TEXT NOT NULL, asset_id TEXT NOT NULL, lookup_id TEXT NOT NULL,
+            desired INTEGER NOT NULL DEFAULT 1,
+            PRIMARY KEY(scope, asset_id, lookup_id),
+            FOREIGN KEY(scope, asset_id) REFERENCES asset_details(scope, asset_id) ON DELETE CASCADE,
+            FOREIGN KEY(scope, lookup_id) REFERENCES place_lookups(scope, lookup_id) ON DELETE CASCADE
+        )
+        """)
+        try database.execute("CREATE UNIQUE INDEX IF NOT EXISTS asset_places_desired ON asset_places(scope, asset_id) WHERE desired = 1")
+        try database.execute("CREATE INDEX IF NOT EXISTS asset_places_lookup ON asset_places(scope, lookup_id, desired)")
+        try database.execute("CREATE INDEX IF NOT EXISTS place_work ON place_lookups(scope, work_state, retry_after)")
     }
 
     private func ensureScope(_ scope: MediaAccountScope, database: SQLiteConnection) throws {

@@ -286,6 +286,17 @@ nonisolated protocol LibraryIndexStoring: Sendable {
     func cachedAssetDetailIDs(scope: MediaAccountScope) async throws -> Set<String>
     func upsert(assetDetail: AssetDetail, scope: MediaAccountScope) async throws
     func clearAssetDetails(scope: MediaAccountScope) async throws
+    func cachedAssetMetadata(id: String, scope: MediaAccountScope) async throws -> AssetDetail?
+    func configurePlaces(scope: MediaAccountScope, preferences: MapsPlacesPreferences, sessionID: String) async throws
+    func deactivatePlaces(scope: MediaAccountScope, sessionID: String) async throws
+    func desiredPlace(assetID: String, scope: MediaAccountScope) async throws -> CachedPlaceLookup?
+    func cachedPlace(_ key: PlaceCacheKey, scope: MediaAccountScope) async throws -> CachedPlaceLookup?
+    func beginPlace(_ key: PlaceCacheKey, scope: MediaAccountScope, sessionID: String, automatic: Bool, now: Date) async throws -> String?
+    func finishPlace(_ key: PlaceCacheKey, scope: MediaAccountScope, sessionID: String, lease: String, location: PlaceLocation?, error: String?, onDemandOnly: Bool, retryDelay: TimeInterval?, now: Date) async throws -> Bool
+    func cancelPlace(_ key: PlaceCacheKey, scope: MediaAccountScope, lease: String) async throws
+    func pendingPlaces(scope: MediaAccountScope, retryFailed: Bool, now: Date) async throws -> [CachedPlaceLookup]
+    func nextPlaceRetry(scope: MediaAccountScope) async throws -> Date?
+    func placeProgress(scope: MediaAccountScope, now: Date) async throws -> PlaceCacheProgress
     func storageReport(scope: MediaAccountScope) async throws -> LibraryIndexStorageReport
     func storedAccounts() async throws -> [StoredLibraryAccount]
     func removeAccount(namespace: String) async throws

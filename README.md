@@ -52,6 +52,7 @@ For now, follow [Build and run](CONTRIBUTING.md#build-and-run) to build from sou
 - View photos with zoom, Live Photo motion playback, and detailed asset information.
 - See Photon place names in the viewer header and asset information, with locality fallback when a lookup is unavailable.
 - Pull up Info to reveal the asset's map using your Immich server's configured basemap; pull farther to reveal the full map and pan or zoom.
+- See signed decimal GPS coordinates centered along the map's attribution row, with text that follows the app theme.
 - Expand an asset from its thumbnail and return smoothly to its place, including within date-group timelines.
 - Hold a timeline asset for 0.35 seconds to open a centered preview; swipe down, tap outside, or use the Back gesture to dismiss it, including while it is opening or loading.
 - Preview Live Photos and videos once with muted playback; tap the preview to expand into the full viewer. Share and Download in the preview panel are reserved for future export support.

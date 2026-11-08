@@ -2,9 +2,15 @@ import CoreLocation
 import Foundation
 import ImmichAPI
 import MapLibre
-import OSLog
 import SwiftUI
 import UIKit
+
+nonisolated enum AssetMapCoordinateFormatting {
+    static func string(_ coordinate: PlaceCoordinate) -> String {
+        String(format: "%.5f, %.5f", locale: Locale(identifier: "en_US_POSIX"),
+               coordinate.latitude, coordinate.longitude)
+    }
+}
 
 /// Visibility affects gestures only. The Info page owns the map's lifetime.
 nonisolated struct AssetMapViewport: Equatable {
@@ -69,13 +75,17 @@ struct AssetLocationMapView: View {
         }
         .frame(height: Self.height)
         .overlay(alignment: .bottom) {
-            Text("\(coordinate.latitude.formatted(.number.precision(.fractionLength(5)))), \(coordinate.longitude.formatted(.number.precision(.fractionLength(5))))")
-                .font(.caption.monospacedDigit())
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(.regularMaterial, in: Capsule())
-                .padding(.bottom, 28)
-                .allowsHitTesting(false)
+            if failed || locations?.mapStyles?.enabled != true {
+                Text(AssetMapCoordinateFormatting.string(coordinate))
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.65)
+                    .padding(.horizontal, 8)
+                    .frame(height: 23)
+                    .padding(.bottom, 8)
+                    .allowsHitTesting(false)
+            }
         }
         .clipShape(.rect(cornerRadius: DesignMetrics.defaultCornerRadius))
         .onGeometryChange(for: MapPosition.self) {
@@ -122,8 +132,17 @@ private struct NativeAssetMap: UIViewRepresentable {
         view.showsUserLocation = false
         view.isRotateEnabled = false
         view.isPitchEnabled = false
+        let label = context.coordinator.coordinateLabel
+        view.addSubview(label)
+        let center = label.centerXAnchor.constraint(equalTo: view.centerXAnchor)
+        center.priority = .init(999)
+        NSLayoutConstraint.activate([
+            center,
+            label.centerYAnchor.constraint(equalTo: view.attributionButton.centerYAnchor),
+            label.leadingAnchor.constraint(greaterThanOrEqualTo: view.logoView.trailingAnchor, constant: 6),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: view.attributionButton.leadingAnchor, constant: -6),
+        ])
         context.coordinator.update(view, value: self)
-        context.coordinator.recordLifecycle("created")
         return view
     }
 
@@ -132,41 +151,44 @@ private struct NativeAssetMap: UIViewRepresentable {
     }
 
     static func dismantleUIView(_ view: MLNMapView, coordinator: Coordinator) {
-        coordinator.recordLifecycle("removed")
         view.delegate = nil
         coordinator.loadFailed = nil
     }
 
     final class Coordinator: NSObject, MLNMapViewDelegate {
-        #if DEBUG
-            private let diagnosticID = String(UUID().uuidString.prefix(8))
-            private static let logger = Logger(subsystem: "io.github.ender-wang.Remmich", category: "AssetMapLifecycle")
-        #endif
+        let coordinateLabel: UILabel = {
+            let label = UILabel()
+            label.translatesAutoresizingMaskIntoConstraints = false
+            label.font = UIFontMetrics(forTextStyle: .caption2).scaledFont(for: .monospacedDigitSystemFont(ofSize: 11, weight: .regular))
+            label.adjustsFontForContentSizeCategory = true
+            label.adjustsFontSizeToFitWidth = true
+            label.minimumScaleFactor = 0.65
+            label.textColor = .label
+            label.textAlignment = .center
+            label.backgroundColor = .clear
+            label.isUserInteractionEnabled = false
+            label.accessibilityLabel = "GPS coordinates"
+            return label
+        }()
+
         private var coordinate: PlaceCoordinate?
         private var language: PlaceLanguage = .english
         private var originals: [String: NSExpression] = [:]
         private let pin = MLNPointAnnotation()
         var loadFailed: (() -> Void)?
 
-        func recordLifecycle(_ event: String) {
-            #if DEBUG
-                let id = diagnosticID
-                Self.logger.debug("Asset map lifecycle id=\(id, privacy: .public) event=\(event, privacy: .public)")
-            #endif
-        }
-
         func update(_ view: MLNMapView, value: NativeAssetMap) {
             loadFailed = value.loadFailed
             if view.styleURL != value.styleURL {
-                recordLifecycle("style-requested")
                 originals = [:]
                 view.styleURL = value.styleURL
             }
             view.isScrollEnabled = value.interactive
             view.isZoomEnabled = value.interactive
             if coordinate != value.coordinate {
-                recordLifecycle("coordinate-updated")
                 coordinate = value.coordinate
+                coordinateLabel.text = AssetMapCoordinateFormatting.string(value.coordinate)
+                coordinateLabel.accessibilityValue = coordinateLabel.text
                 pin.coordinate = CLLocationCoordinate2D(latitude: value.coordinate.latitude, longitude: value.coordinate.longitude)
                 if view.annotations?.isEmpty != false {
                     view.addAnnotation(pin)
@@ -183,7 +205,6 @@ private struct NativeAssetMap: UIViewRepresentable {
         }
 
         func mapView(_: MLNMapView, didFinishLoading style: MLNStyle) {
-            recordLifecycle("style-loaded")
             originals = [:]
             localize(style)
         }
