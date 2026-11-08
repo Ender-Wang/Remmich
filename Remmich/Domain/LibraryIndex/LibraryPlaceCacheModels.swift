@@ -1,7 +1,7 @@
 import Foundation
 
 nonisolated struct PlaceCacheKey: Codable, Hashable, Sendable {
-    static let selectionVersion = 2
+    static let selectionVersion = 3
     let endpoint: URL
     let coordinate: PlaceCoordinate
     let language: PlaceLanguage

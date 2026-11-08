@@ -94,6 +94,19 @@ extension PlaceLookingUp {
 /// Decode all address components from one language-specific response.
 nonisolated struct PhotonResponse: Decodable, Sendable {
     struct Feature: Decodable, Sendable {
+        struct Geometry: Decodable, Sendable {
+            let type: String
+            let coordinates: [Double]?
+
+            private enum CodingKeys: String, CodingKey { case type, coordinates }
+
+            init(from decoder: any Decoder) throws {
+                let values = try decoder.container(keyedBy: CodingKeys.self)
+                type = try values.decode(String.self, forKey: .type)
+                coordinates = type == "Point" ? try? values.decode([Double].self, forKey: .coordinates) : nil
+            }
+        }
+
         struct Properties: Decodable, Sendable {
             let name: String?
             let osm_key: String?
@@ -109,37 +122,62 @@ nonisolated struct PhotonResponse: Decodable, Sendable {
         }
 
         let properties: Properties
+        let geometry: Geometry?
     }
 
     let features: [Feature]
+    private static let landmarkKeys: Set<String> = ["tourism", "leisure", "historic", "amenity", "man_made", "natural"]
+    private static let parkValues: Set<String> = ["park", "garden", "nature_reserve"]
 
     var needsParkContext: Bool {
-        guard let value = features.first?.properties else { return false }
-        return value.osm_key == "leisure" && ["park", "garden", "nature_reserve"].contains(value.osm_value ?? "")
-            && bounds(value.extent) != nil
+        guard let feature = features.first else { return false }
+        let value = feature.properties
+        if bounds(value.extent) != nil {
+            return (value.osm_key == "leisure" && Self.parkValues.contains(value.osm_value ?? ""))
+                || (value.osm_key == "amenity" && value.osm_value == "shelter")
+                || (value.osm_key == "tourism" && ["artwork", "attraction", "viewpoint"].contains(value.osm_value ?? ""))
+                || (value.osm_key == "historic" && ["memorial", "monument"].contains(value.osm_value ?? ""))
+        }
+        // A point POI may be a statue or scenic stop within a larger park.
+        // Malformed area extents must not be treated as point-only evidence.
+        return value.extent == nil && Self.landmarkKeys.contains(value.osm_key ?? "") && point(feature) != nil
     }
 
     /// Photon extents are bounding boxes, not exact boundaries. Require a nested
-    /// park extent as well as the GPS point, rather than selecting any nearby park.
+    /// park extent or landmark point as well as GPS, rather than any nearby park.
     func enclosingPark(in candidates: PhotonResponse, coordinate: PlaceCoordinate, language: PlaceLanguage) -> PlaceLocation? {
         guard needsParkContext, let original = features.first?.properties,
-              let inner = bounds(original.extent),
               let country = original.countrycode?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased(),
               !country.isEmpty else { return nil }
+        let inner = bounds(original.extent)
+        let originalPoint = features.first.flatMap(point)
         let parents = candidates.features.filter { feature in
             let value = feature.properties
-            guard value.osm_key == "leisure", value.osm_value == "park",
+            guard value.osm_key == "leisure", Self.parkValues.contains(value.osm_value ?? ""),
                   value.countrycode?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() == country,
-                  let outer = bounds(value.extent), value.name?.isEmpty == false else { return false }
-            return outer.west <= coordinate.longitude && coordinate.longitude <= outer.east
-                && outer.south <= coordinate.latitude && coordinate.latitude <= outer.north
-                && outer.west <= inner.west && outer.east >= inner.east
-                && outer.south <= inner.south && outer.north >= inner.north
-                && outer.area > inner.area
+                  let outer = bounds(value.extent), value.name?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
+                  contains(coordinate, in: outer) else { return false }
+            if let inner {
+                return outer.west <= inner.west && outer.east >= inner.east
+                    && outer.south <= inner.south && outer.north >= inner.north
+                    && outer.area > inner.area
+            }
+            return originalPoint.map { contains($0, in: outer) } ?? false
         }
         // Prefer the closest enclosing level, rather than an unrelated large area.
         guard let parent = parents.min(by: { bounds($0.properties.extent)!.area < bounds($1.properties.extent)!.area }) else { return nil }
-        return PhotonResponse(features: [parent]).location(language: language)
+        return PhotonResponse(features: [parent]).location(language: language, detailName: original.name)
+    }
+
+    private func point(_ feature: Feature) -> PlaceCoordinate? {
+        guard feature.geometry?.type == "Point", let coordinates = feature.geometry?.coordinates,
+              coordinates.count == 2 else { return nil }
+        return PlaceCoordinate(latitude: coordinates[1], longitude: coordinates[0])
+    }
+
+    private func contains(_ coordinate: PlaceCoordinate, in bounds: (west: Double, north: Double, east: Double, south: Double, area: Double)) -> Bool {
+        bounds.west <= coordinate.longitude && coordinate.longitude <= bounds.east
+            && bounds.south <= coordinate.latitude && coordinate.latitude <= bounds.north
     }
 
     private func bounds(_ extent: [Double]?) -> (west: Double, north: Double, east: Double, south: Double, area: Double)? {
@@ -149,20 +187,23 @@ nonisolated struct PhotonResponse: Decodable, Sendable {
         return (extent[0], extent[1], extent[2], extent[3], (extent[2] - extent[0]) * (extent[1] - extent[3]))
     }
 
-    func location(language: PlaceLanguage) -> PlaceLocation? {
+    func location(language: PlaceLanguage, detailName: String? = nil) -> PlaceLocation? {
         // Do not promote an arbitrary later POI when the best match is a road.
         guard let value = features.first?.properties else { return nil }
-        let landmarkKeys: Set = ["tourism", "leisure", "historic", "amenity", "man_made", "natural"]
-        let name = landmarkKeys.contains(value.osm_key ?? "") ? value.name : nil
-        let parts = [name, value.locality, value.district, value.city, value.county, value.state, value.country]
+        let name = Self.landmarkKeys.contains(value.osm_key ?? "") ? value.name : nil
+        let names = [detailName, name]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        let parts = [detailName, name, value.locality, value.district, value.city, value.county, value.state, value.country]
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
         var unique: [String] = []
         for part in parts where !unique.contains(part) {
             unique.append(part)
         }
-        guard let title = unique.first else { return nil }
-        return .init(title: title, address: unique.joined(separator: " · "),
+        guard let fallbackTitle = unique.first else { return nil }
+        let title = unique.prefix(Set(names).count).joined(separator: " · ")
+        return .init(title: title.isEmpty ? fallbackTitle : title, address: unique.joined(separator: " · "),
                      countryCode: value.countrycode?.uppercased() ?? "", language: language)
     }
 }

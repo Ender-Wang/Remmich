@@ -77,7 +77,7 @@ struct AssetLocationMapView: View {
         .overlay(alignment: .bottom) {
             if failed || locations?.mapStyles?.enabled != true {
                 Text(AssetMapCoordinateFormatting.string(coordinate))
-                    .font(.caption2.monospacedDigit())
+                    .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.65)
@@ -159,7 +159,7 @@ private struct NativeAssetMap: UIViewRepresentable {
         let coordinateLabel: UILabel = {
             let label = UILabel()
             label.translatesAutoresizingMaskIntoConstraints = false
-            label.font = UIFontMetrics(forTextStyle: .caption2).scaledFont(for: .monospacedDigitSystemFont(ofSize: 11, weight: .regular))
+            label.font = UIFontMetrics(forTextStyle: .caption2).scaledFont(for: .systemFont(ofSize: 11, weight: .bold))
             label.adjustsFontForContentSizeCategory = true
             label.adjustsFontSizeToFitWidth = true
             label.minimumScaleFactor = 0.65

@@ -71,3 +71,22 @@ jobs:
             COMPILER_INDEX_STORE_ENABLE=NO \
             | xcbeautify
 
+      - name: Test Photon cache and existing metadata storage
+        run: |
+          xcodebuild -quiet test-without-building \
+            -project Remmich.xcodeproj -scheme Remmich -configuration Debug \
+            -destination "$IPHONE_DESTINATION" -derivedDataPath "$DERIVED_DATA_PATH" \
+            -resultBundlePath .ci/MapLayoutTests.xcresult \
+            -only-testing:RemmichTests/AssetLocationTests \
+            -only-testing:RemmichTests/PlaceMetadataCacheTests \
+            -jobs 2 -parallel-testing-enabled NO COMPILER_INDEX_STORE_ENABLE=NO
+      - name: Upload map layout results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: remmich-map-layout-results
+          path: .ci/MapLayoutTests.xcresult
+          retention-days: 3
+      - name: Shut down simulator
+        if: always()
+        run: xcrun simctl shutdown all || true
