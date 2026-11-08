@@ -17,6 +17,7 @@ struct AssetViewerDismissalTarget {
 }
 
 struct AssetViewerView: View {
+    private static let infoLogger = Logger(subsystem: "io.github.ender-wang.Remmich", category: "AssetInfoLoad")
     private static let memoryLogger = Logger(
         subsystem: "io.github.ender-wang.Remmich",
         category: "MemoryPlayback"
@@ -543,6 +544,10 @@ struct AssetViewerView: View {
         }
         .onChange(of: selectedAssetDetail) {
             updateVideoNowPlayingTitle()
+            let asset = String(session.selectedAssetID.prefix(8))
+            let loaded = selectedAssetDetail != nil
+            let shown = showsInfo
+            Self.infoLogger.info("Viewer Info metadata published asset=\(asset, privacy: .public) loaded=\(loaded) shown=\(shown)")
         }
         .task(id: PlaceLoadRequest(assetID: session.selectedAssetID,
                                    coordinate: selectedPlaceCoordinate,
@@ -611,6 +616,9 @@ struct AssetViewerView: View {
             resetMemoryAutoRotation()
         }
         .onChange(of: showsInfo) { _, shown in
+            let asset = String(session.selectedAssetID.prefix(8))
+            let loaded = selectedAssetDetail != nil
+            Self.infoLogger.info("Viewer Info visibility asset=\(asset, privacy: .public) shown=\(shown) metadataLoaded=\(loaded)")
             if !shown {
                 interactiveMapFrame = nil
             }

@@ -30,8 +30,12 @@ actor CachedAssetDetailReader: AssetDetailReading {
     func cachedAssetDetail(id: String) async -> AssetDetail? {
         guard let scope else { return nil }
         let requestGeneration = generation
+        let started = Date()
+        let asset = String(id.prefix(8))
+        Self.logger.info("Info cache read started asset=\(asset, privacy: .public)")
         do {
             let detail = try await store.cachedAssetMetadata(id: id, scope: scope)
+            Self.logger.info("Info cache read finished asset=\(asset, privacy: .public) found=\(detail != nil) placeCached=\(detail?.cachedPlace != nil) cancelled=\(Task.isCancelled) elapsedMs=\(Int(Date().timeIntervalSince(started) * 1000))")
             guard !Task.isCancelled, requestGeneration == generation, self.scope == scope else { return nil }
             return detail
         } catch {
@@ -45,7 +49,14 @@ actor CachedAssetDetailReader: AssetDetailReading {
     func assetDetail(id: String) async throws -> AssetDetail {
         guard let scope else { throw CancellationError() }
         let requestGeneration = generation
+        let started = Date()
+        let asset = String(id.prefix(8))
+        Self.logger.info("Info server fetch started asset=\(asset, privacy: .public)")
+        defer {
+            Self.logger.info("Info server refresh ended asset=\(asset, privacy: .public) cancelled=\(Task.isCancelled) elapsedMs=\(Int(Date().timeIntervalSince(started) * 1000))")
+        }
         let detail = try await source.assetDetail(id: id)
+        Self.logger.info("Info server fetch received asset=\(asset, privacy: .public) elapsedMs=\(Int(Date().timeIntervalSince(started) * 1000))")
         guard !Task.isCancelled, requestGeneration == generation, self.scope == scope else { throw CancellationError() }
         do {
             try await store.upsert(assetDetail: detail, scope: scope)
@@ -57,6 +68,7 @@ actor CachedAssetDetailReader: AssetDetailReading {
         guard !Task.isCancelled, requestGeneration == generation, self.scope == scope else { throw CancellationError() }
         let composed = try? await store.cachedAssetMetadata(id: id, scope: scope)
         guard !Task.isCancelled, requestGeneration == generation, self.scope == scope else { throw CancellationError() }
+        Self.logger.info("Info server refresh ready asset=\(asset, privacy: .public) elapsedMs=\(Int(Date().timeIntervalSince(started) * 1000))")
         return composed ?? detail
     }
 }

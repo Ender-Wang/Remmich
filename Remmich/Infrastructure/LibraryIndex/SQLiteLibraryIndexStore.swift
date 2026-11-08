@@ -1,7 +1,9 @@
 import Foundation
+import OSLog
 import SQLite3
 
 actor SQLiteLibraryIndexStore: LibraryIndexStoring {
+    private nonisolated static let placeLogger = Logger(subsystem: "io.github.ender-wang.Remmich", category: "PlaceCache")
     static let currentSchemaVersion = 8
 
     private let databaseURL: URL
@@ -616,6 +618,8 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
 
     /// Place enrichment shares metadata ownership and never stores Immich credentials.
     func configurePlaces(scope: MediaAccountScope, preferences: MapsPlacesPreferences, sessionID: String) async throws {
+        let started = Date()
+        var scannedAssets = 0
         let database = try preparedDatabase(scope: scope)
         let encoded = try Self.encode(preferences)
         try database.transaction {
@@ -636,9 +640,13 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
                 for (id, coordinate) in assets {
                     try reconcilePlaceAsset(id, coordinate: coordinate, scope: scope, database: database)
                 }
+                scannedAssets = assets.count
             }
             try pruneUnusedPlaces(scope: scope, database: database)
         }
+        let mainBytes = metadataFileBytes(at: databaseURL)
+        let walBytes = metadataFileBytes(at: URL(fileURLWithPath: databaseURL.path + "-wal"))
+        Self.placeLogger.info("Place metadata prepared scannedAssets=\(scannedAssets) mainBytes=\(mainBytes) walBytes=\(walBytes) elapsedMs=\(Int(Date().timeIntervalSince(started) * 1000))")
     }
 
     func deactivatePlaces(scope: MediaAccountScope, sessionID: String) async throws {
@@ -1130,10 +1138,12 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
 
     private func metadataFileBytes() -> Int64 {
         [databaseURL, URL(fileURLWithPath: databaseURL.path + "-wal")]
-            .reduce(Int64(0)) { total, url in
-                let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
-                return total + ((attributes?[.size] as? NSNumber)?.int64Value ?? 0)
-            }
+            .reduce(Int64(0)) { $0 + metadataFileBytes(at: $1) }
+    }
+
+    private func metadataFileBytes(at url: URL) -> Int64 {
+        let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+        return (attributes?[.size] as? NSNumber)?.int64Value ?? 0
     }
 
     private func database() throws -> SQLiteConnection {
