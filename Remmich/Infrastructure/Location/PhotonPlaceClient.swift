@@ -3,6 +3,10 @@ import Foundation
 actor PhotonPlaceClient: PlaceLookingUp {
     private let session: URLSession
 
+    init(session: URLSession) {
+        self.session = session
+    }
+
     init() {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpCookieStorage = nil
@@ -21,6 +25,9 @@ actor PhotonPlaceClient: PlaceLookingUp {
         let decoded = try await response(Self.request(coordinate, endpoint: endpoint, language: language), automatic: automatic)
         let fallback = decoded.location(language: language)
         guard decoded.needsParkContext else { return fallback }
+        if let park = decoded.enclosingPark(in: decoded, coordinate: coordinate, language: language) {
+            return park
+        }
         do {
             let parks = try await response(Self.request(coordinate, endpoint: endpoint, language: language, parksOnly: true), automatic: automatic)
             return decoded.enclosingPark(in: parks, coordinate: coordinate, language: language) ?? fallback
@@ -63,7 +70,12 @@ actor PhotonPlaceClient: PlaceLookingUp {
             .init(name: "limit", value: parksOnly ? "10" : "5"),
         ]
         if parksOnly {
-            components.queryItems?.append(contentsOf: [.init(name: "osm_tag", value: "leisure:park"), .init(name: "radius", value: "2")])
+            components.queryItems?.append(contentsOf: [
+                .init(name: "osm_tag", value: "leisure:park"),
+                .init(name: "osm_tag", value: "leisure:garden"),
+                .init(name: "osm_tag", value: "leisure:nature_reserve"),
+                .init(name: "radius", value: "2"),
+            ])
         }
         var request = URLRequest(url: components.url!)
         request.setValue("application/json", forHTTPHeaderField: "Accept")

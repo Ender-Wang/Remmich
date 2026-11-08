@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import Synchronization
 import Testing
 @testable import Remmich
 
@@ -59,8 +60,8 @@ struct AssetLocationTests {
         let coordinate = try #require(PlaceCoordinate(latitude: 31.32607, longitude: 121.54968))
         #expect(original.needsParkContext)
         let selected = original.enclosingPark(in: parks, coordinate: coordinate, language: .local)
-        #expect(selected?.title == "共青森林公园")
-        #expect(selected?.address == "共青森林公园 · 上海 · 中国")
+        #expect(selected?.title == "秋林爱晚 · 共青森林公园")
+        #expect(selected?.address == "秋林爱晚 · 共青森林公园 · 上海 · 中国")
         // Crossing the outer extent must not keep assigning the enclosing park.
         let outside = try #require(PlaceCoordinate(latitude: 31.328, longitude: 121.54968))
         #expect(original.enclosingPark(in: parks, coordinate: outside, language: .local) == nil)
@@ -80,6 +81,64 @@ struct AssetLocationTests {
         #expect(unknown.enclosingPark(in: unknownParent, coordinate: coordinate, language: .english) == nil)
     }
 
+    @Test func jinganStatueUsesAnEnclosingParkAlreadyInTheResponse() throws {
+        let response = try Self.decode(ParkPlaceFixtures.statueAndPark)
+        let coordinate = try #require(PlaceCoordinate(latitude: 31.22376, longitude: 121.44211))
+        #expect(response.needsParkContext)
+        let selected = response.enclosingPark(in: response, coordinate: coordinate, language: .local)
+        #expect(selected?.title == "犀牛铜像 · 静安公园")
+        #expect(selected?.address == "犀牛铜像 · 静安公园 · 静安区 · 上海市 · 中国")
+        let outside = try #require(PlaceCoordinate(latitude: 31.225, longitude: 121.44211))
+        #expect(response.enclosingPark(in: response, coordinate: outside, language: .local) == nil)
+    }
+
+    @Test func tingyuPavilionKeepsItsEnclosingGarden() throws {
+        let response = try Self.decode(#"{"features":[{"properties":{"name":"听雨阁","osm_key":"amenity","osm_value":"shelter","countrycode":"CN","extent":[101.2542473,21.9258889,101.2543857,21.9258089]},"geometry":{"type":"Point","coordinates":[101.2543165,21.9258391]}},{"properties":{"name":"棕榈园","osm_key":"leisure","osm_value":"garden","countrycode":"CN","state":"云南省","country":"中国","extent":[101.252756,21.9282456,101.2561245,21.9244514]}}]}"#)
+        let coordinate = try #require(PlaceCoordinate(latitude: 21.92572, longitude: 101.25513))
+        #expect(response.needsParkContext)
+        #expect(response.enclosingPark(in: response, coordinate: coordinate, language: .local)?.title == "听雨阁 · 棕榈园")
+    }
+
+    @Test func pointContextRequiresBothPointsCountryAndValidGeometry() throws {
+        let response = try Self.decode(ParkPlaceFixtures.statueOnly)
+        let coordinate = try #require(PlaceCoordinate(latitude: 31.22376, longitude: 121.44211))
+        // This box includes the GPS but excludes the statue itself.
+        let tooSmall = try Self.decode(#"{"features":[{"properties":{"name":"Unrelated","osm_key":"leisure","osm_value":"park","countrycode":"CN","extent":[121.442,31.2238,121.4422,31.2237]}}]}"#)
+        #expect(response.enclosingPark(in: tooSmall, coordinate: coordinate, language: .english) == nil)
+        let wrongCountry = try Self.decode(ParkPlaceFixtures.statueAndPark.replacingOccurrences(of: "\"countrycode\":\"CN\",\"city\"", with: "\"countrycode\":\"GB\",\"city\""))
+        #expect(response.enclosingPark(in: wrongCountry, coordinate: coordinate, language: .english) == nil)
+        for geometry in [#"{"type":"Point","coordinates":[121]}"#, #"{"type":"Point","coordinates":[121,91]}"#, #"{"type":"Polygon","coordinates":[[[121,31],[122,31],[121,31]]]}"#] {
+            let malformed = try Self.decode("{\"features\":[{\"properties\":{\"name\":\"Statue\",\"osm_key\":\"tourism\",\"osm_value\":\"artwork\"},\"geometry\":\(geometry)}]}")
+            #expect(!malformed.needsParkContext)
+        }
+    }
+
+    @Test func smallestEnclosingAreaWinsAndDuplicateNamesStaySingle() throws {
+        let coordinate = try #require(PlaceCoordinate(latitude: 31.22376, longitude: 121.44211))
+        let original = try Self.decode(ParkPlaceFixtures.statueOnly)
+        let response = try Self.decode("{\"features\":[{\"properties\":{\"name\":\"Larger reserve\",\"osm_key\":\"leisure\",\"osm_value\":\"nature_reserve\",\"countrycode\":\"CN\",\"extent\":[121,32,122,31]}},\(ParkPlaceFixtures.park)]}")
+        #expect(original.enclosingPark(in: response, coordinate: coordinate, language: .local)?.title == "犀牛铜像 · 静安公园")
+        let duplicate = try Self.decode(ParkPlaceFixtures.statueOnly.replacingOccurrences(of: "犀牛铜像", with: "静安公园"))
+        #expect(duplicate.enclosingPark(in: response, coordinate: coordinate, language: .local)?.title == "静安公园")
+    }
+
+    @Test(arguments: [false, true])
+    func parkContextReusesTheFirstResponseOrMakesOneSupplementaryRequest(needsSupplement: Bool) async throws {
+        let endpoint = try #require(URL(string: "https://photon-fixture.invalid/\(UUID().uuidString)/\(needsSupplement ? "fallback" : "reuse")"))
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ParkPlaceProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer {
+            session.invalidateAndCancel()
+            ParkPlaceProtocol.counts.withLock { $0[endpoint.path] = nil }
+        }
+        let client = PhotonPlaceClient(session: session)
+        let coordinate = try #require(PlaceCoordinate(latitude: 31.22376, longitude: 121.44211))
+        let result = try await client.lookup(coordinate, endpoint: endpoint, language: .local)
+        #expect(result?.title == "犀牛铜像 · 静安公园")
+        #expect(ParkPlaceProtocol.counts.withLock { $0[endpoint.path] } == (needsSupplement ? 2 : 1))
+    }
+
     @Test func parkFilterIsOnlyUsedForTheOptionalContextRequest() throws {
         let coordinate = try #require(PlaceCoordinate(latitude: 31.32607, longitude: 121.54968))
         let endpoint = try MapsPlacesPreferences.endpointURL("https://nas.example/photon")
@@ -88,6 +147,7 @@ struct AssetLocationTests {
         let contextURL = try #require(context.url)
         let items = try #require(URLComponents(url: contextURL, resolvingAgainstBaseURL: false)?.queryItems)
         #expect(items.first { $0.name == "osm_tag" }?.value == "leisure:park")
+        #expect(Set(items.filter { $0.name == "osm_tag" }.compactMap(\.value)) == ["leisure:park", "leisure:garden", "leisure:nature_reserve"])
         #expect(items.first { $0.name == "limit" }?.value == "10")
         #expect(items.first { $0.name == "lat" }?.value == "31.32607")
         #expect(items.first { $0.name == "lang" }?.value == "default")
@@ -320,6 +380,39 @@ private struct EmptyPlaceTimeline: TimelineReading {
     func memories() async throws -> [TimelineMemorySummary] {
         []
     }
+}
+
+private nonisolated enum ParkPlaceFixtures {
+    static let statue = #"{"properties":{"name":"犀牛铜像","osm_key":"tourism","osm_value":"artwork","countrycode":"CN"},"geometry":{"type":"Point","coordinates":[121.4422487,31.2238209]}}"#
+    static let park = #"{"properties":{"name":"静安公园","osm_key":"leisure","osm_value":"park","countrycode":"CN","city":"静安区","state":"上海市","country":"中国","extent":[121.4408871,31.2247311,121.443651,31.223162]}}"#
+    static let statueOnly = "{\"features\":[\(statue)]}"
+    static let statueAndPark = "{\"features\":[\(statue),\(park)]}"
+}
+
+private final nonisolated class ParkPlaceProtocol: URLProtocol, @unchecked Sendable {
+    static let counts = Mutex<[String: Int]>([:])
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        request.url?.host == "photon-fixture.invalid"
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        guard let url = request.url else { return }
+        Self.counts.withLock { $0[url.deletingLastPathComponent().path, default: 0] += 1 }
+        let isContext = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.contains { $0.name == "osm_tag" } == true
+        let json = isContext ? "{\"features\":[\(ParkPlaceFixtures.park)]}"
+            : url.path.contains("/fallback/") ? ParkPlaceFixtures.statueOnly : ParkPlaceFixtures.statueAndPark
+        let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(json.utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
 }
 
 private actor LocationTestClient: PlaceLookingUp {
