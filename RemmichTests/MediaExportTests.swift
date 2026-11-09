@@ -1,3 +1,4 @@
+import AVFoundation
 import CoreGraphics
 import Foundation
 import ImageIO
@@ -260,6 +261,14 @@ struct MediaExportTests {
 }
 
 private actor ExportAuthorizationGate: MediaPhotosWriting {
+    func localImageData(receipt _: MediaPhotosReceipt) async throws -> Data? {
+        nil
+    }
+
+    func localVideoAsset(receipt _: MediaPhotosReceipt) async throws -> AVURLAsset? {
+        nil
+    }
+
     private var continuation: CheckedContinuation<Void, Never>?
     private var released = false
     func authorize() async throws {

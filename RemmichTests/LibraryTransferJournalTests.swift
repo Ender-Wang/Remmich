@@ -60,7 +60,7 @@ struct LibraryTransferJournalTests {
         #expect(journal.jobs.isEmpty)
         #expect(throws: CancellationError.self) { try journal.job(url: late.url, kind: .index, owner: original) }
         _ = try journal.job(url: late.url, kind: .index, owner: rotated)
-        #expect(try journal.activate(owner(token: "replacement", endpoint: #require(URL(string: "https://local.example/api")))).count == 1)
+        #expect(journal.activate(owner(token: "replacement", endpoint: endpoint.appending(path: "alternate"))).count == 1)
         _ = try journal.job(url: late.url, kind: .index, owner: #require(journal.owner))
         #expect(journal.activate(owner(user: "another")).count == 1)
     }

@@ -182,7 +182,7 @@ struct AssetViewerView: View {
         _pagerPosition = State(initialValue: route.selectedAsset.id)
         _pagerWindowCenterID = State(initialValue: route.selectedAsset.id)
         _videoPlaybackSession = State(initialValue: route.selectedAsset.mediaKind == .video
-            ? VideoPlaybackSession(assetID: route.selectedAsset.id)
+            ? VideoPlaybackSession(assetID: route.selectedAsset.id, revision: route.selectedAsset.thumbnailRevision)
             : nil)
         _openingIsActive = State(initialValue: opensFromSource)
         _openingProgress = State(initialValue: opensFromSource ? 0 : 1)
@@ -2742,7 +2742,7 @@ struct AssetViewerView: View {
         videoControlsVisible = true
         videoRoutePickerPresented = false
         resumesVideoAfterCancelledDismissal = false
-        videoPlaybackSession = VideoPlaybackSession(assetID: selectedAsset.id)
+        videoPlaybackSession = VideoPlaybackSession(assetID: selectedAsset.id, revision: selectedAsset.thumbnailRevision)
     }
 
     private func pauseVideoForDismissalIfNeeded() {

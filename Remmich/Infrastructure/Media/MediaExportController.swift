@@ -164,6 +164,31 @@ final class MediaExportController: NSObject {
         journal.receipts.contains { $0.assetID == asset.id && $0.revision == asset.thumbnailRevision && $0.tier == tier && verifiedReceiptKeys.contains($0.key) }
     }
 
+    func savedReceipt(assetID: String, revision: Date, tier: MediaExportTier) -> MediaPhotosReceipt? {
+        guard ready else { return nil }
+        // A receipt locates the resource; PhotoKit verifies current readability.
+        // Album membership governs the saved badge, not local-file reuse.
+        return journal.receipts.first {
+            $0.assetID == assetID && $0.revision == revision && $0.tier == tier
+        }
+    }
+
+    func localImageData(assetID: String, revision: Date, tier: MediaExportTier) async throws -> Data? {
+        guard let receipt = savedReceipt(assetID: assetID, revision: revision, tier: tier) else { return nil }
+        let owner = generation
+        let data = try await photos.localImageData(receipt: receipt)
+        guard owner == generation else { throw CancellationError() }
+        return data
+    }
+
+    func localVideoAsset(assetID: String, revision: Date, tier: MediaExportTier) async throws -> AVURLAsset? {
+        guard let receipt = savedReceipt(assetID: assetID, revision: revision, tier: tier) else { return nil }
+        let owner = generation
+        let asset = try await photos.localVideoAsset(receipt: receipt)
+        guard owner == generation else { throw CancellationError() }
+        return asset
+    }
+
     func enqueue(asset: TimelineAssetSummary, tier: MediaExportTier, detail: AssetDetail? = nil, expectedNamespace: String? = nil) {
         if let expectedNamespace, scope?.cacheNamespace != expectedNamespace {
             return

@@ -117,8 +117,11 @@ final class VideoPlaybackSession {
     @ObservationIgnored private var nowPlayingArtwork: Data?
     @ObservationIgnored private weak var nowPlayingArtworkSource: UIImage?
 
-    init(assetID: String, audioSession: any ViewerAudioSessionControlling = ViewerAudioSessionController()) {
+    private let revision: Date?
+
+    init(assetID: String, revision: Date? = nil, audioSession: any ViewerAudioSessionControlling = ViewerAudioSessionController()) {
         self.assetID = assetID
+        self.revision = revision
         self.audioSession = audioSession
         player = AVPlayer()
         player.automaticallyWaitsToMinimizeStalling = true
@@ -167,24 +170,35 @@ final class VideoPlaybackSession {
         resumesPreparationAfterSuspension = false
 
         do {
-            let configuration = try media.videoStreamConfiguration(assetID: assetID)
-            let source = try AuthenticatedVideoStreamSource(
-                configuration: configuration,
-                contentLengthChanged: { [weak self] length in
-                    Task { @MainActor [weak self] in
-                        self?.updateContentLength(length, generation: preparationGeneration)
-                    }
-                }
-            )
-            guard accepts(generation: preparationGeneration) else {
-                source.invalidate()
-                return
+            let local: AVURLAsset? = if let revision {
+                try await media.exports.localVideoAsset(assetID: assetID, revision: revision, tier: .playback)
+            } else {
+                nil
             }
+            guard accepts(generation: preparationGeneration) else { return }
+            let item: AVPlayerItem
+            if let local {
+                item = AVPlayerItem(asset: local)
+            } else {
+                let configuration = try media.videoStreamConfiguration(assetID: assetID)
+                let source = try AuthenticatedVideoStreamSource(
+                    configuration: configuration,
+                    contentLengthChanged: { [weak self] length in
+                        Task { @MainActor [weak self] in
+                            self?.updateContentLength(length, generation: preparationGeneration)
+                        }
+                    }
+                )
+                guard accepts(generation: preparationGeneration) else {
+                    source.invalidate()
+                    return
+                }
 
-            let item = AVPlayerItem(asset: source.asset)
+                item = AVPlayerItem(asset: source.asset)
+                streamSource = source
+            }
             applyNowPlayingMetadata(to: item)
             item.preferredForwardBufferDuration = 10
-            streamSource = source
             playerItem = item
             installObservers(for: item, generation: preparationGeneration)
             player.replaceCurrentItem(with: item)

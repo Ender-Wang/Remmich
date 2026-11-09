@@ -1788,7 +1788,7 @@ struct RemmichTests {
         #expect(cached.isFinal)
     }
 
-    @Test @MainActor func alreadyCachedVideoPosterCanSeedSystemArtworkWithoutAnotherLoad() throws {
+    @Test @MainActor func alreadyCachedVideoPosterCanSeedSystemArtworkWithoutAnotherLoad() async throws {
         let media = MediaLibraryController()
         media.configure(session: .fixture, activeEndpoint: AccountSession.fixture.apiURL)
         let asset = Self.timelineAsset(id: "already-loaded-video-poster", mediaKind: .video)
@@ -1812,7 +1812,9 @@ struct RemmichTests {
         let cached = try #require(media.cachedViewerTransitionImage(for: asset, targetPixels: targetPixels))
         session.updateNowPlayingArtwork(cached, onlyIfMissing: true)
 
-        let data = try #require(item.externalMetadata.first { $0.identifier == .commonIdentifierArtwork }?.dataValue)
+        let metadata = try #require(item.externalMetadata.first { $0.identifier == .commonIdentifierArtwork })
+        let artworkData = try await metadata.load(.dataValue)
+        let data = try #require(artworkData)
         let artwork = try #require(UIImage(data: data))
         #expect(artwork.size == image.size)
         #expect(session.player.currentItem === item)

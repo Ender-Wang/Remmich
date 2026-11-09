@@ -1,3 +1,4 @@
+import AVFoundation
 import CoreLocation
 import Foundation
 import Photos
@@ -9,9 +10,61 @@ nonisolated protocol MediaPhotosWriting: Sendable {
     func validateLivePhoto(still: URL, motion: URL) async throws
     func save(job: MediaExportJob, file: URL, motion: URL?, albumID: String) async throws -> MediaPhotosReceipt
     func verifiedKeys(_ receipts: [MediaPhotosReceipt]) async -> MediaPhotosVerification
+    func localImageData(receipt: MediaPhotosReceipt) async throws -> Data?
+    func localVideoAsset(receipt: MediaPhotosReceipt) async throws -> AVURLAsset?
 }
 
 actor MediaPhotosWriter: MediaPhotosWriting {
+    func localImageData(receipt: MediaPhotosReceipt) async throws -> Data? {
+        guard let asset = readableAsset(receipt), asset.mediaType == .image,
+              let resource = PHAssetResource.assetResources(for: asset).first(where: { $0.type == .photo }) else { return nil }
+        let request = PhotoResourceRead<Data>()
+        let data = Mutex(Data())
+        let options = PHAssetResourceRequestOptions()
+        options.isNetworkAccessAllowed = false
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            let result: Data? = await withCheckedContinuation { continuation in
+                request.begin(continuation)
+                let identifier = PHAssetResourceManager.default().requestData(for: resource, options: options) { @Sendable chunk in
+                    data.withLock { $0.append(chunk) }
+                } completionHandler: { @Sendable error in
+                    request.finish(error == nil ? data.withLock { $0 } : nil)
+                }
+                request.install { PHAssetResourceManager.default().cancelDataRequest(identifier) }
+            }
+            try Task.checkCancellation()
+            return result
+        } onCancel: { request.cancel() }
+    }
+
+    func localVideoAsset(receipt: MediaPhotosReceipt) async throws -> AVURLAsset? {
+        guard let asset = readableAsset(receipt), asset.mediaType == .video else { return nil }
+        let request = PhotoResourceRead<AVURLAsset>()
+        let options = PHVideoRequestOptions()
+        options.isNetworkAccessAllowed = false
+        options.version = .original
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            let result: AVURLAsset? = await withCheckedContinuation { continuation in
+                request.begin(continuation)
+                let identifier = PHImageManager.default().requestAVAsset(forVideo: asset, options: options) { @Sendable video, _, _ in
+                    let local = video as? AVURLAsset
+                    request.finish(local?.url.isFileURL == true ? local : nil)
+                }
+                request.install { PHImageManager.default().cancelImageRequest(identifier) }
+            }
+            try Task.checkCancellation()
+            return result
+        } onCancel: { request.cancel() }
+    }
+
+    private func readableAsset(_ receipt: MediaPhotosReceipt) -> PHAsset? {
+        let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        guard status == .authorized || status == .limited else { return nil }
+        return PHAsset.fetchAssets(withLocalIdentifiers: [receipt.photosID], options: nil).firstObject
+    }
+
     func authorize() async throws {
         let status = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
         guard status == .authorized else {
@@ -119,4 +172,70 @@ actor MediaPhotosWriter: MediaPhotosWriting {
 /// writer, then is read only after performChanges completes.
 private final nonisolated class PhotoCreationIdentifier: @unchecked Sendable {
     var value: String?
+}
+
+/// Covers cancellation before PhotoKit returns its request identifier as well
+/// as cancellation while its local-only read is running.
+final nonisolated class PhotoResourceRead<Value: Sendable>: Sendable {
+    private struct State {
+        var cancelled = false
+        var finished = false
+        var action: (@Sendable () -> Void)?
+        var continuation: CheckedContinuation<Value?, Never>?
+    }
+
+    private let state = Mutex(State())
+
+    func begin(_ continuation: CheckedContinuation<Value?, Never>) {
+        let cancelled = state.withLock {
+            if $0.cancelled {
+                return true
+            }
+            $0.continuation = continuation
+            return false
+        }
+        if cancelled {
+            continuation.resume(returning: nil)
+        }
+    }
+
+    func finish(_ result: Value?) {
+        let continuation = state.withLock {
+            guard !$0.finished else { return CheckedContinuation<Value?, Never>?.none }
+            $0.finished = true
+            let continuation = $0.continuation
+            $0.continuation = nil
+            $0.action = nil
+            return continuation
+        }
+        continuation?.resume(returning: result)
+    }
+
+    func install(_ action: @escaping @Sendable () -> Void) {
+        let cancelNow = state.withLock {
+            if $0.cancelled {
+                return true
+            }
+            if !$0.finished {
+                $0.action = action
+            }
+            return false
+        }
+        if cancelNow {
+            action()
+        }
+    }
+
+    func cancel() {
+        let pending = state.withLock {
+            $0.cancelled = true
+            $0.finished = true
+            let pending = ($0.action, $0.continuation)
+            $0.action = nil
+            $0.continuation = nil
+            return pending
+        }
+        pending.1?.resume(returning: nil)
+        pending.0?()
+    }
 }

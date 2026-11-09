@@ -94,7 +94,7 @@ final class TimelineAssetPreviewSession: Identifiable {
         self.viewerRoute = viewerRoute
         transitionTarget = target
         let motionID = asset.mediaKind == .video ? asset.id : asset.livePhotoVideoID
-        playback = motionID.map { VideoPlaybackSession(assetID: $0, audioSession: SilentPreviewAudioSession()) }
+        playback = motionID.map { VideoPlaybackSession(assetID: $0, revision: asset.thumbnailRevision, audioSession: SilentPreviewAudioSession()) }
         playback?.player.isMuted = true
         playback?.player.actionAtItemEnd = .pause
     }

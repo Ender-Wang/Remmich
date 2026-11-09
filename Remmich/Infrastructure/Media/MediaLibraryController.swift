@@ -26,7 +26,7 @@ final class MediaLibraryController {
     let timelineResidency = TimelineThumbnailResidency()
 
     private var session: AccountSession?
-    let exports = MediaExportController()
+    let exports: MediaExportController
     @ObservationIgnored private var exportRequestIDs: [String: [String]] = [:]
     @ObservationIgnored private var exportManifestLoad: Task<[String: [String]], Never>?
     @ObservationIgnored private var exportManifestSave: Task<Void, Never>?
@@ -55,8 +55,9 @@ final class MediaLibraryController {
     private var cachedProfileImageURL: URL?
     private var profileImageCacheRevision = 0
 
-    init(imageDataLoader: (any DataLoading)? = nil) {
+    init(imageDataLoader: (any DataLoading)? = nil, exports: MediaExportController? = nil) {
         self.imageDataLoader = imageDataLoader
+        self.exports = exports ?? MediaExportController()
     }
 
     func configure(session: AccountSession, activeEndpoint: URL?) {
@@ -149,7 +150,8 @@ final class MediaLibraryController {
 
     func imageRequest(
         for descriptor: MediaRequestDescriptor,
-        priority: ImageRequest.Priority = .normal
+        priority: ImageRequest.Priority = .normal,
+        useSavedPhotos: Bool = true
     ) -> ImageRequest? {
         #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("-ui-testing-signed-in") {
@@ -231,6 +233,33 @@ final class MediaLibraryController {
             // Besides duplicating storage, DataCache reads update file metadata
             // during the first visible batch and delay direct managed-file I/O.
             request.options.insert(.disableDiskCache)
+            request.priority = priority
+            registerExportRequest(request, descriptor: descriptor)
+            return request
+        }
+        if useSavedPhotos, let scope, let pipeline,
+           let tier = MediaExportTier.allCases.first(where: { $0.derivative == descriptor.derivative }),
+           exports.savedReceipt(assetID: descriptor.assetID, revision: descriptor.updatedAt, tier: tier) != nil
+        {
+            let remote = imageRequest(for: descriptor, priority: priority, useSavedPhotos: false)
+            let exports = exports
+            var request = ImageRequest(id: "saved-photos|" + descriptor.cacheKey(in: scope), data: {
+                if let data = try await exports.localImageData(assetID: descriptor.assetID, revision: descriptor.updatedAt, tier: tier) {
+                    guard await self.scope == scope else { throw CancellationError() }
+                    return data
+                }
+                try Task.checkCancellation()
+                guard await self.scope == scope else { throw CancellationError() }
+                guard let remote else { throw URLError(.resourceUnavailable) }
+                return try await pipeline.data(for: remote).0
+            })
+            // The fallback enters this pipeline's normal data-loading queue.
+            // Do not hold one of its slots while waiting for that child task.
+            request.options.insert(.skipDataLoadingQueue)
+            if let pixels = descriptor.targetPixels {
+                request.thumbnail = .init(size: .init(width: pixels.width, height: pixels.height), unit: .pixels,
+                                          contentMode: descriptor.derivative == .thumbnail ? .aspectFill : .aspectFit)
+            }
             request.priority = priority
             registerExportRequest(request, descriptor: descriptor)
             return request
