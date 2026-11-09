@@ -17,7 +17,7 @@
 
 Remmich is a SwiftUI, UIKit, and AVKit client for your self-hosted Immich library. Browse photos, watch videos, revisit memories, and keep thumbnails and asset information available offline without changing your server library.
 
-**0.5.0 is an early release focused on Photos, Videos, and the media viewer.** Save to Photos, Share/Export, and Download are still in development. Albums, Search, and Library collections currently show demo data. The account and profile settings use your real Immich account.
+**0.5.0 is an early release focused on Photos, Videos, and the media viewer.** Download and Save to Photos are available; Sharing is planned. Albums, Search, and Library collections currently show demo data. The account and profile settings use your real Immich account.
 
 See the **[Roadmap](#roadmap)** for upcoming features, remaining verification and the feature timeline from the project's first commit.
 
@@ -41,14 +41,15 @@ For now, follow [Build and run](CONTRIBUTING.md#build-and-run) to build from sou
 - **🗺️ Places and maps:** Photon landmarks, per-country language preferences and asset maps below Info.
 - **🎬 Video:** Native playback, Picture in Picture and iOS Now Playing with titles and artwork.
 - **💾 Offline browsing:** Cached timelines, thumbnails, asset information and place names, with background sync and cache controls.
+- **📥 Downloads:** Save a quality tier to Photos → Remmich, with background transfers, progress, cancel/retry and Downloads History.
 - **🔐 Accounts and connections:** Saved-account switching, separate account caches and Primary/Fallback server addresses.
 - **✨ Native appearance:** Adaptive iPhone/iPad layouts, Liquid Glass, swipe navigation and alternate app icons.
 
 ## Current limitations
 
-- **Local originals and export:** Save to Photos, Share/Export, and Download are still in development; their viewer controls are disabled. Thumbnail caching does not retain original photos or playable videos.
+- **Sharing and offline originals:** Sharing is planned and its controls remain disabled. Thumbnail caching does not retain originals or playable videos; explicitly saved Photos resources can be reused when the requested quality matches.
 - **Albums, Library collections, and Search:** these destinations currently show demo data. Server-backed browsing and search are planned.
-- **Offline video:** cached posters and asset information can be viewed offline; video playback requires a reachable server.
+- **Offline video:** saved Playback videos can load locally while the Photos resource remains accessible. Otherwise, streaming requires a reachable server.
 - **Asset locations and maps:** maps require valid asset GPS and an enabled, compatible Immich map source. Place names and translated map labels depend on the provider's available data.
 
 ## Milestones
@@ -62,7 +63,7 @@ Milestones track implementation and help set expectations for upcoming work. **0
 | M2 | ✅ Done | Sign-in, Keychain restoration, endpoint failover, and the typed read-only API boundary |
 | M3 | ✅ Done | Shared media loading, caching, prefetching, and bounded memory use |
 | M4 | ✅ Done | Real server-backed Photos timeline |
-| M5 | In progress | Semantic zoom, date cards, memories, Videos, viewers, long-press preview, Photon locations/settings, and asset maps are implemented; Save/Share/Download and final verification remain |
+| M5 | In progress | Timelines, viewers, preview, places/maps and Download/Save to Photos are available; Sharing and final verification remain |
 | M6 | Planned | Server-backed read-only Albums browsing |
 | M7 | Planned | Server-backed read-only Library collections |
 | M8 | Planned | Server-backed Search with native filters |
@@ -71,7 +72,7 @@ Milestones track implementation and help set expectations for upcoming work. **0
 
 ## Roadmap
 
-Updated **November 8, 2026**. The timeline runs from future plans at the top, through **Now**, to older achievements below. Future work follows milestone order toward the present without invented dates; conditional options are grouped with their related milestone. Each completed milestone uses its latest implementation checkpoint date; related earlier work is included in its description and commit links. These are repository dates, not App Store availability or release dates. Implemented features may include local commits awaiting publication. Planned work has no promised delivery date.
+Updated **November 9, 2026**. The timeline runs from future plans at the top, through **Now**, to older achievements below. Future work follows milestone order toward the present without invented dates; conditional options are grouped with their related milestone. Each completed milestone uses its latest implementation checkpoint date; related earlier work is included in its description and commit links. These are repository dates, not App Store availability or release dates. Implemented features may include local commits awaiting publication. Planned work has no promised delivery date.
 
 ![Remmich zigzag timeline: future milestones M10 toward M5, Now at the latest achievement, then earlier features down to the September 2026 foundation. Icons mark the joints of the central line.](.github/assets/roadmap-timeline.svg)
 
@@ -79,7 +80,9 @@ Updated **November 8, 2026**. The timeline runs from future plans at the top, th
 
 | Priority | Feature | Status | Intended outcome |
 | --- | --- | --- | --- |
-| Next · M5 | Save to Photos, Share and Download | Planned | Export local copies from the viewer and preview action panel, with progress, cancellation and recoverable errors. Current controls are disabled. |
+| Now · M5 | Download and Save to Photos | Available | Save selected quality to Photos → Remmich; background transfers, progress, cancel/retry and Downloads History. |
+| Next · M5 | Sharing | Planned | Share the displayed resource from the viewer and preview action panel. Controls remain disabled. |
+| M5 follow-up | Download Pause/Resume | Planned | Pause transfers and retain that intent through backgrounding and relaunch. |
 | M6 | Real Albums | Planned | Browse server-backed owned/shared albums and open their assets in the shared viewer. Albums currently shows demo data. |
 | M7 | Library collections | Planned | Read-only Favorites, Archive, People, Places, Memories and Folders, according to server capabilities. Library collections currently use demo data; account/settings already use real data. |
 | M8 | Search and filters | Planned | Server-backed search with supported people, place, date, media and camera filters. Search currently uses demo data. |
@@ -90,6 +93,7 @@ These are the current implementation priorities, not separate committed release 
 
 ### Verification still open
 
+- **Downloads:** earlier Full-tier errors, broader format/Live Photo and background-relaunch cases still need verification. The tested panel UX, cancel/retry and Playback camera/lens display are device-accepted; new metadata fixtures have not yet run.
 - **Custom Photon instance:** batch caching and explicit Cache Rebuild are implemented, but the maintainer has not yet run the NAS Rebuild end to end on a physical device. Public-server demand fetching and landmark names have device acceptance. The latest Rebuild [focused CI passed](https://github.com/Ender-Wang/Remmich/actions/runs/42461148263).
 - **Release coverage:** broader devices, orientations, accessibility and network/interruption cases remain release checks. Feature implementation and the recorded device acceptance do not imply every release scenario has passed.
 
@@ -97,6 +101,12 @@ These are the current implementation priorities, not separate committed release 
 <summary><strong>Timeline details and commit references</strong></summary>
 
 ### Feature timeline
+
+#### November 9, 2026 · Download and Save to Photos
+
+Save a selected quality from the viewer or preview to Photos → Remmich. Downloads continue in the background, with progress, cancel/retry and a compact Downloads History. Matching saved resources load locally. Originals preserve their bytes; reduced images and Playback videos restore supported metadata. Sharing remains a separate planned feature.
+
+[Save to Photos](https://github.com/Ender-Wang/Remmich/commit/4edb755) · [Local reuse](https://github.com/Ender-Wang/Remmich/commit/45133b5) · [Download UX](https://github.com/Ender-Wang/Remmich/commit/810546d) · [Video metadata](https://github.com/Ender-Wang/Remmich/commit/b97a97b)
 
 #### November 8, 2026 · Places join the offline cache
 
@@ -112,7 +122,7 @@ Photon landmarks appear in the viewer header and Info. Account → Maps & Places
 
 #### November 6, 2026 · Long-press preview and interruptible transitions
 
-Hold a timeline asset to preview it; Live Photos and videos play once, muted. Tap the preview to expand into the full viewer. Swipe down, tap outside or use Back to dismiss. Opening and returning transitions allow interruption, immediate reopening and timeline scrolling while a returning image follows its cell. The preview action panel reserves Share/Download for future exports.
+Hold a timeline asset to preview it; Live Photos and videos play once, muted. Tap the preview to expand into the full viewer. Swipe down, tap outside or use Back to dismiss. Opening and returning transitions allow interruption, immediate reopening and timeline scrolling while a returning image follows its cell. The preview action panel opens Save to Photos; Sharing remains planned.
 
 [Preview](https://github.com/Ender-Wang/Remmich/commit/a2f296d) · [Shared transitions and tap-to-open](https://github.com/Ender-Wang/Remmich/commit/63f51a4) · [Swipe-down](https://github.com/Ender-Wang/Remmich/commit/66a5835) · [Interruption](https://github.com/Ender-Wang/Remmich/commit/c7c74d7) · [Scroll-following returns](https://github.com/Ender-Wang/Remmich/commit/02d8e45)
 
@@ -182,7 +192,7 @@ The project begins with a reproducible Xcode baseline, adaptive native shell and
 
 Remmich does not upload, edit, archive, favorite, or delete Immich assets. Saved sign-in sessions are stored in Keychain, and local indexes and media caches are scoped to the account. Cache maintenance changes device data only.
 
-Future Save, Share, and Download actions will operate on local copies. They will not change the Immich server's library.
+Download and Save to Photos operate on local copies without changing the Immich server's library. Planned Sharing follows the same read-only boundary.
 
 ## Dependencies
 
