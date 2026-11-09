@@ -61,12 +61,20 @@ actor MediaExportFiles {
         try? FileManager.default.removeItem(at: directory)
     }
 
-    func prepareVideo(_ sourceURL: URL, job: MediaExportJob) async throws -> URL {
+    func prepareVideo(_ sourceURL: URL, job: MediaExportJob, expectedPixels: MediaPixelSize? = nil) async throws -> URL {
         // Original includes any maker-specific and timed metadata, byte for byte.
         if job.tier == .original {
             let ext = sourceURL.pathExtension.isEmpty ? "mov" : sourceURL.pathExtension
             return try copy(sourceURL, directory: sourceURL.deletingLastPathComponent(),
                             name: job.tier.filename(source: job.metadata.filename, extension: ext))
+        }
+        if let expectedPixels {
+            let tracks = try await AVURLAsset(url: sourceURL).loadTracks(withMediaType: .video)
+            guard let track = tracks.first else { throw MediaExportFailure.message("The Playback file has no video track.") }
+            let size = try await track.load(.naturalSize)
+            guard [size.width, size.height].sorted() == [CGFloat(expectedPixels.width), CGFloat(expectedPixels.height)].sorted() else {
+                throw MediaExportFailure.message("The Playback resolution changed since Share was tapped. Reopen the video and try again.")
+            }
         }
         // MP4 header serialization drops these QuickTime camera tags. Create a
         // real MOV container, retaining compressed samples rather than encoding.
@@ -82,7 +90,40 @@ actor MediaExportFiles {
         return output
     }
 
-    func prepareImage(_ sourceURL: URL, job: MediaExportJob) throws -> URL {
+    func stageBitmap(_ image: CGImage, orientation: UInt32, directory: URL) throws -> URL {
+        let url = directory.appending(path: "displayed.png")
+        guard let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil) else {
+            throw MediaExportFailure.message("Unable to prepare the displayed image.")
+        }
+        CGImageDestinationAddImage(destination, image, [kCGImagePropertyOrientation: orientation] as CFDictionary)
+        guard CGImageDestinationFinalize(destination) else { throw MediaExportFailure.message("Unable to write the displayed image.") }
+        return url
+    }
+
+    func prepareOriginalShare(_ input: URL, job: MediaExportJob) throws -> URL {
+        if CGImageSourceCreateWithURL(input as CFURL, nil) != nil {
+            return try prepareImage(input, job: job)
+        }
+        // Files activities may accept originals that Photos/ImageIO do not.
+        let ext = input.pathExtension == "data" ? (job.metadata.filename as NSString).pathExtension : input.pathExtension
+        return try copy(input, directory: input.deletingLastPathComponent(),
+                        name: job.tier.filename(source: job.metadata.filename, extension: ext.isEmpty ? "data" : ext))
+    }
+
+    func prepareSharedImage(data: Data?, image: CGImage, orientation: UInt32, directory: URL, job: MediaExportJob) throws -> URL {
+        if let data, CGImageSourceCreateWithData(data as CFData, nil) != nil {
+            let input = try stage(data: data, directory: directory, name: "media.data")
+            // The tier's encoded file is the Preview/Thumbnail being shared.
+            // Its screen-decoded bitmap can be smaller; that is not a new tier.
+            return try prepareImage(input, job: job, preserveCompression: true)
+        }
+        // A decoded bitmap can outlive encoded-cache eviction. Do not fetch a
+        // different resource merely to share these already displayed pixels.
+        let input = try stageBitmap(image, orientation: orientation, directory: directory)
+        return try prepareImage(input, job: job)
+    }
+
+    func prepareImage(_ sourceURL: URL, job: MediaExportJob, preserveCompression: Bool = false) throws -> URL {
         guard let source = CGImageSourceCreateWithURL(sourceURL as CFURL, nil),
               let sourceType = CGImageSourceGetType(source)
         else { throw MediaExportFailure.message("The downloaded file is not a readable image.") }
@@ -148,6 +189,31 @@ actor MediaExportFiles {
             gps[kCGImagePropertyGPSLongitude as String] = abs(lon)
             gps[kCGImagePropertyGPSLongitudeRef as String] = lon < 0 ? "W" : "E"
             properties[kCGImagePropertyGPSDictionary as String] = gps
+        }
+        if preserveCompression, type == outputType,
+           [UTType.jpeg, .png, .tiff].contains(outputType)
+        {
+            // Sharing an already displayed encoded resource must not inflate
+            // it by decoding and recompressing at a different JPEG quality.
+            // Apple's QA1895 documents metadata-only copying for these types.
+            let metadata = CGImageMetadataCreateMutable()
+            for dictionary in [kCGImagePropertyTIFFDictionary, kCGImagePropertyExifDictionary, kCGImagePropertyGPSDictionary] {
+                for (key, value) in properties[dictionary as String] as? [String: Any] ?? [:] {
+                    CGImageMetadataSetValueMatchingImageProperty(metadata, dictionary, key as CFString, value as CFTypeRef)
+                }
+            }
+            guard let destination = CGImageDestinationCreateWithURL(output as CFURL, outputType.identifier as CFString, 1, nil) else {
+                throw MediaExportFailure.message("Unable to prepare the displayed image.")
+            }
+            let options: [CFString: Any] = [kCGImageDestinationMetadata: metadata, kCGImageDestinationMergeMetadata: true]
+            var error: Unmanaged<CFError>?
+            guard CGImageDestinationCopyImageSource(destination, source, options as CFDictionary, &error) else {
+                if let error {
+                    throw error.takeRetainedValue()
+                }
+                throw MediaExportFailure.message("Unable to preserve the displayed image's compression and metadata.")
+            }
+            return output
         }
         properties[kCGImageDestinationLossyCompressionQuality as String] = 1.0
         guard let destination = CGImageDestinationCreateWithURL(output as CFURL, outputType.identifier as CFString, 1, nil) else {

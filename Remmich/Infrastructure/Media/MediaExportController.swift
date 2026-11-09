@@ -236,6 +236,81 @@ final class MediaExportController: NSObject {
         }
     }
 
+    /// Uses export preparation and transfer ownership without creating a Photos
+    /// job, requesting authorization, or marking the asset as downloaded.
+    func prepareShare(_ selection: MediaShareSelection,
+                      progress: @escaping @MainActor @Sendable (Int64, Int64) -> Void = { _, _ in }) async throws -> MediaShareFile
+    {
+        guard let scope, let media, selection.namespace == scope.cacheNamespace else { throw CancellationError() }
+        let owner = generation
+        if !ready {
+            await configuring?.value
+        }
+        try Task.checkCancellation()
+        guard generation == owner else { throw CancellationError() }
+        guard ready else { throw MediaExportFailure.message("Export preparation is unavailable. Try again shortly.") }
+        let operation = UUID()
+        let asset = selection.asset
+        var detail = selection.detail
+        if detail == nil {
+            detail = await detailReader?.cachedAssetDetail(id: asset.id)
+        }
+        try Task.checkCancellation()
+        guard generation == owner else { throw CancellationError() }
+        let job = MediaExportJob(id: operation, assetID: asset.id, revision: asset.thumbnailRevision,
+                                 capturedAt: asset.capturedAt, localOffsetHours: asset.localOffsetHours,
+                                 video: selection.isVideo, motionID: nil, tier: selection.tier,
+                                 metadata: .init(assetID: asset.id, detail: detail))
+        let root = try await files.directory(namespace: scope.cacheNamespace, job: operation)
+        do {
+            try Task.checkCancellation()
+            guard generation == owner else { throw CancellationError() }
+            Self.logger.info("Share preparation started tier=\(selection.tier.rawValue, privacy: .public) video=\(selection.isVideo)")
+            let output: URL
+            if selection.isVideo || selection.tier == .original {
+                let input: URL = if selection.isVideo,
+                                    let local = try await localVideoAsset(assetID: asset.id, revision: asset.thumbnailRevision, tier: .playback)
+                {
+                    try await files.copy(local.url, directory: root, name: "media.\(local.url.pathExtension)")
+                } else if !selection.isVideo,
+                          let data = try await localImageData(assetID: asset.id, revision: asset.thumbnailRevision, tier: .original)
+                {
+                    try await files.stage(data: data, directory: root, name: "media.data")
+                } else {
+                    try await resolve(job, assetID: asset.id, tier: selection.tier, name: "media",
+                                      root: root, media: media, owner: owner, tracked: false, progress: progress)
+                }
+                try Task.checkCancellation()
+                guard generation == owner else { throw CancellationError() }
+                if selection.isVideo {
+                    output = try await files.prepareVideo(input, job: job, expectedPixels: selection.videoPixelSize)
+                } else {
+                    output = try await files.prepareOriginalShare(input, job: job)
+                }
+            } else {
+                guard let bitmap = selection.image?.cgImage else { throw MediaExportFailure.message("Wait for an image to load before sharing.") }
+                let data = await media.exportCachedData(assetID: asset.id, revision: asset.thumbnailRevision, tier: selection.tier)
+                try Task.checkCancellation()
+                guard generation == owner else { throw CancellationError() }
+                output = try await files.prepareSharedImage(data: data, image: bitmap, orientation: selection.imageOrientation,
+                                                            directory: root, job: job)
+            }
+            try Task.checkCancellation()
+            guard generation == owner else { throw CancellationError() }
+            await transfers.finishExport(operationID: operation, namespace: scope.cacheNamespace)
+            return MediaShareFile(url: output, directory: root)
+        } catch {
+            await transfers.finishExport(operationID: operation, namespace: scope.cacheNamespace)
+            await files.remove(root)
+            if error is CancellationError || (error as NSError).code == NSURLErrorCancelled {
+                Self.logger.info("Share preparation cancelled")
+            } else {
+                Self.logger.error("Share preparation failed code=\((error as NSError).code)")
+            }
+            throw error
+        }
+    }
+
     func cancel(_ id: UUID) {
         guard let index = journal.jobs.firstIndex(where: { $0.id == id }), journal.jobs[index].canCancel else { return }
         journal.jobs[index].stage = .cancelled
@@ -628,7 +703,8 @@ final class MediaExportController: NSObject {
     }
 
     private func resolve(_ job: MediaExportJob, assetID: String, tier: MediaExportTier, name: String,
-                         root: URL, media: MediaLibraryController, owner: UUID) async throws -> URL
+                         root: URL, media: MediaLibraryController, owner: UUID, tracked: Bool = true,
+                         progress: @escaping @MainActor @Sendable (Int64, Int64) -> Void = { _, _ in }) async throws -> URL
     {
         guard generation == owner else { throw CancellationError() }
         if let data = await media.exportCachedData(assetID: assetID, revision: job.revision, tier: tier),
@@ -641,9 +717,14 @@ final class MediaExportController: NSObject {
         let transferOwner = try await media.exportTransferOwner(using: transfers)
         guard generation == owner,
               let url = media.downloadURL(assetID: assetID, derivative: tier.derivative, endpoint: transferOwner.endpoint) else { throw CancellationError() }
-        try await transition(job.id, to: .downloading, owner: owner)
+        if tracked {
+            try await transition(job.id, to: .downloading, owner: owner)
+        }
         let downloaded = try await transfers.exportFile(url: url, operationID: job.id,
-                                                        component: "\((job.transferAttempt ?? job.id).uuidString)|\(name)", owner: transferOwner) { _, _ in }
+                                                        component: "\((job.transferAttempt ?? job.id).uuidString)|\(name)", owner: transferOwner)
+        { received, total in
+            Task { @MainActor in progress(received, total) }
+        }
         guard 200 ..< 300 ~= downloaded.response.statusCode else {
             await transfers.finishExport(operationID: job.id, namespace: transferOwner.namespace)
             throw MediaDownloadService.DownloadError.httpStatus(downloaded.response.statusCode)

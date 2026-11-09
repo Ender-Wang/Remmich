@@ -20,6 +20,15 @@ nonisolated enum AssetViewerRenderedImageSource: Equatable, Sendable {
     case fullSize
     case original
 
+    var exportTier: MediaExportTier {
+        switch self {
+        case .thumbnail: .thumbnail
+        case .preview: .preview
+        case .fullSize: .full
+        case .original: .original
+        }
+    }
+
     var title: String {
         switch self {
         case .thumbnail:

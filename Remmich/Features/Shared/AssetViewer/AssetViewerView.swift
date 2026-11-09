@@ -62,6 +62,7 @@ struct AssetViewerView: View {
     @State private var cachedDetailMissAssetIDs: Set<String> = []
     @State private var refreshedDetailAssetIDs: Set<String> = []
     @State private var renderedImageMetadataByAssetID: [String: AssetViewerRenderedImageMetadata] = [:]
+    @State private var displayedShareImage: (assetID: String, revision: Date, image: UIImage, tier: MediaExportTier)?
     @State private var videoPlaybackSession: VideoPlaybackSession?
     @State private var videoFirstFrameReady = false
     @State private var videoControlsVisible = true
@@ -1013,6 +1014,12 @@ struct AssetViewerView: View {
                 ),
                 fullResolutionRequestID: fullResolutionRequestIDs[asset.id],
                 videoPosterLoaded: { image in
+                    if asset.id == session.selectedAssetID,
+                       displayedShareImage?.assetID != asset.id || displayedShareImage?.revision != asset.thumbnailRevision
+                       || displayedShareImage?.image !== image || displayedShareImage?.tier != .preview
+                    {
+                        displayedShareImage = (asset.id, asset.thumbnailRevision, image, .preview)
+                    }
                     guard asset.id == session.selectedAssetID,
                           let playback = videoPlaybackSession, playback.assetID == asset.id else { return }
                     updateVideoNowPlayingTitle()
@@ -1028,6 +1035,12 @@ struct AssetViewerView: View {
                     if metadata.source == .original {
                         fullResolutionLoadErrors.removeValue(forKey: asset.id)
                     }
+                },
+                displayedImageChanged: { image, source in
+                    guard asset.id == session.selectedAssetID,
+                          displayedShareImage?.assetID != asset.id || displayedShareImage?.revision != asset.thumbnailRevision
+                          || displayedShareImage?.image !== image || displayedShareImage?.tier != source.exportTier else { return }
+                    displayedShareImage = (asset.id, asset.thumbnailRevision, image, source.exportTier)
                 },
                 fullResolutionLoadFailed: { message in
                     if let message {
@@ -1652,13 +1665,22 @@ struct AssetViewerView: View {
     private var bottomActions: some View {
         GlassEffectContainer(spacing: 12) {
             HStack(spacing: 0) {
-                glassActionButton(
-                    systemImage: AssetViewerExportAction.share.systemImage,
-                    label: AssetViewerExportAction.share.title,
-                    identifier: "asset-viewer-share",
-                    symbolOffsetY: -2,
-                    enabled: AssetViewerExportAction.share.isEnabled
-                ) {}
+                MediaShareButton(media: media, selection: shareSelection) { preparing in
+                    ZStack {
+                        Color.clear.frame(width: controlHitSize, height: controlHitSize)
+                        Group {
+                            if preparing {
+                                ProgressView().tint(.primary)
+                            } else {
+                                Image(systemName: AssetViewerExportAction.share.systemImage).offset(y: -2)
+                            }
+                        }
+                        .font(.title2.weight(.semibold))
+                        .frame(width: controlVisualSize, height: controlVisualSize)
+                        .glassEffect(.regular, in: Circle())
+                    }.contentShape(.rect)
+                }
+                .accessibilityIdentifier("asset-viewer-share")
 
                 Spacer(minLength: 12)
 
@@ -1698,6 +1720,21 @@ struct AssetViewerView: View {
                 ) {}
             }
         }
+    }
+
+    private var shareSelection: MediaShareSelection? {
+        guard let asset = session.selectedAsset, let namespace = media.scope?.cacheNamespace else { return nil }
+        if asset.mediaKind == .video, videoFirstFrameReady {
+            return .init(namespace: namespace, asset: asset, tier: .playback, image: nil, detail: selectedAssetDetail,
+                         videoPixelSize: videoPlaybackSession?.metadata?.pixelSize)
+        }
+        if let current = displayedShareImage, current.assetID == asset.id, current.revision == asset.thumbnailRevision {
+            return .init(namespace: namespace, asset: asset, tier: current.tier, image: current.image, detail: selectedAssetDetail)
+        }
+        if asset.id == route.selectedAsset.id, let sourceImage {
+            return .init(namespace: namespace, asset: asset, tier: .thumbnail, image: sourceImage, detail: selectedAssetDetail)
+        }
+        return nil
     }
 
     private func glassActionButton(
@@ -3925,6 +3962,7 @@ private struct AssetViewerFitPage: View {
     let fullResolutionRequestID: Int?
     let videoPosterLoaded: (UIImage) -> Void
     let renderedImageMetadataChanged: (AssetViewerRenderedImageMetadata) -> Void
+    let displayedImageChanged: (UIImage, AssetViewerRenderedImageSource) -> Void
     let fullResolutionLoadFailed: (String?) -> Void
     let zoomChanged: (Bool) -> Void
     let livePhotoPressChanged: (Bool) -> Void
@@ -3973,6 +4011,7 @@ private struct AssetViewerFitPage: View {
                     reportsRenderedImageMetadata: isSelected,
                     fullResolutionRequestID: fullResolutionRequestID,
                     renderedImageMetadataChanged: renderedImageMetadataChanged,
+                    displayedImageChanged: displayedImageChanged,
                     fullResolutionLoadFailed: fullResolutionLoadFailed,
                     zoomChanged: zoomChanged,
                     livePhotoPressChanged: livePhotoPressChanged,

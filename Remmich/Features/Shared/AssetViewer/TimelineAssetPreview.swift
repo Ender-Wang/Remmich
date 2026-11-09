@@ -31,6 +31,8 @@ final class TimelineAssetPreviewSession: Identifiable {
     let playback: VideoPlaybackSession?
     let viewerRoute: AssetViewerRoute?
     private(set) var previewImage: UIImage?
+    private(set) var previewTier: MediaExportTier = .preview
+    private(set) var videoFrameReady = false
     private var preparationStarted = false
     private(set) var isClosed = false
     private(set) var isDismissing = false
@@ -71,9 +73,15 @@ final class TimelineAssetPreviewSession: Identifiable {
         return true
     }
 
-    func receivePreviewImage(_ image: UIImage) {
-        guard !isDismissing else { return }
+    func receivePreviewImage(_ image: UIImage, tier: MediaExportTier = .preview) {
+        guard !isDismissing, previewImage == nil || previewTier != .preview || tier != .thumbnail else { return }
         previewImage = image
+        previewTier = tier
+    }
+
+    func receiveVideoFrame() {
+        guard !isDismissing else { return }
+        videoFrameReady = true
     }
 
     var isPlaybackIntended: Bool {
@@ -354,22 +362,44 @@ struct TimelineAssetPreview: View {
                     .frame(height: rowHeight).padding(.horizontal, 16).contentShape(.rect)
             }.buttonStyle(.plain).accessibilityIdentifier("timeline-preview-download")
         } else {
-            Button {} label: {
-                Label(action.title, systemImage: action.systemImage)
-                    .font(.body)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .frame(height: rowHeight)
-                    .padding(.horizontal, 16)
-                    .contentShape(.rect)
+            MediaShareButton(media: media, selection: shareSelection) { preparing in
+                HStack {
+                    if preparing {
+                        ProgressView().tint(.primary)
+                    } else {
+                        Image(systemName: action.systemImage)
+                    }
+                    Text(preparing ? "Preparing…" : action.title)
+                }
+                .font(.body)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(height: rowHeight)
+                .padding(.horizontal, 16)
+                .contentShape(.rect)
             }
             .buttonStyle(.plain)
-            .foregroundStyle(action.isEnabled ? Color.primary : Color.secondary)
-            .disabled(!action.isEnabled)
-            .accessibilityHint(action.unavailableHint)
+            .foregroundStyle(shareSelection == nil ? Color.secondary : Color.primary)
             .accessibilityIdentifier("timeline-preview-\(action.rawValue)")
         }
+    }
+
+    private var shareSelection: MediaShareSelection? {
+        guard let namespace = media.scope?.cacheNamespace else { return nil }
+        if session.asset.mediaKind == .video, session.videoFrameReady,
+           let playback = session.playback, !playback.phase.isFailed
+        {
+            return .init(namespace: namespace, asset: session.asset, tier: .playback, image: nil, detail: nil,
+                         videoPixelSize: playback.metadata?.pixelSize)
+        }
+        if let image = session.previewImage {
+            return .init(namespace: namespace, asset: session.asset, tier: session.previewTier, image: image, detail: nil)
+        }
+        if let image = session.image {
+            return .init(namespace: namespace, asset: session.asset, tier: .thumbnail, image: image, detail: nil)
+        }
+        return nil
     }
 
     private func previewContent(pixels: MediaPixelSize, derivative: MediaDerivative) -> some View {
@@ -414,14 +444,14 @@ struct TimelineAssetPreview: View {
                 // update. Publish later, with the same fade as a network hit.
                 Task { @MainActor in
                     withAnimation(.easeOut(duration: 0.18)) {
-                        session.receivePreviewImage(response.image)
+                        session.receivePreviewImage(response.image, tier: derivative == .thumbnail ? .thumbnail : .preview)
                     }
                 }
             }
             .onDisappear(.cancel)
             .id(imageRetryID)
             if let playback = session.playback {
-                SilentPreviewPlayer(player: playback.player)
+                SilentPreviewPlayer(player: playback.player, readyForDisplay: { session.receiveVideoFrame() })
                     .allowsHitTesting(false)
             }
         }
@@ -464,12 +494,14 @@ private nonisolated struct TimelinePreviewClip: Shape {
 
 private struct SilentPreviewPlayer: UIViewRepresentable {
     let player: AVPlayer
+    let readyForDisplay: () -> Void
 
     func makeUIView(context _: Context) -> Surface {
-        Surface(player: player)
+        Surface(player: player, readyForDisplay: readyForDisplay)
     }
 
     func updateUIView(_ view: Surface, context _: Context) {
+        view.readyForDisplay = readyForDisplay
         if view.playerLayer.player !== player {
             view.playerLayer.player = player
         }
@@ -489,8 +521,10 @@ private struct SilentPreviewPlayer: UIViewRepresentable {
         }
 
         private var readiness: NSKeyValueObservation?
+        var readyForDisplay: () -> Void
 
-        init(player: AVPlayer) {
+        init(player: AVPlayer, readyForDisplay: @escaping () -> Void) {
+            self.readyForDisplay = readyForDisplay
             super.init(frame: .zero)
             backgroundColor = .clear
             isOpaque = false
@@ -506,6 +540,7 @@ private struct SilentPreviewPlayer: UIViewRepresentable {
                     UIView.animate(withDuration: 0.18) {
                         self.alpha = 1
                     }
+                    self.readyForDisplay()
                 }
             }
         }

@@ -15,6 +15,7 @@ struct ZoomableStillImageView: View {
     let reportsRenderedImageMetadata: Bool
     let fullResolutionRequestID: Int?
     let renderedImageMetadataChanged: (AssetViewerRenderedImageMetadata) -> Void
+    let displayedImageChanged: (UIImage, AssetViewerRenderedImageSource) -> Void
     let fullResolutionLoadFailed: (String?) -> Void
     let zoomChanged: (Bool) -> Void
     let livePhotoPressChanged: (Bool) -> Void
@@ -39,6 +40,7 @@ struct ZoomableStillImageView: View {
         reportsRenderedImageMetadata: Bool,
         fullResolutionRequestID: Int?,
         renderedImageMetadataChanged: @escaping (AssetViewerRenderedImageMetadata) -> Void,
+        displayedImageChanged: @escaping (UIImage, AssetViewerRenderedImageSource) -> Void = { _, _ in },
         fullResolutionLoadFailed: @escaping (String?) -> Void,
         zoomChanged: @escaping (Bool) -> Void,
         livePhotoPressChanged: @escaping (Bool) -> Void,
@@ -54,6 +56,7 @@ struct ZoomableStillImageView: View {
         self.reportsRenderedImageMetadata = reportsRenderedImageMetadata
         self.fullResolutionRequestID = fullResolutionRequestID
         self.renderedImageMetadataChanged = renderedImageMetadataChanged
+        self.displayedImageChanged = displayedImageChanged
         self.fullResolutionLoadFailed = fullResolutionLoadFailed
         self.zoomChanged = zoomChanged
         self.livePhotoPressChanged = livePhotoPressChanged
@@ -240,6 +243,7 @@ struct ZoomableStillImageView: View {
             )
         }
         guard !Task.isCancelled else { return }
+        displayedImageChanged(image, source)
         publishMetadata(source: source, pixelSize: pixelSize, fileSizeBytes: loadedFileSizeBytes)
 
         guard loadedFileSizeBytes == nil,
@@ -256,6 +260,7 @@ struct ZoomableStillImageView: View {
         for image: UIImage,
         source: AssetViewerRenderedImageSource
     ) {
+        displayedImageChanged(image, source)
         let pixelSize: MediaPixelSize = if let bitmap = image.cgImage {
             .init(width: bitmap.width, height: bitmap.height)
         } else {

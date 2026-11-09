@@ -17,12 +17,12 @@ nonisolated enum AssetViewerExportAction: String {
         }
     }
 
-    /// Download is wired to Photos; Share remains a separate delivery.
+    /// Availability additionally depends on a real displayed resource.
     var isEnabled: Bool {
-        self == .download
+        true
     }
 
     var unavailableHint: String {
-        self == .download ? "Choose a quality and save to Photos" : "Coming in a later update"
+        self == .download ? "Choose a quality and save to Photos" : "Share the displayed resolution"
     }
 }

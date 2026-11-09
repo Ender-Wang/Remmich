@@ -870,7 +870,7 @@ final class VideoPlaybackSession {
     }
 }
 
-private extension VideoPlaybackPhase {
+extension VideoPlaybackPhase {
     var isFailed: Bool {
         if case .failed = self {
             return true
@@ -878,7 +878,7 @@ private extension VideoPlaybackPhase {
         return false
     }
 
-    var isSeeking: Bool {
+    fileprivate var isSeeking: Bool {
         if case .seeking = self {
             return true
         }
