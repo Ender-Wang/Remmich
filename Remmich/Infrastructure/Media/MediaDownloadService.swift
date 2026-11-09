@@ -17,9 +17,13 @@ actor MediaDownloadService {
 
     enum DownloadError: LocalizedError {
         case invalidResponse
+        case httpStatus(Int)
 
         var errorDescription: String? {
-            "The Immich media download returned an invalid response."
+            switch self {
+            case .invalidResponse: "The Immich media download returned an invalid response."
+            case let .httpStatus(status): "The Immich media request failed (HTTP \(status))."
+            }
         }
     }
 
@@ -52,9 +56,10 @@ actor MediaDownloadService {
         var destination: URL?
         do {
             try Task.checkCancellation()
-            guard let http = response as? HTTPURLResponse, 200 ..< 300 ~= http.statusCode else {
+            guard let http = response as? HTTPURLResponse else {
                 throw DownloadError.invalidResponse
             }
+            guard 200 ..< 300 ~= http.statusCode else { throw DownloadError.httpStatus(http.statusCode) }
 
             try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
             let responseFilename = response.suggestedFilename?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -67,7 +72,8 @@ actor MediaDownloadService {
             return DownloadedMedia(
                 fileURL: target,
                 suggestedFilename: filename,
-                mimeType: response.mimeType
+                mimeType: response.mimeType,
+                resolvedURL: response.url
             )
         } catch {
             try? fileManager.removeItem(at: temporaryURL)

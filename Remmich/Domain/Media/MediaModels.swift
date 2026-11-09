@@ -37,4 +37,5 @@ nonisolated struct DownloadedMedia: Sendable {
     let fileURL: URL
     let suggestedFilename: String
     let mimeType: String?
+    var resolvedURL: URL?
 }

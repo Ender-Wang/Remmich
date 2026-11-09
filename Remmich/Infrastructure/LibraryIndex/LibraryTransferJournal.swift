@@ -2,10 +2,14 @@ import CryptoKit
 import Foundation
 
 nonisolated enum LibraryTransferKind: String, Codable, Sendable {
-    case index, metadata, thumbnail
+    case index, metadata, thumbnail, export
 
     var lane: String {
-        self == .index ? "index" : "cache"
+        switch self {
+        case .index: "index"
+        case .export: "export"
+        case .metadata, .thumbnail: "cache"
+        }
     }
 }
 
@@ -101,6 +105,9 @@ nonisolated struct LibraryTransferJournal: Codable, Sendable {
         var state: State = .queued
         var statusCode: Int?
         var contentType: String?
+        var contentDisposition: String?
+        var responseURL: URL?
+        var receivedBytes: Int64?
         var errorCode: Int?
         var nativeTaskID: Int?
         var attemptID: UUID?
@@ -129,6 +136,7 @@ nonisolated struct LibraryTransferJournal: Codable, Sendable {
             case .index: 64 * 1024 * 1024
             case .metadata: 4 * 1024 * 1024
             case .thumbnail: 16 * 1024 * 1024
+            case .export: Int64.max
             }
         }
     }
@@ -150,7 +158,7 @@ nonisolated struct LibraryTransferJournal: Codable, Sendable {
 
     mutating func job(url: URL, kind: LibraryTransferKind, owner expected: LibraryTransferOwner, sourceRevision: String? = nil) throws -> Job {
         guard owner == expected, !disabledLanes.contains(kind.lane) else { throw CancellationError() }
-        if let existing = jobs.first(where: { $0.owner == expected && $0.kind == kind && $0.url == url }) {
+        if let existing = jobs.first(where: { $0.owner == expected && $0.kind == kind && $0.url == url && (kind != .export || $0.sourceRevision == sourceRevision) }) {
             return existing
         }
         let pass = passes[kind.lane] ?? UUID()
@@ -171,8 +179,16 @@ nonisolated struct LibraryTransferJournal: Codable, Sendable {
         jobs[index] = job
     }
 
+    mutating func removeExport(operationID: UUID, attemptID: UUID? = nil) -> [Job] {
+        let prefix = operationID.uuidString + "|" + (attemptID.map { $0.uuidString + "|" } ?? "")
+        let removed = jobs.filter { $0.kind == .export && $0.sourceRevision?.hasPrefix(prefix) == true }
+        let ids = Set(removed.map(\.id))
+        jobs.removeAll { ids.contains($0.id) }
+        return removed
+    }
+
     mutating func requeueFailures(at now: Date = Date()) {
-        for index in jobs.indices where jobs[index].state == .failed {
+        for index in jobs.indices where jobs[index].state == .failed && jobs[index].kind != .export {
             guard let retryAfter = jobs[index].retryAfter, retryAfter <= now,
                   !disabledLanes.contains(jobs[index].kind.lane) else { continue }
             jobs[index].state = .queued
@@ -189,7 +205,7 @@ nonisolated struct LibraryTransferJournal: Codable, Sendable {
     mutating func handoff(to transport: LibraryTransferTransport, unfinished: Set<UUID>) -> [Job] {
         var replaced: [Job] = []
         for index in jobs.indices where unfinished.contains(jobs[index].id) && jobs[index].state == .running {
-            guard (jobs[index].transport ?? .background) != transport else { continue }
+            guard jobs[index].kind != .export, (jobs[index].transport ?? .background) != transport else { continue }
             replaced.append(jobs[index])
             jobs[index].state = .queued
             jobs[index].nativeTaskID = nil

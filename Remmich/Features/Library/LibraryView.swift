@@ -4,6 +4,7 @@ struct LibraryView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let collections: [FixtureCollection]
+    var exports: MediaExportController?
     let session: AccountSession
     let profile: ConnectionProfile
     let activeRoute: ActiveConnectionRoute?
@@ -31,12 +32,32 @@ struct LibraryView: View {
         GeometryReader { geometry in
             ZStack(alignment: .topTrailing) {
                 ScrollView {
-                    LazyVGrid(columns: columns, spacing: 14) {
-                        ForEach(collections) { collection in
-                            NavigationLink(value: collection) {
-                                CollectionCard(collection: collection)
+                    VStack(alignment: .leading, spacing: 16) {
+                        if let exports {
+                            Text("On This Device").font(.headline)
+                            NavigationLink {
+                                DownloadsView(exports: exports)
+                            } label: {
+                                HStack(spacing: 12) {
+                                    Image(systemName: "arrow.down.circle").font(.title2)
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text("Downloads History").font(.headline)
+                                        Text(exports.activeCount > 0 ? "\(exports.activeCount) active · Photos · Remmich" : "Save history · Photos · Remmich")
+                                            .font(.caption).foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
+                                }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
+                                    .glassEffect(.regular, in: .rect(cornerRadius: 22))
+                            }.buttonStyle(.plain)
+                        }
+                        LazyVGrid(columns: columns, spacing: 14) {
+                            ForEach(collections) { collection in
+                                NavigationLink(value: collection) {
+                                    CollectionCard(collection: collection)
+                                }
+                                .buttonStyle(.plain)
                             }
-                            .buttonStyle(.plain)
                         }
                     }
                     .padding(.horizontal, 16)

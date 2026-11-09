@@ -5,6 +5,7 @@ import UIKit
 
 struct AppShellView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var exportScenePhase
 
     let session: AccountSession
     let profile: ConnectionProfile
@@ -173,6 +174,7 @@ struct AppShellView: View {
                     NavigationStack(path: $libraryPath) {
                         LibraryView(
                             collections: PreviewFixtures.collections,
+                            exports: media.exports,
                             session: session,
                             profile: profile,
                             activeRoute: activeRoute,
@@ -273,6 +275,13 @@ struct AppShellView: View {
         .ignoresSafeArea(.container, edges: .all)
         .environment(\.accountAvatarMedia, media)
         .onAppear { media.logShellPresented() }
+        .onChange(of: media.scope, initial: true) { _, _ in media.exports.detailReader = assetDetails }
+        .onChange(of: exportScenePhase, initial: true) { _, phase in
+            media.exports.sceneActivityChanged(active: phase == .active)
+            if phase == .active {
+                Task { await media.exports.reconcile() }
+            }
+        }
         .onChange(of: isPrimaryContentLoading, initial: true) { _, loading in
             primaryContentLoadingChanged?(loading)
         }

@@ -6,6 +6,7 @@ struct TimelineAssetOverlay: View {
     let asset: TimelineAssetSummary
     var isHidden = false
     var hiddenLivePhotoBadgeAssetID: String?
+    var savedToPhotos = false
 
     static func isVisible(for asset: TimelineAssetSummary) -> Bool {
         asset.isFavorite || TimelineAssetBadgeOverlay.isVisible(for: asset) || asset.mediaKind == .video
@@ -30,6 +31,14 @@ struct TimelineAssetOverlay: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                     .shadow(radius: 3)
             }
+            if savedToPhotos {
+                Image(systemName: "checkmark")
+                    .font(.caption2.weight(.semibold)).foregroundStyle(.white)
+                    .padding([.bottom, .trailing], 3)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                    .shadow(radius: 3)
+                    .accessibilityLabel("Saved to Photos")
+            }
         }
         .opacity(isHidden ? 0 : 1)
         // UIKit-hosted cells do not inherit the presenting SwiftUI transaction.
@@ -51,6 +60,7 @@ nonisolated struct AssetViewerOpeningAssetOverlay: View, Animatable {
     var sourceRect: CGRect
     let destinationRect: CGRect
     var progress: CGFloat
+    var savedToPhotos = false
 
     var animatableData: AnimatableValues<CGFloat, CGFloat, CGFloat, CGFloat, CGFloat> {
         get { AnimatableValues(progress, sourceRect.minX, sourceRect.minY, sourceRect.width, sourceRect.height) }
@@ -69,7 +79,7 @@ nonisolated struct AssetViewerOpeningAssetOverlay: View, Animatable {
             width: sourceRect.width + (destinationRect.width - sourceRect.width) * amount,
             height: sourceRect.height + (destinationRect.height - sourceRect.height) * amount
         )
-        TimelineAssetOverlay(asset: asset)
+        TimelineAssetOverlay(asset: asset, savedToPhotos: savedToPhotos)
             .frame(width: frame.width, height: frame.height)
             .position(x: frame.midX, y: frame.midY)
             .opacity(1 - amount)

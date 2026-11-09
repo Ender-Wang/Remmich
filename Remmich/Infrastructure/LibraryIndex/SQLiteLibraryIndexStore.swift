@@ -2,7 +2,7 @@ import Foundation
 import SQLite3
 
 actor SQLiteLibraryIndexStore: LibraryIndexStoring {
-    static let currentSchemaVersion = 8
+    static let currentSchemaVersion = 9
 
     private let databaseURL: URL
     private var connection: SQLiteConnection?
@@ -26,6 +26,41 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
         let database = try database()
         try prepareSchema(database)
         try ensureScope(scope, database: database)
+    }
+
+    func loadMediaExports(scope: MediaAccountScope) throws -> MediaExportJournal {
+        let db = try preparedDatabase(scope: scope)
+        guard let json = try db.scalarText("SELECT payload FROM media_exports WHERE scope=?", [.text(scope.cacheNamespace)]) else { return .init() }
+        return try JSONDecoder().decode(MediaExportJournal.self, from: Data(json.utf8))
+    }
+
+    func saveMediaExports(_ journal: MediaExportJournal, scope: MediaAccountScope) throws {
+        // Configuration creates the scope. A late export must not resurrect a
+        // deleted account after a sign-out or Clear Local Data operation.
+        let db = try preparedDatabase()
+        guard try db.scalarInt64("SELECT COUNT(*) FROM scopes WHERE scope=?", [.text(scope.cacheNamespace)]) == 1 else {
+            throw CancellationError()
+        }
+        let json = try String(decoding: JSONEncoder().encode(journal), as: UTF8.self)
+        try db.execute("INSERT INTO media_exports(scope,payload) VALUES(?,?) ON CONFLICT(scope) DO UPDATE SET payload=excluded.payload", [.text(scope.cacheNamespace), .text(json)])
+    }
+
+    func recordMediaReceipt(_ receipt: MediaPhotosReceipt, jobID: UUID, filename: String, byteCount: Int64 = 0, scope: MediaAccountScope) throws {
+        let db = try preparedDatabase()
+        guard let json = try db.scalarText("SELECT payload FROM media_exports WHERE scope=?", [.text(scope.cacheNamespace)]) else { throw CancellationError() }
+        var journal = try JSONDecoder().decode(MediaExportJournal.self, from: Data(json.utf8))
+        guard let index = journal.jobs.firstIndex(where: { $0.id == jobID && $0.key == receipt.key }) else { throw CancellationError() }
+        journal.receipts.removeAll { $0.key == receipt.key }
+        journal.receipts.append(receipt)
+        journal.jobs[index].stage = .completed
+        journal.jobs[index].finishedAt = receipt.savedAt
+        journal.jobs[index].exportedFilename = filename
+        journal.jobs[index].error = nil
+        if byteCount > 0 {
+            journal.jobs[index].received = byteCount
+            journal.jobs[index].expected = byteCount
+        }
+        try saveMediaExports(journal, scope: scope)
     }
 
     func beginGeneration(scope: MediaAccountScope) async throws -> Int64 {
@@ -1074,7 +1109,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
         try prepareSchema(database)
         try database.transaction {
             for table in [
-                "asset_places", "place_lookups", "place_accounts", "account_endpoint_aliases", "asset_details", "asset_detail_strings", "derivatives", "grouped_catalogs",
+                "media_exports", "asset_places", "place_lookups", "place_accounts", "account_endpoint_aliases", "asset_details", "asset_detail_strings", "derivatives", "grouped_catalogs",
                 "assets", "generations", "sync_state", "scopes",
             ] {
                 try database.execute(
@@ -1176,9 +1211,17 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
         if version == Self.currentSchemaVersion {
             return
         }
+        if version == 8 {
+            try database.transaction {
+                try createMediaExportSchema(database)
+                try database.execute("PRAGMA user_version = \(Self.currentSchemaVersion)")
+            }
+            return
+        }
         if version == 7 {
             try database.transaction {
                 try createPlaceSchema(database)
+                try createMediaExportSchema(database)
                 try database.execute("PRAGMA user_version = \(Self.currentSchemaVersion)")
             }
             return
@@ -1349,8 +1392,13 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
             )
             """)
             try createPlaceSchema(database)
+            try createMediaExportSchema(database)
             try database.execute("PRAGMA user_version = \(Self.currentSchemaVersion)")
         }
+    }
+
+    private func createMediaExportSchema(_ database: SQLiteConnection) throws {
+        try database.execute("CREATE TABLE IF NOT EXISTS media_exports(scope TEXT PRIMARY KEY REFERENCES scopes(scope) ON DELETE CASCADE, payload TEXT NOT NULL)")
     }
 
     private func createPlaceSchema(_ database: SQLiteConnection) throws {

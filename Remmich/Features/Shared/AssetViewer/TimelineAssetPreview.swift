@@ -227,6 +227,11 @@ struct TimelineAssetPreview: View {
                                                   sourceRadius: (target?.cornerRadius ?? 18) / max(landing.scale, 0.04),
                                                   progress: progress))
                 .gesture(assetGesture(frame: frame))
+                .overlay(alignment: .bottomTrailing) {
+                    if session.isOpeningComplete, !session.isDismissing {
+                        MediaExportProgressBadge(assetID: session.asset.id, exports: media.exports).padding(12)
+                    }
+                }
                 // Keep the opening spring's attributes separate from direct
                 // finger updates, so an early drag cannot snap it to its end.
                 .scaleEffect(scale)
@@ -340,22 +345,31 @@ struct TimelineAssetPreview: View {
         .padding(.vertical, 4)
     }
 
+    @ViewBuilder
     private func actionButton(_ action: AssetViewerExportAction, rowHeight: CGFloat) -> some View {
-        Button {} label: {
-            Label(action.title, systemImage: action.systemImage)
-                .font(.body)
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .frame(height: rowHeight)
-                .padding(.horizontal, 16)
-                .contentShape(.rect)
+        if action == .download {
+            MediaDownloadButton(asset: session.asset, media: media) { saved in
+                Label(saved ? "Saved to Photos" : "Save to Photos", systemImage: saved ? "checkmark" : action.systemImage)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(height: rowHeight).padding(.horizontal, 16).contentShape(.rect)
+            }.buttonStyle(.plain).accessibilityIdentifier("timeline-preview-download")
+        } else {
+            Button {} label: {
+                Label(action.title, systemImage: action.systemImage)
+                    .font(.body)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(height: rowHeight)
+                    .padding(.horizontal, 16)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(action.isEnabled ? Color.primary : Color.secondary)
+            .disabled(!action.isEnabled)
+            .accessibilityHint(action.unavailableHint)
+            .accessibilityIdentifier("timeline-preview-\(action.rawValue)")
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(action.isEnabled ? Color.primary : Color.secondary)
-        .disabled(!action.isEnabled)
-        .accessibilityHint(action.unavailableHint)
-        .accessibilityIdentifier("timeline-preview-\(action.rawValue)")
     }
 
     private func previewContent(pixels: MediaPixelSize, derivative: MediaDerivative) -> some View {

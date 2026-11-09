@@ -633,7 +633,7 @@ struct TimelineAssetThumbnail: View {
             )
             .frame(width: proxy.size.width, height: proxy.size.height)
             .overlay {
-                if TimelineAssetOverlay.isVisible(for: asset) {
+                if TimelineAssetOverlay.isVisible(for: asset) || media.exports.saved(asset) {
                     GeometryReader { overlayGeometry in
                         let thumbnailRect = TimelineThumbnailGeometry.renderedImageRect(
                             in: overlayGeometry.size,
@@ -642,7 +642,8 @@ struct TimelineAssetThumbnail: View {
                         )
                         TimelineAssetOverlay(
                             asset: asset,
-                            isHidden: hiddenLivePhotoBadgeAssetID == asset.id || hiddenBadgeAssetIDs.contains(asset.id)
+                            isHidden: hiddenLivePhotoBadgeAssetID == asset.id || hiddenBadgeAssetIDs.contains(asset.id),
+                            savedToPhotos: media.exports.saved(asset)
                         )
                         .frame(
                             width: thumbnailRect.width,

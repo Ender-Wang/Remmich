@@ -431,17 +431,26 @@ struct AssetViewerView: View {
 
                     if isOpening, !isMemoryViewer, !reduceMotion,
                        let asset = session.selectedAsset,
-                       TimelineAssetOverlay.isVisible(for: asset), let openingTarget
+                       TimelineAssetOverlay.isVisible(for: asset) || media.exports.saved(asset), let openingTarget
                     {
                         AssetViewerOpeningAssetOverlay(
                             asset: asset,
                             sourceRect: openingTarget.imageFrame.offsetBy(dx: -fullFrame.minX, dy: -fullFrame.minY),
                             destinationRect: dismissalImageRect,
-                            progress: openingProgress
+                            progress: openingProgress,
+                            savedToPhotos: media.exports.saved(asset)
                         )
                         .scaleEffect(openingDragScale)
                         .offset(openingDragTranslation)
                         .modifier(AssetViewerReturnSourceOffset(source: returnSource))
+                    }
+
+                    if !isOpening, !isDismissing, let asset = session.selectedAsset {
+                        MediaExportProgressBadge(assetID: asset.id, exports: media.exports)
+                            .padding(12)
+                            .frame(width: dismissalImageRect.width, height: dismissalImageRect.height, alignment: .bottomTrailing)
+                            .position(x: dismissalImageRect.midX, y: dismissalImageRect.midY)
+                            .zIndex(3)
                     }
 
                     // Show loading feedback throughout opening. Keep the lightweight overlay
@@ -1663,16 +1672,15 @@ struct AssetViewerView: View {
                     .accessibilityValue(showsInfo ? "Shown" : "Hidden")
                     .accessibilityIdentifier("asset-viewer-info")
 
-                    Button {} label: {
-                        Image(systemName: AssetViewerExportAction.download.systemImage)
-                            // Balance the arrow's lower visual weight against Info.
-                            .offset(y: -3)
-                            .frame(width: controlHitSize, height: controlHitSize)
+                    if let asset = session.selectedAsset {
+                        MediaDownloadButton(asset: asset, media: media) { saved in
+                            Image(systemName: saved ? "checkmark" : AssetViewerExportAction.download.systemImage)
+                                // Balance the arrow's lower visual weight against Info.
+                                .offset(y: saved ? 0 : -3)
+                                .frame(width: controlHitSize, height: controlHitSize)
+                        }
+                        .accessibilityIdentifier("asset-viewer-download")
                     }
-                    .disabled(!AssetViewerExportAction.download.isEnabled)
-                    .accessibilityLabel(AssetViewerExportAction.download.title)
-                    .accessibilityHint(AssetViewerExportAction.download.unavailableHint)
-                    .accessibilityIdentifier("asset-viewer-download")
                 }
                 .font(.title2.weight(.semibold))
                 .buttonStyle(.plain)

@@ -418,6 +418,13 @@ final class RemmichAppDelegate: NSObject, UIApplicationDelegate {
     func application(_: UIApplication, handleEventsForBackgroundURLSession identifier: String,
                      completionHandler: @escaping () -> Void)
     {
+        if identifier == LibraryTransferQueue.exportSessionIdentifier {
+            let completion = LibraryTransferEventCompletion(completionHandler)
+            Task {
+                await LibraryTransferQueue.exports.handleBackgroundEvents { await completion.finish() }
+            }
+            return
+        }
         guard identifier == LibraryTransferQueue.sessionIdentifier else { completionHandler(); return }
         let completion = LibraryTransferEventCompletion(completionHandler)
         Task {

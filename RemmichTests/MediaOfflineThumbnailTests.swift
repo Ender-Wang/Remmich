@@ -24,6 +24,82 @@ struct MediaOfflineThumbnailTests {
         #expect(response.image.size.width > 0)
         #expect(offline.activeAPIURL == nil)
         #expect(loader.loadCount == 0)
+        let export = await offline.exportCachedData(assetID: descriptor.assetID, revision: descriptor.updatedAt, tier: .thumbnail)
+        #expect(export == jpeg())
+        #expect(loader.loadCount == 0)
+    }
+
+    @Test func staleManagedThumbnailFallsBackToTheExistingEncodedCache() async throws {
+        let session = makeSession()
+        let descriptor = thumbnail()
+        let seeded = try seedDisk(session: session, descriptor: descriptor)
+        let loader = OfflineThumbnailLoader(data: jpeg())
+        let offline = MediaLibraryController(imageDataLoader: loader)
+        offline.configure(session: session, activeEndpoint: nil)
+        defer { offline.clearAll(); seeded.clearAll() }
+        let missing = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        offline.registerWarmedThumbnails([.init(assetID: descriptor.assetID,
+                                                sourceRevision: descriptor.updatedAt.ISO8601Format(), fileURL: missing)])
+        // The timeline's request discovers the same complete encoded cache key
+        // without depending on an export manifest written by a previous launch.
+        _ = try #require(offline.imageRequest(for: descriptor))
+        let export = await offline.exportCachedData(assetID: descriptor.assetID, revision: descriptor.updatedAt, tier: .thumbnail)
+        #expect(export == jpeg())
+        #expect(loader.loadCount == 0)
+    }
+
+    @Test func registeringManagedThumbnailsRefreshesExportAvailabilityWithoutAConnection() async throws {
+        let session = makeSession()
+        let descriptor = thumbnail()
+        let loader = OfflineThumbnailLoader(data: jpeg())
+        let media = MediaLibraryController(imageDataLoader: loader)
+        media.configure(session: session, activeEndpoint: nil)
+        let file = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        let data = jpeg()
+        try data.write(to: file)
+        defer { media.clearAll(); try? FileManager.default.removeItem(at: file) }
+        let revision = media.thumbnailInventoryRevision
+        media.registerWarmedThumbnails([.init(assetID: descriptor.assetID,
+                                              sourceRevision: descriptor.updatedAt.ISO8601Format(), fileURL: file)])
+        #expect(media.thumbnailInventoryRevision > revision)
+        #expect(await media.exportCachedData(assetID: descriptor.assetID, revision: descriptor.updatedAt, tier: .thumbnail) == data)
+        #expect(loader.loadCount == 0)
+    }
+
+    @Test func thumbnailExportPrefersResponseBytesOverAnEncodedVariant() async throws {
+        let session = makeSession()
+        let descriptor = thumbnail()
+        let loader = OfflineThumbnailLoader(data: jpeg())
+        let media = MediaLibraryController(imageDataLoader: loader)
+        media.configure(session: session, activeEndpoint: nil)
+        defer { media.clearAll() }
+        let request = try #require(media.imageRequest(for: descriptor))
+        let pipeline = try #require(media.pipeline)
+        let original = jpeg()
+        var source = request
+        source.thumbnail = nil
+        pipeline.cache.storeCachedData(original, for: source)
+        pipeline.cache.storeCachedData(original + Data([0]), for: request)
+        #expect(await media.exportCachedData(assetID: descriptor.assetID, revision: descriptor.updatedAt, tier: .thumbnail) == original)
+        #expect(loader.loadCount == 0)
+    }
+
+    @Test func exportMenuChecksOnlyTheSelectedAssetsInventoryWithoutDecodingOrNetworking() async throws {
+        let session = makeSession()
+        let descriptor = thumbnail()
+        let loader = OfflineThumbnailLoader(data: jpeg())
+        let media = MediaLibraryController(imageDataLoader: loader)
+        media.configure(session: session, activeEndpoint: nil)
+        defer { media.clearAll() }
+        let request = try #require(media.imageRequest(for: descriptor))
+        let pipeline = try #require(media.pipeline)
+        // Menu eligibility is deliberately provisional. This isn't decoded or
+        // validated until the chosen save prepares the real resource.
+        pipeline.cache.storeCachedData(Data("unvalidated cached bytes".utf8), for: request)
+        let asset = summary(id: descriptor.assetID, revision: descriptor.updatedAt)
+        #expect(await media.exportCachedTiers(for: asset) == [.thumbnail])
+        #expect(await media.exportCachedTiers(for: summary(id: "another-asset", revision: descriptor.updatedAt)).isEmpty)
+        #expect(loader.loadCount == 0)
     }
 
     @Test func cacheMissWaitsForRouteAndThenAllowsTheSameImageToLoad() async throws {
@@ -96,6 +172,12 @@ struct MediaOfflineThumbnailTests {
     private func thumbnail() -> MediaRequestDescriptor {
         .init(assetID: "cached-thumbnail", updatedAt: Date(timeIntervalSince1970: 1_700_000_000),
               derivative: .thumbnail, targetPixels: .init(width: 222, height: 222))
+    }
+
+    private func summary(id: String, revision: Date) -> TimelineAssetSummary {
+        .init(id: id, ownerID: "offline-test", capturedAt: .now, uploadedAt: .now, localOffsetHours: 8, mediaKind: .image,
+              durationMilliseconds: nil, aspectRatio: 1, isFavorite: false, visibility: .timeline, livePhotoVideoID: nil,
+              stack: nil, projectionType: nil, thumbhash: nil, thumbnailRevision: revision)
     }
 
     private func jpeg() -> Data {

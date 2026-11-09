@@ -26,6 +26,10 @@ final class MediaLibraryController {
     let timelineResidency = TimelineThumbnailResidency()
 
     private var session: AccountSession?
+    let exports = MediaExportController()
+    @ObservationIgnored private var exportRequestIDs: [String: [String]] = [:]
+    @ObservationIgnored private var exportManifestLoad: Task<[String: [String]], Never>?
+    @ObservationIgnored private var exportManifestSave: Task<Void, Never>?
     private var prefetcher: ImagePrefetcher?
     private var viewerPrefetcher: ImagePrefetcher?
     private var viewerPrefetchRequests: [MediaRequestDescriptor: ImageRequest] = [:]
@@ -45,6 +49,7 @@ final class MediaLibraryController {
     private var didLogFirstTimelineThumbnail = false
     private var pendingTimelineContentTrace: TimelineContentTrace?
     private var warmedThumbnailURLs: [String: URL] = [:]
+    private(set) var thumbnailInventoryRevision = 0
     private let profileImageCache = ProfileImageCache()
     private var profileImageCacheTask: Task<Void, Never>?
     private var cachedProfileImageURL: URL?
@@ -63,6 +68,11 @@ final class MediaLibraryController {
             scope = nextScope
             let pipeline = Self.makePipeline(scope: nextScope, imageDataLoader: imageDataLoader)
             self.pipeline = pipeline
+            let dataCache = pipeline.configuration.dataCache
+            exportManifestLoad = Task.detached(priority: .utility) {
+                guard let data = dataCache?.cachedData(for: "remmich-export-sources-v1") else { return [:] }
+                return (try? JSONDecoder().decode([String: [String]].self, from: data)) ?? [:]
+            }
             let pipelineAt = Date()
             prefetcher = ImagePrefetcher(
                 pipeline: pipeline,
@@ -85,6 +95,7 @@ final class MediaLibraryController {
         }
         self.session = session
         activeAPIURL = activeEndpoint
+        exports.configure(media: self, scope: nextScope)
         let profileStartedAt = Date()
         prepareProfileImageCache(scope: nextScope, session: session, endpoint: activeEndpoint)
         Self.logger.info(
@@ -96,6 +107,15 @@ final class MediaLibraryController {
         activeAPIURL = endpoint
         guard let scope, let session else { return }
         prepareProfileImageCache(scope: scope, session: session, endpoint: endpoint)
+    }
+
+    func exportTransferOwner(using transfers: LibraryTransferQueue) async throws -> LibraryTransferOwner {
+        guard let session, let scope else { throw CancellationError() }
+        let restored = await transfers.restoredExportOwner(session: session)
+        guard let endpoint = restored?.endpoint ?? activeAPIURL else { throw MediaExportFailure.connectionRequired }
+        try await transfers.configure(session: session, endpoint: endpoint)
+        guard self.scope == scope, self.session == session else { throw CancellationError() }
+        return LibraryTransferOwner(session: session, endpoint: endpoint)
     }
 
     func beginTimelinePresentation() {
@@ -212,6 +232,7 @@ final class MediaLibraryController {
             // during the first visible batch and delay direct managed-file I/O.
             request.options.insert(.disableDiskCache)
             request.priority = priority
+            registerExportRequest(request, descriptor: descriptor)
             return request
         }
         guard let scope, let session else { return nil }
@@ -242,7 +263,107 @@ final class MediaLibraryController {
                 contentMode: descriptor.derivative == .thumbnail ? .aspectFill : .aspectFit
             )
         }
+        registerExportRequest(request, descriptor: descriptor)
         return request
+    }
+
+    private func registerExportRequest(_ request: ImageRequest, descriptor: MediaRequestDescriptor) {
+        let key = "\(descriptor.assetID)|\(descriptor.updatedAt.timeIntervalSince1970)|\(descriptor.derivative.rawValue)"
+        guard let scope else { return }
+        let id = descriptor.cacheKey(in: scope)
+        // Nuke stores original response bytes without thumbnail/processors,
+        // while its public cache API can also store an encoded Thumbnail.
+        // Only Thumbnail may use that variant: never substitute processed
+        // pixels for Original, Full, or the server's Preview file.
+        let actualKey = descriptor.derivative == .thumbnail ? pipeline?.cache.makeDataCacheKey(for: request) ?? id : id
+        let current = exportRequestIDs[key] ?? []
+        guard !current.contains(id) || !current.contains(actualKey) else { return }
+        var identities = [id]
+        if actualKey != id {
+            identities.append(actualKey)
+        }
+        exportRequestIDs[key] = Array((identities + current.filter { !identities.contains($0) }).prefix(8))
+        if exportRequestIDs.count > 256, let stale = exportRequestIDs.keys.first(where: { $0 != key }) {
+            exportRequestIDs.removeValue(forKey: stale)
+        }
+        exportManifestSave?.cancel()
+        let owner = scope
+        exportManifestSave = Task {
+            try? await Task.sleep(for: .milliseconds(500))
+            guard !Task.isCancelled, self.scope == owner, let cache = pipeline?.configuration.dataCache else { return }
+            let stored = await exportManifestLoad?.value ?? [:]
+            guard !Task.isCancelled, self.scope == owner else { return }
+            let recent = Array(exportRequestIDs)
+            let older = stored.filter { exportRequestIDs[$0.key] == nil }
+            let bounded = Dictionary(uniqueKeysWithValues: (recent + Array(older)).prefix(256).map { ($0.key, $0.value) })
+            await Task.detached(priority: .utility) {
+                if let data = try? JSONEncoder().encode(bounded) {
+                    cache.storeData(data, for: "remmich-export-sources-v1")
+                }
+            }.value
+        }
+    }
+
+    func exportCachedData(assetID: String, revision: Date, tier: MediaExportTier) async -> Data? {
+        let managedURL = tier == .thumbnail ? warmedThumbnailURLs[Self.warmedThumbnailKey(assetID: assetID, revision: revision)] : nil
+        if let url = managedURL,
+           let data = await Task.detached(priority: .utility, operation: { try? Data(contentsOf: url) }).value, !data.isEmpty
+        {
+            return data
+        }
+        guard let pipeline, let cache = pipeline.configuration.dataCache else { return nil }
+        let key = "\(assetID)|\(revision.timeIntervalSince1970)|\(tier.derivative.rawValue)"
+        let stored = await exportManifestLoad?.value ?? [:]
+        var seen = Set<String>()
+        let identities = ((exportRequestIDs[key] ?? []) + (stored[key] ?? [])).filter { seen.insert($0).inserted }
+        return await Task.detached(priority: .utility) { () -> Data? in
+            for identity in identities {
+                if let data = cache.cachedData(for: identity), !data.isEmpty {
+                    return data
+                }
+            }
+            return nil
+        }.value
+    }
+
+    func registeredExportTiers(for asset: TimelineAssetSummary) -> Set<MediaExportTier> {
+        guard asset.mediaKind != .video, asset.livePhotoVideoID == nil,
+              warmedThumbnailURLs[Self.warmedThumbnailKey(assetID: asset.id, revision: asset.thumbnailRevision)] != nil else { return [] }
+        return [.thumbnail]
+    }
+
+    /// Menu availability only: look up this asset's registered keys and check
+    /// file existence. Reading/validating media belongs to the selected save.
+    func exportCachedTiers(for asset: TimelineAssetSummary) async -> Set<MediaExportTier> {
+        guard let owner = scope else { return [] }
+        let cache = pipeline?.configuration.dataCache
+        let managed = warmedThumbnailURLs[Self.warmedThumbnailKey(assetID: asset.id, revision: asset.thumbnailRevision)]
+        let stored = await exportManifestLoad?.value ?? [:]
+        guard scope == owner else { return [] }
+        func keys(assetID: String, tier: MediaExportTier) -> [String] {
+            let key = "\(assetID)|\(asset.thumbnailRevision.timeIntervalSince1970)|\(tier.derivative.rawValue)"
+            var seen = Set<String>()
+            return ((exportRequestIDs[key] ?? []) + (stored[key] ?? [])).filter { seen.insert($0).inserted }
+        }
+        let candidates = Dictionary(uniqueKeysWithValues: MediaExportTier.choices(video: asset.mediaKind == .video, live: asset.livePhotoVideoID != nil)
+            .map { ($0, keys(assetID: asset.id, tier: $0)) })
+        let motionKeys = asset.livePhotoVideoID.map { keys(assetID: $0, tier: .original) }
+        let available = await Task.detached(priority: .utility) {
+            var result = Set<MediaExportTier>()
+            for (tier, ids) in candidates where ids.contains(where: { cache?.containsData(for: $0) == true }) {
+                result.insert(tier)
+            }
+            if let motionKeys {
+                if !motionKeys.contains(where: { cache?.containsData(for: $0) == true }) {
+                    result.remove(.original)
+                }
+            } else if asset.mediaKind != .video, let managed, FileManager.default.fileExists(atPath: managed.path) {
+                result.insert(.thumbnail)
+            }
+            return result
+        }.value
+        guard scope == owner else { return [] }
+        return available
     }
 
     nonisolated static func viewerPreviewDescriptor(
@@ -480,10 +601,12 @@ final class MediaLibraryController {
         warmedThumbnailURLs = Dictionary(uniqueKeysWithValues: thumbnails.map {
             ("\($0.assetID)|\($0.sourceRevision)", $0.fileURL)
         })
+        thumbnailInventoryRevision &+= 1
     }
 
     func clearRegisteredWarmedThumbnails() {
         warmedThumbnailURLs.removeAll()
+        thumbnailInventoryRevision &+= 1
     }
 
     func updateTimelineResidency(
@@ -577,8 +700,8 @@ final class MediaLibraryController {
         }
     }
 
-    func downloadURL(assetID: String, derivative: MediaDerivative) -> URL? {
-        guard let activeAPIURL else { return nil }
+    func downloadURL(assetID: String, derivative: MediaDerivative, endpoint: URL? = nil) -> URL? {
+        guard let activeAPIURL = endpoint ?? activeAPIURL else { return nil }
         let descriptor = MediaRequestDescriptor(
             assetID: assetID,
             updatedAt: .distantPast,
@@ -681,6 +804,10 @@ final class MediaLibraryController {
     }
 
     func clearAll() {
+        exports.reset()
+        exportManifestSave?.cancel()
+        exportManifestLoad?.cancel()
+        exportRequestIDs.removeAll()
         viewerSessionIDs.removeAll()
         pendingViewerOriginals.removeAll()
         viewerMotionCleanup = nil

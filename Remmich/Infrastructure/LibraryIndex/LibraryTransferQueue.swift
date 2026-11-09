@@ -7,6 +7,12 @@ import OSLog
 actor LibraryTransferQueue {
     static let shared = LibraryTransferQueue()
     nonisolated static let sessionIdentifier = "io.github.ender-wang.Remmich.library-transfers"
+    nonisolated static let exportSessionIdentifier = "io.github.ender-wang.Remmich.export-transfers"
+    static let exports = LibraryTransferQueue(
+        rootURL: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appending(path: "RemmichExportTransfers", directoryHint: .isDirectory),
+        sessionIdentifier: exportSessionIdentifier
+    )
     private static let httpConnectionsPerHost = 6
     nonisolated static let cacheLookAheadAssets = 128
     private static let maximumNativeTasks = 256
@@ -33,13 +39,33 @@ actor LibraryTransferQueue {
         let response: HTTPURLResponse
     }
 
+    struct FileResponse: Sendable {
+        let fileURL: URL
+        let response: HTTPURLResponse
+    }
+
+    struct ExportUpdate: Sendable {
+        let operationID: UUID
+        let attemptID: UUID
+        let received: Int64
+        let expected: Int64
+        let started: Bool
+        let complete: Bool
+        let errorCode: Int?
+    }
+
     private let rootURL: URL
     private let journalURL: URL
+    private let nativeSessionIdentifier: String
     private let nativeTasksProvider: (@Sendable () async -> [URLSessionTask])?
     private var journal: LibraryTransferJournal
     private var authorization: String?
     private var nativeTasks: [UUID: URLSessionTask] = [:]
     private var waiters: [UUID: [UUID: CheckedContinuation<Response, Error>]] = [:]
+    private var fileWaiters: [UUID: CheckedContinuation<FileResponse, Error>] = [:]
+    private var progressHandlers: [UUID: @Sendable (Int64, Int64) -> Void] = [:]
+    private var exportHandler: (@Sendable (ExportUpdate) -> Void)?
+    private var exportBytes: [UUID: (received: Int64, expected: Int64)] = [:]
     private var startupTask: Task<Void, Never>?
     private var configurationRevision: UInt64 = 0
     private var configuringOwner: LibraryTransferOwner?
@@ -66,9 +92,13 @@ actor LibraryTransferQueue {
     private lazy var session = makeSession(transport: .background)
     private lazy var foregroundSession = makeSession(transport: .foreground)
 
+    private var nativeCapacity: Int {
+        nativeSessionIdentifier == Self.exportSessionIdentifier ? 1 : Self.maximumNativeTasks
+    }
+
     private func makeSession(transport: LibraryTransferTransport) -> URLSession {
         let configuration = transport == .background
-            ? URLSessionConfiguration.background(withIdentifier: Self.sessionIdentifier)
+            ? URLSessionConfiguration.background(withIdentifier: nativeSessionIdentifier)
             : URLSessionConfiguration.default
         configuration.sessionSendsLaunchEvents = transport == .background
         configuration.isDiscretionary = false
@@ -80,13 +110,17 @@ actor LibraryTransferQueue {
         let timestamp = Date().ISO8601Format(.init(includingFractionalSeconds: true))
         let connections = configuration.httpMaximumConnectionsPerHost
         let lookAhead = Self.cacheLookAheadAssets
-        let maximumTasks = Self.maximumNativeTasks
-        Self.logger.info("Library transfer session configured timestamp=\(timestamp, privacy: .public) transport=\(transport.rawValue, privacy: .public) maxConnectionsPerHost=\(connections) lookAheadAssets=\(lookAhead) maxNativeTasks=\(maximumTasks)")
+        let maximumTasks = nativeCapacity
+        let purpose = nativeSessionIdentifier == Self.exportSessionIdentifier ? "export" : "library"
+        Self.logger.info("Library transfer session configured timestamp=\(timestamp, privacy: .public) purpose=\(purpose, privacy: .public) transport=\(transport.rawValue, privacy: .public) maxConnectionsPerHost=\(connections) lookAheadAssets=\(lookAhead) maxNativeTasks=\(maximumTasks)")
         return URLSession(configuration: configuration, delegate: delegate, delegateQueue: callbacks)
     }
 
-    init(rootURL: URL? = nil, nativeTasksProvider: (@Sendable () async -> [URLSessionTask])? = nil) {
+    init(rootURL: URL? = nil, nativeTasksProvider: (@Sendable () async -> [URLSessionTask])? = nil,
+         sessionIdentifier: String = LibraryTransferQueue.sessionIdentifier)
+    {
         self.nativeTasksProvider = nativeTasksProvider
+        nativeSessionIdentifier = sessionIdentifier
         let root = rootURL ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appending(path: "RemmichLibraryTransfers", directoryHint: .isDirectory)
         self.rootURL = root
@@ -112,6 +146,123 @@ actor LibraryTransferQueue {
         return .init(owner: owner, revision: deliveryRevision, importRevision: importRevision, hasReadyResponses: !ready.isEmpty,
                      hasIndexWork: journal.jobs.contains { $0.kind == .index },
                      requiresRouteValidation: recoveryRequired)
+    }
+
+    /// Only authenticated owners may reattach tasks after a cold launch.
+    func restoredExportOwner(session: AccountSession) async -> LibraryTransferOwner? {
+        await start()
+        guard let owner = journal.owner else { return nil }
+        guard owner.namespace == MediaAccountScope(session: session).cacheNamespace,
+              owner.credentialRevision == LibraryTransferOwner.digest(session.accessToken)
+        else {
+            invalidate()
+            return nil
+        }
+        guard journal.jobs.contains(where: { $0.kind == .export && $0.state != .failed }) else { return nil }
+        return owner
+    }
+
+    /// The response remains in the durable transfer store until the export is
+    /// committed or explicitly cancelled. Never read a large video into Data.
+    func exportFile(url: URL, operationID: UUID, component: String, owner: LibraryTransferOwner,
+                    progress: @escaping @Sendable (Int64, Int64) -> Void) async throws -> FileResponse
+    {
+        let job = try enqueueExport(url: url, operationID: operationID, component: component, owner: owner)
+        if job.state == .failed {
+            throw URLError(URLError.Code(rawValue: job.errorCode ?? URLError.badServerResponse.rawValue))
+        }
+        if job.state == .completed {
+            return try fileResponse(for: job)
+        }
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try await withCheckedThrowingContinuation { continuation in
+                fileWaiters[job.id] = continuation
+                progressHandlers[job.id] = progress
+                if let task = nativeTasks[job.id] {
+                    progress(task.countOfBytesReceived, task.countOfBytesExpectedToReceive)
+                }
+                pump()
+            }
+        } onCancel: {
+            let attemptID = component.split(separator: "|").first.flatMap { UUID(uuidString: String($0)) }
+            Task { await self.finishExport(operationID: operationID, namespace: owner.namespace, attemptID: attemptID) }
+        }
+    }
+
+    @discardableResult
+    func enqueueExport(url: URL, operationID: UUID, component: String, owner: LibraryTransferOwner) throws -> LibraryTransferJournal.Job {
+        try Task.checkCancellation()
+        guard journal.owner == owner, Self.sameOrigin(url, owner.endpoint) else { throw CancellationError() }
+        let identity = operationID.uuidString + "|" + component
+        let job = try journal.job(url: url, kind: .export, owner: owner, sourceRevision: identity)
+        try persist()
+        // The consumer attaches before pumping in exportFile; pre-submission
+        // (e.g. Live Photo motion) has no waiter and is retained durably.
+        return job
+    }
+
+    func setExportHandler(_ handler: @escaping @Sendable (ExportUpdate) -> Void) {
+        exportHandler = handler
+    }
+
+    /// Called after all components have been persisted. Native downloads keep
+    /// advancing independently of foreground-only PhotoKit imports.
+    func startExports() {
+        pump()
+        for job in journal.jobs where job.kind == .export {
+            reportExport(job)
+        }
+    }
+
+    func finishExport(operationID: UUID, namespace: String, attemptID: UUID? = nil) {
+        guard journal.owner?.namespace == namespace else { return }
+        discard(journal.removeExport(operationID: operationID, attemptID: attemptID))
+        try? persist()
+    }
+
+    func retainExports(operationIDs: Set<UUID>, namespace: String) {
+        guard journal.owner?.namespace == namespace else { return }
+        let orphaned = Set(journal.jobs.filter { $0.kind == .export }.compactMap { job in
+            job.sourceRevision?.split(separator: "|").first.flatMap { UUID(uuidString: String($0)) }
+        }).subtracting(operationIDs)
+        for id in orphaned {
+            discard(journal.removeExport(operationID: id))
+        }
+        try? persist()
+    }
+
+    func exportProgress(id: UUID, nativeTaskID: Int, attemptID: UUID?, received: Int64, expected: Int64) {
+        guard let job = journal.jobs.first(where: { $0.id == id }), job.kind == .export,
+              job.accepts(nativeTaskID: nativeTaskID, attemptID: attemptID, transport: .background) else { return }
+        exportBytes[id] = (received, expected)
+        progressHandlers[id]?(received, expected)
+        reportExport(job)
+    }
+
+    private func reportExport(_ job: LibraryTransferJournal.Job) {
+        guard job.kind == .export, let parts = job.sourceRevision?.split(separator: "|"), parts.count == 3,
+              let operationID = UUID(uuidString: String(parts[0])), let attemptID = UUID(uuidString: String(parts[1])) else { return }
+        let prefix = operationID.uuidString + "|" + attemptID.uuidString + "|"
+        let components = journal.jobs.filter { $0.kind == .export && $0.sourceRevision?.hasPrefix(prefix) == true }
+        let bytes = components.map { item -> (received: Int64, expected: Int64) in
+            if item.state == .completed {
+                return (item.receivedBytes ?? 0, item.receivedBytes ?? 0)
+            }
+            if let current = exportBytes[item.id] {
+                return current
+            }
+            if let task = nativeTasks[item.id] {
+                return (task.countOfBytesReceived, task.countOfBytesExpectedToReceive)
+            }
+            return (0, 0)
+        }
+        exportHandler?(.init(operationID: operationID, attemptID: attemptID,
+                             received: bytes.reduce(0) { $0 + $1.received },
+                             expected: bytes.allSatisfy { $0.expected > 0 } ? bytes.reduce(0) { $0 + $1.expected } : 0,
+                             started: components.contains { $0.state == .running || $0.state == .completed },
+                             complete: components.allSatisfy { $0.state == .completed },
+                             errorCode: components.first { $0.state == .failed }?.errorCode))
     }
 
     /// Import complete pairs first, rather than occupying import workers with
@@ -367,17 +518,19 @@ actor LibraryTransferQueue {
         var created: [(LibraryTransferJournal.Job, URLSessionDownloadTask)] = []
         // Delegate delivery may temporarily leave completed tasks in this map;
         // It never exceeds the bounded native-transfer capacity.
-        for var job in journal.jobs where job.state == .queued && nativeTasks.count + created.count < Self.maximumNativeTasks {
+        let capacity = nativeCapacity
+        for var job in journal.jobs where job.state == .queued && nativeTasks.count + created.count < capacity {
             guard !journal.disabledLanes.contains(job.kind.lane), journal.owner == job.owner else { continue }
             if job.kind.lane == "cache", !cacheResourcesAllowed {
                 continue
             }
             var request = URLRequest(url: job.url)
             request.setValue("Bearer \(authorization)", forHTTPHeaderField: "Authorization")
-            request.setValue(job.kind == .thumbnail ? "image/*" : "application/json", forHTTPHeaderField: "Accept")
-            let task = (transport == .foreground ? foregroundSession : session).downloadTask(with: request)
+            request.setValue(job.kind == .export ? "*/*" : job.kind == .thumbnail ? "image/*" : "application/json", forHTTPHeaderField: "Accept")
+            let jobTransport: LibraryTransferTransport = job.kind == .export ? .background : transport
+            let task = (jobTransport == .foreground ? foregroundSession : session).downloadTask(with: request)
             job.attemptID = UUID()
-            job.transport = transport
+            job.transport = jobTransport
             task.taskDescription = LibraryTransferAttempt(jobID: job.id, attemptID: job.attemptID).description
             job.nativeTaskID = task.taskIdentifier
             job.submittedAt = Date()
@@ -401,6 +554,9 @@ actor LibraryTransferQueue {
                 submittedTotal += 1
             #endif
             task.resume()
+            if job.kind == .export {
+                Self.logger.info("Export transfer submitted job=\(job.id.uuidString, privacy: .public) transport=background task=\(task.taskIdentifier)")
+            }
         }
         #if DEBUG
             logStatus(force: false)
@@ -470,10 +626,17 @@ actor LibraryTransferQueue {
                   let size = try (FileManager.default.attributesOfItem(atPath: fileURL.path)[.size] as? NSNumber)?.int64Value,
                   size <= job.maximumBytes else { throw URLError(.badServerResponse) }
             job.statusCode = response.statusCode
-            if response.statusCode >= 500 || response.statusCode == 408 || response.statusCode == 429 {
+            if (job.kind == .export && !(200 ..< 300).contains(response.statusCode))
+                || (job.kind != .export && (response.statusCode >= 500 || response.statusCode == 408 || response.statusCode == 429))
+            {
                 throw URLError(.badServerResponse)
             }
             job.contentType = response.value(forHTTPHeaderField: "Content-Type")
+            if job.kind == .export {
+                job.contentDisposition = response.value(forHTTPHeaderField: "Content-Disposition")
+            }
+            job.responseURL = response.url
+            job.receivedBytes = size
             job.state = .completed
             job.completedAt = Date()
             journal.update(job)
@@ -481,10 +644,17 @@ actor LibraryTransferQueue {
             #if DEBUG
                 receivedTotal += 1
             #endif
-            let result = try self.response(for: job)
+            if job.kind == .export {
+                let result = try fileResponse(for: job)
+                fileWaiters.removeValue(forKey: job.id)?.resume(returning: result)
+                progressHandlers[job.id] = nil
+                reportExport(job)
+            } else {
+                let result = try self.response(for: job)
+                resolve(job.id, result: .success(result))
+            }
             deliveryRevision &+= 1
             notifyDeliveryWaiters()
-            resolve(job.id, result: .success(result))
             if let responseHandler {
                 Task { await responseHandler() }
             }
@@ -509,6 +679,7 @@ actor LibraryTransferQueue {
                 }
             }
             resolve(job.id, result: .failure(URLError(URLError.Code(rawValue: job.errorCode!))))
+            reportExport(job)
         }
     }
 
@@ -534,11 +705,19 @@ actor LibraryTransferQueue {
     }
 
     private func response(for job: LibraryTransferJournal.Job) throws -> Response {
+        let file = try fileResponse(for: job)
+        return try Response(data: Data(contentsOf: file.fileURL), response: file.response)
+    }
+
+    private func fileResponse(for job: LibraryTransferJournal.Job) throws -> FileResponse {
         guard job.owner == journal.owner, let status = job.statusCode,
-              let response = HTTPURLResponse(url: job.url, statusCode: status, httpVersion: nil,
-                                             headerFields: ["Content-Type": job.contentType ?? "application/octet-stream"])
+              let response = HTTPURLResponse(url: job.responseURL ?? job.url, statusCode: status, httpVersion: nil,
+                                             headerFields: ["Content-Type": job.contentType ?? "application/octet-stream",
+                                                            "Content-Disposition": job.contentDisposition ?? ""])
         else { throw URLError(.badServerResponse) }
-        return try Response(data: Data(contentsOf: rootURL.appending(path: job.responseFilename)), response: response)
+        let url = rootURL.appending(path: job.responseFilename)
+        guard FileManager.default.fileExists(atPath: url.path) else { throw URLError(.fileDoesNotExist) }
+        return FileResponse(fileURL: url, response: response)
     }
 
     private func detach(waiter: UUID, jobID: UUID) {
@@ -549,6 +728,10 @@ actor LibraryTransferQueue {
     }
 
     private func resolve(_ id: UUID, result: Result<Response, Error>) {
+        if case let .failure(error) = result {
+            fileWaiters.removeValue(forKey: id)?.resume(throwing: error)
+            progressHandlers[id] = nil
+        }
         let continuations = waiters.removeValue(forKey: id) ?? [:]
         for continuation in continuations.values {
             continuation.resume(with: result)
@@ -562,6 +745,7 @@ actor LibraryTransferQueue {
         }
         for job in jobs {
             nativeTasks.removeValue(forKey: job.id)?.cancel()
+            exportBytes[job.id] = nil
             resolve(job.id, result: .failure(CancellationError()))
             try? FileManager.default.removeItem(at: rootURL.appending(path: job.responseFilename))
         }
@@ -585,10 +769,26 @@ private final nonisolated class LibraryTransferDelegate: NSObject, URLSessionDow
     let rootURL: URL
     let queue: LibraryTransferQueue
     private var delivery: Task<Void, Never>?
+    private var progressReportedAt: [UUID: TimeInterval] = [:]
 
     init(rootURL: URL, queue: LibraryTransferQueue) {
         self.rootURL = rootURL
         self.queue = queue
+    }
+
+    func urlSession(_: URLSession, downloadTask: URLSessionDownloadTask, didWriteData _: Int64,
+                    totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64)
+    {
+        guard let attempt = LibraryTransferAttempt(description: downloadTask.taskDescription) else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now - (progressReportedAt[attempt.jobID] ?? 0) >= 0.2
+            || (totalBytesExpectedToWrite > 0 && totalBytesWritten >= totalBytesExpectedToWrite) else { return }
+        progressReportedAt[attempt.jobID] = now
+        let nativeTaskID = downloadTask.taskIdentifier
+        Task { [queue] in
+            await queue.exportProgress(id: attempt.jobID, nativeTaskID: nativeTaskID, attemptID: attempt.attemptID,
+                                       received: totalBytesWritten, expected: totalBytesExpectedToWrite)
+        }
     }
 
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
@@ -650,6 +850,7 @@ private final nonisolated class LibraryTransferDelegate: NSObject, URLSessionDow
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         guard let attempt = LibraryTransferAttempt(description: task.taskDescription) else { return }
+        progressReportedAt[attempt.jobID] = nil
         let transport: LibraryTransferTransport = session.configuration.identifier == nil ? .foreground : .background
         let previous = delivery
         let code = (error as? URLError)?.errorCode
