@@ -203,6 +203,11 @@ struct MediaExportTests {
         #expect(!DownloadHistorySwipePolicy.commits(translation: .init(x: -320, y: 0), width: 0, direction: -1))
         #expect(!DownloadHistorySwipePolicy.commits(translation: .init(x: -100, y: 0), width: 400, direction: -1, revealed: true))
         #expect(DownloadHistorySwipePolicy.commits(translation: .init(x: -190, y: 0), width: 400, direction: -1, revealed: true))
+        #expect(DownloadHistorySwipePolicy.closes(translation: .init(x: 30, y: 0), direction: -1, revealed: true))
+        #expect(!DownloadHistorySwipePolicy.closes(translation: .init(x: 10, y: 0), direction: -1, revealed: true))
+        #expect(!DownloadHistorySwipePolicy.closes(translation: .init(x: 30, y: 40), direction: -1, revealed: true))
+        #expect(!DownloadHistorySwipePolicy.closes(translation: .init(x: 30, y: 0), direction: -1, revealed: false))
+        #expect(DownloadHistorySwipePolicy.closes(translation: .init(x: -30, y: 0), direction: 1, revealed: true))
     }
 
     @Test func panelHeaderDragRequiresVerticalIntentInEitherDirection() {

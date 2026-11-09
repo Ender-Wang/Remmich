@@ -69,6 +69,7 @@ struct DownloadsView: View {
     @State private var clearConfirmation = false
     @State private var uncertainJob: UUID?
     @State private var removingJob: UUID?
+    @State private var revealedJob: UUID?
     @State private var errorJob: MediaExportJob?
     @State private var measuredContentHeight: CGFloat = 0
     @State private var measuredHeaderHeight: CGFloat = 0
@@ -143,6 +144,7 @@ struct DownloadsView: View {
                             .modifier(DownloadHistoryRemoval(enabled: exports.canRemoveHistory(job),
                                                              isFirst: jobs.first?.id == job.id,
                                                              isLast: jobs.last?.id == job.id,
+                                                             id: job.id, revealedID: $revealedJob,
                                                              confirm: { removingJob = job.id },
                                                              remove: { removeHistory(job.id) }))
                     }
@@ -175,6 +177,8 @@ struct DownloadsView: View {
                               canBegin: !clearConfirmation && uncertainJob == nil && removingJob == nil && errorJob == nil,
                               priority: 300, animatesContent: false) { backAction?() }
         .accessibilityIdentifier("downloads-list")
+        .contentShape(Rectangle())
+        .simultaneousGesture(TapGesture().onEnded { revealedJob = nil })
         .toolbar {
             if backAction == nil {
                 ToolbarItem(placement: .topBarTrailing) { clearButton }

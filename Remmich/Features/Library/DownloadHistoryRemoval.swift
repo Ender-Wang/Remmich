@@ -8,6 +8,8 @@ struct DownloadHistoryRemoval: ViewModifier {
     let enabled: Bool
     let isFirst: Bool
     let isLast: Bool
+    let id: UUID
+    @Binding var revealedID: UUID?
     let confirm: () -> Void
     let remove: () -> Void
     @State private var rowWidth: CGFloat = 0
@@ -21,7 +23,7 @@ struct DownloadHistoryRemoval: ViewModifier {
             .frame(maxWidth: .infinity, alignment: .leading)
             .offset(x: reveal * direction)
             .background(alignment: .trailing) {
-                if enabled, reveal > 0 {
+                if enabled {
                     Button {
                         settle(0)
                         confirm()
@@ -38,7 +40,9 @@ struct DownloadHistoryRemoval: ViewModifier {
                     .background(.red)
                     .clipShape(UnevenRoundedRectangle(bottomTrailingRadius: isLast ? 18 : 0,
                                                       topTrailingRadius: isFirst ? 18 : 0))
-                    .transition(.identity)
+                    .clipped()
+                    .allowsHitTesting(reveal > 0)
+                    .accessibilityHidden(reveal <= 0)
                 }
             }
             .clipped()
@@ -48,13 +52,17 @@ struct DownloadHistoryRemoval: ViewModifier {
                 switch phase {
                 case .began:
                     dragStart = reveal
+                    revealedID = id
                 case .changed:
                     reveal = min(rowWidth, max(0, dragStart + translation.x * direction))
                 case .ended:
                     if DownloadHistorySwipePolicy.commits(translation: translation, width: rowWidth,
                                                           direction: direction, revealed: dragStart > 0)
                     {
+                        revealedID = nil
                         remove()
+                    } else if DownloadHistorySwipePolicy.closes(translation: translation, direction: direction, revealed: dragStart > 0) {
+                        settle(0)
                     } else {
                         settle(reveal >= actionWidth / 2 ? actionWidth : 0)
                     }
@@ -70,6 +78,14 @@ struct DownloadHistoryRemoval: ViewModifier {
             .onChange(of: enabled) { _, enabled in
                 if !enabled {
                     reveal = 0; dragStart = 0
+                    if revealedID == id {
+                        revealedID = nil
+                    }
+                }
+            }
+            .onChange(of: revealedID) { _, current in
+                if current != id, reveal > 0 {
+                    settle(0)
                 }
             }
             .onDisappear { reveal = 0 }
@@ -80,7 +96,12 @@ struct DownloadHistoryRemoval: ViewModifier {
     }
 
     private func settle(_ value: CGFloat) {
-        withAnimation(reduceMotion ? nil : .snappy(duration: 0.24)) { reveal = value }
+        if value > 0 {
+            revealedID = id
+        } else if revealedID == id {
+            revealedID = nil
+        }
+        withAnimation(reduceMotion ? nil : .smooth(duration: 0.24)) { reveal = value }
     }
 }
 
@@ -136,6 +157,10 @@ private struct DownloadHistoryPan: UIGestureRecognizerRepresentable {
 }
 
 nonisolated enum DownloadHistorySwipePolicy {
+    static func closes(translation: CGPoint, direction: CGFloat, revealed: Bool) -> Bool {
+        revealed && translation.x * direction < -20 && abs(translation.x) > abs(translation.y) * 1.5
+    }
+
     static func commits(translation: CGPoint, width: CGFloat, direction: CGFloat, revealed: Bool = false) -> Bool {
         // A second drag starts from an already shifted row.
         width > 0 && translation.x * direction >= max(revealed ? 120 : 180, width * (revealed ? 0.45 : 0.75))
