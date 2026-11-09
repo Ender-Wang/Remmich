@@ -90,9 +90,17 @@ nonisolated enum MediaVideoMetadata {
            (-90 ... 90).contains(lat), (-180 ... 180).contains(lon)
         {
             append(.quickTimeMetadataLocationISO6709,
-                   String(format: "%+010.6f%+011.6f/", locale: Locale(identifier: "en_US_POSIX"), lat, lon), to: &items)
+                   coordinate(lat, integerDigits: 2) + coordinate(lon, integerDigits: 3) + "/", to: &items)
         }
         return items
+    }
+
+    private static func coordinate(_ value: Double, integerDigits: Int) -> String {
+        // Locale-aware Foundation formatting ignores printf's zero-padding
+        // flag. Pad explicitly so ISO 6709 never contains embedded spaces.
+        let magnitude = String(format: "%.6f", locale: Locale(identifier: "en_US_POSIX"), abs(value))
+        let zeros = String(repeating: "0", count: max(0, integerDigits + 7 - magnitude.count))
+        return (value.sign == .minus ? "-" : "+") + zeros + magnitude
     }
 
     static func cameraItems(existing: [AVMetadataItem], metadata: MediaExportMetadata) -> [AVMetadataItem] {

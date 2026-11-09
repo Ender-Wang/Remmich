@@ -48,7 +48,8 @@ struct MediaVideoMetadataTests {
         let items = MediaVideoMetadata.movieItems(existing: [existing], job: job)
         #expect(items.filter { $0.identifier == .quickTimeMetadataMake }.count == 1)
         #expect(try await items.first { $0.identifier == .quickTimeMetadataMake }?.load(.stringValue) == "Existing camera maker")
-        #expect(try await items.first { $0.identifier == .quickTimeMetadataLocationISO6709 }?.load(.stringValue) == "-01.250000-002.500000/")
+        let coordinates = try await items.first { $0.identifier == .quickTimeMetadataLocationISO6709 }?.load(.stringValue)
+        #expect(coordinates == "-01.250000-002.500000/")
         job.metadata.latitude = .nan
         #expect(!MediaVideoMetadata.movieItems(existing: [], job: job).contains { $0.identifier == .quickTimeMetadataLocationISO6709 })
         job.metadata.exposureTime = "1/0"
@@ -66,6 +67,21 @@ struct MediaVideoMetadataTests {
         #expect(camera[0].extendedLanguageTag == "en")
         #expect(try await camera[0].load(.stringValue) == "Existing information\nFocal length: 600.0 mm")
         #expect(try await camera[1].load(.stringValue) == "Informations existantes")
+    }
+
+    @Test(arguments: [
+        (0.0, 0.0, "+00.000000+000.000000/"),
+        (31.2, 121.4, "+31.200000+121.400000/"),
+        (-90.0, -180.0, "-90.000000-180.000000/"),
+        (-0.0, -2.5, "-00.000000-002.500000/"),
+    ])
+    func locationUsesFixedWidthSignedDecimalDegrees(latitude: Double, longitude: Double, expected: String) async throws {
+        var job = job(tier: .playback)
+        job.metadata.latitude = latitude
+        job.metadata.longitude = longitude
+        let items = MediaVideoMetadata.movieItems(existing: [], job: job)
+        let coordinates = try await items.first { $0.identifier == .quickTimeMetadataLocationISO6709 }?.load(.stringValue)
+        #expect(coordinates == expected)
     }
 
     private func job(tier: MediaExportTier) -> MediaExportJob {

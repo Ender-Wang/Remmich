@@ -62,29 +62,35 @@ struct MediaExportTests {
     func originalBytesAreUnchangedAndDerivativeMetadataUsesActualDimensions(tier: MediaExportTier) async throws {
         let root = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
-        let source = root.appending(path: "input.jpg")
+        let source = root.appending(path: "input.tiff")
         let color = CGColorSpaceCreateDeviceRGB()
         let context = try #require(CGContext(data: nil, width: 3, height: 5, bitsPerComponent: 8,
                                              bytesPerRow: 12, space: color, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue))
         context.setFillColor(CGColor(red: 0.2, green: 0.4, blue: 0.7, alpha: 1))
         context.fill(CGRect(x: 0, y: 0, width: 3, height: 5))
         let image = try #require(context.makeImage())
-        let destination = try #require(CGImageDestinationCreateWithURL(source as CFURL, UTType.jpeg.identifier as CFString, 1, nil))
+        // ImageIO omits TIFF Artist when creating a JPEG fixture. Use a TIFF
+        // that actually contains the tag before testing its preservation.
+        let destination = try #require(CGImageDestinationCreateWithURL(source as CFURL, UTType.tiff.identifier as CFString, 1, nil))
         CGImageDestinationAddImage(destination, image, [
             kCGImagePropertyTIFFDictionary: [kCGImagePropertyTIFFArtist: "Fixture author"],
         ] as CFDictionary)
         #expect(CGImageDestinationFinalize(destination))
         let sourceData = try Data(contentsOf: source)
+        let fixture = try #require(CGImageSourceCreateWithData(sourceData as CFData, nil))
+        let fixtureProperties = try #require(CGImageSourceCopyPropertiesAtIndex(fixture, 0, nil) as? [String: Any])
+        let fixtureTIFF = try #require(fixtureProperties[kCGImagePropertyTIFFDictionary as String] as? [String: Any])
+        #expect(fixtureTIFF[kCGImagePropertyTIFFArtist as String] as? String == "Fixture author")
         #expect(MediaExportFiles.isFullSize(sourceData, width: 5, height: 3))
         #expect(!MediaExportFiles.isFullSize(sourceData, width: 30, height: 50))
         #expect(!MediaExportFiles.isFullSize(sourceData, width: nil, height: nil))
         let files = MediaExportFiles()
         var original = job(tier: .original)
-        original.metadata.filename = "Nikon.JPG"
+        original.metadata.filename = "Nikon.TIFF"
         let originalURL = try await files.prepareImage(source, job: original)
         #expect(try Data(contentsOf: originalURL) == Data(contentsOf: source))
         var preview = job(tier: tier)
-        preview.metadata.filename = "Nikon.JPG"
+        preview.metadata.filename = "Nikon.TIFF"
         preview.metadata.latitude = -31.2
         preview.metadata.longitude = 121.4
         preview.metadata.make = "NIKON"
