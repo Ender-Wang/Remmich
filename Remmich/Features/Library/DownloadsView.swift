@@ -177,6 +177,7 @@ struct DownloadsView: View {
                               canBegin: !clearConfirmation && uncertainJob == nil && removingJob == nil && errorJob == nil,
                               priority: 300, animatesContent: false) { backAction?() }
         .accessibilityIdentifier("downloads-list")
+        .background(DownloadHistoryNavigationBoundary())
         .contentShape(Rectangle())
         .simultaneousGesture(TapGesture().onEnded { revealedJob = nil })
         .toolbar {
