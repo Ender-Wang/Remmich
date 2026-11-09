@@ -1537,7 +1537,7 @@ struct PhotosView: View {
         if case .memory = route.origin {
             hiddenLivePhotoBadgeAssetID = nil
         } else {
-            hiddenLivePhotoBadgeAssetID = TimelineAssetOverlay.isVisible(for: route.selectedAsset)
+            hiddenLivePhotoBadgeAssetID = TimelineAssetOverlay.isVisible(for: route.selectedAsset, savedToPhotos: media.exports.saved(route.selectedAsset), isDownloading: media.exports.isDownloading(route.selectedAsset))
                 ? route.selectedAsset.id : nil
         }
         hiddenReturningThumbnailAssetID = sourceOverride == nil ? nil : route.selectedAsset.id

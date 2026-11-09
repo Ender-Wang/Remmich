@@ -1321,7 +1321,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             for destination in destinations {
                 let representative = targetRepresentatives[destination.id]!
                 let asset = catalog.assets[representative]
-                guard TimelineAssetOverlay.isVisible(for: asset) else { continue }
+                guard hasAssetOverlay(asset) else { continue }
                 let end = imageRect(item: destination, scale: nextScale, asset: asset)
                     .offsetBy(dx: 0, dy: -targetOffset)
                 let sourceItem = sources.first { $0.element.assetRange.contains(representative) }?.element
@@ -1340,7 +1340,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             for (_, sourceItem) in sources {
                 let representative = representativeIndex(sourceItem)
                 let asset = catalog.assets[representative]
-                guard TimelineAssetOverlay.isVisible(for: asset),
+                guard hasAssetOverlay(asset),
                       let destination = destinations.first(where: { $0.assetRange.contains(representative) })
                 else { continue }
                 let start = imageRect(item: sourceItem, scale: scale, asset: asset)
@@ -1556,22 +1556,31 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
 
         guard catalog.assets.indices.contains(item.assetRange.lowerBound) else { return nil }
         let asset = catalog.assets[item.assetRange.lowerBound]
-        guard TimelineAssetOverlay.isVisible(for: asset) else { return nil }
+        guard hasAssetOverlay(asset) else { return nil }
         return badgeTransitionChromePlan(
             asset: asset,
             size: imageRect(item: item, scale: scale, asset: asset).size
         )
     }
 
+    private func hasAssetOverlay(_ asset: TimelineAssetSummary) -> Bool {
+        TimelineAssetOverlay.isVisible(for: asset, savedToPhotos: input?.media.exports.saved(asset) ?? false,
+                                       isDownloading: input?.media.exports.isDownloading(asset) ?? false)
+    }
+
     private func badgeTransitionChromePlan(asset: TimelineAssetSummary, size: CGSize) -> TransitionChromePlan {
-        makeTransitionChromePlan(
+        let saved = input?.media.exports.saved(asset) ?? false
+        let downloading = input?.media.exports.isDownloading(asset) ?? false
+        return makeTransitionChromePlan(
             role: "badge",
             identity: asset.id,
-            signature: "\(asset.isFavorite)|\(asset.livePhotoVideoID != nil)|\(asset.projectionType ?? "")|\(asset.stack?.assetCount ?? 0)|\(asset.mediaKind == .video)|\(asset.durationMilliseconds ?? -1)|\(input?.hiddenLivePhotoID == asset.id)",
+            signature: "\(asset.isFavorite)|\(asset.livePhotoVideoID != nil)|\(asset.projectionType ?? "")|\(asset.stack?.assetCount ?? 0)|\(asset.mediaKind == .video)|\(asset.durationMilliseconds ?? -1)|\(input?.hiddenLivePhotoID == asset.id)|\(saved)|\(downloading)",
             size: size,
             content: TimelineAssetOverlay(
                 asset: asset,
-                hiddenLivePhotoBadgeAssetID: input?.hiddenLivePhotoID
+                hiddenLivePhotoBadgeAssetID: input?.hiddenLivePhotoID,
+                savedToPhotos: saved,
+                isDownloading: downloading
             )
         )
     }

@@ -156,6 +156,10 @@ final class MediaExportController: NSObject {
         savedAssetRevisions.contains("\(asset.id)|\(asset.thumbnailRevision.timeIntervalSince1970)")
     }
 
+    func isDownloading(_ asset: TimelineAssetSummary) -> Bool {
+        journal.jobs.contains { $0.assetID == asset.id && $0.revision == asset.thumbnailRevision && $0.stage.isActive }
+    }
+
     func activeJob(assetID: String) -> MediaExportJob? {
         journal.jobs.first { $0.assetID == assetID && $0.stage.isActive }
     }

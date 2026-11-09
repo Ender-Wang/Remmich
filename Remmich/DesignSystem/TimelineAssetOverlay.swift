@@ -7,9 +7,10 @@ struct TimelineAssetOverlay: View {
     var isHidden = false
     var hiddenLivePhotoBadgeAssetID: String?
     var savedToPhotos = false
+    var isDownloading = false
 
-    static func isVisible(for asset: TimelineAssetSummary) -> Bool {
-        asset.isFavorite || TimelineAssetBadgeOverlay.isVisible(for: asset) || asset.mediaKind == .video
+    static func isVisible(for asset: TimelineAssetSummary, savedToPhotos: Bool = false, isDownloading: Bool = false) -> Bool {
+        savedToPhotos || isDownloading || asset.isFavorite || TimelineAssetBadgeOverlay.isVisible(for: asset) || asset.mediaKind == .video
     }
 
     var body: some View {
@@ -31,18 +32,21 @@ struct TimelineAssetOverlay: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                     .shadow(radius: 3)
             }
-            if savedToPhotos {
-                Image(systemName: "checkmark")
+            if savedToPhotos || isDownloading {
+                Image(systemName: isDownloading ? "arrow.down.circle" : "checkmark")
                     .font(.caption2.weight(.semibold)).foregroundStyle(.white)
                     .padding([.bottom, .trailing], 3)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                     .shadow(radius: 3)
-                    .accessibilityLabel("Saved to Photos")
+                    .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
+                    .accessibilityLabel(isDownloading ? "Download in progress" : "Saved to Photos")
             }
         }
         .opacity(isHidden ? 0 : 1)
         // UIKit-hosted cells do not inherit the presenting SwiftUI transaction.
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.24), value: isHidden)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.24), value: isDownloading)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.24), value: savedToPhotos)
         .allowsHitTesting(false)
     }
 
@@ -61,6 +65,7 @@ nonisolated struct AssetViewerOpeningAssetOverlay: View, Animatable {
     let destinationRect: CGRect
     var progress: CGFloat
     var savedToPhotos = false
+    var isDownloading = false
 
     var animatableData: AnimatableValues<CGFloat, CGFloat, CGFloat, CGFloat, CGFloat> {
         get { AnimatableValues(progress, sourceRect.minX, sourceRect.minY, sourceRect.width, sourceRect.height) }
@@ -79,7 +84,7 @@ nonisolated struct AssetViewerOpeningAssetOverlay: View, Animatable {
             width: sourceRect.width + (destinationRect.width - sourceRect.width) * amount,
             height: sourceRect.height + (destinationRect.height - sourceRect.height) * amount
         )
-        TimelineAssetOverlay(asset: asset, savedToPhotos: savedToPhotos)
+        TimelineAssetOverlay(asset: asset, savedToPhotos: savedToPhotos, isDownloading: isDownloading)
             .frame(width: frame.width, height: frame.height)
             .position(x: frame.midX, y: frame.midY)
             .opacity(1 - amount)

@@ -253,7 +253,11 @@ struct MediaExportTests {
         }
         #expect(try await store.loadMediaExports(scope: scope).jobs.count == 2)
         let first = try #require(exports.jobs.first { $0.assetID == "one" })
+        #expect(exports.isDownloading(asset("one")))
+        #expect(exports.isDownloading(asset("two")))
+        #expect(!exports.isDownloading(asset("unrelated")))
         exports.cancel(first.id)
+        #expect(!exports.isDownloading(asset("one")))
         exports.retry(first.id)
         #expect(exports.jobs.first { $0.id == first.id }?.stage == .cancelled)
         await photos.release()

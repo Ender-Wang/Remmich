@@ -431,14 +431,15 @@ struct AssetViewerView: View {
 
                     if isOpening, !isMemoryViewer, !reduceMotion,
                        let asset = session.selectedAsset,
-                       TimelineAssetOverlay.isVisible(for: asset) || media.exports.saved(asset), let openingTarget
+                       TimelineAssetOverlay.isVisible(for: asset, savedToPhotos: media.exports.saved(asset), isDownloading: media.exports.isDownloading(asset)), let openingTarget
                     {
                         AssetViewerOpeningAssetOverlay(
                             asset: asset,
                             sourceRect: openingTarget.imageFrame.offsetBy(dx: -fullFrame.minX, dy: -fullFrame.minY),
                             destinationRect: dismissalImageRect,
                             progress: openingProgress,
-                            savedToPhotos: media.exports.saved(asset)
+                            savedToPhotos: media.exports.saved(asset),
+                            isDownloading: media.exports.isDownloading(asset)
                         )
                         .scaleEffect(openingDragScale)
                         .offset(openingDragTranslation)
@@ -2058,7 +2059,7 @@ struct AssetViewerView: View {
     private func beginReturningTimelineTransition(for asset: TimelineAssetSummary) {
         dismissalThumbnailRevealTask?.cancel()
         returningTimelineThumbnailChanged(asset.id)
-        if TimelineAssetOverlay.isVisible(for: asset) {
+        if TimelineAssetOverlay.isVisible(for: asset, savedToPhotos: media.exports.saved(asset), isDownloading: media.exports.isDownloading(asset)) {
             returningLivePhotoBadgeChanged(asset.id)
         }
     }
