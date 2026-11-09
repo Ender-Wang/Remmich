@@ -58,7 +58,8 @@ struct MediaExportTests {
         #expect(try await reader.storedAccounts().isEmpty)
     }
 
-    @Test func originalBytesAreUnchangedAndDerivativeMetadataUsesActualDimensions() async throws {
+    @Test(arguments: [MediaExportTier.thumbnail, .preview, .full])
+    func originalBytesAreUnchangedAndDerivativeMetadataUsesActualDimensions(tier: MediaExportTier) async throws {
         let root = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let source = root.appending(path: "input.jpg")
@@ -69,7 +70,9 @@ struct MediaExportTests {
         context.fill(CGRect(x: 0, y: 0, width: 3, height: 5))
         let image = try #require(context.makeImage())
         let destination = try #require(CGImageDestinationCreateWithURL(source as CFURL, UTType.jpeg.identifier as CFString, 1, nil))
-        CGImageDestinationAddImage(destination, image, nil)
+        CGImageDestinationAddImage(destination, image, [
+            kCGImagePropertyTIFFDictionary: [kCGImagePropertyTIFFArtist: "Fixture author"],
+        ] as CFDictionary)
         #expect(CGImageDestinationFinalize(destination))
         let sourceData = try Data(contentsOf: source)
         #expect(MediaExportFiles.isFullSize(sourceData, width: 5, height: 3))
@@ -80,11 +83,15 @@ struct MediaExportTests {
         original.metadata.filename = "Nikon.JPG"
         let originalURL = try await files.prepareImage(source, job: original)
         #expect(try Data(contentsOf: originalURL) == Data(contentsOf: source))
-        var preview = job(tier: .preview)
+        var preview = job(tier: tier)
         preview.metadata.filename = "Nikon.JPG"
         preview.metadata.latitude = -31.2
         preview.metadata.longitude = 121.4
         preview.metadata.make = "NIKON"
+        preview.metadata.model = "Z f"
+        preview.metadata.lens = "NIKKOR Z 180-600mm"
+        preview.metadata.aperture = 6.3
+        preview.metadata.focalLength = 600
         preview.metadata.iso = 7200
         preview.metadata.exposureTime = "1/1000"
         let previewURL = try await files.prepareImage(source, job: preview)
@@ -96,9 +103,14 @@ struct MediaExportTests {
         #expect(gps[kCGImagePropertyGPSLatitudeRef as String] as? String == "S")
         let tiff = try #require(properties[kCGImagePropertyTIFFDictionary as String] as? [String: Any])
         #expect(tiff[kCGImagePropertyTIFFMake as String] as? String == "NIKON")
+        #expect(tiff[kCGImagePropertyTIFFModel as String] as? String == "Z f")
+        #expect(tiff[kCGImagePropertyTIFFArtist as String] as? String == "Fixture author")
         let exif = try #require(properties[kCGImagePropertyExifDictionary as String] as? [String: Any])
+        #expect(exif[kCGImagePropertyExifLensModel as String] as? String == "NIKKOR Z 180-600mm")
+        #expect((exif[kCGImagePropertyExifFNumber as String] as? NSNumber)?.doubleValue == 6.3)
+        #expect((exif[kCGImagePropertyExifFocalLength as String] as? NSNumber)?.doubleValue == 600)
         #expect((exif[kCGImagePropertyExifExposureTime as String] as? NSNumber)?.doubleValue == 0.001)
-        #expect(previewURL.lastPathComponent.contains("_Preview."))
+        #expect(previewURL.lastPathComponent.contains("_\(tier.rawValue)."))
     }
 
     @MainActor

@@ -544,8 +544,7 @@ final class MediaExportController: NSObject {
                 let asset = AVURLAsset(url: input)
                 let tracks = try await asset.loadTracks(withMediaType: .video)
                 guard !tracks.isEmpty else { throw MediaExportFailure.message("The playback response is not a complete video file. Choose Original instead.") }
-                let ext = input.pathExtension.isEmpty ? "mov" : input.pathExtension
-                file = try await files.copy(input, directory: root, name: job.tier.filename(source: job.metadata.filename, extension: ext))
+                file = try await files.prepareVideo(input, job: job)
             } else {
                 file = try await files.prepareImage(input, job: job)
             }

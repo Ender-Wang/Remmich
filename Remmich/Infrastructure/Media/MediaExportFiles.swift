@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
@@ -58,6 +59,27 @@ actor MediaExportFiles {
 
     func remove(_ directory: URL) {
         try? FileManager.default.removeItem(at: directory)
+    }
+
+    func prepareVideo(_ sourceURL: URL, job: MediaExportJob) async throws -> URL {
+        // Original includes any maker-specific and timed metadata, byte for byte.
+        if job.tier == .original {
+            let ext = sourceURL.pathExtension.isEmpty ? "mov" : sourceURL.pathExtension
+            return try copy(sourceURL, directory: sourceURL.deletingLastPathComponent(),
+                            name: job.tier.filename(source: job.metadata.filename, extension: ext))
+        }
+        // MP4 header serialization drops these QuickTime camera tags. Create a
+        // real MOV container, retaining compressed samples rather than encoding.
+        let output = sourceURL.deletingLastPathComponent()
+            .appending(path: job.tier.filename(source: job.metadata.filename, extension: "mov"))
+        guard let export = AVAssetExportSession(asset: AVURLAsset(url: sourceURL), presetName: AVAssetExportPresetPassthrough) else {
+            throw MediaExportFailure.message("This Playback video cannot be prepared with its metadata. Choose Original instead.")
+        }
+        try Task.checkCancellation()
+        try await export.export(to: output, as: .mov)
+        try Task.checkCancellation()
+        try await MediaVideoMetadata.restore(at: output, job: job)
+        return output
     }
 
     func prepareImage(_ sourceURL: URL, job: MediaExportJob) throws -> URL {
