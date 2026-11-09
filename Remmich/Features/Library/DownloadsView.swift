@@ -1,5 +1,63 @@
 import Nuke
+import Observation
 import SwiftUI
+
+nonisolated enum MediaExportHeaderDirection: Equatable {
+    case up, down
+
+    static func resolve(_ translation: CGSize) -> Self? {
+        guard abs(translation.height) > 32,
+              abs(translation.height) > abs(translation.width) * 1.5 else { return nil }
+        return translation.height < 0 ? .up : .down
+    }
+}
+
+private struct MediaExportHeaderGesture: ViewModifier {
+    let action: ((MediaExportHeaderDirection) -> Void)?
+    func body(content: Content) -> some View {
+        content.contentShape(Rectangle())
+            .highPriorityGesture(DragGesture(minimumDistance: 12).onEnded { gesture in
+                if let direction = MediaExportHeaderDirection.resolve(gesture.translation) {
+                    action?(direction)
+                }
+            })
+    }
+}
+
+private struct MediaExportSheetGrabber: View {
+    var body: some View {
+        Capsule().fill(.secondary.opacity(0.35)).frame(width: 32, height: 4).accessibilityHidden(true)
+    }
+}
+
+/// Only the header changes height. The previous detent remains available until
+/// the native resize animation finishes, then content scrolling has one stop.
+@MainActor @Observable
+private final class MediaExportSheetSizing {
+    private(set) var detents: Set<PresentationDetent> = [.height(350)]
+    private(set) var selection = PresentationDetent.height(350)
+    private var transition = UUID()
+
+    func reset(_ target: PresentationDetent) {
+        transition = UUID()
+        selection = target
+        detents = [target]
+    }
+
+    func select(_ target: PresentationDetent, animation: Animation?, changes: () -> Void = {}) {
+        let owner = UUID()
+        transition = owner
+        let previous = selection
+        withAnimation(animation, completionCriteria: .removed) {
+            detents = [previous, target]
+            selection = target
+            changes()
+        } completion: { [weak self] in
+            guard let self, transition == owner else { return }
+            detents = [target]
+        }
+    }
+}
 
 struct DownloadsView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -7,9 +65,11 @@ struct DownloadsView: View {
     let exports: MediaExportController
     var backAction: (() -> Void)?
     var contentHeightChanged: ((CGFloat) -> Void)?
+    var headerDrag: ((MediaExportHeaderDirection) -> Void)?
     @State private var clearConfirmation = false
     @State private var uncertainJob: UUID?
     @State private var removingJob: UUID?
+    @State private var errorJob: MediaExportJob?
     @State private var measuredContentHeight: CGFloat = 0
     @State private var measuredHeaderHeight: CGFloat = 0
 
@@ -24,8 +84,6 @@ struct DownloadsView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.glass)
-        .buttonBorderShape(.circle)
         .frame(width: 44, height: 44)
         .tint(.red)
         .accessibilityLabel("Clear History")
@@ -33,24 +91,32 @@ struct DownloadsView: View {
         .popover(isPresented: $clearConfirmation, attachmentAnchor: .rect(.bounds), arrowEdge: .top) { confirmation }
         VStack(spacing: 0) {
             if let backAction {
-                HStack(spacing: 12) {
-                    Button(action: backAction) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 18, weight: .medium))
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .contentShape(Rectangle())
+                VStack(spacing: 4) {
+                    if headerDrag != nil {
+                        MediaExportSheetGrabber()
                     }
-                    .buttonStyle(.glass)
-                    .buttonBorderShape(.circle)
-                    .frame(width: 44, height: 44)
-                    .accessibilityLabel("Back")
-                    Text("Downloads History").font(.headline).frame(maxWidth: .infinity)
-                    clearButton
+                    HStack(spacing: 12) {
+                        Button(action: backAction) {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 18, weight: .medium))
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.glass)
+                        .buttonBorderShape(.circle)
+                        .frame(width: 44, height: 44)
+                        .accessibilityLabel("Back")
+                        Text("Downloads History").font(.headline).frame(maxWidth: .infinity)
+                        clearButton
+                            .buttonStyle(.glass)
+                            .buttonBorderShape(.circle)
+                    }
                 }
                 .padding(.horizontal, 20)
-                .padding(.top, 12)
+                .padding(.top, headerDrag == nil ? 12 : 8)
                 .padding(.bottom, 8)
                 .fixedSize(horizontal: false, vertical: true)
+                .modifier(MediaExportHeaderGesture(action: headerDrag))
                 .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
                     measuredHeaderHeight = ceil(size.height)
                 }
@@ -71,21 +137,14 @@ struct DownloadsView: View {
                     if exports.jobs.isEmpty, exports.ready {
                         ContentUnavailableView("No Downloads", systemImage: "arrow.down.circle")
                     }
-                    ForEach([true, false], id: \.self) { active in
-                        let jobs = exports.jobs.filter { $0.stage.isActive == active }
-                        if !jobs.isEmpty {
-                            if active {
-                                Text("Active").font(.headline).padding(.bottom, 8)
-                            }
-                            ForEach(jobs) { job in
-                                row(job)
-                                    .modifier(DownloadHistoryRemoval(enabled: exports.canRemoveHistory(job),
-                                                                     isFirst: jobs.first?.id == job.id,
-                                                                     isLast: jobs.last?.id == job.id,
-                                                                     confirm: { removingJob = job.id },
-                                                                     remove: { removeHistory(job.id) }))
-                            }
-                        }
+                    let jobs = exports.jobs
+                    ForEach(jobs) { job in
+                        row(job)
+                            .modifier(DownloadHistoryRemoval(enabled: exports.canRemoveHistory(job),
+                                                             isFirst: jobs.first?.id == job.id,
+                                                             isLast: jobs.last?.id == job.id,
+                                                             confirm: { removingJob = job.id },
+                                                             remove: { removeHistory(job.id) }))
                     }
                     if let message = exports.message {
                         Text(message).font(.footnote).foregroundStyle(.secondary)
@@ -113,8 +172,8 @@ struct DownloadsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(backAction == nil ? .visible : .hidden, for: .navigationBar)
         .nativeEdgeBackAction(active: backAction != nil,
-                              canBegin: !clearConfirmation && uncertainJob == nil && removingJob == nil,
-                              priority: 300) { backAction?() }
+                              canBegin: !clearConfirmation && uncertainJob == nil && removingJob == nil && errorJob == nil,
+                              priority: 300, animatesContent: false) { backAction?() }
         .accessibilityIdentifier("downloads-list")
         .toolbar {
             if backAction == nil {
@@ -139,6 +198,13 @@ struct DownloadsView: View {
             Button("Remove", role: .destructive) { removeHistory(id); removingJob = nil }
             Button("Cancel", role: .cancel) { removingJob = nil }
         } message: { _ in Text("The saved photo stays in Apple Photos.") }
+        .alert("Download details", isPresented: Binding(get: { errorJob != nil }, set: {
+            if !$0 {
+                errorJob = nil
+            }
+        }), presenting: errorJob) { _ in
+            Button("OK", role: .cancel) { errorJob = nil }
+        } message: { job in Text(job.error ?? job.stage.title) }
         .task { await exports.reconcile() }
     }
 
@@ -169,77 +235,106 @@ struct DownloadsView: View {
             if let media = exports.media {
                 ImmichThumbnail(
                     descriptor: .init(assetID: job.assetID, updatedAt: job.revision, derivative: .thumbnail,
-                                      targetPixels: .init(width: Int(54 * displayScale), height: Int(54 * displayScale))),
+                                      targetPixels: .init(width: Int(76 * displayScale), height: Int(76 * displayScale))),
                     media: media,
                     priority: .low
                 )
-                .frame(width: 46, height: 54)
-                .clipShape(.rect(cornerRadius: 7))
+                .frame(width: 64, height: 76)
+                .clipShape(.rect(cornerRadius: 9))
                 .accessibilityHidden(true)
             }
             VStack(alignment: .leading, spacing: 0) {
-                Text(job.exportedFilename ?? job.metadata.filename)
-                    .font(.subheadline.weight(.medium))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .padding(.bottom, 4)
-                if job.stage != .completed {
-                    Text(job.stage.title).font(.caption).foregroundStyle(.secondary)
-                }
-                if job.stage == .downloading {
-                    if let fraction = job.fraction {
-                        ProgressView(value: fraction)
-                    } else {
-                        ProgressView()
-                    }
-                } else if job.stage == .preparing || job.stage == .saving {
-                    ProgressView().controlSize(.small)
-                }
-                HStack(alignment: .firstTextBaseline) {
-                    if job.received > 0 {
-                        Text(ByteCountFormatter.string(fromByteCount: job.received, countStyle: .file)
-                            + (job.expected > 0 ? " / " + ByteCountFormatter.string(fromByteCount: job.expected, countStyle: .file) : ""))
-                            .monospacedDigit()
-                    }
-                    Spacer(minLength: 8)
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(job.exportedFilename ?? job.metadata.filename)
+                        .font(.subheadline.weight(.medium))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .contentTransition(.opacity)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     Text(job.tier.rawValue)
-                }.font(.caption).foregroundStyle(.secondary)
-                if let error = job.error {
-                    Text(error).font(.caption).foregroundStyle(.secondary)
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize()
                 }
-                if job.canCancel || job.canRetry || job.stage == .uncertain {
-                    HStack {
-                        if job.canCancel {
-                            Button("Cancel", role: .destructive) { exports.cancel(job.id) }
-                        }
-                        if job.canRetry {
-                            Button("Retry") { exports.retry(job.id) }.disabled(!exports.canRetry(job))
-                        }
-                        if job.stage == .uncertain {
-                            Button("I checked Photos…") { uncertainJob = job.id }
-                        }
-                    }.font(.caption).buttonStyle(.borderless)
-                }
+                .frame(minHeight: 28)
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     let elapsed = max(0, (job.finishedAt ?? context.date).timeIntervalSince(job.startedAt))
-                    VStack(alignment: .trailing, spacing: 4) {
-                        if job.stage == .downloading, job.expected > job.received, job.received > 0, elapsed > 1 {
-                            let remaining = Double(job.expected - job.received) * elapsed / Double(job.received)
-                            Text("About " + Duration.seconds(remaining).formatted(.time(pattern: .minuteSecond)) + " left")
-                        }
+                    VStack(alignment: .trailing, spacing: 0) {
                         HStack(alignment: .firstTextBaseline) {
+                            Text(ByteCountFormatter.string(fromByteCount: job.received, countStyle: .file)
+                                + (job.expected > 0 ? " / " + ByteCountFormatter.string(fromByteCount: job.expected, countStyle: .file) : ""))
+                            Spacer(minLength: 8)
+                            if job.stage == .downloading, job.expected > job.received, job.received > 0, elapsed > 1 {
+                                let remaining = Double(job.expected - job.received) * elapsed / Double(job.received)
+                                Text("About " + Duration.seconds(remaining).formatted(.time(pattern: .minuteSecond)) + " left")
+                            } else if job.stage != .cancelled, job.error != nil {
+                                Button { errorJob = job } label: {
+                                    Label(job.stage.title, systemImage: "info.circle")
+                                        .contentTransition(.opacity)
+                                }.buttonStyle(.plain)
+                                    .accessibilityHint("Show error details")
+                            } else if job.stage != .completed {
+                                Text(job.stage.title)
+                                    .contentTransition(.opacity)
+                            }
+                        }
+                        .lineLimit(1)
+                        .frame(minHeight: 28)
+                        HStack(alignment: .center, spacing: 8) {
                             if let finished = job.finishedAt, job.stage == .completed {
                                 Text(finished, format: .dateTime.month().day().hour().minute())
+                            } else if job.canRetry {
+                                Button("Retry") { exports.retry(job.id) }
+                                    .disabled(!exports.canRetry(job))
+                                    .foregroundStyle(.tint)
+                                    .buttonStyle(.glass)
+                                    .buttonBorderShape(.capsule)
+                                    .controlSize(.small)
+                                    .frame(minWidth: 44, minHeight: 28)
+                                    .contentShape(Rectangle().inset(by: -8))
+                                    .transition(.opacity)
+                            } else if job.canCancel {
+                                Button("Cancel", role: .destructive) { exports.cancel(job.id) }
+                                    .foregroundStyle(.red)
+                                    .buttonStyle(.glass)
+                                    .buttonBorderShape(.capsule)
+                                    .controlSize(.small)
+                                    .frame(minWidth: 44, minHeight: 28)
+                                    .contentShape(Rectangle().inset(by: -8))
+                                    .transition(.opacity)
+                            } else if job.stage == .uncertain {
+                                Button("I checked Photos…") { uncertainJob = job.id }
+                                    .buttonStyle(.glass)
+                                    .buttonBorderShape(.capsule)
+                                    .controlSize(.small)
+                                    .frame(minWidth: 44, minHeight: 28)
+                                    .contentShape(Rectangle().inset(by: -8))
+                                    .transition(.opacity)
                             }
-                            Spacer(minLength: 8)
+                            if job.stage == .downloading {
+                                if let fraction = job.fraction {
+                                    ProgressView(value: fraction).progressViewStyle(.linear)
+                                        .frame(maxWidth: .infinity)
+                                        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: fraction)
+                                        .transition(.opacity)
+                                } else {
+                                    ProgressView().controlSize(.small).frame(maxWidth: .infinity).transition(.opacity)
+                                }
+                            } else if job.stage == .preparing || job.stage == .saving {
+                                ProgressView().controlSize(.small).frame(maxWidth: .infinity).transition(.opacity)
+                            } else {
+                                Spacer(minLength: 8)
+                            }
                             Text(Duration.seconds(elapsed).formatted(.time(pattern: .minuteSecond)) + " elapsed")
+                                .fixedSize(horizontal: true, vertical: false)
                         }
+                        .frame(minHeight: 28)
                     }
                 }.font(.caption).foregroundStyle(.secondary).monospacedDigit()
             }
         }
         .padding(.vertical, 12)
         .frame(minHeight: 88)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: job.stage)
     }
 
     private func removeHistory(_ id: UUID) {
@@ -256,14 +351,16 @@ struct MediaDownloadButton<Content: View>: View {
     @State private var qualityHeight: CGFloat = 350
     @State private var historyHeight: CGFloat = 350
     @State private var showsHistory = false
-    @State private var selectedDetent = PresentationDetent.height(350)
+    @State private var historyExpanded = false
+    @State private var sheetSizing = MediaExportSheetSizing()
 
     var body: some View {
         let saved = media.exports.saved(asset)
         Button {
             guard let namespace = media.scope?.cacheNamespace else { return }
             showsHistory = false
-            selectedDetent = compactDetent
+            historyExpanded = false
+            sheetSizing.reset(compactDetent)
             withAnimation(panelAnimation) {
                 presentation = .init(asset: asset, namespace: namespace, cachedTiers: media.registeredExportTiers(for: asset))
             }
@@ -281,34 +378,41 @@ struct MediaDownloadButton<Content: View>: View {
                             setHistoryVisible(true)
                         }
                         .frame(width: container.size.width)
-                        .transition(reduceMotion ? .opacity : .offset(x: -24).combined(with: .opacity))
+                        .transition(reduceMotion ? .opacity : .offset(y: -24).combined(with: .opacity))
                     }
                     if showsHistory {
                         DownloadsView(exports: media.exports, backAction: { setHistoryVisible(false) },
                                       contentHeightChanged: { height in
                                           guard abs(historyHeight - height) > 1 else { return }
-                                          withAnimation(panelAnimation) {
-                                              historyHeight = height
-                                              if showsHistory {
-                                                  selectedDetent = historyDetent
-                                              }
+                                          historyHeight = height
+                                          if showsHistory, !historyExpanded {
+                                              sheetSizing.select(historyDetent, animation: panelAnimation)
+                                          }
+                                      }, headerDrag: { direction in
+                                          if direction == .up {
+                                              sheetSizing.select(.large, animation: panelAnimation) { historyExpanded = true }
+                                          } else {
+                                              presentation = nil
                                           }
                                       })
                                       .frame(width: container.size.width)
-                                      .transition(reduceMotion ? .opacity : .offset(x: 24).combined(with: .opacity))
+                                      .transition(reduceMotion ? .opacity : .offset(y: 24).combined(with: .opacity))
                     }
                 }
                 .frame(width: container.size.width, height: container.size.height)
             }
-            .nativeEdgeBackAction(active: !showsHistory, priority: 300) {
+            .background(MediaExportOutsideTap { presentation = nil })
+            .nativeEdgeBackAction(active: !showsHistory, priority: 300, animatesContent: false) {
                 presentation = nil
             }
             .font(.body)
             .fontWeight(.regular)
             .buttonStyle(.automatic)
             .controlSize(.regular)
-            .presentationDetents([compactDetent, historyDetent], selection: $selectedDetent)
-            .presentationDragIndicator(.visible)
+            .presentationDetents(sheetSizing.detents, selection: .constant(sheetSizing.selection))
+            .presentationDragIndicator(.hidden)
+            .presentationContentInteraction(.scrolls)
+            .interactiveDismissDisabled()
             .onChange(of: media.scope?.cacheNamespace) { _, current in
                 if current != selection.namespace {
                     presentation = nil
@@ -331,19 +435,18 @@ struct MediaDownloadButton<Content: View>: View {
 
     private var measuredHeight: Binding<CGFloat> {
         Binding(get: { qualityHeight }, set: { height in
-            withAnimation(panelAnimation) {
-                qualityHeight = height
-                if !showsHistory {
-                    selectedDetent = compactDetent
-                }
+            guard abs(qualityHeight - height) > 1 else { return }
+            qualityHeight = height
+            if !showsHistory {
+                sheetSizing.select(compactDetent, animation: panelAnimation)
             }
         })
     }
 
     private func setHistoryVisible(_ visible: Bool) {
-        withAnimation(panelAnimation) {
+        sheetSizing.select(visible ? historyDetent : compactDetent, animation: panelAnimation) {
             showsHistory = visible
-            selectedDetent = visible ? historyDetent : compactDetent
+            historyExpanded = false
         }
     }
 }
@@ -364,6 +467,8 @@ private struct MediaExportQualityView: View {
     @Binding var contentHeight: CGFloat
     let openDownloads: () -> Void
     @State private var cached: Set<MediaExportTier>
+    @State private var headerHeight: CGFloat = 0
+    @State private var bodyHeight: CGFloat = 0
 
     init(selection: MediaExportPresentation, media: MediaLibraryController,
          contentHeight: Binding<CGFloat>, openDownloads: @escaping () -> Void)
@@ -377,91 +482,110 @@ private struct MediaExportQualityView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+        VStack(spacing: 16) {
+            VStack(spacing: 4) {
+                MediaExportSheetGrabber()
                 HStack(spacing: 12) {
                     doneButton.hidden().allowsHitTesting(false).accessibilityHidden(true)
                     Text("Save to Photos").font(.headline).frame(maxWidth: .infinity)
                         .multilineTextAlignment(.center)
                     doneButton
-                }
-                .frame(minHeight: 44)
-                .contentShape(Rectangle())
-                .highPriorityGesture(
-                    DragGesture(minimumDistance: 12)
-                        .onEnded { gesture in
-                            let translation = gesture.translation
-                            guard translation.height < -32,
-                                  abs(translation.height) > abs(translation.width) * 1.5 else { return }
-                            openDownloads()
-                        }
-                )
-                VStack(spacing: 0) {
-                    let tiers = MediaExportTier.choices(video: asset.mediaKind == .video, live: asset.livePhotoVideoID != nil)
-                    ForEach(tiers) { tier in
-                        let saved = media.exports.isSaved(asset: asset, tier: tier)
-                        let active = media.exports.jobs.first { $0.assetID == asset.id && $0.revision == asset.thumbnailRevision && $0.tier == tier && $0.stage.isActive }
-                        Button {
-                            media.exports.enqueue(asset: asset, tier: tier, expectedNamespace: namespace)
-                        } label: {
-                            HStack(spacing: 12) {
-                                Text(tier.rawValue + (asset.mediaKind == .video ? " video" : ""))
-                                    .font(.body.weight(.medium))
-                                Spacer()
-                                Group {
-                                    if let active, !saved {
-                                        if let fraction = active.fraction, active.stage == .downloading {
-                                            ProgressView(value: fraction).progressViewStyle(.circular)
-                                        } else {
-                                            ProgressView()
-                                        }
-                                    } else {
-                                        Image(systemName: saved ? "checkmark" : "arrow.down")
-                                            .font(.body.weight(.medium))
-                                            .contentTransition(reduceMotion ? .opacity : .symbolEffect(.replace))
-                                    }
-                                }
-                                .frame(width: 24, height: 24)
-                                .transition(.scale(scale: 0.8).combined(with: .opacity))
-                            }.foregroundStyle(.primary)
-                                .frame(minHeight: 48)
-                                .padding(.horizontal, 4)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(!media.exports.ready || media.scope?.cacheNamespace != namespace || saved || active != nil || (media.activeAPIURL == nil && !cached.contains(tier)))
-                        .animation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.8), value: saved)
-                        .accessibilityValue(saved ? "Saved to Photos" : active?.stage.title ?? "")
-                        .accessibilityIdentifier("download-tier-\(tier.rawValue.lowercased())")
-                        if tier != tiers.last {
-                            Divider().padding(.horizontal, 4)
-                        }
-                    }
-                }
-                HStack {
-                    Button("Downloads History", action: openDownloads)
-                        .foregroundStyle(.tint)
-                    Spacer()
-                    if let job = media.exports.activeJob(assetID: asset.id), job.canCancel {
-                        Button("Cancel", role: .destructive) { media.exports.cancel(job.id) }
-                    }
-                }
-                .font(.subheadline)
-                .frame(minHeight: 44)
-                .padding(.horizontal, 4)
-                .buttonStyle(.plain)
-                if let message = media.exports.message {
-                    Text(message).font(.footnote).foregroundStyle(.secondary)
-                }
+                }.frame(minHeight: 44)
             }
             .padding(.horizontal, 20)
-            .padding(.top, 12)
-            .padding(.bottom, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
-                if abs(contentHeight - height) > 1 {
-                    contentHeight = height
+            .padding(.top, 8)
+            .fixedSize(horizontal: false, vertical: true)
+            .modifier(MediaExportHeaderGesture(action: { direction in
+                if direction == .up {
+                    openDownloads()
+                } else {
+                    dismiss()
                 }
+            }))
+            .onGeometryChange(for: CGFloat.self) { ceil($0.size.height) } action: { headerHeight = $0 }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    VStack(spacing: 0) {
+                        let tiers = MediaExportTier.choices(video: asset.mediaKind == .video, live: asset.livePhotoVideoID != nil)
+                        ForEach(tiers) { tier in
+                            let saved = media.exports.isSaved(asset: asset, tier: tier)
+                            let active = media.exports.jobs.first { $0.assetID == asset.id && $0.revision == asset.thumbnailRevision && $0.tier == tier && $0.stage.isActive }
+                            Button {
+                                media.exports.enqueue(asset: asset, tier: tier, expectedNamespace: namespace)
+                            } label: {
+                                HStack(spacing: 12) {
+                                    Text(tier.rawValue + (asset.mediaKind == .video ? " video" : ""))
+                                        .font(.body.weight(.medium))
+                                    Spacer()
+                                    Group {
+                                        if let active, !saved {
+                                            if let fraction = active.fraction, active.stage == .downloading {
+                                                ProgressView(value: fraction).progressViewStyle(.circular)
+                                                    .transition(.opacity)
+                                            } else {
+                                                ProgressView()
+                                                    .transition(.opacity)
+                                            }
+                                        } else {
+                                            Image(systemName: saved ? "checkmark" : "arrow.down")
+                                                .font(.body.weight(.medium))
+                                                .contentTransition(reduceMotion ? .opacity : .symbolEffect(.replace))
+                                                .transition(.opacity)
+                                        }
+                                    }
+                                    .frame(width: 24, height: 24)
+                                    .transition(.scale(scale: 0.8).combined(with: .opacity))
+                                }.foregroundStyle(.primary)
+                                    .frame(minHeight: 48)
+                                    .padding(.horizontal, 4)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(!media.exports.ready || media.scope?.cacheNamespace != namespace || saved || active != nil || (media.activeAPIURL == nil && !cached.contains(tier)))
+                            .animation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.8), value: saved)
+                            .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: active?.stage)
+                            .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: active?.id)
+                            .accessibilityValue(saved ? "Saved to Photos" : active?.stage.title ?? "")
+                            .accessibilityIdentifier("download-tier-\(tier.rawValue.lowercased())")
+                            if tier != tiers.last {
+                                Divider().padding(.horizontal, 4)
+                            }
+                        }
+                    }
+                    HStack {
+                        Button("Downloads History", action: openDownloads)
+                            .foregroundStyle(.tint)
+                        Spacer()
+                        if let job = media.exports.activeJob(assetID: asset.id), job.canCancel {
+                            Button("Cancel", role: .destructive) { media.exports.cancel(job.id) }
+                                .buttonStyle(.glass)
+                                .buttonBorderShape(.capsule)
+                                .foregroundStyle(.red)
+                                .controlSize(.regular)
+                                .transition(.opacity)
+                        }
+                    }
+                    .font(.subheadline)
+                    .frame(minHeight: 44)
+                    .padding(.horizontal, 4)
+                    .buttonStyle(.plain)
+                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: media.exports.activeJob(assetID: asset.id)?.id)
+                    if let message = media.exports.message {
+                        Text(message).font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .onGeometryChange(for: CGFloat.self) { ceil($0.size.height) } action: { bodyHeight = $0 }
+            }
+        }
+        .onChange(of: headerHeight + bodyHeight) { _, height in
+            guard headerHeight > 0, bodyHeight > 0 else { return }
+            let total = height + 16
+            if abs(contentHeight - total) > 1 {
+                contentHeight = total
             }
         }
         .scrollBounceBehavior(.basedOnSize)
@@ -494,15 +618,22 @@ private struct MediaExportCacheProbe: Hashable {
 }
 
 struct MediaExportProgressBadge: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let assetID: String
     let exports: MediaExportController
     @State private var showDownloads = false
     @State private var historyHeight: CGFloat = 350
+    @State private var historyExpanded = false
+    @State private var sheetSizing = MediaExportSheetSizing()
 
     var body: some View {
         Group {
             if let job = exports.activeJob(assetID: assetID) {
-                Button { showDownloads = true } label: {
+                Button {
+                    historyExpanded = false
+                    sheetSizing.reset(.height(historyHeight))
+                    showDownloads = true
+                } label: {
                     HStack(spacing: 5) {
                         ProgressView().controlSize(.mini).tint(.white)
                         if job.stage == .downloading, let fraction = job.fraction {
@@ -526,16 +657,28 @@ struct MediaExportProgressBadge: View {
                               contentHeightChanged: { height in
                                   if abs(historyHeight - height) > 1 {
                                       historyHeight = height
+                                      if !historyExpanded {
+                                          sheetSizing.select(.height(height), animation: reduceMotion ? nil : .default)
+                                      }
+                                  }
+                              }, headerDrag: { direction in
+                                  if direction == .up {
+                                      sheetSizing.select(.large, animation: reduceMotion ? nil : .default) { historyExpanded = true }
+                                  } else {
+                                      showDownloads = false
                                   }
                               })
                               .frame(width: container.size.width, height: container.size.height)
             }
+            .background(MediaExportOutsideTap { showDownloads = false })
             .font(.body)
             .fontWeight(.regular)
             .buttonStyle(.automatic)
             .controlSize(.regular)
-            .presentationDetents([.height(historyHeight)])
-            .presentationDragIndicator(.visible)
+            .presentationDetents(sheetSizing.detents, selection: .constant(sheetSizing.selection))
+            .presentationDragIndicator(.hidden)
+            .presentationContentInteraction(.scrolls)
+            .interactiveDismissDisabled()
         }
     }
 }

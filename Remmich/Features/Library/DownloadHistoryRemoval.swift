@@ -16,59 +16,63 @@ struct DownloadHistoryRemoval: ViewModifier {
     private let actionWidth: CGFloat = 96
 
     func body(content: Content) -> some View {
-        if enabled {
-            content
-                .padding(.horizontal, 4)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .offset(x: reveal * direction)
-                .background(alignment: .trailing) {
-                    if reveal > 0 {
-                        Button {
-                            settle(0)
-                            confirm()
-                        } label: {
-                            Text("Remove")
-                                .font(.subheadline)
-                                .foregroundStyle(.white)
-                                .frame(width: max(actionWidth, reveal))
-                                .frame(maxHeight: .infinity)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .frame(width: reveal, alignment: .trailing)
-                        .background(.red)
-                        .clipShape(UnevenRoundedRectangle(bottomTrailingRadius: isLast ? 18 : 0,
-                                                          topTrailingRadius: isFirst ? 18 : 0))
-                        .transition(.identity)
+        content
+            .padding(.horizontal, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .offset(x: reveal * direction)
+            .background(alignment: .trailing) {
+                if enabled, reveal > 0 {
+                    Button {
+                        settle(0)
+                        confirm()
+                    } label: {
+                        Text("Remove")
+                            .font(.subheadline)
+                            .foregroundStyle(.white)
+                            .frame(width: max(actionWidth, reveal))
+                            .frame(maxHeight: .infinity)
+                            .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
+                    .frame(width: reveal, alignment: .trailing)
+                    .background(.red)
+                    .clipShape(UnevenRoundedRectangle(bottomTrailingRadius: isLast ? 18 : 0,
+                                                      topTrailingRadius: isFirst ? 18 : 0))
+                    .transition(.identity)
                 }
-                .clipped()
-                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { rowWidth = $0 }
-                .gesture(DownloadHistoryPan(direction: direction, revealed: reveal > 0) { phase, translation in
-                    switch phase {
-                    case .began:
-                        dragStart = reveal
-                    case .changed:
-                        reveal = min(rowWidth, max(0, dragStart + translation.x * direction))
-                    case .ended:
-                        if DownloadHistorySwipePolicy.commits(translation: translation, width: rowWidth,
-                                                              direction: direction, revealed: dragStart > 0)
-                        {
-                            remove()
-                        } else {
-                            settle(reveal >= actionWidth / 2 ? actionWidth : 0)
-                        }
-                    default:
-                        settle(dragStart > 0 ? actionWidth : 0)
+            }
+            .clipped()
+            .contentShape(Rectangle())
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { rowWidth = $0 }
+            .gesture(DownloadHistoryPan(enabled: enabled, direction: direction, revealed: reveal > 0) { phase, translation in
+                switch phase {
+                case .began:
+                    dragStart = reveal
+                case .changed:
+                    reveal = min(rowWidth, max(0, dragStart + translation.x * direction))
+                case .ended:
+                    if DownloadHistorySwipePolicy.commits(translation: translation, width: rowWidth,
+                                                          direction: direction, revealed: dragStart > 0)
+                    {
+                        remove()
+                    } else {
+                        settle(reveal >= actionWidth / 2 ? actionWidth : 0)
                     }
-                })
-                .accessibilityAction(named: "Remove") { confirm() }
-                .onDisappear { reveal = 0 }
-        } else {
-            content
-                .padding(.horizontal, 4)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
+                default:
+                    settle(dragStart > 0 ? actionWidth : 0)
+                }
+            })
+            .accessibilityActions {
+                if enabled {
+                    Button("Remove", action: confirm)
+                }
+            }
+            .onChange(of: enabled) { _, enabled in
+                if !enabled {
+                    reveal = 0; dragStart = 0
+                }
+            }
+            .onDisappear { reveal = 0 }
     }
 
     private var direction: CGFloat {
@@ -81,6 +85,7 @@ struct DownloadHistoryRemoval: ViewModifier {
 }
 
 private struct DownloadHistoryPan: UIGestureRecognizerRepresentable {
+    let enabled: Bool
     let direction: CGFloat
     let revealed: Bool
     let update: (UIGestureRecognizer.State, CGPoint) -> Void
@@ -91,13 +96,17 @@ private struct DownloadHistoryPan: UIGestureRecognizerRepresentable {
 
     func makeUIGestureRecognizer(context: Context) -> UIPanGestureRecognizer {
         let pan = UIPanGestureRecognizer()
+        pan.isEnabled = enabled
         pan.maximumNumberOfTouches = 1
         pan.cancelsTouchesInView = false
         pan.delegate = context.coordinator
         return pan
     }
 
-    func updateUIGestureRecognizer(_: UIPanGestureRecognizer, context: Context) {
+    func updateUIGestureRecognizer(_ pan: UIPanGestureRecognizer, context: Context) {
+        if pan.isEnabled != enabled {
+            pan.isEnabled = enabled
+        }
         context.coordinator.direction = direction
         context.coordinator.revealed = revealed
     }

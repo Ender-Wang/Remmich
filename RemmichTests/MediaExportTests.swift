@@ -193,6 +193,28 @@ struct MediaExportTests {
         #expect(DownloadHistorySwipePolicy.commits(translation: .init(x: -190, y: 0), width: 400, direction: -1, revealed: true))
     }
 
+    @Test func panelHeaderDragRequiresVerticalIntentInEitherDirection() {
+        #expect(MediaExportHeaderDirection.resolve(.init(width: 4, height: -60)) == .up)
+        #expect(MediaExportHeaderDirection.resolve(.init(width: -4, height: 60)) == .down)
+        #expect(MediaExportHeaderDirection.resolve(.init(width: 0, height: 20)) == nil)
+        #expect(MediaExportHeaderDirection.resolve(.init(width: 60, height: -40)) == nil)
+        #expect(MediaExportHeaderDirection.resolve(.init(width: -80, height: 30)) == nil)
+    }
+
+    @MainActor
+    @Test func idleWaitingHistoryIsRemovableButActiveAndUncertainSavesAreProtected() {
+        let exports = MediaExportController(photos: ExportAuthorizationGate())
+        var item = job()
+        for stage in [MediaExportStage.waiting, .cancelled, .failed, .completed] {
+            item.stage = stage
+            #expect(exports.canRemoveHistory(item))
+        }
+        for stage in [MediaExportStage.queued, .preparing, .downloading, .saving, .awaitingPhotos, .uncertain] {
+            item.stage = stage
+            #expect(!exports.canRemoveHistory(item))
+        }
+    }
+
     @MainActor
     @Test func queuedWorkIsPersistedWhileFirstJobWaitsAndRetryCannotRaceCancellation() async throws {
         let root = temporaryDirectory()

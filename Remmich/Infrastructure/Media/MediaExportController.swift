@@ -235,6 +235,7 @@ final class MediaExportController: NSObject {
     func cancel(_ id: UUID) {
         guard let index = journal.jobs.firstIndex(where: { $0.id == id }), journal.jobs[index].canCancel else { return }
         journal.jobs[index].stage = .cancelled
+        journal.jobs[index].error = nil
         journal.jobs[index].finishedAt = Date()
         if runningID == id {
             worker?.cancel()
@@ -302,7 +303,7 @@ final class MediaExportController: NSObject {
     }
 
     func canRemoveHistory(_ job: MediaExportJob) -> Bool {
-        !job.stage.isActive && job.stage != .uncertain && runningID != job.id
+        (!job.stage.isActive || job.stage == .waiting) && job.stage != .uncertain && runningID != job.id
     }
 
     func removeHistory(_ id: UUID) {
@@ -608,7 +609,7 @@ final class MediaExportController: NSObject {
                 journal.jobs[index].stage = committing ? .uncertain : (cancelled ? .cancelled : (offline ? .waiting : .failed))
                 journal.jobs[index].error = committing
                     ? (savedInPhotos ? "Saved to Photos, but the history could not be recorded. Avoid saving again. " : "Photos may have saved this item. Check the Remmich album before saving again. ") + error.localizedDescription
-                    : error.localizedDescription
+                    : (cancelled ? nil : error.localizedDescription)
                 journal.jobs[index].finishedAt = Date()
                 await saveOrReport()
             }
