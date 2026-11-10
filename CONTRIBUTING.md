@@ -302,6 +302,19 @@ xcodebuild build-for-testing \
 
 This compiles test products; it does not execute the tests. Run relevant app tests in Xcode, and verify media behavior, gestures, rotation, and accessibility on a physical device. The [CI build workflow](.github/workflows/build.yml) produces one set of app/test products; the [test workflow](.github/workflows/test.yml) runs the package and app-logic tests against that build's revision.
 
+### Release IPAs
+
+The Tests workflow also handles releases after its test job succeeds, following EdgeMark's version/tag convention. Only same-repository `push` or manual Build runs on `main`/`develop` can reach the release jobs. The downloaded test-product revision must match the triggering Build SHA; all release jobs use that exact tested revision.
+
+- A tested commit changing `Remmich.xcodeproj/project.pbxproj` checks for a release automatically. For an existing version such as the initial 0.5.0, run the **Build** workflow manually on the intended branch after the workflow changes are pushed.
+- `main` creates `v<version>`; an existing stable tag is left unchanged. `develop` creates the next unused `v<version>-beta.N` prerelease. Version and build are read from the project, and app/test targets must agree.
+- Release notes use the body of the exact tested commit, excluding its subject, for both automatic and manual Build runs. Put the intended Markdown release notes in that commit body; no GitHub-generated changelog or fixed introductory text is added.
+- Archive uses `Release`, a generic iOS device destination, Swift `-O` and whole-module compilation. Code signing is disabled; no signing certificate or provisioning-profile secrets are required.
+- Package only the archived `Remmich.app` under `Payload/`, preserving its frameworks/resources. Publish `Remmich-v<version>-unsigned.ipa`, a separate dSYMs ZIP, and SHA-256 files. Verify the archived version/build, iOS platform and arm64 executable before upload.
+- Only the final publishing job has `contents: write`. It verifies checksums, creates the GitHub release/tag at the tested SHA, and attaches the generated assets. An eligible successful run publishes automatically.
+
+These unsigned IPAs need re-signing with a compatible sideloading tool before installation; they are not App Store/TestFlight or directly installable distribution builds. Test the optimized build on a physical device before treating it as release-verified. The first archive/publication remains pending until this pipeline runs successfully.
+
 Run the API package tests with:
 
 ```bash

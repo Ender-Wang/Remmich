@@ -29,9 +29,9 @@ See the **[Roadmap](#roadmap)** for upcoming features, remaining verification an
 
 Requires an iPhone or iPad running iOS/iPadOS 26.6 or later and an account on your Immich server.
 
-CI-built IPA downloads for sideloading are planned for a later update, with AltStore as a possible installation option.
+Download an optimized, unsigned IPA from [GitHub Releases](https://github.com/Ender-Wang/Remmich/releases) and install it with a compatible sideloading tool, such as AltStore Classic, which signs it using your Apple ID.
 
-For now, follow [Build and run](CONTRIBUTING.md#build-and-run) to build from source. After installing, sign in with your Immich server address and credentials. Add a Primary address and optional Fallback addresses in **Profile → Connection** if needed.
+You can also follow [Build and run](CONTRIBUTING.md#build-and-run) to build from source. After installing, sign in with your Immich server address and credentials. Add a Primary address and optional Fallback addresses in **Profile → Connection** if needed.
 
 ## Features
 
@@ -71,7 +71,7 @@ Milestones track implementation and help set expectations for upcoming work. **0
 | M7 | Planned | Server-backed read-only Library collections |
 | M8 | Planned | Server-backed Search with native filters |
 | M9 | Planned | Further improvements and verification for iPad, accessibility, resilience, and performance |
-| M10 | Planned | Broader real-device release verification, CI-built IPAs, and sideloading distribution; AltStore is under consideration |
+| M10 | Planned | Broader real-device release verification and additional distribution options |
 
 ## Roadmap
 
@@ -97,7 +97,7 @@ These are the current implementation priorities, not separate committed release 
 ### Verification still open
 
 - **Sharing:** Preview metadata-only copying is device-verified. Broader formats, destinations, iPad presentation and automated test coverage still need verification.
-- **Downloads:** earlier Full-tier errors, broader format/Live Photo and background-relaunch cases still need verification. Pause/Resume and its controls have device exercise; comprehensive interruption/relaunch coverage and new automated fixtures remain unverified. Partial-data reuse depends on iOS and server support; a download may restart when it cannot resume.
+- **Downloads:** earlier Full-tier errors, broader format/Live Photo and background-relaunch cases still need verification. Pause/Resume controls and the restored byte-count handoff are device-verified; comprehensive interruption/relaunch coverage and new automated fixtures remain unverified. Partial-data reuse depends on iOS and server support; a download may restart when it cannot resume.
 - **Custom Photon instance:** batch caching and explicit Cache Rebuild are implemented, but the maintainer has not yet run the NAS Rebuild end to end on a physical device. Public-server demand fetching and landmark names have device acceptance. The latest Rebuild [focused CI passed](https://github.com/Ender-Wang/Remmich/actions/runs/42461148263).
 - **Release coverage:** broader devices, orientations, accessibility and network/interruption cases remain release checks. Feature implementation and the recorded device acceptance do not imply every release scenario has passed.
 
