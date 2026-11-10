@@ -8,6 +8,45 @@ import UniformTypeIdentifiers
 
 @Suite(.serialized)
 struct MediaExportTests {
+    @Test func recoveryPrunesAbandonedStagingWithoutTouchingOwnedOrProtectedJobs() async throws {
+        let manager = FileManager.default
+        let namespace = "cleanup-test-\(UUID().uuidString)"
+        let root = manager.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appending(path: "RemmichExports/\(namespace)", directoryHint: .isDirectory)
+        try manager.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? manager.removeItem(at: root) }
+        let files = MediaExportFiles()
+        let abandoned = root.appending(path: UUID().uuidString)
+        let activeID = UUID()
+        let uncertainID = UUID()
+        let active = root.appending(path: activeID.uuidString)
+        let uncertain = root.appending(path: uncertainID.uuidString)
+        let unknown = root.appending(path: "unrecognized")
+        for directory in [abandoned, active, uncertain, unknown] {
+            try manager.createDirectory(at: directory, withIntermediateDirectories: true)
+            try Data([1, 2, 3]).write(to: directory.appending(path: "media.mov"))
+        }
+        let owned = try await files.directory(namespace: namespace, job: UUID())
+        // Recovery uses ownership, not a grace period or modification date.
+        try manager.setAttributes([.modificationDate: Date.distantPast], ofItemAtPath: owned.path)
+        let regularFile = root.appending(path: UUID().uuidString)
+        try Data([4]).write(to: regularFile)
+        let link = root.appending(path: UUID().uuidString)
+        try manager.createSymbolicLink(at: link, withDestinationURL: unknown)
+
+        let result = await files.prune(namespace: namespace, keeping: [activeID, uncertainID])
+        #expect(result.removed == 1)
+        #expect(result.failed == 0)
+        #expect(!manager.fileExists(atPath: abandoned.path))
+        for protected in [active, uncertain, unknown, owned, regularFile, link] {
+            #expect(manager.fileExists(atPath: protected.path))
+        }
+        let again = await files.prune(namespace: namespace, keeping: [activeID, uncertainID])
+        #expect(again.removed == 0)
+        await files.remove(owned)
+        #expect(!manager.fileExists(atPath: owned.path))
+    }
+
     @Test func tiersAndNamesNeverMislabelVideoOrLivePhotos() {
         #expect(MediaExportTier.choices(video: true, live: false) == [.playback, .original])
         #expect(MediaExportTier.choices(video: false, live: true) == [.original])

@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 
 /// Owns files independently of the viewer's short-lived media downloads.
 actor MediaExportFiles {
+    private var ownedDirectories: Set<URL> = []
     nonisolated static func isFullSize(_ data: Data, width: Int?, height: Int?) -> Bool {
         guard let width, let height, let source = CGImageSourceCreateWithData(data as CFData, nil),
               let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [String: Any],
@@ -19,16 +20,26 @@ actor MediaExportFiles {
         }
     }
 
-    func prune(namespace: String, keeping ids: Set<UUID>) {
+    func prune(namespace: String, keeping ids: Set<UUID>) -> (removed: Int, failed: Int) {
         let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
             .appending(path: "RemmichExports/\(namespace)", directoryHint: .isDirectory)
-        let entries = (try? FileManager.default.contentsOfDirectory(at: base, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        let keys: Set<URLResourceKey> = [.isDirectoryKey, .isSymbolicLinkKey]
+        let entries = (try? FileManager.default.contentsOfDirectory(at: base, includingPropertiesForKeys: Array(keys))) ?? []
+        var removed = 0
+        var failed = 0
         for entry in entries {
             guard let id = UUID(uuidString: entry.lastPathComponent), !ids.contains(id),
-                  let date = try? entry.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
-                  date < Date().addingTimeInterval(-86400) else { continue }
-            try? FileManager.default.removeItem(at: entry)
+                  !ownedDirectories.contains(entry.standardizedFileURL),
+                  let values = try? entry.resourceValues(forKeys: keys),
+                  values.isDirectory == true, values.isSymbolicLink != true else { continue }
+            do {
+                try FileManager.default.removeItem(at: entry)
+                removed += 1
+            } catch {
+                failed += 1
+            }
         }
+        return (removed, failed)
     }
 
     func directory(namespace: String, job: UUID) throws -> URL {
@@ -39,6 +50,7 @@ actor MediaExportFiles {
             try FileManager.default.removeItem(at: base)
         }
         try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        ownedDirectories.insert(base.standardizedFileURL)
         return base
     }
 
@@ -58,6 +70,7 @@ actor MediaExportFiles {
     }
 
     func remove(_ directory: URL) {
+        ownedDirectories.remove(directory.standardizedFileURL)
         try? FileManager.default.removeItem(at: directory)
     }
 

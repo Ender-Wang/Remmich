@@ -47,15 +47,17 @@ final nonisolated class MediaShareFile: Identifiable, Sendable {
     let id = UUID()
     let url: URL
     let directory: URL
-    private static let cleanupQueue = DispatchQueue(label: "Remmich.share-cleanup", qos: .utility)
+    private let files: MediaExportFiles
 
-    init(url: URL, directory: URL) {
+    init(url: URL, directory: URL, files: MediaExportFiles = .init()) {
         self.url = url
         self.directory = directory
+        self.files = files
     }
 
     deinit {
         let directory = directory
-        Self.cleanupQueue.async { try? FileManager.default.removeItem(at: directory) }
+        let files = files
+        Task { await files.remove(directory) }
     }
 }

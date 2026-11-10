@@ -91,7 +91,9 @@ final class MediaExportController: NSObject {
                 await scheduleTransfers().value
                 guard generation == owner else { return }
                 pump()
-                await files.prune(namespace: scope.cacheNamespace, keeping: Set(loaded.jobs.filter { $0.stage == .uncertain }.map(\.id)))
+                let protectedJobs = Set(loaded.jobs.filter { $0.stage.isActive || $0.stage == .uncertain }.map(\.id))
+                let cleanup = await files.prune(namespace: scope.cacheNamespace, keeping: protectedJobs)
+                Self.logger.info("Export staging recovery removed=\(cleanup.removed) failed=\(cleanup.failed)")
                 guard generation == owner else { return }
                 await reconcile()
                 Self.logger.info("Export restored jobs=\(loaded.jobs.count) receipts=\(loaded.receipts.count)")
@@ -298,7 +300,7 @@ final class MediaExportController: NSObject {
             try Task.checkCancellation()
             guard generation == owner else { throw CancellationError() }
             await transfers.finishExport(operationID: operation, namespace: scope.cacheNamespace)
-            return MediaShareFile(url: output, directory: root)
+            return MediaShareFile(url: output, directory: root, files: files)
         } catch {
             await transfers.finishExport(operationID: operation, namespace: scope.cacheNamespace)
             await files.remove(root)
