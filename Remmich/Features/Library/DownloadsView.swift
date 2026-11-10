@@ -262,7 +262,7 @@ struct DownloadsView: View {
                 }
                 .frame(minHeight: 28)
                 TimelineView(.periodic(from: .now, by: 1)) { context in
-                    let elapsed = max(0, (job.finishedAt ?? context.date).timeIntervalSince(job.startedAt))
+                    let elapsed = job.elapsed(at: context.date)
                     VStack(alignment: .trailing, spacing: 0) {
                         HStack(alignment: .firstTextBaseline) {
                             Text(ByteCountFormatter.string(fromByteCount: job.received, countStyle: .file)
@@ -315,19 +315,31 @@ struct DownloadsView: View {
                                     .contentShape(Rectangle().inset(by: -8))
                                     .transition(.opacity)
                             }
-                            if job.stage == .downloading {
-                                if let fraction = job.fraction {
-                                    ProgressView(value: fraction).progressViewStyle(.linear)
-                                        .frame(maxWidth: .infinity)
-                                        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: fraction)
-                                        .transition(.opacity)
-                                } else {
-                                    ProgressView().controlSize(.small).frame(maxWidth: .infinity).transition(.opacity)
-                                }
-                            } else if job.stage == .preparing || job.stage == .saving {
-                                ProgressView().controlSize(.small).frame(maxWidth: .infinity).transition(.opacity)
+                            if job.stage.isActive || job.stage == .paused {
+                                ProgressView(value: job.fraction ?? 0).progressViewStyle(.linear)
+                                    .frame(maxWidth: .infinity)
+                                    .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: job.fraction)
+                                    .transition(.opacity)
                             } else {
                                 Spacer(minLength: 8)
+                            }
+                            if job.canPause || job.stage == .paused {
+                                Button {
+                                    if job.stage == .paused {
+                                        exports.resume(job.id)
+                                    } else {
+                                        exports.pause(job.id)
+                                    }
+                                } label: {
+                                    Image(systemName: job.stage == .paused ? "play.fill" : "pause.fill")
+                                        .contentTransition(reduceMotion ? .opacity : .symbolEffect(.replace))
+                                }
+                                .accessibilityLabel(job.stage == .paused ? "Resume download" : "Pause download")
+                                .buttonStyle(.glass)
+                                .buttonBorderShape(.capsule)
+                                .controlSize(.small)
+                                .frame(minWidth: 44, minHeight: 28)
+                                .transition(.opacity)
                             }
                             Text(Duration.seconds(elapsed).formatted(.time(pattern: .minuteSecond)) + " elapsed")
                                 .fixedSize(horizontal: true, vertical: false)
@@ -514,7 +526,7 @@ private struct MediaExportQualityView: View {
                         let tiers = MediaExportTier.choices(video: asset.mediaKind == .video, live: asset.livePhotoVideoID != nil)
                         ForEach(tiers) { tier in
                             let saved = media.exports.isSaved(asset: asset, tier: tier)
-                            let active = media.exports.jobs.first { $0.assetID == asset.id && $0.revision == asset.thumbnailRevision && $0.tier == tier && $0.stage.isActive }
+                            let active = media.exports.jobs.first { $0.assetID == asset.id && $0.revision == asset.thumbnailRevision && $0.tier == tier && ($0.stage.isActive || $0.stage == .paused) }
                             Button {
                                 media.exports.enqueue(asset: asset, tier: tier, expectedNamespace: namespace)
                             } label: {
@@ -524,7 +536,9 @@ private struct MediaExportQualityView: View {
                                     Spacer()
                                     Group {
                                         if let active, !saved {
-                                            if let fraction = active.fraction, active.stage == .downloading {
+                                            if active.stage == .paused {
+                                                Image(systemName: "pause.fill").transition(.opacity)
+                                            } else if let fraction = active.fraction, active.stage == .downloading {
                                                 ProgressView(value: fraction).progressViewStyle(.circular)
                                                     .transition(.opacity)
                                             } else {
@@ -640,11 +654,15 @@ struct MediaExportProgressBadge: View {
                     showDownloads = true
                 } label: {
                     HStack(spacing: 5) {
-                        ProgressView().controlSize(.mini).tint(.white)
+                        if job.stage == .paused {
+                            Image(systemName: "pause.fill")
+                        } else {
+                            ProgressView().controlSize(.mini).tint(.white)
+                        }
                         if job.stage == .downloading, let fraction = job.fraction {
                             Text(fraction, format: .percent.precision(.fractionLength(0)))
                         } else {
-                            Text(job.stage == .saving ? "Saving" : job.stage == .queued ? "Queued" : job.stage == .waiting ? "Waiting" : job.stage == .awaitingPhotos ? "Open to save" : "Preparing")
+                            Text(job.stage == .paused ? "Paused" : job.stage == .saving ? "Saving" : job.stage == .queued ? "Queued" : job.stage == .waiting ? "Waiting" : job.stage == .awaitingPhotos ? "Open to save" : "Preparing")
                         }
                     }
                     .font(.caption2.weight(.semibold)).monospacedDigit().foregroundStyle(.white)

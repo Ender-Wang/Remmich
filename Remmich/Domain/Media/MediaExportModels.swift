@@ -36,7 +36,7 @@ nonisolated enum MediaExportTier: String, Codable, CaseIterable, Identifiable, S
 }
 
 nonisolated enum MediaExportStage: String, Codable, Sendable {
-    case queued, preparing, downloading, waiting, awaitingPhotos, saving, completed, cancelled, failed, uncertain
+    case queued, preparing, downloading, waiting, paused, awaitingPhotos, saving, completed, cancelled, failed, uncertain
     var isActive: Bool {
         [.queued, .preparing, .downloading, .waiting, .awaitingPhotos, .saving].contains(self)
     }
@@ -47,6 +47,7 @@ nonisolated enum MediaExportStage: String, Codable, Sendable {
         case .preparing: "Preparing media"
         case .downloading: "Downloading"
         case .waiting: "Waiting for connection"
+        case .paused: "Paused"
         case .awaitingPhotos: "Open Remmich to save to Photos"
         case .saving: "Saving to Photos"
         case .completed: "Saved to Photos"
@@ -100,11 +101,25 @@ nonisolated struct MediaExportJob: Codable, Identifiable, Sendable {
     let tier: MediaExportTier
     var metadata: MediaExportMetadata
     var transferAttempt: UUID?
-    var stage: MediaExportStage = .queued
+    var stage: MediaExportStage = .queued {
+        didSet {
+            guard stage != oldValue else { return }
+            let now = Date()
+            if stage == .paused || stage == .waiting {
+                inactiveSince = inactiveSince ?? now
+            } else if let inactiveSince {
+                inactiveDuration = (inactiveDuration ?? 0) + max(0, now.timeIntervalSince(inactiveSince))
+                self.inactiveSince = nil
+            }
+        }
+    }
+
     var received: Int64 = 0
     var expected: Int64 = 0
     var startedAt = Date()
     var finishedAt: Date?
+    var inactiveSince: Date?
+    var inactiveDuration: TimeInterval?
     var error: String?
     var exportedFilename: String?
 
@@ -116,12 +131,22 @@ nonisolated struct MediaExportJob: Codable, Identifiable, Sendable {
         expected > 0 ? min(1, Double(received) / Double(expected)) : nil
     }
 
+    func elapsed(at date: Date) -> TimeInterval {
+        let end = finishedAt ?? date
+        let currentWait = inactiveSince.map { max(0, end.timeIntervalSince($0)) } ?? 0
+        return max(0, end.timeIntervalSince(startedAt) - (inactiveDuration ?? 0) - currentWait)
+    }
+
     var canCancel: Bool {
-        stage.isActive && stage != .saving
+        (stage.isActive && stage != .saving) || stage == .paused
+    }
+
+    var canPause: Bool {
+        [.queued, .preparing, .downloading, .waiting, .awaitingPhotos].contains(stage)
     }
 
     var canRetry: Bool {
-        stage == .failed || stage == .cancelled || stage == .waiting
+        stage == .failed || stage == .cancelled
     }
 }
 

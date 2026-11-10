@@ -92,10 +92,11 @@ nonisolated struct LibraryTransferDeliveryCursor {
     }
 }
 
-/// Durable request identities and responses; authorization is deliberately not serialized.
+/// Durable request identities and responses. Opaque export resume data may
+/// contain request headers; the journal uses protected, backup-excluded storage.
 nonisolated struct LibraryTransferJournal: Codable, Sendable {
     struct Job: Codable, Sendable {
-        enum State: String, Codable { case queued, running, completed, failed }
+        enum State: String, Codable { case queued, running, paused, completed, failed }
         let id: UUID
         let owner: LibraryTransferOwner
         let pass: UUID
@@ -117,6 +118,15 @@ nonisolated struct LibraryTransferJournal: Codable, Sendable {
         var sourceRevision: String?
         var completedAt: Date?
         var submittedAt: Date?
+        var resumeData: Data?
+        var expectedBytes: Int64?
+
+        static func isRecoverable(_ code: Int?) -> Bool {
+            guard let code else { return false }
+            return [NSURLErrorTimedOut, NSURLErrorNetworkConnectionLost, NSURLErrorNotConnectedToInternet,
+                    NSURLErrorCannotFindHost, NSURLErrorCannotConnectToHost, NSURLErrorDNSLookupFailed,
+                    NSURLErrorCancelled, NSURLErrorBackgroundSessionWasDisconnected].contains(code)
+        }
 
         /// Three quick attempts, then a cooldown before an automatic retry burst.
         var retryDelay: TimeInterval {
@@ -188,8 +198,9 @@ nonisolated struct LibraryTransferJournal: Codable, Sendable {
     }
 
     mutating func requeueFailures(at now: Date = Date()) {
-        for index in jobs.indices where jobs[index].state == .failed && jobs[index].kind != .export {
-            guard let retryAfter = jobs[index].retryAfter, retryAfter <= now,
+        for index in jobs.indices where jobs[index].state == .failed {
+            guard jobs[index].kind != .export || Job.isRecoverable(jobs[index].errorCode),
+                  let retryAfter = jobs[index].retryAfter, retryAfter <= now,
                   !disabledLanes.contains(jobs[index].kind.lane) else { continue }
             jobs[index].state = .queued
             jobs[index].errorCode = nil

@@ -63,9 +63,11 @@ actor LibraryTransferQueue {
     private var nativeTasks: [UUID: URLSessionTask] = [:]
     private var waiters: [UUID: [UUID: CheckedContinuation<Response, Error>]] = [:]
     private var fileWaiters: [UUID: CheckedContinuation<FileResponse, Error>] = [:]
+    private var fileWaiterIDs: [UUID: UUID] = [:]
     private var progressHandlers: [UUID: @Sendable (Int64, Int64) -> Void] = [:]
     private var exportHandler: (@Sendable (ExportUpdate) -> Void)?
     private var exportBytes: [UUID: (received: Int64, expected: Int64)] = [:]
+    private var exportRetry: Task<Void, Never>?
     private var startupTask: Task<Void, Never>?
     private var configurationRevision: UInt64 = 0
     private var configuringOwner: LibraryTransferOwner?
@@ -158,7 +160,7 @@ actor LibraryTransferQueue {
             invalidate()
             return nil
         }
-        guard journal.jobs.contains(where: { $0.kind == .export && $0.state != .failed }) else { return nil }
+        guard journal.jobs.contains(where: { $0.kind == .export && ($0.state != .failed || LibraryTransferJournal.Job.isRecoverable($0.errorCode)) }) else { return nil }
         return owner
     }
 
@@ -168,26 +170,82 @@ actor LibraryTransferQueue {
                     progress: @escaping @Sendable (Int64, Int64) -> Void) async throws -> FileResponse
     {
         let job = try enqueueExport(url: url, operationID: operationID, component: component, owner: owner)
-        if job.state == .failed {
+        if job.state == .failed, !LibraryTransferJournal.Job.isRecoverable(job.errorCode) {
             throw URLError(URLError.Code(rawValue: job.errorCode ?? URLError.badServerResponse.rawValue))
         }
+        guard job.state != .paused else { throw CancellationError() }
         if job.state == .completed {
             return try fileResponse(for: job)
         }
+        let waiterID = UUID()
         return try await withTaskCancellationHandler {
             try Task.checkCancellation()
             return try await withCheckedThrowingContinuation { continuation in
                 fileWaiters[job.id] = continuation
+                fileWaiterIDs[job.id] = waiterID
                 progressHandlers[job.id] = progress
-                if let task = nativeTasks[job.id] {
-                    progress(task.countOfBytesReceived, task.countOfBytesExpectedToReceive)
-                }
+                let bytes = exportProgressBytes(for: job)
+                progress(bytes.received, bytes.expected)
                 pump()
             }
         } onCancel: {
-            let attemptID = component.split(separator: "|").first.flatMap { UUID(uuidString: String($0)) }
-            Task { await self.finishExport(operationID: operationID, namespace: owner.namespace, attemptID: attemptID) }
+            Task { await self.detachExportWaiter(jobID: job.id, waiterID: waiterID) }
         }
+    }
+
+    private func detachExportWaiter(jobID: UUID, waiterID: UUID) {
+        // Resource deletion belongs to explicit Cancel/commit/share cleanup.
+        // A delayed callback must never detach a newer resumed consumer.
+        guard fileWaiterIDs[jobID] == waiterID else { return }
+        fileWaiterIDs[jobID] = nil
+        fileWaiters.removeValue(forKey: jobID)?.resume(throwing: CancellationError())
+        progressHandlers[jobID] = nil
+    }
+
+    func pauseExport(operationID: UUID, namespace: String) async throws {
+        guard journal.owner?.namespace == namespace else { return }
+        let previous = journal
+        let prefix = operationID.uuidString + "|"
+        let jobs = journal.jobs.filter { $0.kind == .export && $0.sourceRevision?.hasPrefix(prefix) == true && $0.state != .completed }
+        for var job in jobs {
+            job.state = .paused
+            if let bytes = exportBytes[job.id] {
+                job.receivedBytes = bytes.received
+                job.expectedBytes = bytes.expected
+            }
+            // Fence delegate callbacks before cancellation can deliver them.
+            job.nativeTaskID = nil
+            journal.update(job)
+        }
+        do { try persist() } catch { journal = previous; throw error }
+        for job in jobs {
+            resolve(job.id, result: .failure(CancellationError()))
+            let task = nativeTasks.removeValue(forKey: job.id) as? URLSessionDownloadTask
+            if let task {
+                let data: Data? = await withCheckedContinuation { continuation in
+                    task.cancel { continuation.resume(returning: $0) }
+                }
+                guard var current = journal.jobs.first(where: { $0.id == job.id }),
+                      current.owner == job.owner, current.state == .paused else { continue }
+                current.resumeData = data
+                journal.update(current)
+                try persist()
+            }
+        }
+        pump()
+    }
+
+    func resumeExport(operationID: UUID, namespace: String) throws {
+        guard journal.owner?.namespace == namespace else { return }
+        let previous = journal
+        let prefix = operationID.uuidString + "|"
+        for var job in journal.jobs where job.kind == .export && job.sourceRevision?.hasPrefix(prefix) == true && job.state == .paused {
+            job.state = .queued
+            job.errorCode = nil
+            journal.update(job)
+        }
+        do { try persist() } catch { journal = previous; throw error }
+        pump()
     }
 
     @discardableResult
@@ -240,23 +298,30 @@ actor LibraryTransferQueue {
         reportExport(job)
     }
 
+    private func exportProgressBytes(for job: LibraryTransferJournal.Job) -> (received: Int64, expected: Int64) {
+        if job.state == .completed {
+            return (job.receivedBytes ?? 0, job.receivedBytes ?? 0)
+        }
+        if let current = exportBytes[job.id] {
+            return current
+        }
+        // A recreated native task starts at 0/unknown until URLSession delivers
+        // progress. Keep the persisted checkpoint until that callback arrives.
+        if let received = job.receivedBytes {
+            return (received, job.expectedBytes ?? 0)
+        }
+        if let task = nativeTasks[job.id] {
+            return (task.countOfBytesReceived, task.countOfBytesExpectedToReceive)
+        }
+        return (0, 0)
+    }
+
     private func reportExport(_ job: LibraryTransferJournal.Job) {
         guard job.kind == .export, let parts = job.sourceRevision?.split(separator: "|"), parts.count == 3,
               let operationID = UUID(uuidString: String(parts[0])), let attemptID = UUID(uuidString: String(parts[1])) else { return }
         let prefix = operationID.uuidString + "|" + attemptID.uuidString + "|"
         let components = journal.jobs.filter { $0.kind == .export && $0.sourceRevision?.hasPrefix(prefix) == true }
-        let bytes = components.map { item -> (received: Int64, expected: Int64) in
-            if item.state == .completed {
-                return (item.receivedBytes ?? 0, item.receivedBytes ?? 0)
-            }
-            if let current = exportBytes[item.id] {
-                return current
-            }
-            if let task = nativeTasks[item.id] {
-                return (task.countOfBytesReceived, task.countOfBytesExpectedToReceive)
-            }
-            return (0, 0)
-        }
+        let bytes = components.map { exportProgressBytes(for: $0) }
         exportHandler?(.init(operationID: operationID, attemptID: attemptID,
                              received: bytes.reduce(0) { $0 + $1.received },
                              expected: bytes.allSatisfy { $0.expected > 0 } ? bytes.reduce(0) { $0 + $1.expected } : 0,
@@ -403,6 +468,7 @@ actor LibraryTransferQueue {
         }
         for (id, task) in nativeTasks where task.state == .suspended {
             guard let job = journal.jobs.first(where: { $0.id == id }), job.owner == owner,
+                  job.state == .running,
                   !journal.disabledLanes.contains(job.kind.lane), job.kind.lane != "cache" || cacheAllowed else { continue }
             task.resume()
         }
@@ -528,7 +594,12 @@ actor LibraryTransferQueue {
             request.setValue("Bearer \(authorization)", forHTTPHeaderField: "Authorization")
             request.setValue(job.kind == .export ? "*/*" : job.kind == .thumbnail ? "image/*" : "application/json", forHTTPHeaderField: "Accept")
             let jobTransport: LibraryTransferTransport = job.kind == .export ? .background : transport
-            let task = (jobTransport == .foreground ? foregroundSession : session).downloadTask(with: request)
+            let nativeSession = jobTransport == .foreground ? foregroundSession : session
+            let task: URLSessionDownloadTask = if job.kind == .export, let data = job.resumeData {
+                nativeSession.downloadTask(withResumeData: data)
+            } else {
+                nativeSession.downloadTask(with: request)
+            }
             job.attemptID = UUID()
             job.transport = jobTransport
             task.taskDescription = LibraryTransferAttempt(jobID: job.id, attemptID: job.attemptID).description
@@ -558,6 +629,7 @@ actor LibraryTransferQueue {
                 Self.logger.info("Export transfer submitted job=\(job.id.uuidString, privacy: .public) transport=background task=\(task.taskIdentifier)")
             }
         }
+        scheduleExportRetry()
         #if DEBUG
             logStatus(force: false)
         #endif
@@ -605,7 +677,7 @@ actor LibraryTransferQueue {
     #endif
 
     func received(id: UUID, nativeTaskID: Int, attemptID: UUID?, transport: LibraryTransferTransport,
-                  response: HTTPURLResponse?, fileURL: URL?, errorCode: Int?, callbackAt: Date? = nil) async
+                  response: HTTPURLResponse?, fileURL: URL?, errorCode: Int?, callbackAt: Date? = nil, resumeData: Data? = nil) async
     {
         #if DEBUG
             let context = await Self.diagnosticContext()
@@ -638,6 +710,7 @@ actor LibraryTransferQueue {
             job.responseURL = response.url
             job.receivedBytes = size
             job.state = .completed
+            job.resumeData = nil
             job.completedAt = Date()
             journal.update(job)
             try persist()
@@ -647,6 +720,7 @@ actor LibraryTransferQueue {
             if job.kind == .export {
                 let result = try fileResponse(for: job)
                 fileWaiters.removeValue(forKey: job.id)?.resume(returning: result)
+                fileWaiterIDs[job.id] = nil
                 progressHandlers[job.id] = nil
                 reportExport(job)
             } else {
@@ -669,6 +743,22 @@ actor LibraryTransferQueue {
             }
             job.state = .failed
             job.errorCode = errorCode ?? (error as? URLError)?.errorCode ?? URLError.badServerResponse.rawValue
+            // URLSession usually restarts an unusable resume token itself. If
+            // its temporary file/token is rejected, try one fresh GET instead.
+            let restartWithoutResume = job.kind == .export && job.resumeData != nil
+                && [NSURLErrorUnknown, NSURLErrorBadURL, NSURLErrorCannotOpenFile, NSURLErrorFileDoesNotExist].contains(job.errorCode!)
+            if job.kind == .export {
+                job.resumeData = restartWithoutResume ? nil : resumeData
+                if let bytes = exportBytes[job.id] {
+                    job.receivedBytes = bytes.received
+                    job.expectedBytes = bytes.expected
+                }
+            }
+            if restartWithoutResume {
+                job.state = .queued
+                job.errorCode = nil
+                Self.logger.info("Export recovery restarting without unusable resume data job=\(job.id.uuidString, privacy: .public)")
+            }
             job.retryAfter = Date().addingTimeInterval(job.retryDelay)
             journal.update(job)
             if (try? persist()) != nil {
@@ -678,19 +768,36 @@ actor LibraryTransferQueue {
                     Task { await responseHandler() }
                 }
             }
-            resolve(job.id, result: .failure(URLError(URLError.Code(rawValue: job.errorCode!))))
+            if !restartWithoutResume, job.kind != .export || !LibraryTransferJournal.Job.isRecoverable(job.errorCode) {
+                resolve(job.id, result: .failure(URLError(URLError.Code(rawValue: job.errorCode!))))
+            }
             reportExport(job)
+            scheduleExportRetry()
         }
     }
 
-    func completed(id: UUID, nativeTaskID: Int, attemptID: UUID?, transport: LibraryTransferTransport, errorCode: Int?) async {
+    func completed(id: UUID, nativeTaskID: Int, attemptID: UUID?, transport: LibraryTransferTransport, errorCode: Int?, resumeData: Data? = nil) async {
         guard journal.jobs.first(where: { $0.id == id })?.accepts(nativeTaskID: nativeTaskID, attemptID: attemptID, transport: transport) == true else { return }
         nativeTasks[id] = nil
         if let job = journal.jobs.first(where: { $0.id == id }), job.state == .running {
             await received(id: id, nativeTaskID: nativeTaskID, attemptID: attemptID, transport: transport,
-                           response: nil, fileURL: nil, errorCode: errorCode)
+                           response: nil, fileURL: nil, errorCode: errorCode, resumeData: resumeData)
         }
         pump()
+    }
+
+    private func scheduleExportRetry() {
+        exportRetry?.cancel()
+        exportRetry = nil
+        guard authorization != nil, let next = journal.jobs.filter({
+            $0.kind == .export && $0.state == .failed && LibraryTransferJournal.Job.isRecoverable($0.errorCode)
+        }).compactMap(\.retryAfter).min() else { return }
+        let delay = max(0.1, next.timeIntervalSinceNow)
+        exportRetry = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(delay)) } catch { return }
+            guard !Task.isCancelled else { return }
+            await self?.pump()
+        }
     }
 
     func handleBackgroundEvents(completion: @escaping @Sendable () async -> Void) async {
@@ -730,6 +837,7 @@ actor LibraryTransferQueue {
     private func resolve(_ id: UUID, result: Result<Response, Error>) {
         if case let .failure(error) = result {
             fileWaiters.removeValue(forKey: id)?.resume(throwing: error)
+            fileWaiterIDs[id] = nil
             progressHandlers[id] = nil
         }
         let continuations = waiters.removeValue(forKey: id) ?? [:]
@@ -854,10 +962,11 @@ private final nonisolated class LibraryTransferDelegate: NSObject, URLSessionDow
         let transport: LibraryTransferTransport = session.configuration.identifier == nil ? .foreground : .background
         let previous = delivery
         let code = (error as? URLError)?.errorCode
+        let resumeData = (error as NSError?)?.userInfo[NSURLSessionDownloadTaskResumeData] as? Data
         let nativeTaskID = task.taskIdentifier
         delivery = Task { [queue] in
             await previous?.value
-            await queue.completed(id: attempt.jobID, nativeTaskID: nativeTaskID, attemptID: attempt.attemptID, transport: transport, errorCode: code)
+            await queue.completed(id: attempt.jobID, nativeTaskID: nativeTaskID, attemptID: attempt.attemptID, transport: transport, errorCode: code, resumeData: resumeData)
         }
     }
 

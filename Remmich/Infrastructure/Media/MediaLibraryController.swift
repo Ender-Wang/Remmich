@@ -108,6 +108,9 @@ final class MediaLibraryController {
         activeAPIURL = endpoint
         guard let scope, let session else { return }
         prepareProfileImageCache(scope: scope, session: session, endpoint: endpoint)
+        if endpoint != nil {
+            exports.recoverInterruptedDownloads()
+        }
     }
 
     func exportTransferOwner(using transfers: LibraryTransferQueue) async throws -> LibraryTransferOwner {

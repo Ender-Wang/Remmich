@@ -761,6 +761,7 @@ final class AppSessionController {
         guard lastNetworkPathSignature != signature else { return }
         lastNetworkPathSignature = signature
         hasReceivedNetworkPath = true
+        media.exports.networkAvailabilityChanged(available: signature.status == "satisfied")
         // NWPathMonitor always delivers one callback immediately on `.start()`, whether or not
         // anything changed. Discarding that noise avoids redundantly revalidating a route that
         // just connected a moment earlier (e.g., right after a fresh login). Saved-session

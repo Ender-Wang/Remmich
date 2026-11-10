@@ -25,10 +25,12 @@ final class MediaExportController: NSObject {
     @ObservationIgnored private let transfers: LibraryTransferQueue
     @ObservationIgnored private var foregroundWaiters: [UUID: CheckedContinuation<Void, Error>] = [:]
     @ObservationIgnored private var foregroundAvailable = UIApplication.shared.applicationState == .active
+    @ObservationIgnored private var networkAvailable = true
     @ObservationIgnored private var cancellationTasks: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var submission: Task<Void, Never>?
     @ObservationIgnored private var permissionIntents = Set<UUID>()
     @ObservationIgnored private var worker: Task<Void, Never>?
+    @ObservationIgnored private var recovery: Task<Void, Never>?
     @ObservationIgnored private var configuring: Task<Void, Never>?
     @ObservationIgnored private var retiringWorkers: [Task<Void, Never>] = []
     @ObservationIgnored private var writing: Task<Void, Error>?
@@ -84,6 +86,14 @@ final class MediaExportController: NSObject {
                 guard generation == owner else { return }
                 ready = true
                 await transfers.retainExports(operationIDs: Set(loaded.jobs.filter { $0.stage != .completed && $0.stage != .cancelled }.map(\.id)), namespace: scope.cacheNamespace)
+                for job in loaded.jobs where job.stage == .paused || job.stage.isActive {
+                    if job.stage == .paused {
+                        try await transfers.pauseExport(operationID: job.id, namespace: scope.cacheNamespace)
+                    } else {
+                        try await transfers.resumeExport(operationID: job.id, namespace: scope.cacheNamespace)
+                    }
+                    guard generation == owner else { return }
+                }
                 guard generation == owner else { return }
                 await transfers.setExportHandler { [weak self] update in
                     Task { @MainActor in self?.applyTransferUpdate(update, owner: owner) }
@@ -91,7 +101,7 @@ final class MediaExportController: NSObject {
                 await scheduleTransfers().value
                 guard generation == owner else { return }
                 pump()
-                let protectedJobs = Set(loaded.jobs.filter { $0.stage.isActive || $0.stage == .uncertain }.map(\.id))
+                let protectedJobs = Set(loaded.jobs.filter { $0.stage.isActive || $0.stage == .paused || $0.stage == .uncertain }.map(\.id))
                 let cleanup = await files.prune(namespace: scope.cacheNamespace, keeping: protectedJobs)
                 Self.logger.info("Export staging recovery removed=\(cleanup.removed) failed=\(cleanup.failed)")
                 guard generation == owner else { return }
@@ -108,6 +118,8 @@ final class MediaExportController: NSObject {
     func reset() {
         let oldScope = scope
         generation = UUID()
+        recovery?.cancel()
+        recovery = nil
         configuring?.cancel()
         if let worker {
             if journal.jobs.first(where: { $0.id == runningID })?.stage != .saving {
@@ -163,7 +175,7 @@ final class MediaExportController: NSObject {
     }
 
     func activeJob(assetID: String) -> MediaExportJob? {
-        journal.jobs.first { $0.assetID == assetID && $0.stage.isActive }
+        journal.jobs.first { $0.assetID == assetID && ($0.stage.isActive || $0.stage == .paused) }
     }
 
     func isSaved(asset: TimelineAssetSummary, tier: MediaExportTier) -> Bool {
@@ -204,7 +216,7 @@ final class MediaExportController: NSObject {
         let job = MediaExportJob(id: UUID(), assetID: asset.id, revision: asset.thumbnailRevision, capturedAt: asset.capturedAt,
                                  localOffsetHours: asset.localOffsetHours, video: asset.mediaKind == .video,
                                  motionID: asset.livePhotoVideoID, tier: tier, metadata: .init(assetID: asset.id, detail: detail))
-        guard !journal.jobs.contains(where: { $0.key == job.key && ($0.stage.isActive || $0.stage == .uncertain) }) else {
+        guard !journal.jobs.contains(where: { $0.key == job.key && ($0.stage.isActive || $0.stage == .paused || $0.stage == .uncertain) }) else {
             message = "This save is already tracked in Downloads."
             return
         }
@@ -323,15 +335,75 @@ final class MediaExportController: NSObject {
         }
         if let scope {
             let transfers = transfers
-            cancellationTasks[id] = Task { await transfers.finishExport(operationID: id, namespace: scope.cacheNamespace) }
+            let previous = cancellationTasks[id]
+            cancellationTasks[id] = Task {
+                await previous?.value
+                await transfers.finishExport(operationID: id, namespace: scope.cacheNamespace)
+            }
         }
         scheduleSaveOrReport()
+    }
+
+    func pause(_ id: UUID) {
+        guard ready, let scope, let index = journal.jobs.firstIndex(where: { $0.id == id }), journal.jobs[index].canPause else { return }
+        journal.jobs[index].stage = .paused
+        journal.jobs[index].error = nil
+        let owner = generation
+        let pending = writeSnapshot()
+        let importer = runningID == id ? worker : nil
+        let submitted = submission
+        let previous = cancellationTasks[id]
+        cancellationTasks[id] = Task {
+            await previous?.value
+            do {
+                try await pending.value
+                await submitted?.value
+                guard generation == owner, journal.jobs.contains(where: { $0.id == id && $0.stage == .paused }) else { return }
+                // Stop new direct submissions before fencing native callbacks.
+                // Cancellation only detaches the importer; it keeps resources.
+                importer?.cancel()
+                try await transfers.pauseExport(operationID: id, namespace: scope.cacheNamespace)
+                await importer?.value
+                Self.logger.info("Export job=\(id.uuidString, privacy: .public) paused")
+            } catch {
+                guard generation == owner else { return }
+                message = "The download could not be paused: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    func resume(_ id: UUID) {
+        guard ready, let scope, journal.jobs.contains(where: { $0.id == id && $0.stage == .paused }) else { return }
+        let owner = generation
+        let previous = cancellationTasks[id]
+        cancellationTasks[id] = Task {
+            await previous?.value
+            guard generation == owner, let index = journal.jobs.firstIndex(where: { $0.id == id }), journal.jobs[index].stage == .paused else { return }
+            do {
+                // Persist user intent before re-enabling OS-owned downloads.
+                journal.jobs[index].stage = .queued
+                journal.jobs[index].finishedAt = nil
+                journal.jobs[index].error = nil
+                try await persist()
+                guard generation == owner, journal.jobs.contains(where: { $0.id == id && $0.stage == .queued }) else { return }
+                try await transfers.resumeExport(operationID: id, namespace: scope.cacheNamespace)
+                await scheduleTransfers().value
+                guard generation == owner else { return }
+                Self.logger.info("Export job=\(id.uuidString, privacy: .public) resumed")
+                pump()
+            } catch {
+                guard generation == owner else { return }
+                message = "The download could not be resumed: \(error.localizedDescription)"
+            }
+        }
     }
 
     func retry(_ id: UUID) {
         guard ready, runningID != id, let index = journal.jobs.firstIndex(where: { $0.id == id }), journal.jobs[index].canRetry else { return }
         journal.jobs[index].stage = .queued
         journal.jobs[index].startedAt = Date()
+        journal.jobs[index].inactiveSince = nil
+        journal.jobs[index].inactiveDuration = nil
         journal.jobs[index].finishedAt = nil
         journal.jobs[index].error = nil
         journal.jobs[index].received = 0
@@ -384,7 +456,7 @@ final class MediaExportController: NSObject {
     }
 
     func canRemoveHistory(_ job: MediaExportJob) -> Bool {
-        (!job.stage.isActive || job.stage == .waiting) && job.stage != .uncertain && runningID != job.id
+        (!job.stage.isActive || job.stage == .waiting) && job.stage != .paused && job.stage != .uncertain && runningID != job.id
     }
 
     func removeHistory(_ id: UUID) {
@@ -416,6 +488,44 @@ final class MediaExportController: NSObject {
         foregroundWaiters.removeAll()
         for waiter in waiting {
             waiter.resume()
+        }
+        recoverInterruptedDownloads()
+    }
+
+    func recoverInterruptedDownloads() {
+        guard ready, networkAvailable else { return }
+        for index in journal.jobs.indices where journal.jobs[index].stage == .waiting && journal.jobs[index].id != runningID {
+            journal.jobs[index].stage = .queued
+            journal.jobs[index].finishedAt = nil
+        }
+        scheduleSaveOrReport()
+        _ = scheduleTransfers()
+        pump()
+    }
+
+    func networkAvailabilityChanged(available: Bool) {
+        guard networkAvailable != available else { return }
+        networkAvailable = available
+        guard ready else { return }
+        if available {
+            recoverInterruptedDownloads()
+        } else {
+            for index in journal.jobs.indices where journal.jobs[index].stage == .downloading {
+                journal.jobs[index].stage = .waiting
+                journal.jobs[index].error = nil
+            }
+            scheduleSaveOrReport()
+        }
+    }
+
+    private func scheduleRecovery() {
+        guard recovery == nil, journal.jobs.contains(where: { $0.stage == .waiting && $0.id != runningID }) else { return }
+        let owner = generation
+        recovery = Task {
+            do { try await Task.sleep(for: .seconds(15)) } catch { return }
+            guard generation == owner else { return }
+            recovery = nil
+            recoverInterruptedDownloads()
         }
     }
 
@@ -504,6 +614,7 @@ final class MediaExportController: NSObject {
             worker = nil
             runningID = nil
             pump()
+            scheduleRecovery()
         }
     }
 
@@ -535,7 +646,9 @@ final class MediaExportController: NSObject {
                         try await transfers.enqueueExport(url: url, operationID: job.id,
                                                           component: "\((job.transferAttempt ?? job.id).uuidString)|\(component.name)", owner: transferOwner)
                         if generation != owner || Task.isCancelled || !journal.jobs.contains(where: { $0.id == job.id && $0.transferAttempt == job.transferAttempt && $0.stage.isActive }) {
-                            await transfers.finishExport(operationID: job.id, namespace: transferOwner.namespace, attemptID: job.transferAttempt ?? job.id)
+                            if !journal.jobs.contains(where: { $0.id == job.id && $0.stage == .paused }) {
+                                await transfers.finishExport(operationID: job.id, namespace: transferOwner.namespace, attemptID: job.transferAttempt ?? job.id)
+                            }
                             return
                         }
                     }
@@ -555,26 +668,29 @@ final class MediaExportController: NSObject {
     private func applyTransferUpdate(_ update: LibraryTransferQueue.ExportUpdate, owner: UUID) {
         guard generation == owner, let index = journal.jobs.firstIndex(where: { $0.id == update.operationID }),
               update.attemptID == (journal.jobs[index].transferAttempt ?? journal.jobs[index].id),
-              [.queued, .downloading, .awaitingPhotos].contains(journal.jobs[index].stage) else { return }
+              [.queued, .downloading, .waiting, .awaitingPhotos].contains(journal.jobs[index].stage) else { return }
         journal.jobs[index].received = update.received
         journal.jobs[index].expected = update.expected
         if let code = update.errorCode {
-            journal.jobs[index].stage = .failed
+            let recoverable = LibraryTransferJournal.Job.isRecoverable(code)
+            journal.jobs[index].stage = recoverable ? .waiting : .failed
             journal.jobs[index].error = URLError(URLError.Code(rawValue: code)).localizedDescription
-            journal.jobs[index].finishedAt = Date()
+            journal.jobs[index].finishedAt = recoverable ? nil : Date()
             scheduleSaveOrReport()
         } else if update.complete {
             journal.jobs[index].stage = .awaitingPhotos
             scheduleSaveOrReport()
         } else if update.started {
-            journal.jobs[index].stage = .downloading
+            journal.jobs[index].stage = networkAvailable ? .downloading : .waiting
+            journal.jobs[index].error = nil
         }
     }
 
     private func transition(_ id: UUID, to stage: MediaExportStage, owner: UUID) async throws {
         try Task.checkCancellation()
-        guard generation == owner, let index = journal.jobs.firstIndex(where: { $0.id == id }), journal.jobs[index].stage != .cancelled else { throw CancellationError() }
-        journal.jobs[index].stage = stage
+        guard generation == owner, let index = journal.jobs.firstIndex(where: { $0.id == id }),
+              journal.jobs[index].stage != .cancelled, journal.jobs[index].stage != .paused else { throw CancellationError() }
+        journal.jobs[index].stage = stage == .downloading && !networkAvailable ? .waiting : stage
         try await persist()
     }
 
@@ -679,10 +795,12 @@ final class MediaExportController: NSObject {
             if case MediaExportFailure.photosRejected = error {
                 committing = false
             }
-            if generation == owner, let index = journal.jobs.firstIndex(where: { $0.id == job.id }) {
+            if generation == owner, let index = journal.jobs.firstIndex(where: { $0.id == job.id }),
+               journal.jobs[index].stage != .paused, journal.jobs[index].stage != .cancelled
+            {
                 let cancelled = error is CancellationError || (error as NSError).code == NSURLErrorCancelled
                 let code = (error as NSError).code
-                var offline = [NSURLErrorNotConnectedToInternet, NSURLErrorNetworkConnectionLost, NSURLErrorTimedOut].contains(code)
+                var offline = LibraryTransferJournal.Job.isRecoverable(code) && !cancelled
                 if case MediaExportFailure.connectionRequired = error {
                     offline = true
                 }
@@ -690,7 +808,7 @@ final class MediaExportController: NSObject {
                 journal.jobs[index].error = committing
                     ? (savedInPhotos ? "Saved to Photos, but the history could not be recorded. Avoid saving again. " : "Photos may have saved this item. Check the Remmich album before saving again. ") + error.localizedDescription
                     : (cancelled ? nil : error.localizedDescription)
-                journal.jobs[index].finishedAt = Date()
+                journal.jobs[index].finishedAt = offline && !committing ? nil : Date()
                 await saveOrReport()
             }
             if error is CancellationError || (error as NSError).code == NSURLErrorCancelled {

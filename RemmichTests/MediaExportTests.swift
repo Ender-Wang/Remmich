@@ -8,6 +8,24 @@ import UniformTypeIdentifiers
 
 @Suite(.serialized)
 struct MediaExportTests {
+    @Test func exportClockStopsDuringPauseAndNetworkWaitAndSurvivesPersistence() throws {
+        var item = job()
+        item.startedAt = Date(timeIntervalSince1970: 100)
+        item.stage = .downloading
+        item.stage = .paused
+        let pausedAt = try #require(item.inactiveSince)
+        let frozen = item.elapsed(at: pausedAt)
+        #expect(abs(item.elapsed(at: pausedAt.addingTimeInterval(60)) - frozen) < 0.001)
+        item.stage = .waiting
+        #expect(item.inactiveSince == pausedAt)
+        let restored = try JSONDecoder().decode(MediaExportJob.self, from: JSONEncoder().encode(item))
+        #expect(abs(restored.elapsed(at: pausedAt.addingTimeInterval(600)) - frozen) < 0.001)
+        item.stage = .downloading
+        #expect(item.inactiveSince == nil)
+        let resumedAt = Date()
+        #expect(abs(item.elapsed(at: resumedAt.addingTimeInterval(10)) - item.elapsed(at: resumedAt) - 10) < 0.001)
+    }
+
     @Test func recoveryPrunesAbandonedStagingWithoutTouchingOwnedOrProtectedJobs() async throws {
         let manager = FileManager.default
         let namespace = "cleanup-test-\(UUID().uuidString)"
@@ -56,7 +74,9 @@ struct MediaExportTests {
         #expect(MediaExportStage.saving.isActive)
         var item = job()
         item.stage = .saving
-        #expect(!item.canCancel && !item.canRetry)
+        #expect(!item.canCancel && !item.canRetry && !item.canPause)
+        item.stage = .paused
+        #expect(item.canCancel && !item.canRetry && !item.canPause && !item.stage.isActive)
         item.stage = .uncertain
         #expect(!item.canRetry)
         item.expected = 200
@@ -180,6 +200,41 @@ struct MediaExportTests {
     }
 
     @MainActor
+    @Test func pausedIntentRestoresOfflineEvenWhenTransferJournalBelongsToAnotherAccount() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteLibraryIndexStore(databaseURL: root.appending(path: "library.sqlite3"))
+        let scope = Self.scope(userID: "paused-account")
+        try await store.prepare(scope: scope)
+        var paused = job()
+        paused.stage = .paused
+        paused.received = 50
+        paused.expected = 100
+        try await store.saveMediaExports(.init(jobs: [paused]), scope: scope)
+        let transferRoot = root.appending(path: "transfers")
+        let otherSession = try AccountSession(apiURL: #require(URL(string: "https://other.example/api")), accessToken: "fixture",
+                                              userID: "other", userEmail: "other@example.com", name: "Other", isAdmin: false,
+                                              serverVersion: .init(major: 3, minor: 2, patch: 0, prerelease: nil))
+        let otherOwner = LibraryTransferOwner(session: otherSession, endpoint: otherSession.apiURL)
+        var transfers = LibraryTransferJournal()
+        _ = transfers.activate(otherOwner)
+        _ = try transfers.job(url: otherSession.apiURL.appending(path: "assets/video/original"), kind: .export, owner: otherOwner)
+        try transfers.save(to: transferRoot.appending(path: "journal.json"))
+        let queue = LibraryTransferQueue(rootURL: transferRoot, nativeTasksProvider: { [] }, sessionIdentifier: UUID().uuidString)
+        let exports = MediaExportController(store: store, photos: ExportAuthorizationGate(), transfers: queue)
+        let media = MediaLibraryController()
+        defer { exports.reset(); withExtendedLifetime(media) {} }
+        exports.configure(media: media, scope: scope)
+        try await wait { exports.ready }
+        exports.sceneActivityChanged(active: true)
+        #expect(exports.jobs.first?.stage == .paused)
+        #expect(exports.jobs.first?.received == 50)
+        #expect(!exports.canRemoveHistory(paused))
+        #expect(try await store.loadMediaExports(scope: scope).jobs.first?.stage == .paused)
+        #expect(try LibraryTransferJournal.load(from: transferRoot.appending(path: "journal.json")).owner == otherOwner)
+    }
+
+    @MainActor
     @Test func interruptedPhotosSaveRequiresManualReconciliationAndHistoryKeepsReceipts() async throws {
         let root = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -271,7 +326,7 @@ struct MediaExportTests {
             item.stage = stage
             #expect(exports.canRemoveHistory(item))
         }
-        for stage in [MediaExportStage.queued, .preparing, .downloading, .saving, .awaitingPhotos, .uncertain] {
+        for stage in [MediaExportStage.queued, .preparing, .downloading, .paused, .saving, .awaitingPhotos, .uncertain] {
             item.stage = stage
             #expect(!exports.canRemoveHistory(item))
         }

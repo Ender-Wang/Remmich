@@ -5,6 +5,139 @@ import Testing
 
 @Suite(.serialized)
 struct MediaExportTransferTests {
+    @Test func resumedNativeTaskKeepsCheckpointUntilFreshProgressEvenWhenItRestarts() async throws {
+        let root = try directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let owner = LibraryTransferOwner(session: session, endpoint: session.apiURL)
+        let operation = UUID()
+        let component = UUID().uuidString + "|media"
+        let nativeSession = URLSession(configuration: .ephemeral)
+        defer { nativeSession.invalidateAndCancel() }
+        // A suspended task models the fresh native 0/unknown counters without
+        // starting a network request or consuming a fabricated resume token.
+        let native = nativeSession.downloadTask(with: session.apiURL.appending(path: "assets/video/original"))
+        var journal = LibraryTransferJournal()
+        _ = journal.activate(owner)
+        var video = try journal.job(url: session.apiURL.appending(path: "assets/video/original"), kind: .export,
+                                    owner: owner, sourceRevision: operation.uuidString + "|" + component)
+        video.state = .running
+        video.transport = .background
+        video.nativeTaskID = native.taskIdentifier
+        video.attemptID = UUID()
+        video.receivedBytes = 50
+        video.expectedBytes = 100
+        native.taskDescription = LibraryTransferAttempt(jobID: video.id, attemptID: video.attemptID).description
+        journal.update(video)
+        try journal.save(to: root.appending(path: "journal.json"))
+        let queue = LibraryTransferQueue(rootURL: root, nativeTasksProvider: { [native] }, sessionIdentifier: UUID().uuidString)
+        #expect(await queue.restoredExportOwner(session: session) == owner)
+        let updates = Mutex<[LibraryTransferQueue.ExportUpdate]>([])
+        await queue.setExportHandler { update in updates.withLock { $0.append(update) } }
+        await queue.startExports()
+        let initial = try #require(updates.withLock { $0.last })
+        #expect(initial.received == 50 && initial.expected == 100)
+        let progress = Mutex<Int64>(-1)
+        let url = video.url
+        let consumer = Task {
+            try await queue.exportFile(url: url, operationID: operation, component: component, owner: owner) { received, _ in
+                progress.withLock { $0 = received }
+            }
+        }
+        for _ in 0 ..< 100 {
+            if progress.withLock({ $0 }) != -1 {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(progress.withLock { $0 } == 50)
+        await queue.exportProgress(id: video.id, nativeTaskID: native.taskIdentifier, attemptID: video.attemptID, received: 60, expected: 100)
+        #expect(updates.withLock { $0.last?.received } == 60)
+        // Genuine restart progress must replace the checkpoint, not be clamped.
+        await queue.exportProgress(id: video.id, nativeTaskID: native.taskIdentifier, attemptID: video.attemptID, received: 3, expected: 120)
+        let restarted = try #require(updates.withLock { $0.last })
+        #expect(restarted.received == 3 && restarted.expected == 120)
+        consumer.cancel()
+        await #expect(throws: CancellationError.self) { try await consumer.value }
+        await queue.finishExport(operationID: operation, namespace: owner.namespace)
+    }
+
+    @Test func pausedExportSurvivesRestoreAndRejectsLateCallbacksUntilExplicitResume() async throws {
+        let root = try directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let owner = LibraryTransferOwner(session: session, endpoint: session.apiURL)
+        let operation = UUID()
+        var journal = LibraryTransferJournal()
+        _ = journal.activate(owner)
+        var video = try journal.job(url: session.apiURL.appending(path: "assets/video/original"), kind: .export,
+                                    owner: owner, sourceRevision: operation.uuidString + "|" + UUID().uuidString + "|media")
+        video.state = .running
+        video.nativeTaskID = 7
+        video.attemptID = UUID()
+        video.transport = .background
+        video.resumeData = Data("resume fixture".utf8)
+        video.receivedBytes = 50
+        video.expectedBytes = 100
+        journal.update(video)
+        let journalURL = root.appending(path: "journal.json")
+        try journal.save(to: journalURL)
+        let queue = LibraryTransferQueue(rootURL: root, nativeTasksProvider: { [] }, sessionIdentifier: UUID().uuidString)
+        try await queue.pauseExport(operationID: operation, namespace: owner.namespace)
+        await queue.completed(id: video.id, nativeTaskID: 7, attemptID: video.attemptID,
+                              transport: .background, errorCode: NSURLErrorCancelled)
+        let restored = LibraryTransferQueue(rootURL: root, nativeTasksProvider: { [] }, sessionIdentifier: UUID().uuidString)
+        #expect(await restored.restoredExportOwner(session: session) == owner)
+        var paused = try #require(LibraryTransferJournal.load(from: journalURL).jobs.first)
+        #expect(paused.state == .paused)
+        #expect(paused.resumeData == video.resumeData && paused.receivedBytes == 50 && paused.expectedBytes == 100)
+        try await restored.resumeExport(operationID: operation, namespace: owner.namespace)
+        paused = try #require(LibraryTransferJournal.load(from: journalURL).jobs.first)
+        #expect(paused.state == .queued && paused.resumeData == video.resumeData)
+        await restored.finishExport(operationID: operation, namespace: owner.namespace)
+        #expect(try LibraryTransferJournal.load(from: journalURL).jobs.isEmpty)
+    }
+
+    @Test func interruptionRetainsResumeDataAndRetriesOnlyTransientFailures() async throws {
+        let root = try directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let owner = LibraryTransferOwner(session: session, endpoint: session.apiURL)
+        let operation = UUID()
+        var journal = LibraryTransferJournal()
+        _ = journal.activate(owner)
+        var video = try journal.job(url: session.apiURL.appending(path: "assets/video/original"), kind: .export,
+                                    owner: owner, sourceRevision: operation.uuidString + "|media")
+        video.state = .running
+        video.nativeTaskID = 7
+        video.attemptID = UUID()
+        video.transport = .background
+        journal.update(video)
+        let journalURL = root.appending(path: "journal.json")
+        try journal.save(to: journalURL)
+        let queue = LibraryTransferQueue(rootURL: root, nativeTasksProvider: { [] }, sessionIdentifier: UUID().uuidString)
+        await queue.exportProgress(id: video.id, nativeTaskID: 7, attemptID: video.attemptID, received: 50, expected: 100)
+        let token = Data("resume fixture".utf8)
+        await queue.completed(id: video.id, nativeTaskID: 7, attemptID: video.attemptID, transport: .background,
+                              errorCode: NSURLErrorNetworkConnectionLost, resumeData: token)
+        journal = try LibraryTransferJournal.load(from: journalURL)
+        let interrupted = try #require(journal.jobs.first)
+        #expect(interrupted.state == .failed && interrupted.resumeData == token)
+        #expect(interrupted.receivedBytes == 50 && interrupted.expectedBytes == 100)
+        journal.requeueFailures(at: .distantFuture)
+        #expect(journal.jobs.first?.state == .queued)
+        for state in [LibraryTransferJournal.Job.State.paused, .completed] {
+            var retained = interrupted
+            retained.state = state
+            journal.update(retained)
+            journal.requeueFailures(at: .distantFuture)
+            #expect(journal.jobs.first?.state == state)
+        }
+        var rejected = interrupted
+        rejected.errorCode = NSURLErrorBadServerResponse
+        journal.update(rejected)
+        journal.requeueFailures(at: .distantFuture)
+        #expect(journal.jobs.first?.state == .failed)
+        await queue.finishExport(operationID: operation, namespace: owner.namespace)
+    }
+
     @Test func exportsKeepTheirBackgroundAttemptWhenCacheChangesModeOrPauses() throws {
         let owner = LibraryTransferOwner(session: session, endpoint: session.apiURL)
         let operation = UUID()
@@ -111,6 +244,10 @@ struct MediaExportTransferTests {
         #expect(progress.withLock { $0 } == 50)
         consumer.cancel()
         await #expect(throws: CancellationError.self) { try await consumer.value }
+        // Cancelling a foreground consumer detaches it. Only explicit Cancel
+        // discards durable resources, so late callbacks cannot delete a resume.
+        #expect(try LibraryTransferJournal.load(from: journalURL).jobs.count == 1)
+        await queue.finishExport(operationID: operation, namespace: owner.namespace)
         #expect(try LibraryTransferJournal.load(from: journalURL).jobs.isEmpty)
         let retry = try await queue.enqueueExport(url: url, operationID: operation, component: "media", owner: owner)
         #expect(retry.id != video.id)
