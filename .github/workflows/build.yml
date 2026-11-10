@@ -66,6 +66,9 @@ jobs:
             COMPILER_INDEX_STORE_ENABLE=NO \
             | xcbeautify
 
+      - name: Verify build did not modify checked-out sources
+        run: git diff --exit-code
+
       - name: Archive test products
         run: |
           test -d "$DERIVED_DATA_PATH/Build/Products"
