@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="2444" viewBox="0 0 1000 2444" role="img" aria-labelledby="title desc">
   <title id="title">Remmich roadmap — Future, Now, then history</title>
-  <desc id="desc">Future milestones lead down to Now: Download Pause/Resume and automatic recovery on November 10, 2026. Sharing, Download and Save to Photos and earlier achievements continue below in date order. Native Live Photo sharing is limited by the investigated Apple APIs. Feature icons sit on the central connecting line.</desc>
+  <desc id="desc">Future milestones lead down to Now: M6 server-backed Albums. Completed M5 features include Download Pause/Resume and Sharing on November 10, 2026, with Download and Save to Photos and earlier achievements below in date order. Native Live Photo sharing is limited by the investigated Apple APIs. Feature icons sit on the central connecting line.</desc>
   <style>
     .bg{fill:#f8fafc}.card{fill:#fff;stroke:#dbe3ee;stroke-width:1.5}.now{fill:#eef2ff;stroke:#818cf8;stroke-width:1.5}
     .spine{fill:none;stroke:#cbd5e1;stroke-width:3}.branch{stroke:#94a3b8;stroke-width:2}.dot{fill:#6366f1;stroke:#f8fafc;stroke-width:5}
@@ -69,15 +69,15 @@
 
   <path class="branch" d="M458 652H500"/><circle class="dot" cx="500" cy="652" r="17"/>
   <use href="#photo" transform="translate(488 640)" style="color:#34b3a0"/>
-  <rect class="planned" x="38" y="612" width="420" height="94" rx="14"/>
-  <text x="58" y="636" class="future-label">M6 · PLANNED</text>
+  <rect class="now" x="38" y="612" width="420" height="94" rx="14"/>
+  <text x="58" y="636" class="label">NOW · M6 · IN PROGRESS</text>
   <text x="58" y="662" class="future-heading">Server-backed Albums</text>
   <text x="58" y="688" class="body">Owned/shared albums &amp; the common asset viewer</text>
 
   <path class="branch" d="M500 760H542"/><circle class="dot" cx="500" cy="760" r="17"/>
   <use href="#download" transform="translate(488 748)" style="color:#818cf8"/>
-  <rect class="now" x="542" y="720" width="420" height="94" rx="14"/>
-  <text x="562" y="744" class="label">NOW · NOV 10, 2026</text>
+  <rect class="card" x="542" y="720" width="420" height="94" rx="14"/>
+  <text x="562" y="744" class="date">NOV 10 · 2026</text>
   <text x="562" y="770" class="heading">Download Pause/Resume</text>
   <text x="562" y="796" class="body">Persistent pauses &amp; automatic interruption recovery</text>
 

@@ -7,7 +7,7 @@
 <br clear="all" />
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.5.0-blue" alt="Version 0.5.0" />
+  <a href="https://github.com/Ender-Wang/Remmich/releases/latest"><img src="https://img.shields.io/github/v/release/Ender-Wang/Remmich?label=version&amp;color=blue" alt="Latest release" /></a>
   <img src="https://img.shields.io/badge/Swift-6-orange?logo=swift" alt="Swift 6" />
   <img src="https://img.shields.io/badge/iOS-26.6%2B-black?logo=apple" alt="iOS 26.6+" />
   <img src=".github/assets/immich-read-only-badge.svg" alt="Read-only Immich" />
@@ -29,7 +29,7 @@ See the **[Roadmap](#roadmap)** for upcoming features, remaining verification an
 
 Requires an iPhone or iPad running iOS/iPadOS 26.6 or later and an account on your Immich server.
 
-Download an optimized, unsigned IPA from [GitHub Releases](https://github.com/Ender-Wang/Remmich/releases) and install it with a compatible sideloading tool, such as AltStore Classic, which signs it using your Apple ID.
+Download an optimized, unsigned IPA from the [latest GitHub release](https://github.com/Ender-Wang/Remmich/releases/latest) and install it with a compatible sideloading tool, such as AltStore Classic, which signs it using your Apple ID.
 
 You can also follow [Build and run](CONTRIBUTING.md#build-and-run) to build from source. After installing, sign in with your Immich server address and credentials. Add a Primary address and optional Fallback addresses in **Profile → Connection** if needed.
 
@@ -57,7 +57,7 @@ You can also follow [Build and run](CONTRIBUTING.md#build-and-run) to build from
 
 ## Milestones
 
-Milestones track implementation and help set expectations for upcoming work. **0.5.0 includes the implemented parts of M5; M5 remains in progress.** The [Roadmap](#roadmap) expands this summary with planned features and dated achievements.
+Milestones track implementation and help set expectations for upcoming work. **M5 is complete; M6 — read-only Albums — is the current milestone.** The [Roadmap](#roadmap) expands this summary with planned features and dated achievements.
 
 | Milestone | Status | Scope and expectations |
 | --- | --- | --- |
@@ -66,8 +66,8 @@ Milestones track implementation and help set expectations for upcoming work. **0
 | M2 | ✅ Done | Sign-in, Keychain restoration, endpoint failover, and the typed read-only API boundary |
 | M3 | ✅ Done | Shared media loading, caching, prefetching, and bounded memory use |
 | M4 | ✅ Done | Real server-backed Photos timeline |
-| M5 | In progress | Timelines, viewers, preview, places/maps, Sharing and Download/Save to Photos are available; final verification remains |
-| M6 | Planned | Server-backed read-only Albums browsing |
+| M5 | ✅ Done | Timelines, viewers, preview, places/maps, Sharing and Download/Save to Photos with Pause/Resume |
+| M6 | In progress | Server-backed read-only Albums browsing |
 | M7 | Planned | Server-backed read-only Library collections |
 | M8 | Planned | Server-backed Search with native filters |
 | M9 | Planned | Further improvements and verification for iPad, accessibility, resilience, and performance |
@@ -77,16 +77,16 @@ Milestones track implementation and help set expectations for upcoming work. **0
 
 Updated **November 10, 2026**. The timeline runs from future plans at the top, through **Now**, to older achievements below. Future work follows milestone order toward the present without invented dates; conditional options are grouped with their related milestone. Each completed milestone uses its latest implementation checkpoint date; related earlier work is included in its description and commit links. These are repository dates, not App Store availability or release dates. Implemented features may include local commits awaiting publication. Planned work has no promised delivery date.
 
-![Remmich zigzag timeline: future milestones M10 toward M5, Now at the latest achievement, then earlier features down to the September 2026 foundation. Icons mark the joints of the central line.](.github/assets/roadmap-timeline.svg)
+![Remmich zigzag timeline: future milestones M10 toward M7, Now at M6 Albums, then completed M5 features and earlier achievements down to the September 2026 foundation. Icons mark the joints of the central line.](.github/assets/roadmap-timeline.svg)
 
 ### Now and next
 
 | Priority | Feature | Status | Intended outcome |
 | --- | --- | --- | --- |
-| Now · M5 | Download Pause/Resume | Available | Retain manual pauses across relaunch and recover interrupted downloads automatically where supported. |
+| Now · M6 | Real Albums | In progress | Browse server-backed owned/shared albums and open their assets in the shared viewer. Albums currently shows demo data. |
+| M5 | Download Pause/Resume | Available | Retain manual pauses across relaunch and recover interrupted downloads automatically where supported. |
 | M5 | Sharing | Available | Share the viewed tier with supported metadata; Live Photos share their still. |
 | M5 | Download and Save to Photos | Available | Save selected quality to Photos → Remmich; background transfers, progress, cancel/retry and Downloads History. |
-| M6 | Real Albums | Planned | Browse server-backed owned/shared albums and open their assets in the shared viewer. Albums currently shows demo data. |
 | M7 | Library collections | Planned | Read-only Favorites, Archive, People, Places, Memories and Folders, according to server capabilities. Library collections currently use demo data; account/settings already use real data. |
 | M8 | Search and filters | Planned | Server-backed search with supported people, place, date, media and camera filters. Search currently uses demo data. |
 | M9 | Wider native polish and resilience | Planned | Broader iPad, accessibility, interruption, offline and performance coverage across the completed workflows. |
