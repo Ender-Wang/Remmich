@@ -214,6 +214,39 @@ public actor ImmichClient {
         }
     }
 
+    public func albums() async throws -> [ImmichAlbum] {
+        guard credential != nil else { throw ImmichAPIError.unauthorized }
+        do {
+            switch try await makeClient().getAllAlbums(.init()) {
+            case let .ok(response): return try response.body.json.map(Self.album(from:))
+            case let .undocumented(statusCode, _): throw Self.map(status: statusCode)
+            }
+        } catch { throw Self.map(error) }
+    }
+
+    public func album(id: String) async throws -> ImmichAlbum {
+        guard credential != nil else { throw ImmichAPIError.unauthorized }
+        guard !id.isEmpty else { throw ImmichAPIError.invalidResponse }
+        do {
+            switch try await makeClient().getAlbumInfo(.init(path: .init(id: id))) {
+            case let .ok(response): return try Self.album(from: response.body.json)
+            case let .undocumented(statusCode, _): throw Self.map(status: statusCode)
+            }
+        } catch { throw Self.map(error) }
+    }
+
+    private static func album(from response: Components.Schemas.AlbumResponseDto) throws -> ImmichAlbum {
+        guard !response.id.isEmpty, response.assetCount >= 0 else { throw ImmichAPIError.invalidResponse }
+        let owner = response.albumUsers.first { $0.role == .owner }?.user
+        return ImmichAlbum(id: response.id, name: response.albumName, description: response.description,
+                           thumbnailAssetID: response.albumThumbnailAssetId, assetCount: response.assetCount,
+                           updatedAt: response.updatedAt, createdAt: response.createdAt,
+                           startDate: response.startDate, endDate: response.endDate,
+                           lastModifiedAssetTimestamp: response.lastModifiedAssetTimestamp,
+                           isShared: response.shared || response.hasSharedLink,
+                           ownerName: owner?.name, ownerID: owner?.id)
+    }
+
     public func timelineBuckets(
         query: ImmichTimelineQuery = .init()
     ) async throws -> [ImmichTimelineBucket] {
@@ -491,10 +524,11 @@ public actor ImmichClient {
         from query: ImmichTimelineQuery
     ) throws -> Operations.getTimeBuckets.Input.Query {
         try .init(
+            albumId: query.albumID,
             isTrashed: query.includesTrashed,
             order: timelineOrder(from: query.order),
             orderBy: timelineOrderBy(from: query.orderBy),
-            visibility: timelineVisibility(from: query.visibility),
+            visibility: query.albumID == nil ? timelineVisibility(from: query.visibility) : nil,
             withCoordinates: true,
             withPartners: query.includesPartners,
             withStacked: query.includesStacks
@@ -506,11 +540,12 @@ public actor ImmichClient {
         from query: ImmichTimelineQuery
     ) throws -> Operations.getTimeBucket.Input.Query {
         try .init(
+            albumId: query.albumID,
             isTrashed: query.includesTrashed,
             order: timelineOrder(from: query.order),
             orderBy: timelineOrderBy(from: query.orderBy),
             timeBucket: bucketID,
-            visibility: timelineVisibility(from: query.visibility),
+            visibility: query.albumID == nil ? timelineVisibility(from: query.visibility) : nil,
             withCoordinates: true,
             withPartners: query.includesPartners,
             withStacked: query.includesStacks

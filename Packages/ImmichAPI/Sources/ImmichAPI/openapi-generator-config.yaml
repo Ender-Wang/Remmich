@@ -17,4 +17,6 @@ filter:
     - searchAssets
     - getAssetInfo
     - searchMemories
+    - getAllAlbums
+    - getAlbumInfo
 

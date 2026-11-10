@@ -194,6 +194,7 @@ public struct ImmichAssetDetail: Hashable, Sendable {
 }
 
 public struct ImmichTimelineQuery: Codable, Hashable, Sendable {
+    public let albumID: String?
     public let order: ImmichTimelineOrder
     public let orderBy: ImmichTimelineOrderBy
     public let visibility: ImmichAssetVisibility
@@ -207,7 +208,8 @@ public struct ImmichTimelineQuery: Codable, Hashable, Sendable {
         visibility: ImmichAssetVisibility = .timeline,
         includesTrashed: Bool = false,
         includesStacks: Bool = true,
-        includesPartners: Bool = true
+        includesPartners: Bool = true,
+        albumID: String? = nil
     ) {
         self.order = order
         self.orderBy = orderBy
@@ -215,6 +217,7 @@ public struct ImmichTimelineQuery: Codable, Hashable, Sendable {
         self.includesTrashed = includesTrashed
         self.includesStacks = includesStacks
         self.includesPartners = includesPartners
+        self.albumID = albumID
     }
 }
 
