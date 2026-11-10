@@ -300,20 +300,21 @@ xcodebuild build-for-testing \
   CODE_SIGNING_ALLOWED=NO
 ```
 
-This compiles test products; it does not execute the tests. Run relevant app tests in Xcode, and verify media behavior, gestures, rotation, and accessibility on a physical device. The [CI build workflow](.github/workflows/build.yml) produces one set of app/test products; the [test workflow](.github/workflows/test.yml) runs the package and app-logic tests against that build's revision.
+This compiles test products; it does not execute the tests. Run relevant app tests in Xcode, and verify media behavior, gestures, rotation, and accessibility on a physical device. The [Build workflow](.github/workflows/build.yml) produces one set of app/test products; [Tests](.github/workflows/test.yml) runs the package and app-logic tests against that build's revision. The separate [Release workflow](.github/workflows/release.yml) handles eligible archives and publication after Tests succeeds.
 
 ### Release IPAs
 
-The Tests workflow also handles releases after its test job succeeds, following EdgeMark's version/tag convention. Only same-repository `push` or manual Build runs on `main`/`develop` can reach the release jobs. The downloaded test-product revision must match the triggering Build SHA; all release jobs use that exact tested revision.
+The Actions sidebar separates **Build → Tests → Release**, following EdgeMark's version/tag convention. After successful tests, Tests records the original Build run ID and tested SHA in a small release-context artifact. Release verifies both successful runs through GitHub's API and archives that exact revision. Only same-repository `push` or manual Build runs on `main`/`develop` qualify.
 
 - A tested commit changing `Remmich.xcodeproj/project.pbxproj` checks for a release automatically. For an existing version such as the initial 0.5.0, run the **Build** workflow manually on the intended branch after the workflow changes are pushed.
+- To retry only packaging/publication, choose **Actions → Release → Run workflow**, select the branch matching the successful Tests run, and enter its `tests_run_id` (the number in its Actions URL). This bypasses the project-file change check, but still requires successful Build/Tests and an unused tag. The 30-day release-context artifact must exist; runs from before this split or expired artifacts require a fresh Build/Tests run.
 - `main` creates `v<version>`; an existing stable tag is left unchanged. `develop` creates the next unused `v<version>-beta.N` prerelease. Version and build are read from the project, and app/test targets must agree.
 - Release notes use the body of the exact tested commit, excluding its subject, for both automatic and manual Build runs. Put the intended Markdown release notes in that commit body; no GitHub-generated changelog or fixed introductory text is added.
 - Archive uses `Release`, a generic iOS device destination, Swift `-O` and whole-module compilation. Code signing is disabled; no signing certificate or provisioning-profile secrets are required.
 - Package only the archived `Remmich.app` under `Payload/`, preserving its frameworks/resources. Publish `Remmich-v<version>-unsigned.ipa`, a separate dSYMs ZIP, and SHA-256 files. Verify the archived version/build, iOS platform and arm64 executable before upload.
 - Only the final publishing job has `contents: write`. It verifies checksums, creates the GitHub release/tag at the tested SHA, and attaches the generated assets. An eligible successful run publishes automatically.
 
-These unsigned IPAs need re-signing with a compatible sideloading tool before installation; they are not App Store/TestFlight or directly installable distribution builds. Test the optimized build on a physical device before treating it as release-verified. The first archive/publication remains pending until this pipeline runs successfully.
+These unsigned IPAs need re-signing with a compatible sideloading tool before installation; they are not App Store/TestFlight or directly installable distribution builds. Test the optimized build on a physical device before treating it as release-verified. The **Run workflow** button is on the selected workflow's Actions page, not inside an individual run, and appears after the workflow is present on the default branch.
 
 Run the API package tests with:
 

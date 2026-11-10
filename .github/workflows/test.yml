@@ -18,8 +18,6 @@ jobs:
     name: Tests
     runs-on: xcode-27
     timeout-minutes: 120
-    outputs:
-      tested-revision: ${{ steps.test-products.outputs.tested-revision }}
     env:
       IPHONE_DESTINATION: platform=iOS Simulator,name=iPhone 17e,OS=27.0
 
@@ -93,6 +91,30 @@ jobs:
             COMPILER_INDEX_STORE_ENABLE=NO \
             | xcbeautify
 
+      - name: Record successful tested revision
+        env:
+          BUILD_RUN_ID: ${{ github.event.workflow_run.id }}
+          TESTED_REVISION: ${{ steps.test-products.outputs.tested-revision }}
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib
+          path = pathlib.Path(os.environ["RUNNER_TEMP"], "RemmichReleaseContext")
+          path.mkdir()
+          (path / "release-context.json").write_text(json.dumps({
+              "build_run_id": int(os.environ["BUILD_RUN_ID"]),
+              "tested_revision": os.environ["TESTED_REVISION"],
+          }))
+          PY
+
+      - name: Upload release context
+        uses: actions/upload-artifact@v4
+        with:
+          name: remmich-release-context
+          path: ${{ runner.temp }}/RemmichReleaseContext/release-context.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 30
+
       - name: Report app logic failures
         if: ${{ failure() }}
         run: |
@@ -114,185 +136,3 @@ jobs:
           path: ${{ runner.temp }}/Remmich*.xcresult
           if-no-files-found: ignore
           retention-days: 7
-
-  release-plan:
-    name: Check release version
-    needs: test
-    if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.head_repository.full_name == github.repository &&
-      contains(fromJSON('["push", "workflow_dispatch"]'), github.event.workflow_run.event) &&
-      contains(fromJSON('["main", "develop"]'), github.event.workflow_run.head_branch)
-    runs-on: ubuntu-latest
-    outputs:
-      release: ${{ steps.version.outputs.release }}
-      version: ${{ steps.version.outputs.version }}
-      build: ${{ steps.version.outputs.build }}
-      tag: ${{ steps.version.outputs.tag }}
-      prerelease: ${{ steps.version.outputs.prerelease }}
-    steps:
-      - name: Check out tested revision
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.test.outputs.tested-revision }}
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Check version and release tag
-        id: version
-        env:
-          SOURCE_EVENT: ${{ github.event.workflow_run.event }}
-          SOURCE_BRANCH: ${{ github.event.workflow_run.head_branch }}
-        run: |
-          set -euo pipefail
-          # Match EdgeMark: project changes release automatically; a manual
-          # Build run can release the current version without another bump.
-          if [[ "$SOURCE_EVENT" != "workflow_dispatch" ]] && git rev-parse HEAD^ >/dev/null 2>&1; then
-            if git diff --quiet HEAD^ HEAD -- Remmich.xcodeproj/project.pbxproj; then
-              echo "release=false" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-          fi
-          python3 - <<'PY'
-          import os, pathlib, re
-          project = pathlib.Path("Remmich.xcodeproj/project.pbxproj").read_text()
-          versions = set(re.findall(r"MARKETING_VERSION = ([^;]+);", project))
-          builds = set(re.findall(r"CURRENT_PROJECT_VERSION = ([^;]+);", project))
-          if len(versions) != 1 or len(builds) != 1:
-              raise SystemExit("App and test targets must agree on version and build.")
-          version, build = versions.pop().strip(), builds.pop().strip()
-          if not re.fullmatch(r"\d+\.\d+\.\d+", version) or not build.isdecimal():
-              raise SystemExit("Expected a numeric major.minor.patch version and build.")
-          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-              output.write(f"version={version}\nbuild={build}\n")
-          pathlib.Path(os.environ["RUNNER_TEMP"], "release-version").write_text(version)
-          PY
-          version="$(<"$RUNNER_TEMP/release-version")"
-          prerelease=false
-          tag="v$version"
-          if [[ "$SOURCE_BRANCH" == "develop" ]]; then
-            prerelease=true
-            beta=1
-            while git rev-parse --verify "refs/tags/v${version}-beta.${beta}" >/dev/null 2>&1; do
-              beta=$((beta + 1))
-            done
-            tag="v${version}-beta.${beta}"
-          fi
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
-          if git rev-parse --verify "refs/tags/$tag" >/dev/null 2>&1; then
-            echo "Tag $tag already exists; leaving its release unchanged."
-            echo "release=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "release=true" >> "$GITHUB_OUTPUT"
-          fi
-
-  archive:
-    name: Archive optimized iOS app
-    needs: [test, release-plan]
-    if: needs.release-plan.outputs.release == 'true'
-    runs-on: xcode-27
-    timeout-minutes: 45
-    steps:
-      - name: Check out tested revision
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.test.outputs.tested-revision }}
-          persist-credentials: false
-
-      - name: Archive Release for iOS devices
-        run: |
-          set -euo pipefail
-          xcodebuild archive -quiet \
-            -project Remmich.xcodeproj \
-            -scheme Remmich \
-            -configuration Release \
-            -destination 'generic/platform=iOS' \
-            -archivePath "$RUNNER_TEMP/Remmich.xcarchive" \
-            -derivedDataPath "$RUNNER_TEMP/RemmichReleaseBuild" \
-            -skipPackagePluginValidation \
-            -jobs 2 \
-            -parallel-testing-enabled NO \
-            COMPILER_INDEX_STORE_ENABLE=NO \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY= DEVELOPMENT_TEAM= \
-            SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule \
-            DEBUG_INFORMATION_FORMAT=dwarf-with-dsym \
-            STRIP_INSTALLED_PRODUCT=YES COPY_PHASE_STRIP=YES
-
-      - name: Verify archive did not modify checked-out sources
-        run: git diff --exit-code
-
-      - name: Package unsigned IPA and debug symbols
-        env:
-          RELEASE_TAG: ${{ needs.release-plan.outputs.tag }}
-          RELEASE_VERSION: ${{ needs.release-plan.outputs.version }}
-          RELEASE_BUILD: ${{ needs.release-plan.outputs.build }}
-        run: |
-          set -euo pipefail
-          app="$RUNNER_TEMP/Remmich.xcarchive/Products/Applications/Remmich.app"
-          test -d "$app"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Info.plist")" = "$RELEASE_VERSION"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Info.plist")" = "$RELEASE_BUILD"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :DTPlatformName' "$app/Info.plist")" = "iphoneos"
-          xcrun lipo -archs "$app/Remmich" | grep -w arm64
-          mkdir -p "$RUNNER_TEMP/RemmichIPA/Payload" "$RUNNER_TEMP/RemmichRelease"
-          git log -1 --format=%b > "$RUNNER_TEMP/RemmichRelease/release-notes.md"
-          ditto "$app" "$RUNNER_TEMP/RemmichIPA/Payload/Remmich.app"
-          ditto -c -k --keepParent "$RUNNER_TEMP/RemmichIPA/Payload" \
-            "$RUNNER_TEMP/RemmichRelease/Remmich-${RELEASE_TAG}-unsigned.ipa"
-          test -d "$RUNNER_TEMP/Remmich.xcarchive/dSYMs"
-          ditto -c -k --keepParent "$RUNNER_TEMP/Remmich.xcarchive/dSYMs" \
-            "$RUNNER_TEMP/RemmichRelease/Remmich-${RELEASE_TAG}-dSYMs.zip"
-          cd "$RUNNER_TEMP/RemmichRelease"
-          for asset in *.ipa *.zip; do
-            shasum -a 256 "$asset" > "$asset.sha256"
-          done
-
-      - name: Upload release files
-        uses: actions/upload-artifact@v4
-        with:
-          name: remmich-release-${{ needs.test.outputs.tested-revision }}
-          path: ${{ runner.temp }}/RemmichRelease/*
-          if-no-files-found: error
-          retention-days: 7
-
-  release:
-    name: Publish GitHub release
-    needs: [test, release-plan, archive]
-    if: needs.release-plan.outputs.release == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      actions: read
-      contents: write
-    concurrency:
-      group: release-${{ needs.release-plan.outputs.tag }}
-      cancel-in-progress: false
-    steps:
-      - name: Download release files
-        uses: actions/download-artifact@v5
-        with:
-          name: remmich-release-${{ needs.test.outputs.tested-revision }}
-          path: release-files
-
-      - name: Publish tested version
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ needs.release-plan.outputs.tag }}
-          RELEASE_BUILD: ${{ needs.release-plan.outputs.build }}
-          PRERELEASE: ${{ needs.release-plan.outputs.prerelease }}
-          TESTED_REVISION: ${{ needs.test.outputs.tested-revision }}
-        run: |
-          set -euo pipefail
-          cd release-files
-          sha256sum -c ./*.sha256
-          flags=()
-          if [[ "$PRERELEASE" == "true" ]]; then
-            flags+=(--prerelease --latest=false)
-          fi
-          gh release create "$RELEASE_TAG" ./*.ipa ./*.zip ./*.sha256 \
-            --target "$TESTED_REVISION" \
-            --title "$RELEASE_TAG (build $RELEASE_BUILD)" \
-            --notes-file release-notes.md \
-            "${flags[@]}"
