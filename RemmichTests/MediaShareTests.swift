@@ -109,6 +109,11 @@ struct MediaShareTests {
         #expect((exif[kCGImagePropertyExifPixelXDimension as String] as? NSNumber)?.intValue == 64)
         let gps = try #require(properties[kCGImagePropertyGPSDictionary as String] as? [String: Any])
         #expect(gps[kCGImagePropertyGPSLatitudeRef as String] as? String == "S")
+        let latitude = try #require((gps[kCGImagePropertyGPSLatitude as String] as? NSNumber)?.doubleValue)
+        #expect(abs(latitude - 31.2) < 0.000001)
+        #expect(gps[kCGImagePropertyGPSLongitudeRef as String] as? String == "E")
+        let longitude = try #require((gps[kCGImagePropertyGPSLongitude as String] as? NSNumber)?.doubleValue)
+        #expect(abs(longitude - 121.4) < 0.000001)
     }
 
     @Test func downsampledDisplaySharesEncodedPreviewWithoutRecompressing() async throws {

@@ -191,11 +191,12 @@ actor MediaExportFiles {
             properties[kCGImagePropertyGPSDictionary as String] = gps
         }
         if preserveCompression, type == outputType,
-           [UTType.jpeg, .png, .tiff].contains(outputType)
+           [UTType.jpeg, .png].contains(outputType)
         {
             // Sharing an already displayed encoded resource must not inflate
             // it by decoding and recompressing at a different JPEG quality.
-            // Apple's QA1895 documents metadata-only copying for these types.
+            // TIFF uses the properties writer below: ImageIO's metadata-only
+            // copy can succeed without writing a newly added GPS directory.
             let metadata = CGImageMetadataCreateMutable()
             for dictionary in [kCGImagePropertyTIFFDictionary, kCGImagePropertyExifDictionary, kCGImagePropertyGPSDictionary] {
                 for (key, value) in properties[dictionary as String] as? [String: Any] ?? [:] {
