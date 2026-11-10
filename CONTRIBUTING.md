@@ -312,7 +312,15 @@ The Actions sidebar separates **Build → Tests → Release**, following EdgeMar
 - Release notes use the body of the exact tested commit, excluding its subject, for both automatic and manual Build runs. Put the intended Markdown release notes in that commit body; no GitHub-generated changelog or fixed introductory text is added.
 - Archive uses `Release`, a generic iOS device destination, Swift `-O` and whole-module compilation. Code signing is disabled; no signing certificate or provisioning-profile secrets are required.
 - Package only the archived `Remmich.app` under `Payload/`, preserving its frameworks/resources. Publish `Remmich-v<version>-unsigned.ipa`, a separate dSYMs ZIP, and SHA-256 files. Verify the archived version/build, iOS platform and arm64 executable before upload.
-- Only the final publishing job has `contents: write`. It verifies checksums, creates the GitHub release/tag at the tested SHA, and attaches the generated assets. An eligible successful run publishes automatically.
+- The publishing job verifies checksums, creates the GitHub release/tag at the tested SHA, and attaches the generated assets. An eligible successful run publishes automatically. Publishing and the subsequent SideStore source update have `contents: write`; build, tests and archive remain read-only.
+
+### SideStore source
+
+The repository's [source.json](source.json) uses the [AltStore source format](https://faq.altstore.io/developers/make-a-source), compatible with SideStore. Its permanent subscription URL is `https://raw.githubusercontent.com/Ender-Wang/Remmich/main/source.json`. It starts with the published 0.5.0 IPA; the maintainer confirmed that IPA installs through SideStore.
+
+After publishing a stable release, Release downloads and checksum-verifies its IPA, then runs `Scripts/update-sidestore-source.py`. Version/build, minimum OS, privacy descriptions and byte size come from the actual IPA/release asset. Older versions remain available, ordered newest first; beta releases are excluded. Source branding and descriptions remain editable in the repository.
+
+The source job updates only `source.json` on the default branch through GitHub's Contents API, creating a GitHub Actions bot commit. It uses the existing blob SHA to reject concurrent edits and does not alter the release commit or notes. If this step fails (for example, branch protection denies the bot), the published release remains available; resolve the failure and rerun the failed source job. No new IPA build is required. Token-authored source updates do not trigger another Build run.
 
 These unsigned IPAs need re-signing with a compatible sideloading tool before installation; they are not App Store/TestFlight or directly installable distribution builds. Test the optimized build on a physical device before treating it as release-verified. The **Run workflow** button is on the selected workflow's Actions page, not inside an individual run, and appears after the workflow is present on the default branch.
 

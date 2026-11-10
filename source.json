@@ -1,0 +1,40 @@
+{
+  "name": "Remmich",
+  "identifier": "io.github.ender-wang.Remmich.source",
+  "sourceURL": "https://raw.githubusercontent.com/Ender-Wang/Remmich/main/source.json",
+  "subtitle": "Your read-only Immich library, native on iPhone and iPad.",
+  "website": "https://github.com/Ender-Wang/Remmich",
+  "iconURL": "https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/sidestore-icon.png",
+  "tintColor": "6366F1",
+  "apps": [
+    {
+      "name": "Remmich",
+      "bundleIdentifier": "io.github.ender-wang.Remmich",
+      "developerName": "Ender Wang",
+      "subtitle": "Your read-only Immich library.",
+      "localizedDescription": "Browse your Immich photos and videos with native timelines, Live Photos, quick previews, maps, offline browsing, sharing and Save to Photos. Albums, Search and Library collections currently show demo data. Requires your Immich server, or try the built-in demo sign-in.",
+      "iconURL": "https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/sidestore-icon.png",
+      "tintColor": "6366F1",
+      "category": "photo-video",
+      "versions": [
+        {
+          "version": "0.5.0",
+          "buildVersion": "1",
+          "date": "2026-11-10T08:47:20Z",
+          "localizedDescription": "First release: native timelines and media viewing, previews, Photon places and maps, offline browsing, sharing, and Save to Photos with background downloads and Pause/Resume.",
+          "downloadURL": "https://github.com/Ender-Wang/Remmich/releases/download/v0.5.0/Remmich-v0.5.0-unsigned.ipa",
+          "size": 24236266,
+          "minOSVersion": "26.6"
+        }
+      ],
+      "appPermissions": {
+        "entitlements": [],
+        "privacy": {
+          "NSLocalNetworkUsageDescription": "Remmich connects to your Immich server on your local network.",
+          "NSPhotoLibraryUsageDescription": "Remmich needs access to create and reuse the Remmich album, save selected media, and verify which items you saved."
+        }
+      }
+    }
+  ],
+  "news": []
+}

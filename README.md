@@ -31,6 +31,14 @@ Requires an iPhone or iPad running iOS/iPadOS 26.6 or later and an account on yo
 
 Download an optimized, unsigned IPA from the [latest GitHub release](https://github.com/Ender-Wang/Remmich/releases/latest) and install it with a compatible sideloading tool, such as AltStore Classic, which signs it using your Apple ID.
 
+**SideStore:** add this source in **Sources → +** to browse releases and receive updates:
+
+```text
+https://raw.githubusercontent.com/Ender-Wang/Remmich/main/source.json
+```
+
+The source follows stable releases automatically. SideStore signs installations using your Apple ID.
+
 You can also follow [Build and run](CONTRIBUTING.md#build-and-run) to build from source. After installing, sign in with your Immich server address and credentials. Add a Primary address and optional Fallback addresses in **Profile → Connection** if needed.
 
 ## Features

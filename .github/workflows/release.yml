@@ -278,3 +278,49 @@ jobs:
             --title "$RELEASE_TAG (build $RELEASE_BUILD)" \
             --notes-file release-notes.md \
             "${flags[@]}"
+
+  update-source:
+    name: Update SideStore source
+    needs: [release-plan, release]
+    if: needs.release-plan.outputs.prerelease == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: sidestore-source
+      cancel-in-progress: false
+    steps:
+      - name: Check out current source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Update source from published IPA
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.release-plan.outputs.tag }}
+          SOURCE_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GH_REPO/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/release.json"
+          gh release download "$RELEASE_TAG" --pattern '*-unsigned.ipa' --pattern '*-unsigned.ipa.sha256' --dir "$RUNNER_TEMP/source-ipa"
+          (cd "$RUNNER_TEMP/source-ipa" && sha256sum -c ./*.sha256)
+          python3 Scripts/update-sidestore-source.py \
+            --source source.json --release "$RUNNER_TEMP/release.json" \
+            --ipa "$RUNNER_TEMP/source-ipa/Remmich-${RELEASE_TAG}-unsigned.ipa"
+          if git diff --quiet -- source.json; then
+            exit 0
+          fi
+          # Use the checked-out blob SHA so concurrent edits fail safely.
+          python3 - <<'PY' > "$RUNNER_TEMP/source-update.json"
+          import base64, json, os, pathlib, subprocess
+          print(json.dumps({
+              "message": "docs: update SideStore source for " + os.environ["RELEASE_TAG"],
+              "content": base64.b64encode(pathlib.Path("source.json").read_bytes()).decode(),
+              "sha": subprocess.check_output(["git", "rev-parse", "HEAD:source.json"], text=True).strip(),
+              "branch": os.environ["SOURCE_BRANCH"],
+          }))
+          PY
+          gh api --silent --method PUT "repos/$GH_REPO/contents/source.json" --input "$RUNNER_TEMP/source-update.json"
