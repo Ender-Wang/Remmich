@@ -44,12 +44,13 @@ final class AppSessionController {
     let locations: AssetLocationStore
     let timeline: ImmichTimelineRepository
     let assetDetails: any AssetDetailReading
+    let albums: any AlbumReading & TimelineReading
     let photos: PhotosTimelineStore
     let videos: PhotosTimelineStore
     let libraryIndex: LibraryIndexController
     private let librarySyncSource: ImmichTimelineRepository
     private let libraryTransfers: LibraryTransferQueue?
-    private let libraryIndexStore: SQLiteLibraryIndexStore
+    let libraryIndexStore: SQLiteLibraryIndexStore
 
     private let service: any ServerReading & SessionManaging & RouteValidating
     private let sessionStore: any SessionStoring
@@ -142,6 +143,11 @@ final class AppSessionController {
             previewReader
         } else {
             persistentAssetDetails
+        }
+        albums = if previewReader != nil {
+            PreviewAlbumReader()
+        } else {
+            timeline
         }
         photos = PhotosTimelineStore(
             reader: photosReader,

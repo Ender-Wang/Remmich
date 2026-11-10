@@ -127,10 +127,18 @@ final class PhotosTimelineStore {
     }
 
     func bootstrap(_ snapshot: TimelineBootstrapSnapshot) {
-        semanticHistoryState = .idle
-        let previousVisibleAnchor = visibleAnchor
         generation &+= 1
         cancelInFlightWork()
+        installCompleteCatalog(snapshot)
+    }
+
+    private func installCompleteCatalog(_ snapshot: TimelineBootstrapSnapshot) {
+        semanticHistoryState = .idle
+        rangeCoverRevision &+= 1
+        rangeCardCoverCache.removeAll()
+        rangeCardCoverTasks.values.forEach { $0.cancel() }
+        rangeCardCoverTasks.removeAll()
+        let previousVisibleAnchor = visibleAnchor
         publicationRevision &+= 1
         let revision = publicationRevision
         bucketSummaries = snapshot.summaries
@@ -698,9 +706,14 @@ final class PhotosTimelineStore {
         do {
             let summaries = try await reader.bucketSummaries(query: query)
             guard requestGeneration == generation else { return }
-            publishSummaries(summaries)
             if let completeReader = reader as? any CompleteTimelineCatalogReading {
                 let assetsByBucket = await completeReader.completeCatalogAssets()
+                if let prepared = await completeReader.preparedGroupedCatalogs() {
+                    guard requestGeneration == generation, !Task.isCancelled else { return }
+                    installCompleteCatalog(.init(generation: Int64(requestGeneration), summaries: summaries,
+                                                 assetsByBucket: assetsByBucket, groupedCatalogs: prepared, isComplete: true))
+                    return
+                }
                 guard requestGeneration == generation else { return }
                 let baseCatalogs = groupedCatalogs
                 let buildTask = Task.detached(priority: .userInitiated) {
@@ -715,9 +728,12 @@ final class PhotosTimelineStore {
                 } onCancel: {
                     buildTask.cancel()
                 }
-                guard requestGeneration == generation else { return }
-                groupedCatalogs = catalogs
+                guard requestGeneration == generation, !Task.isCancelled else { return }
+                installCompleteCatalog(.init(generation: Int64(requestGeneration), summaries: summaries,
+                                             assetsByBucket: assetsByBucket, groupedCatalogs: catalogs, isComplete: true))
+                return
             }
+            publishSummaries(summaries)
             Self.logger.info(
                 "Initial summaries published generation=\(requestGeneration) count=\(summaries.count)"
             )
@@ -809,6 +825,25 @@ final class PhotosTimelineStore {
         do {
             let refreshed = try await reader.bucketSummaries(query: query)
             guard requestGeneration == generation else { return }
+            if let completeReader = reader as? any CompleteTimelineCatalogReading {
+                let assets = await completeReader.completeCatalogAssets()
+                if let prepared = await completeReader.preparedGroupedCatalogs() {
+                    guard requestGeneration == generation, !Task.isCancelled else { return }
+                    installCompleteCatalog(.init(generation: Int64(requestGeneration), summaries: refreshed,
+                                                 assetsByBucket: assets, groupedCatalogs: prepared, isComplete: true))
+                    return
+                }
+                let baseCatalogs = groupedCatalogs
+                let build = Task.detached(priority: .userInitiated) {
+                    try TimelineCompleteGroupedCatalogBuilder.build(summaries: refreshed, assetsByBucket: assets,
+                                                                    baseCatalogs: baseCatalogs)
+                }
+                let catalogs = try await withTaskCancellationHandler { try await build.value } onCancel: { build.cancel() }
+                guard requestGeneration == generation, !Task.isCancelled else { return }
+                installCompleteCatalog(.init(generation: Int64(requestGeneration), summaries: refreshed,
+                                             assetsByBucket: assets, groupedCatalogs: catalogs, isComplete: true))
+                return
+            }
             let previousCounts = Dictionary(uniqueKeysWithValues: bucketSummaries.map { ($0.id, $0.assetCount) })
             publishSummaries(refreshed)
             if refreshed.isEmpty {

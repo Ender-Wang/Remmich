@@ -146,7 +146,7 @@ actor LibraryTransferQueue {
         let recoveryRequired = ready.contains { $0.statusCode == 401 || $0.statusCode == 403 }
             || journal.jobs.contains { $0.state == .failed && connectionErrors.contains($0.errorCode ?? 0) }
         return .init(owner: owner, revision: deliveryRevision, importRevision: importRevision, hasReadyResponses: !ready.isEmpty,
-                     hasIndexWork: journal.jobs.contains { $0.kind == .index },
+                     hasIndexWork: journal.jobs.contains { $0.kind == .index || $0.kind == .albumIndex },
                      requiresRouteValidation: recoveryRequired)
     }
 
@@ -498,6 +498,12 @@ actor LibraryTransferQueue {
     func finishIndexPass(namespace: String) {
         guard journal.owner?.namespace == namespace else { return }
         discard(journal.remove(lane: "index"), committed: true)
+        try? persist()
+    }
+
+    func finishAlbumIndexPass(namespace: String) {
+        guard journal.owner?.namespace == namespace else { return }
+        discard(journal.removeFinishedAlbums(), committed: true)
         try? persist()
     }
 

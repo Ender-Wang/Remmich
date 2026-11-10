@@ -1,13 +1,13 @@
 import Foundation
 
-nonisolated enum TimelineGroupedCatalogLevel: Hashable, Sendable {
+nonisolated enum TimelineGroupedCatalogLevel: Codable, Hashable, Sendable {
     case day
     case week
     case month
     case year
 }
 
-nonisolated enum TimelineGroupedCatalogID: Hashable, Sendable {
+nonisolated enum TimelineGroupedCatalogID: Codable, Hashable, Sendable {
     case day(TimelineBucketID, TimelineCaptureDay)
     case week(TimelineBucketID, TimelineWeekID)
     case month(TimelineBucketID)
@@ -27,7 +27,7 @@ nonisolated enum TimelineGroupedCatalogID: Hashable, Sendable {
     }
 }
 
-nonisolated struct TimelineGroupedCatalogEntry: Identifiable, Sendable {
+nonisolated struct TimelineGroupedCatalogEntry: Codable, Identifiable, Sendable {
     static let coverLimit = 12
 
     let id: TimelineGroupedCatalogID
@@ -54,7 +54,7 @@ nonisolated struct TimelineGroupedCatalogEntry: Identifiable, Sendable {
     }
 }
 
-nonisolated struct TimelineGroupedCatalog: Sendable {
+nonisolated struct TimelineGroupedCatalog: Codable, Sendable {
     let level: TimelineGroupedCatalogLevel
     let entries: [TimelineGroupedCatalogEntry]
     let loadedBucketIDs: Set<TimelineBucketID>
@@ -75,7 +75,7 @@ nonisolated struct TimelineGroupedCatalog: Sendable {
 /// Session-owned grouped projections. A store owns one cache, so Photos and
 /// Videos remain independent while switching Day/Week/Month/Year reuses the
 /// same stable catalog until the store is reset or its summaries change.
-nonisolated struct TimelineGroupedCatalogCache: Sendable {
+nonisolated struct TimelineGroupedCatalogCache: Codable, Sendable {
     private(set) var catalogs: [TimelineGroupedCatalogLevel: TimelineGroupedCatalog] = [:]
     private var contributions: [TimelineGroupedCatalogLevel: [TimelineBucketID: [TimelineGroupedCatalogEntry]]] = [:]
     private var summarySignature: [TimelineBucketSummary] = []

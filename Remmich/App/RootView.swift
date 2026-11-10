@@ -27,6 +27,7 @@ struct RootView: View {
                     photos: controller.photos,
                     videos: controller.videos,
                     assetDetails: controller.assetDetails,
+                    albumSource: controller.albums,
                     presentation: presentation,
                     media: controller.media,
                     libraryIndex: controller.libraryIndex,

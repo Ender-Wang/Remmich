@@ -2,7 +2,7 @@ import Foundation
 import ImmichAPI
 import OSLog
 
-actor ImmichTimelineRepository: TimelineReading, VideoReading, AssetDetailReading {
+actor ImmichTimelineRepository: TimelineReading, VideoReading, AssetDetailReading, AlbumReading {
     private nonisolated static let logger = Logger(
         subsystem: "io.github.ender-wang.Remmich",
         category: "TimelineRepository"
@@ -51,7 +51,9 @@ actor ImmichTimelineRepository: TimelineReading, VideoReading, AssetDetailReadin
             let owner = LibraryTransferOwner(session: session, endpoint: endpoint)
             client = ImmichClient(apiURL: endpoint, credential: .bearer(session.accessToken),
                                   transport: ImmichQueuedGETTransport { request, operation in
-                                      let kind: LibraryTransferKind = operation == "getAssetInfo" ? .metadata : .index
+                                      let isAlbum = operation == "getAllAlbums" || operation == "getAlbumInfo"
+                                          || request.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }?.queryItems?.contains(where: { $0.name == "albumId" }) == true
+                                      let kind: LibraryTransferKind = isAlbum ? .albumIndex : operation == "getAssetInfo" ? .metadata : .index
                                       let value = try await transfers.data(for: request, kind: kind, owner: owner)
                                       return (value.data, value.response)
                                   })
@@ -250,6 +252,31 @@ actor ImmichTimelineRepository: TimelineReading, VideoReading, AssetDetailReadin
         }
     }
 
+    func albums() async throws -> [AlbumSummary] {
+        let (client, requestGeneration) = try requestContext()
+        let albums = try await client.albums()
+        try requireCurrent(requestGeneration)
+        Self.logger.info("Albums loaded generation=\(requestGeneration) count=\(albums.count)")
+        return albums.map(Self.map)
+    }
+
+    func album(id: String) async throws -> AlbumSummary {
+        let (client, requestGeneration) = try requestContext()
+        let album = try await client.album(id: id)
+        try requireCurrent(requestGeneration)
+        Self.logger.info("Album detail loaded generation=\(requestGeneration) items=\(album.assetCount)")
+        return Self.map(album)
+    }
+
+    private static func map(_ album: ImmichAlbum) -> AlbumSummary {
+        .init(id: album.id, name: album.name, description: album.description,
+              thumbnailAssetID: album.thumbnailAssetID, assetCount: album.assetCount,
+              updatedAt: album.updatedAt, createdAt: album.createdAt,
+              startDate: album.startDate, endDate: album.endDate, isShared: album.isShared,
+              lastModifiedAssetTimestamp: album.lastModifiedAssetTimestamp,
+              ownerName: album.ownerName, ownerID: album.ownerID)
+    }
+
     private func requestContext() throws -> (ImmichClient, UInt64) {
         guard let client, activeEndpoint != nil else {
             throw TimelineReadError.routeUnavailable
@@ -270,7 +297,8 @@ actor ImmichTimelineRepository: TimelineReading, VideoReading, AssetDetailReadin
             visibility: map(query.visibility),
             includesTrashed: query.includesTrashed,
             includesStacks: query.includesStacks,
-            includesPartners: query.includesPartners
+            includesPartners: query.includesPartners,
+            albumID: query.albumID
         )
     }
 

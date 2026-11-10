@@ -41,6 +41,13 @@ extension TimelineReading {
 /// producing bucket summaries can seed grouped catalogs without more I/O.
 nonisolated protocol CompleteTimelineCatalogReading: TimelineReading {
     func completeCatalogAssets() async -> [TimelineBucketID: [TimelineAssetSummary]]
+    func preparedGroupedCatalogs() async -> TimelineGroupedCatalogCache?
+}
+
+extension CompleteTimelineCatalogReading {
+    nonisolated func preparedGroupedCatalogs() async -> TimelineGroupedCatalogCache? {
+        nil
+    }
 }
 
 nonisolated protocol AssetDetailReading: Sendable {
@@ -68,7 +75,8 @@ nonisolated protocol AssetReading: Sendable {
 }
 
 nonisolated protocol AlbumReading: Sendable {
-    func albumIDs() async throws -> [String]
+    func albums() async throws -> [AlbumSummary]
+    func album(id: String) async throws -> AlbumSummary
 }
 
 nonisolated protocol LibraryReading: Sendable {

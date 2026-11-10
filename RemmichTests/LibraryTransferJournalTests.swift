@@ -4,6 +4,20 @@ import Testing
 
 @Suite(.serialized)
 struct LibraryTransferJournalTests {
+    @Test func albumCleanupPreservesInteractiveRequestsAndTimelinePauseDoesNotBlockAlbums() throws {
+        let owner = owner()
+        var journal = LibraryTransferJournal()
+        _ = journal.activate(owner)
+        var completed = try journal.job(url: endpoint.appending(path: "albums"), kind: .albumIndex, owner: owner)
+        completed.state = .completed
+        journal.update(completed)
+        let browsing = try journal.job(url: endpoint.appending(path: "albums/one"), kind: .albumIndex, owner: owner)
+        _ = journal.setEnabled(false, lane: "index")
+        #expect(try journal.job(url: browsing.url, kind: .albumIndex, owner: owner).id == browsing.id)
+        #expect(journal.removeFinishedAlbums().map(\.id) == [completed.id])
+        #expect(journal.jobs.map(\.id) == [browsing.id])
+    }
+
     @Test func restoresPassAndResponseStateWithoutSerializingCredentials() throws {
         let root = try directory()
         defer { try? FileManager.default.removeItem(at: root) }

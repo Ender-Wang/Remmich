@@ -212,11 +212,13 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
     let pageSwipeEnabled: Bool
     let photosScrollRequest: Int
     let videosScrollRequest: Int
+    var albumsScrollRequest: Int = 0
     let groupedScrollRequests: [NativeTabDestination: Int]
     let groupedMediaOwner: NativeTabDestination
     let libraryContentRevision: NativeLibraryContentRevision
     let photosRetapped: () -> Void
     let videosRetapped: () -> Void
+    var albumsRetapped: () -> Void = {}
     let libraryRetapped: () -> Void
     let groupedTabRetapped: (NativeTabDestination) -> Void
     let photos: AnyView
@@ -264,6 +266,7 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
         private var installedTabs: [NativeTabDestination]?
         private var isUpdatingTabs = false
         private var didResolveLibrary = false
+        private var didResolveAlbums = false
         private var tabBarInteractionBlockedByViewer = false
         private var didResolveVideos = false
         private var contentActivationGeneration = 0
@@ -296,10 +299,11 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
             destination: .videos,
             ignoresContainerSafeArea: true
         )
-        private lazy var albumsController = tabHostingController(
-            rootView: parent.albums,
-            destination: .albums
-        )
+        private lazy var albumsController = {
+            self.didResolveAlbums = true
+            return self.tabHostingController(rootView: self.parent.albums, destination: .albums)
+        }()
+
         private lazy var libraryController = tabHostingController(
             rootView: parent.library,
             destination: .library
@@ -435,6 +439,12 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
             parent = next
 
             let mediaLayoutChanged = previous.tabBarTop != next.tabBarTop
+            if didResolveAlbums,
+               previous.libraryContentRevision != next.libraryContentRevision || mediaLayoutChanged
+               || previous.albumsScrollRequest != next.albumsScrollRequest
+            {
+                albumsController.rootView = hostedRoot(next.albums)
+            }
             if previous.photosScrollRequest != next.photosScrollRequest {
                 photosController.rootView = hostedRoot(next.photos)
             }
@@ -756,6 +766,8 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
                 parent.photosRetapped()
             } else if selectedTab === videosTab, previousTab === videosTab {
                 parent.videosRetapped()
+            } else if selectedTab === albumsTab, previousTab === albumsTab {
+                parent.albumsRetapped()
             } else if selectedTab === libraryTab, previousTab === libraryTab {
                 parent.libraryRetapped()
             } else if selectedTab === previousTab,

@@ -153,7 +153,7 @@ actor PreviewTimelineReader: TimelineReading, VideoReading, AssetDetailReading {
         )
     }
 
-    private nonisolated static func map(_ asset: FixtureAsset) -> TimelineAssetSummary {
+    nonisolated static func map(_ asset: FixtureAsset) -> TimelineAssetSummary {
         TimelineAssetSummary(
             id: asset.id,
             ownerID: "preview-owner",

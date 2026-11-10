@@ -9,7 +9,7 @@ nonisolated struct TimelineYearSummary: Identifiable, Sendable {
     }
 }
 
-nonisolated struct TimelineWeekID: Hashable, Identifiable, Sendable {
+nonisolated struct TimelineWeekID: Codable, Hashable, Identifiable, Sendable {
     let year: Int
     let week: Int
     let startDate: Date

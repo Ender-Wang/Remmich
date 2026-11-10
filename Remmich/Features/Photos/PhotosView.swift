@@ -3,7 +3,7 @@ import OSLog
 import SwiftUI
 import UIKit
 
-private struct TimelineMemoryGradientBackdrop: UIViewRepresentable {
+struct TimelineMemoryGradientBackdrop: UIViewRepresentable {
     let visible: Bool
     let extended: Bool
     let reduceMotion: Bool
@@ -22,7 +22,7 @@ private struct TimelineMemoryGradientBackdrop: UIViewRepresentable {
 }
 
 @MainActor
-private final class TimelineMemoryGradientBackdropView: UIView {
+final class TimelineMemoryGradientBackdropView: UIView {
     private let effectView = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
     private let gradientMask = CAGradientLayer()
     private var visibilityAnimator: UIViewPropertyAnimator?
@@ -360,6 +360,9 @@ struct PhotosView: View {
     var requestedLibraryRangeHandled: () -> Void = {}
     var contentName = "Photos"
     var rootAccessibilityID = "photos-root"
+    var collectionTitle: String?
+    var collectionSubtitle: String?
+    var collectionInfoAction: (() -> Void)?
     let compactChromeChanged: (Bool) -> Void
     var viewerVisibilityChanged: (Bool) -> Void = { _ in }
     var loadingVisibilityChanged: ((Bool) -> Void)?
@@ -415,6 +418,9 @@ struct PhotosView: View {
         requestedLibraryRangeHandled: @escaping () -> Void = {},
         contentName: String = "Photos",
         rootAccessibilityID: String = "photos-root",
+        collectionTitle: String? = nil,
+        collectionSubtitle: String? = nil,
+        collectionInfoAction: (() -> Void)? = nil,
         compactChromeChanged: @escaping (Bool) -> Void,
         viewerVisibilityChanged: @escaping (Bool) -> Void = { _ in },
         loadingVisibilityChanged: ((Bool) -> Void)? = nil,
@@ -435,6 +441,9 @@ struct PhotosView: View {
         self.requestedLibraryRangeHandled = requestedLibraryRangeHandled
         self.contentName = contentName
         self.rootAccessibilityID = rootAccessibilityID
+        self.collectionTitle = collectionTitle
+        self.collectionSubtitle = collectionSubtitle
+        self.collectionInfoAction = collectionInfoAction
         self.compactChromeChanged = compactChromeChanged
         self.viewerVisibilityChanged = viewerVisibilityChanged
         self.viewerPresentations = viewerPresentations
@@ -474,7 +483,7 @@ struct PhotosView: View {
         }
         .navigationTitle(navigationTitle)
         .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(hasInteractivePreview)
+        .navigationBarBackButtonHidden(hasInteractivePreview || (collectionTitle != nil && (!navigationPath.isEmpty || libraryRange != .all)))
         .nativeEdgeBackAction(active: viewerRoute == nil && (hasInteractivePreview || !navigationPath.isEmpty || libraryRange != .all),
                               animatesContent: assetPreview == nil, action: navigateBack)
         .environment(\.timelineAssetPreviewAction, previewAction)
@@ -515,12 +524,39 @@ struct PhotosView: View {
         }
         .toolbarBackground(navigationPath.isEmpty ? .hidden : .visible, for: .navigationBar)
         .toolbar {
+            if !hasInteractivePreview, navigationPath.isEmpty, let collectionTitle {
+                ToolbarItem(placement: .principal) {
+                    VStack(spacing: 2) {
+                        Text(collectionTitle).font(.headline).lineLimit(1)
+                        if let collectionSubtitle {
+                            Text(collectionSubtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                    }
+                    .accessibilityElement(children: .combine)
+                }
+                if let collectionInfoAction {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button(action: collectionInfoAction) {
+                            Label("Album Details", systemImage: "info.circle")
+                        }
+                    }
+                }
+            }
             if !hasInteractivePreview, !navigationPath.isEmpty || libraryRange != .all {
                 ToolbarItem(placement: .topBarLeading) {
                     Button(action: navigateBack) {
                         Label("Back", systemImage: "chevron.backward")
                     }
                     .accessibilityIdentifier("timeline-range-back")
+                    .highPriorityGesture(LongPressGesture(minimumDuration: 0.35)
+                        .exclusively(before: TapGesture())
+                        .onEnded { result in
+                            switch result {
+                            case .first: returnToRootTimeline()
+                            case .second: navigateBack()
+                            }
+                        })
+                    .accessibilityAction(named: "Return to Timeline", returnToRootTimeline)
                 }
             }
             if UIDevice.current.userInterfaceIdiom == .pad,
@@ -782,10 +818,9 @@ struct PhotosView: View {
             let barHeight = tabBarTop > 0
                 ? max(0, frame.maxY - tabBarTop)
                 : TimelineRangeGridLayout.minimumBottomNavigationHeight(isPhone: isPhone, viewportSize: geometry.size)
-            let topInset = TimelineMemoryLaneSafeArea.topInset(
-                proposed: geometry.safeAreaInsets.top,
-                window: windowTopInset
-            )
+            let topInset = collectionTitle == nil
+                ? TimelineMemoryLaneSafeArea.topInset(proposed: geometry.safeAreaInsets.top, window: windowTopInset)
+                : 0
             // Keep the row's scroll clearance while compact chrome hides it,
             // so showing the row does not move the timeline underneath it.
             let bottomClearance = isPhone ? barHeight : 0
@@ -872,7 +907,7 @@ struct PhotosView: View {
                 windowTopInset = inset
             }
         }
-        .ignoresSafeArea(.container, edges: [.top, .horizontal, .bottom])
+        .ignoresSafeArea(.container, edges: collectionTitle == nil ? [.top, .horizontal, .bottom] : [.horizontal, .bottom])
         .safeAreaInset(edge: .top, spacing: 0) {
             if case let .failed(message) = store.refreshState {
                 TimelineRefreshError(message: message) {
@@ -1031,7 +1066,7 @@ struct PhotosView: View {
     }
 
     private var navigationTitle: String {
-        navigationPath.last?.navigationTitle ?? ""
+        navigationPath.last?.navigationTitle ?? collectionTitle ?? ""
     }
 
     private var previewOverlay: some View {
@@ -1186,6 +1221,16 @@ struct PhotosView: View {
             } else {
                 semanticRuntime.changeScale(coarser: false)
             }
+        }
+    }
+
+    private func returnToRootTimeline() {
+        retireDismissedPreview()
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            navigationPath.removeAll()
+            libraryRange = .all
         }
     }
 

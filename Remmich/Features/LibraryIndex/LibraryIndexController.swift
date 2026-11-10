@@ -81,6 +81,7 @@ final class LibraryIndexController {
     var acceptedGroupedCatalogsDidChange: ((LibraryTimelineBootstrap) -> Void)?
 
     private let store: SQLiteLibraryIndexStore
+    let albumIndex: AlbumIndexController
     private let synchronizer: LibraryIndexSynchronizer
     private let thumbnailCache: LibraryThumbnailCache
     private let transfers: LibraryTransferQueue?
@@ -154,6 +155,8 @@ final class LibraryIndexController {
         self.media = media
         self.resourceConditions = resourceConditions
         self.preferences = preferences
+        albumIndex = AlbumIndexController(source: source as? any AlbumReading & TimelineReading,
+                                          store: store, transfers: transfers, preferences: preferences)
         synchronizer = LibraryIndexSynchronizer(source: source, store: store)
         thumbnailCache = LibraryThumbnailCache(store: store, rootURL: cacheRootURL, assetDetails: assetDetails, transfers: transfers)
         thumbnailWarmingStatus = if thumbnailWarmingEnabled {
@@ -174,15 +177,15 @@ final class LibraryIndexController {
     }
 
     var hasActiveSyncWork: Bool {
-        task != nil || warmingTask != nil
+        task != nil || warmingTask != nil || albumIndex.isRunning
     }
 
     var hasAutomaticSyncWork: Bool {
-        !indexPaused || (thumbnailWarmingEnabled && !thumbnailWarmingPaused)
+        !indexPaused || albumIndex.automaticWorkEnabled || (thumbnailWarmingEnabled && !thumbnailWarmingPaused)
     }
 
     var hasAutomaticIndexWork: Bool {
-        !indexPaused
+        !indexPaused || albumIndex.automaticWorkEnabled
     }
 
     func setBackgroundRefreshOnly(_ enabled: Bool) {
@@ -203,6 +206,7 @@ final class LibraryIndexController {
         adoptScope(nextScope)
         let revision = sessionRevision
         try await store.prepare(scope: nextScope)
+        await albumIndex.restore()
         let savedState = try await store.syncState(scope: nextScope)
         let snapshot = try await store.snapshot(scope: nextScope)
         try Task.checkCancellation()
@@ -250,9 +254,12 @@ final class LibraryIndexController {
             run(fullReconciliation: false)
         }
         await task?.value
+        guard !Task.isCancelled, scope == expectedScope else { return false }
+        albumIndex.start()
+        let albumsComplete = await albumIndex.finish()
         if kind == .refresh {
             return !Task.isCancelled && scope == expectedScope
-                && (indexPaused || status == .upToDate || completedIndexRunID == runID)
+                && (indexPaused || status == .upToDate || completedIndexRunID == runID) && albumsComplete
         }
         guard !Task.isCancelled, scope == expectedScope, indexPaused || status == .upToDate else { return false }
         if thumbnailWarmingEnabled || pendingThumbnailRequest?.manual == true, !thumbnailWarmingPaused, warmingTask == nil,
@@ -270,7 +277,7 @@ final class LibraryIndexController {
         let manualPlaceIntent = scope.map { hasManualCacheIntent(namespace: $0.cacheNamespace) } ?? false
         let placesComplete = !automaticPlacesAllowed || !(thumbnailWarmingEnabled || manualPlaceIntent) || thumbnailWarmingPaused
             || (placeProgress.pending == 0 && placeProgress.failed == 0 && placeStorageError == nil)
-        return ordinaryComplete && placesComplete
+        return ordinaryComplete && placesComplete && albumsComplete
     }
 
     func setTimelinePublicationDeferred(_ deferred: Bool) {
@@ -398,6 +405,7 @@ final class LibraryIndexController {
         Self.logger.info("Library bootstrap started")
         do {
             try await store.prepare(scope: nextScope)
+            await albumIndex.restore()
             Self.logger.info(
                 "Library bootstrap store prepared elapsedMs=\(Self.elapsedMilliseconds(since: bootstrapStartedAt))"
             )
@@ -490,14 +498,17 @@ final class LibraryIndexController {
     func start(session: AccountSession, endpoint: URL, automatic: Bool = false) {
         let nextScope = MediaAccountScope(session: session)
         adoptScope(nextScope)
-        if scope == nextScope, self.endpoint == endpoint, accessToken == session.accessToken, hasActiveSyncWork {
+        let timelineWorkActive = task != nil || warmingTask != nil
+        if scope == nextScope, self.endpoint == endpoint, accessToken == session.accessToken, timelineWorkActive {
+            albumIndex.start()
             return
         }
-        if scope == nextScope, !hasActiveSyncWork, automatic, status == .upToDate,
+        if scope == nextScope, !timelineWorkActive, automatic, status == .upToDate,
            !LibrarySyncPolicy.needsAutomaticSync(lastSuccess: lastSuccessfulSyncAt)
         {
             self.endpoint = endpoint
             accessToken = session.accessToken
+            albumIndex.start()
             if !backgroundRefreshOnly, thumbnailWarmingEnabled || pendingThumbnailRequest?.manual == true, !thumbnailWarmingPaused,
                thumbnailWarmingCachedCount < indexedAssetCount
             {
@@ -511,6 +522,7 @@ final class LibraryIndexController {
         accessToken = session.accessToken
         refreshStoredAccounts()
         run(fullReconciliation: false)
+        albumIndex.start()
     }
 
     func pause() {
@@ -716,6 +728,9 @@ final class LibraryIndexController {
     func deleteCurrentAccountData() async {
         guard let scope else { return }
         suspend()
+        albumIndex.removePreferences(namespace: scope.cacheNamespace)
+        albumIndex.clear()
+        albumIndex.configure(scope: scope)
         preparedCacheGeneration = nil
         deferredBootstrapPublication = nil
         preferences.removeObject(forKey: successKey(scope))
@@ -749,6 +764,7 @@ final class LibraryIndexController {
 
     func deleteStoredAccount(namespace: String) async {
         guard !isDeletingStoredAccount else { return }
+        albumIndex.removePreferences(namespace: namespace)
         preferences.removeObject(forKey: "library-index-last-success-\(namespace)")
         preferences.removeObject(forKey: "library-transfer-cache-intent-\(namespace)")
         AccountCachePreferences.remove(from: preferences, namespace: namespace)
@@ -790,6 +806,7 @@ final class LibraryIndexController {
     }
 
     private func suspend(cancelBootstrapCatalogs: Bool) {
+        albumIndex.suspend()
         stopPlaceWork()
         if status == .indexing {
             indexContinuationPending = true
@@ -843,6 +860,7 @@ final class LibraryIndexController {
     func clearSession() {
         sessionRevision &+= 1
         suspend()
+        albumIndex.clear()
         backgroundRefreshOnly = false
         completedIndexRunID = nil
         indexPaused = false
@@ -895,6 +913,7 @@ final class LibraryIndexController {
         clearSession()
         backgroundRefreshOnly = refreshOnly
         scope = nextScope
+        albumIndex.configure(scope: nextScope)
         let settings = AccountCachePreferences.load(from: preferences, scope: nextScope)
         thumbnailWarmingEnabled = settings.enabled
         thumbnailWarmingPaused = settings.paused

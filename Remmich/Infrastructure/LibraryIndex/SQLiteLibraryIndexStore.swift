@@ -1,8 +1,8 @@
 import Foundation
 import SQLite3
 
-actor SQLiteLibraryIndexStore: LibraryIndexStoring {
-    static let currentSchemaVersion = 9
+actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
+    static let currentSchemaVersion = 10
 
     private let databaseURL: URL
     private var connection: SQLiteConnection?
@@ -32,6 +32,62 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
         let db = try preparedDatabase(scope: scope)
         guard let json = try db.scalarText("SELECT payload FROM media_exports WHERE scope=?", [.text(scope.cacheNamespace)]) else { return .init() }
         return try JSONDecoder().decode(MediaExportJournal.self, from: Data(json.utf8))
+    }
+
+    func albumCatalog(scope: MediaAccountScope, albumID: String) throws -> AlbumCatalog? {
+        let db = try preparedDatabase()
+        guard let json = try db.scalarText("SELECT payload FROM album_catalogs WHERE scope=? AND album_id=?",
+                                           [.text(scope.cacheNamespace), .text(albumID)]) else { return nil }
+        return try JSONDecoder().decode(AlbumCatalog.self, from: Data(json.utf8))
+    }
+
+    func albumCoverRevision(scope: MediaAccountScope, albumID: String, assetID: String) throws -> Date? {
+        let db = try preparedDatabase()
+        let revisions = try db.query("""
+        SELECT a.updated_at FROM assets a JOIN sync_state s ON s.scope=a.scope AND s.accepted_generation=a.generation
+        WHERE a.scope=? AND a.asset_id=? AND a.tombstone=0 LIMIT 1
+        """, [.text(scope.cacheNamespace), .text(assetID)]) { $0.date(0) }
+        if let revision = revisions.first {
+            return revision
+        }
+        return try albumCatalog(scope: scope, albumID: albumID)?.assetsByBucket.values
+            .lazy.flatMap(\.self).first { $0.id == assetID }?.thumbnailRevision
+    }
+
+    func saveAlbumCatalog(_ catalog: AlbumCatalog, scope: MediaAccountScope, albumID: String) throws {
+        let db = try preparedDatabase()
+        guard try db.scalarText("SELECT scope FROM scopes WHERE scope=?", [.text(scope.cacheNamespace)]) != nil else { return }
+        if let list = try albumList(scope: scope), !list.contains(where: { $0.id == albumID }) {
+            return
+        }
+        let json = try String(decoding: JSONEncoder().encode(catalog), as: UTF8.self)
+        try db.execute("""
+        INSERT INTO album_catalogs(scope,album_id,payload) VALUES(?,?,?)
+        ON CONFLICT(scope,album_id) DO UPDATE SET payload=excluded.payload
+        """, [.text(scope.cacheNamespace), .text(albumID), .text(json)])
+    }
+
+    func albumList(scope: MediaAccountScope) throws -> [AlbumSummary]? {
+        let db = try preparedDatabase()
+        guard let json = try db.scalarText("SELECT payload FROM album_lists WHERE scope=?", [.text(scope.cacheNamespace)]) else { return nil }
+        return try JSONDecoder().decode([AlbumSummary].self, from: Data(json.utf8))
+    }
+
+    func saveAlbumList(_ albums: [AlbumSummary], scope: MediaAccountScope) throws {
+        let db = try preparedDatabase()
+        guard try db.scalarText("SELECT scope FROM scopes WHERE scope=?", [.text(scope.cacheNamespace)]) != nil else { return }
+        let json = try String(decoding: JSONEncoder().encode(albums), as: UTF8.self)
+        try db.transaction {
+            try db.execute("""
+            INSERT INTO album_lists(scope,payload) VALUES(?,?)
+            ON CONFLICT(scope) DO UPDATE SET payload=excluded.payload
+            """, [.text(scope.cacheNamespace), .text(json)])
+            let ids = Set(albums.map(\.id))
+            let saved = try db.query("SELECT album_id FROM album_catalogs WHERE scope=?", [.text(scope.cacheNamespace)]) { $0.text(0) }
+            for id in saved where !ids.contains(id) {
+                try db.execute("DELETE FROM album_catalogs WHERE scope=? AND album_id=?", [.text(scope.cacheNamespace), .text(id)])
+            }
+        }
     }
 
     func saveMediaExports(_ journal: MediaExportJournal, scope: MediaAccountScope) throws {
@@ -1109,6 +1165,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
         try prepareSchema(database)
         try database.transaction {
             for table in [
+                "album_catalogs", "album_lists",
                 "media_exports", "asset_places", "place_lookups", "place_accounts", "account_endpoint_aliases", "asset_details", "asset_detail_strings", "derivatives", "grouped_catalogs",
                 "assets", "generations", "sync_state", "scopes",
             ] {
@@ -1211,9 +1268,17 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
         if version == Self.currentSchemaVersion {
             return
         }
+        if version == 9 {
+            try database.transaction {
+                try createAlbumSchema(database)
+                try database.execute("PRAGMA user_version = \(Self.currentSchemaVersion)")
+            }
+            return
+        }
         if version == 8 {
             try database.transaction {
                 try createMediaExportSchema(database)
+                try createAlbumSchema(database)
                 try database.execute("PRAGMA user_version = \(Self.currentSchemaVersion)")
             }
             return
@@ -1222,6 +1287,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
             try database.transaction {
                 try createPlaceSchema(database)
                 try createMediaExportSchema(database)
+                try createAlbumSchema(database)
                 try database.execute("PRAGMA user_version = \(Self.currentSchemaVersion)")
             }
             return
@@ -1393,8 +1459,20 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring {
             """)
             try createPlaceSchema(database)
             try createMediaExportSchema(database)
+            try createAlbumSchema(database)
             try database.execute("PRAGMA user_version = \(Self.currentSchemaVersion)")
         }
+    }
+
+    private func createAlbumSchema(_ database: SQLiteConnection) throws {
+        try database.execute("""
+        CREATE TABLE IF NOT EXISTS album_catalogs(
+            scope TEXT NOT NULL REFERENCES scopes(scope) ON DELETE CASCADE,
+            album_id TEXT NOT NULL, payload TEXT NOT NULL,
+            PRIMARY KEY(scope,album_id)
+        )
+        """)
+        try database.execute("CREATE TABLE IF NOT EXISTS album_lists(scope TEXT PRIMARY KEY REFERENCES scopes(scope) ON DELETE CASCADE,payload TEXT NOT NULL)")
     }
 
     private func createMediaExportSchema(_ database: SQLiteConnection) throws {

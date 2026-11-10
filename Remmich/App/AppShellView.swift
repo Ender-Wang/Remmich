@@ -14,6 +14,7 @@ struct AppShellView: View {
     let photos: PhotosTimelineStore
     let videos: PhotosTimelineStore
     let assetDetails: any AssetDetailReading
+    let albumSource: any AlbumReading & TimelineReading
     let presentation: PhotosPresentationState
     let media: MediaLibraryController
     let libraryIndex: LibraryIndexController
@@ -31,6 +32,7 @@ struct AppShellView: View {
     @State private var groupedMediaOwner: NativeTabDestination = .photos
     @State private var photosScrollRequest = 0
     @State private var videosScrollRequest = 0
+    @State private var albumsScrollRequest = 0
     @State private var libraryDismissAccountRequest = 0
     @State private var libraryAccountPresented = false
     @State private var videoPresentation = PhotosPresentationState(
@@ -63,6 +65,7 @@ struct AppShellView: View {
             pageSwipeEnabled: pageSwipeEnabled,
             photosScrollRequest: photosScrollRequest,
             videosScrollRequest: videosScrollRequest,
+            albumsScrollRequest: albumsScrollRequest,
             groupedScrollRequests: groupedScrollRequests,
             groupedMediaOwner: groupedMediaOwner,
             libraryContentRevision: .init(
@@ -78,6 +81,7 @@ struct AppShellView: View {
                 videosScrollRequest &+= 1
                 compactVideosTabs = false
             },
+            albumsRetapped: { albumsScrollRequest &+= 1 },
             libraryRetapped: {
                 libraryDismissAccountRequest &+= 1
             },
@@ -161,7 +165,12 @@ struct AppShellView: View {
                     activationState: tabContentActivationState
                 ) {
                     NavigationStack(path: $albumsPath) {
-                        AlbumsView(albums: PreviewFixtures.albums, showAccount: showAccount)
+                        AlbumsView(source: albumSource, media: media, assetDetails: assetDetails,
+                                   activeEndpoint: activeRoute?.endpoint,
+                                   scrollToLatestRequest: albumsScrollRequest,
+                                   persistence: sessionController?.libraryIndexStore, scope: MediaAccountScope(session: session),
+                                   viewerPresentations: viewerPresentations,
+                                   tabSelectionState: tabSelectionState, tabBarTop: $tabBarTop, showAccount: showAccount)
                     }
                 }
             ),
@@ -508,6 +517,7 @@ extension EnvironmentValues {
         photos: store,
         videos: PhotosTimelineStore(reader: VideoTimelineReader(source: PreviewTimelineReader())),
         assetDetails: PreviewTimelineReader(),
+        albumSource: PreviewAlbumReader(),
         presentation: .init(),
         media: .init(),
         libraryIndex: LibraryIndexController(source: PreviewTimelineReader()),

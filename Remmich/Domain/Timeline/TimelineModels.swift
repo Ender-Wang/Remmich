@@ -55,7 +55,7 @@ nonisolated enum TimelineOrderBy: Hashable, Sendable {
     case createdAt
 }
 
-nonisolated enum TimelineVisibility: Hashable, Sendable {
+nonisolated enum TimelineVisibility: Codable, Hashable, Sendable {
     case archive
     case timeline
     case hidden
@@ -64,6 +64,7 @@ nonisolated enum TimelineVisibility: Hashable, Sendable {
 }
 
 nonisolated struct TimelineQuery: Hashable, Sendable {
+    var albumID: String?
     var order: TimelineOrder = .descending
     var orderBy: TimelineOrderBy = .takenAt
     var visibility: TimelineVisibility = .timeline
@@ -72,7 +73,7 @@ nonisolated struct TimelineQuery: Hashable, Sendable {
     var includesPartners = true
 }
 
-nonisolated struct TimelineBucketID: Hashable, Identifiable, RawRepresentable, Sendable {
+nonisolated struct TimelineBucketID: Codable, Hashable, Identifiable, RawRepresentable, Sendable {
     let rawValue: String
 
     var id: String {
@@ -92,7 +93,7 @@ nonisolated struct TimelineBucketID: Hashable, Identifiable, RawRepresentable, S
     }
 }
 
-nonisolated struct TimelineBucketSummary: Hashable, Identifiable, Sendable {
+nonisolated struct TimelineBucketSummary: Codable, Hashable, Identifiable, Sendable {
     let id: TimelineBucketID
     let assetCount: Int
 
@@ -105,19 +106,19 @@ nonisolated struct TimelineBucketSummary: Hashable, Identifiable, Sendable {
     }
 }
 
-nonisolated enum TimelineMediaKind: Hashable, Sendable {
+nonisolated enum TimelineMediaKind: Codable, Hashable, Sendable {
     case image
     case video
     case audio
     case other
 }
 
-nonisolated struct TimelineStackSummary: Hashable, Sendable {
+nonisolated struct TimelineStackSummary: Codable, Hashable, Sendable {
     let id: String
     let assetCount: Int
 }
 
-nonisolated struct TimelineAssetSummary: Hashable, Identifiable, Sendable {
+nonisolated struct TimelineAssetSummary: Codable, Hashable, Identifiable, Sendable {
     let id: String
     let ownerID: String
     /// Absolute capture instant; use captureLocalDate for calendar/UI values.
@@ -183,7 +184,7 @@ nonisolated struct AssetDetail: Hashable, Identifiable, Sendable {
     var cachedPlace: PlaceLocation?
 }
 
-nonisolated struct TimelineCaptureDay: Hashable, Identifiable, Sendable {
+nonisolated struct TimelineCaptureDay: Codable, Hashable, Identifiable, Sendable {
     let year: Int
     let month: Int
     let day: Int

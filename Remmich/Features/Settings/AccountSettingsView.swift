@@ -2,6 +2,11 @@ import SwiftUI
 import UIKit
 
 struct AccountSettingsView: View {
+    private enum IndexSection: String, CaseIterable {
+        case timeline = "Timeline Index"
+        case albums = "Album Index"
+    }
+
     private enum SettingsPage: String {
         case home = "Profile"
         case account = "Account"
@@ -131,7 +136,9 @@ struct AccountSettingsView: View {
     @State private var showsThumbnailClearConfirmation = false
     @State private var libraryIndexClock = Date()
     @State private var profileCardSummaries: [SettingsPage: ProfileCardSummary] = [:]
+    @State private var albumIndexCardSummary: ProfileCardSummary?
     @State private var selectedPage = SettingsPage.home
+    @State private var selectedIndexSection = IndexSection.timeline
     @State private var pageHistory: [SettingsPage] = []
     @State private var cardFrames: [SettingsPage: CGRect] = [:]
     @State private var expandedCard: SettingsPage?
@@ -358,6 +365,7 @@ struct AccountSettingsView: View {
                     .index: syncCardSummary(for: .index),
                     .cache: syncCardSummary(for: .cache),
                 ]
+                albumIndexCardSummary = albumIndexSummary()
                 do { try await Task.sleep(for: .seconds(1)) } catch { return }
             }
         }
@@ -459,7 +467,10 @@ struct AccountSettingsView: View {
             .padding(.trailing, compact && page == .connection ? 32 : 0)
             .frame(maxWidth: .infinity, alignment: .leading)
             VStack(alignment: .leading, spacing: 0) {
-                if page == .index || page == .cache {
+                if page == .index {
+                    indexCardStatus("Timeline", summary: profileCardSummaries[page] ?? syncCardSummary(for: page))
+                    indexCardStatus("Albums", summary: albumIndexCardSummary ?? albumIndexSummary())
+                } else if page == .cache {
                     syncCardLabel(profileCardSummaries[page] ?? syncCardSummary(for: page))
                 } else if page == .connection {
                     animatedCardStatus(profileCardSummaries[page]?.status ?? presentation.detail)
@@ -550,6 +561,33 @@ struct AccountSettingsView: View {
         .lineLimit(1)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(summary.percentageText)\(summary.percentage == nil ? "" : "%"), \(summary.status)")
+    }
+
+    private func albumIndexSummary() -> ProfileCardSummary {
+        let index = libraryIndex.albumIndex
+        let percentage = index.albumCount > 0 ? (index.fractionCompleted * 1000).rounded(.down) / 10
+            : index.status == .upToDate ? 100.0 : nil
+        let status = switch index.status {
+        case .idle: "Waiting"
+        case .indexing: "Indexing"
+        case .paused: "Paused"
+        case .upToDate: "Up to date"
+        case .failed: "Needs attention"
+        }
+        return ProfileCardSummary(percentage: percentage, status: status)
+    }
+
+    private func indexCardStatus(_ title: String, summary: ProfileCardSummary) -> some View {
+        ViewThatFits(in: .horizontal) {
+            Text("\(title) · \(summary.percentage.map { _ in summary.percentageText + "% · " } ?? "")\(summary.status)")
+                .fixedSize()
+            Text("\(title) · \(summary.status)")
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentTransition(.opacity)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: summary.status)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: summary.percentage)
     }
 
     private func animatedCardStatus(_ text: String) -> some View {
@@ -1081,7 +1119,90 @@ struct AccountSettingsView: View {
 
     private var indexPage: some View {
         VStack(alignment: .leading, spacing: 0) {
-            sectionCaption("TIMELINE INDEX")
+            Picker("Index", selection: $selectedIndexSection) {
+                ForEach(IndexSection.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .padding(.bottom, 20)
+            if selectedIndexSection == .timeline {
+                timelineIndexPage
+            } else {
+                albumIndexPage
+            }
+        }
+    }
+
+    private var albumIndexPage: some View {
+        let index = libraryIndex.albumIndex
+        let message: String = if case let .failed(message) = index.status {
+            message
+        } else {
+            ""
+        }
+        let actionTitle = index.status == .indexing ? "Pause" : index.isPaused ? "Resume" : index.failures.isEmpty ? "Sync now" : "Retry"
+        return VStack(alignment: .leading, spacing: 10) {
+            syncHeading(albumIndexStatusPresentation, active: index.status == .indexing, diagnostics: index.diagnostics)
+                .lineLimit(1)
+                .contentTransition(.opacity)
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: index.status)
+            progressMeter(index.fractionCompleted, tint: Self.indexColor, label: "Album indexing progress",
+                          value: "\(index.indexedAlbumCount) / \(index.albumCount) albums indexed")
+                .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: index.fractionCompleted)
+            progressCaption(percentage: Self.progressPercentage(completed: index.indexedAlbumCount, total: index.albumCount),
+                            count: "\(index.indexedAlbumCount.formatted()) / \(index.albumCount.formatted()) albums indexed")
+            VStack(spacing: 0) {
+                statistic("Albums", index.albumCount.formatted())
+                statistic("Indexed albums", index.indexedAlbumCount.formatted())
+                statistic("Album items", index.membershipCount.formatted())
+                statistic("Current album", index.currentAlbum ?? "—")
+                    .lineLimit(1)
+                    .contentTransition(.opacity)
+                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: index.currentAlbum)
+                statistic("Last synced", Self.syncedDate(index.lastUpdatedAt))
+            }
+            .lineLimit(1)
+            .contentTransition(.numericText())
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: index.indexedAlbumCount)
+            Text("An asset in multiple albums is counted in each. Thumbnails use the shared cache.")
+                .font(.caption2).foregroundStyle(.secondary)
+            Text(message.isEmpty ? " " : message)
+                .font(.footnote).foregroundStyle(.red)
+                .lineLimit(2, reservesSpace: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .opacity(message.isEmpty ? 0 : 1)
+                .accessibilityHidden(message.isEmpty)
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: message)
+            summaryActionButton(actionTitle, width: 96) {
+                if index.status == .indexing {
+                    index.pause()
+                } else if index.isPaused {
+                    index.resume()
+                } else {
+                    index.start(automatic: false)
+                }
+            }
+            .contentTransition(.opacity)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: actionTitle)
+            Divider().padding(.top, 8)
+            Button { index.start(automatic: false, rebuild: true) } label: {
+                actionRow("Rebuild album index", symbol: "arrow.triangle.2.circlepath")
+            }
+            .buttonStyle(.plain).disabled(index.status == .indexing || index.isPaused)
+        }
+    }
+
+    private var albumIndexStatusPresentation: StatusPresentation {
+        switch libraryIndex.albumIndex.status {
+        case .idle: StatusPresentation(systemImage: "clock", tint: .primary, accessibilityValue: "Waiting")
+        case .indexing: StatusPresentation(systemImage: "arrow.trianglehead.2.clockwise", tint: .primary, accessibilityValue: "Indexing")
+        case .paused: StatusPresentation(systemImage: "pause.fill", tint: .primary, accessibilityValue: "Paused")
+        case .upToDate: StatusPresentation(systemImage: "checkmark.circle.fill", tint: .green, accessibilityValue: "Up to date")
+        case .failed: StatusPresentation(systemImage: "exclamationmark.triangle.fill", tint: .red, accessibilityValue: "Failed")
+        }
+    }
+
+    private var timelineIndexPage: some View {
+        VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 10) {
                 syncHeading(indexStatusPresentation, active: libraryIndex.status == .indexing,
                             diagnostics: libraryIndex.indexFailureDiagnostics)
@@ -1214,8 +1335,8 @@ struct AccountSettingsView: View {
         .font(.caption).monospacedDigit()
     }
 
-    private func summaryActionButton(_ title: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) { Text(title).font(.caption.weight(.semibold)).frame(minHeight: 28) }
+    private func summaryActionButton(_ title: String, width: CGFloat? = nil, action: @escaping () -> Void) -> some View {
+        Button(action: action) { Text(title).font(.caption.weight(.semibold)).frame(width: width).frame(minHeight: 28) }
             .buttonStyle(.glass)
             .buttonBorderShape(.capsule)
             .frame(minHeight: 44)

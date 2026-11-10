@@ -2,11 +2,12 @@ import CryptoKit
 import Foundation
 
 nonisolated enum LibraryTransferKind: String, Codable, Sendable {
-    case index, metadata, thumbnail, export
+    case index, albumIndex, metadata, thumbnail, export
 
     var lane: String {
         switch self {
         case .index: "index"
+        case .albumIndex: "albums"
         case .export: "export"
         case .metadata, .thumbnail: "cache"
         }
@@ -143,7 +144,7 @@ nonisolated struct LibraryTransferJournal: Codable, Sendable {
 
         var maximumBytes: Int64 {
             switch kind {
-            case .index: 64 * 1024 * 1024
+            case .index, .albumIndex: 64 * 1024 * 1024
             case .metadata: 4 * 1024 * 1024
             case .thumbnail: 16 * 1024 * 1024
             case .export: Int64.max
@@ -243,6 +244,13 @@ nonisolated struct LibraryTransferJournal: Codable, Sendable {
     mutating func discardStaleCacheAsset(_ assetID: String, revision: String) -> [Job] {
         guard jobs.contains(where: { $0.kind.lane == "cache" && $0.assetID == assetID && $0.sourceRevision != revision }) else { return [] }
         return remove(lane: "cache", assetID: assetID)
+    }
+
+    mutating func removeFinishedAlbums() -> [Job] {
+        let removed = jobs.filter { $0.kind == .albumIndex && ($0.state == .completed || $0.state == .failed) }
+        let ids = Set(removed.map(\.id))
+        jobs.removeAll { ids.contains($0.id) }
+        return removed
     }
 
     mutating func remove(lane: String? = nil, assetID: String? = nil) -> [Job] {
