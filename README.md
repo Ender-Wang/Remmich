@@ -41,7 +41,7 @@ For now, follow [Build and run](CONTRIBUTING.md#build-and-run) to build from sou
 - **🗺️ Places and maps:** Photon landmarks, per-country language preferences and asset maps below Info.
 - **🎬 Video:** Native playback, Picture in Picture and iOS Now Playing with titles and artwork.
 - **💾 Offline browsing:** Cached timelines, thumbnails, asset information and place names, with background sync and cache controls.
-- **📥 Downloads:** Save a quality tier to Photos → Remmich, with background transfers, progress, cancel/retry and Downloads History.
+- **📥 Downloads:** Save a quality tier to Photos → Remmich, with background transfers, pause/resume, automatic recovery, cancel/retry and history.
 - **📤 Sharing:** Share the viewed quality from the viewer or preview, retaining supported metadata and cached image compression.
 - **🔐 Accounts and connections:** Saved-account switching, separate account caches and Primary/Fallback server addresses.
 - **✨ Native appearance:** Adaptive iPhone/iPad layouts, Liquid Glass, swipe navigation and alternate app icons.
@@ -83,9 +83,9 @@ Updated **November 10, 2026**. The timeline runs from future plans at the top, t
 
 | Priority | Feature | Status | Intended outcome |
 | --- | --- | --- | --- |
-| Now · M5 | Sharing | Available | Share the viewed tier with supported metadata; Live Photos share their still. |
+| Now · M5 | Download Pause/Resume | Available | Retain manual pauses across relaunch and recover interrupted downloads automatically where supported. |
+| M5 | Sharing | Available | Share the viewed tier with supported metadata; Live Photos share their still. |
 | M5 | Download and Save to Photos | Available | Save selected quality to Photos → Remmich; background transfers, progress, cancel/retry and Downloads History. |
-| M5 follow-up | Download Pause/Resume | Planned | Pause transfers and retain that intent through backgrounding and relaunch. |
 | M6 | Real Albums | Planned | Browse server-backed owned/shared albums and open their assets in the shared viewer. Albums currently shows demo data. |
 | M7 | Library collections | Planned | Read-only Favorites, Archive, People, Places, Memories and Folders, according to server capabilities. Library collections currently use demo data; account/settings already use real data. |
 | M8 | Search and filters | Planned | Server-backed search with supported people, place, date, media and camera filters. Search currently uses demo data. |
@@ -97,7 +97,7 @@ These are the current implementation priorities, not separate committed release 
 ### Verification still open
 
 - **Sharing:** Preview metadata-only copying is device-verified. Broader formats, destinations, iPad presentation and automated test coverage still need verification.
-- **Downloads:** earlier Full-tier errors, broader format/Live Photo and background-relaunch cases still need verification. The tested panel UX, cancel/retry and Playback camera/lens display are device-accepted; new metadata fixtures have not yet run.
+- **Downloads:** earlier Full-tier errors, broader format/Live Photo and background-relaunch cases still need verification. Pause/Resume and its controls have device exercise; comprehensive interruption/relaunch coverage and new automated fixtures remain unverified. Partial-data reuse depends on iOS and server support; a download may restart when it cannot resume.
 - **Custom Photon instance:** batch caching and explicit Cache Rebuild are implemented, but the maintainer has not yet run the NAS Rebuild end to end on a physical device. Public-server demand fetching and landmark names have device acceptance. The latest Rebuild [focused CI passed](https://github.com/Ender-Wang/Remmich/actions/runs/42461148263).
 - **Release coverage:** broader devices, orientations, accessibility and network/interruption cases remain release checks. Feature implementation and the recorded device acceptance do not imply every release scenario has passed.
 
@@ -105,6 +105,12 @@ These are the current implementation priorities, not separate committed release 
 <summary><strong>Timeline details and commit references</strong></summary>
 
 ### Feature timeline
+
+#### November 10, 2026 · Download Pause/Resume and recovery
+
+Pause downloads and resume them later, retaining paused intent across relaunch. Transient interruptions retry automatically; reusable partial data is preserved where supported. Stable controls and progress remain visible, with elapsed time stopped during pauses and network waits. After a force-quit, reopen Remmich to recover downloads.
+
+[Pause/Resume and recovery](https://github.com/Ender-Wang/Remmich/commit/91fd894)
 
 #### November 10, 2026 · Sharing
 

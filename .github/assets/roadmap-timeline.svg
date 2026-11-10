@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="2444" viewBox="0 0 1000 2444" role="img" aria-labelledby="title desc">
   <title id="title">Remmich roadmap — Future, Now, then history</title>
-  <desc id="desc">Future milestones and download Pause/Resume lead down to Now: Sharing on November 10, 2026. Native Live Photo sharing is limited by the investigated Apple APIs. Download and Save to Photos and earlier achievements continue below in date order. Feature icons sit on the central connecting line.</desc>
+  <desc id="desc">Future milestones lead down to Now: Download Pause/Resume and automatic recovery on November 10, 2026. Sharing, Download and Save to Photos and earlier achievements continue below in date order. Native Live Photo sharing is limited by the investigated Apple APIs. Feature icons sit on the central connecting line.</desc>
   <style>
     .bg{fill:#f8fafc}.card{fill:#fff;stroke:#dbe3ee;stroke-width:1.5}.now{fill:#eef2ff;stroke:#818cf8;stroke-width:1.5}
     .spine{fill:none;stroke:#cbd5e1;stroke-width:3}.branch{stroke:#94a3b8;stroke-width:2}.dot{fill:#6366f1;stroke:#f8fafc;stroke-width:5}
@@ -75,16 +75,16 @@
   <text x="58" y="688" class="body">Owned/shared albums &amp; the common asset viewer</text>
 
   <path class="branch" d="M500 760H542"/><circle class="dot" cx="500" cy="760" r="17"/>
-  <use href="#export" transform="translate(488 748)" style="color:#e99455"/>
-  <rect class="planned" x="542" y="720" width="420" height="94" rx="14"/>
-  <text x="562" y="744" class="future-label">M5 FOLLOW-UP · PLANNED</text>
-  <text x="562" y="770" class="future-heading">Download Pause/Resume</text>
-  <text x="562" y="796" class="body">Retain paused transfers across background &amp; relaunch</text>
+  <use href="#download" transform="translate(488 748)" style="color:#818cf8"/>
+  <rect class="now" x="542" y="720" width="420" height="94" rx="14"/>
+  <text x="562" y="744" class="label">NOW · NOV 10, 2026</text>
+  <text x="562" y="770" class="heading">Download Pause/Resume</text>
+  <text x="562" y="796" class="body">Persistent pauses &amp; automatic interruption recovery</text>
 
   <path class="branch" d="M458 868H500"/><circle class="dot" cx="500" cy="868" r="17"/>
-  <rect class="now" x="38" y="828" width="420" height="94" rx="14"/>
+  <rect class="card" x="38" y="828" width="420" height="94" rx="14"/>
   <use href="#export" transform="translate(488 856)" style="color:#818cf8"/>
-  <text x="58" y="852" class="label">NOW · NOV 10, 2026</text>
+  <text x="58" y="852" class="date">NOV 10 · 2026</text>
   <text x="58" y="878" class="heading">Sharing</text>
   <text x="58" y="904" class="body">Viewed quality, native share sheet &amp; metadata</text>
 
