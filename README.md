@@ -51,6 +51,7 @@ You can also follow [Build and run](CONTRIBUTING.md#build-and-run) to build from
 - **💾 Offline browsing:** Cached timelines, thumbnails, asset information and place names, with background sync and cache controls.
 - **📥 Downloads:** Save a quality tier to Photos → Remmich, with background transfers, pause/resume, automatic recovery, cancel/retry and history.
 - **📤 Sharing:** Share the viewed quality from the viewer or preview, retaining supported metadata and cached image compression.
+- **🗂️ Albums:** Browse owned/shared albums with search, sort, grid/list layouts and offline indexing, using the common timeline and viewer.
 - **🔐 Accounts and connections:** Saved-account switching, separate account caches and Primary/Fallback server addresses.
 - **✨ Native appearance:** Adaptive iPhone/iPad layouts, Liquid Glass, swipe navigation and alternate app icons.
 
@@ -59,7 +60,7 @@ You can also follow [Build and run](CONTRIBUTING.md#build-and-run) to build from
 - **Live Photo sharing:** shares the still image. Native motion sharing is limited by the investigated Apple public APIs; automatic export is unavailable in this implementation, and the system picker requires another selection step. Save to Photos preserves Live Photos.
 - **Sharing:** single-asset sharing only. Shared files currently retain available GPS metadata.
 - **Offline originals:** thumbnail caching does not retain originals or playable videos; explicitly saved Photos resources can be reused when the requested quality matches.
-- **Albums, Library collections, and Search:** these destinations currently show demo data. Server-backed browsing and search are planned.
+- **Library collections and Search:** these destinations currently show demo data. Server-backed browsing and search are planned.
 - **Offline video:** saved Playback videos can load locally while the Photos resource remains accessible. Otherwise, streaming requires a reachable server.
 - **Asset locations and maps:** maps require valid asset GPS and an enabled, compatible Immich map source. Place names and translated map labels depend on the provider's available data.
 
@@ -75,7 +76,7 @@ Milestones track implementation and help set expectations for upcoming work. **M
 | M3 | ✅ Done | Shared media loading, caching, prefetching, and bounded memory use |
 | M4 | ✅ Done | Real server-backed Photos timeline |
 | M5 | ✅ Done | Timelines, viewers, preview, places/maps, Sharing and Download/Save to Photos with Pause/Resume |
-| M6 | In progress | Server-backed read-only Albums browsing |
+| M6 | Core available; refinements in progress | Server-backed read-only Albums browsing and automatic Album Index |
 | M7 | Planned | Server-backed read-only Library collections |
 | M8 | Planned | Server-backed Search with native filters |
 | M9 | Planned | Further improvements and verification for iPad, accessibility, resilience, and performance |
@@ -91,7 +92,7 @@ Updated **November 10, 2026**. The timeline runs from future plans at the top, t
 
 | Priority | Feature | Status | Intended outcome |
 | --- | --- | --- | --- |
-| Now · M6 | Real Albums | In progress | Browse server-backed owned/shared albums and open their assets in the shared viewer. Albums currently shows demo data. |
+| Now · M6 | Real Albums | In progress | Server-backed discovery and the shared viewer are implemented; device verification is next. |
 | M5 | Download Pause/Resume | Available | Retain manual pauses across relaunch and recover interrupted downloads automatically where supported. |
 | M5 | Sharing | Available | Share the viewed tier with supported metadata; Live Photos share their still. |
 | M5 | Download and Save to Photos | Available | Save selected quality to Photos → Remmich; background transfers, progress, cancel/retry and Downloads History. |
@@ -104,6 +105,7 @@ These are the current implementation priorities, not separate committed release 
 
 ### Verification still open
 
+- **Albums:** M6 source builds replace album demo data with server reads. Owned/shared access, large albums, return position and iPhone/iPad presentation await device verification. The published 0.5.0 release still has demo Albums.
 - **Sharing:** Preview metadata-only copying is device-verified. Broader formats, destinations, iPad presentation and automated test coverage still need verification.
 - **Downloads:** earlier Full-tier errors, broader format/Live Photo and background-relaunch cases still need verification. Pause/Resume controls and the restored byte-count handoff are device-verified; comprehensive interruption/relaunch coverage and new automated fixtures remain unverified. Partial-data reuse depends on iOS and server support; a download may restart when it cannot resume.
 - **Custom Photon instance:** batch caching and explicit Cache Rebuild are implemented, but the maintainer has not yet run the NAS Rebuild end to end on a physical device. Public-server demand fetching and landmark names have device acceptance. The latest Rebuild [focused CI passed](https://github.com/Ender-Wang/Remmich/actions/runs/42461148263).

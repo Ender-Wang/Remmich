@@ -72,7 +72,7 @@
   <rect class="now" x="38" y="612" width="420" height="94" rx="14"/>
   <text x="58" y="636" class="label">NOW · M6 · IN PROGRESS</text>
   <text x="58" y="662" class="future-heading">Server-backed Albums</text>
-  <text x="58" y="688" class="body">Owned/shared albums &amp; the common asset viewer</text>
+  <text x="58" y="688" class="body">Owned/shared browsing, Album Index &amp; shared viewer</text>
 
   <path class="branch" d="M500 760H542"/><circle class="dot" cx="500" cy="760" r="17"/>
   <use href="#download" transform="translate(488 748)" style="color:#818cf8"/>
