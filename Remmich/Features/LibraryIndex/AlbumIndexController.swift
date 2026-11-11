@@ -10,11 +10,15 @@ final class AlbumIndexController {
     private(set) var albumCount = 0
     private(set) var indexedAlbumCount = 0
     private(set) var membershipCount = 0
+    private(set) var totalItemCount = 0
+    private(set) var processedItemCount = 0
     private(set) var currentAlbum: String?
     private(set) var currentAlbumItemCount: Int?
     private(set) var failures: [String] = []
     private(set) var lastUpdatedAt: Date?
     private(set) var isPaused = false
+    private var startedAt: Date?
+    private var completedElapsed: TimeInterval?
     private let source: (any AlbumReading & TimelineReading)?
     private let store: any AlbumCatalogStoring
     private let transfers: LibraryTransferQueue?
@@ -48,6 +52,16 @@ final class AlbumIndexController {
         failures.isEmpty ? nil : failures.joined(separator: "\n")
     }
 
+    func elapsed(at date: Date) -> TimeInterval? {
+        startedAt.map { max(0, date.timeIntervalSince($0)) } ?? completedElapsed
+    }
+
+    func estimatedRemaining(at date: Date) -> TimeInterval? {
+        guard status == .indexing, currentAlbum != nil, processedItemCount > 0, processedItemCount < totalItemCount,
+              let elapsed = elapsed(at: date) else { return nil }
+        return elapsed * Double(totalItemCount - processedItemCount) / Double(processedItemCount)
+    }
+
     func configure(scope: MediaAccountScope) {
         guard self.scope != scope else { return }
         suspend()
@@ -55,6 +69,9 @@ final class AlbumIndexController {
         albumCount = 0
         indexedAlbumCount = 0
         membershipCount = 0
+        totalItemCount = 0
+        processedItemCount = 0
+        completedElapsed = preferences.object(forKey: elapsedKey(scope)) as? Double
         failures = []
         isPaused = preferences.bool(forKey: pauseKey(scope))
         lastUpdatedAt = preferences.object(forKey: successKey(scope)) as? Date
@@ -81,6 +98,8 @@ final class AlbumIndexController {
             albumCount = albums.count
             indexedAlbumCount = indexed
             membershipCount = memberships
+            totalItemCount = albums.reduce(0) { $0 + $1.assetCount }
+            processedItemCount = memberships
             status = isPaused ? .paused : lastUpdatedAt != nil && indexed == albums.count && groupsPrepared ? .upToDate : .idle
         } catch {
             guard self.scope == scope, generation == request else { return }
@@ -96,12 +115,16 @@ final class AlbumIndexController {
         generation &+= 1
         let request = generation
         status = .indexing
+        startedAt = .now
+        completedElapsed = nil
         failures = []
         Self.logger.info("Album index pass started rebuild=\(rebuild)")
         task = Task { [weak self] in
             guard let self else { return }
             defer {
                 if self.generation == request {
+                    self.completedElapsed = self.elapsed(at: .now)
+                    self.startedAt = nil
                     self.task = nil
                     self.currentAlbum = nil
                     self.currentAlbumItemCount = nil
@@ -116,11 +139,14 @@ final class AlbumIndexController {
                 albumCount = albums.count
                 indexedAlbumCount = 0
                 membershipCount = 0
+                totalItemCount = albums.reduce(0) { $0 + $1.assetCount }
+                processedItemCount = 0
                 for album in albums {
                     try Task.checkCancellation()
                     guard self.scope == scope, generation == request else { return }
                     currentAlbum = album.title
                     currentAlbumItemCount = album.assetCount
+                    let processedBeforeAlbum = processedItemCount
                     do {
                         let saved = try await store.albumCatalog(scope: scope, albumID: album.id)
                         let catalog: AlbumCatalog
@@ -134,7 +160,10 @@ final class AlbumIndexController {
                                 try await store.saveAlbumCatalog(catalog, scope: scope, albumID: album.id)
                             }
                         } else {
-                            let reader = AlbumTimelineReader(source: source, albumID: album.id, revision: album.catalogRevision)
+                            let reader = AlbumTimelineReader(source: source, albumID: album.id, revision: album.catalogRevision) { [weak self] count in
+                                guard let self, generation == request, self.scope == scope else { return }
+                                processedItemCount = processedBeforeAlbum + count
+                            }
                             let summaries = try await reader.bucketSummaries(query: .init())
                             let assets = await reader.completeCatalogAssets()
                             let groups = await reader.preparedGroupedCatalogs()
@@ -146,8 +175,10 @@ final class AlbumIndexController {
                         }
                         try Task.checkCancellation()
                         guard generation == request else { return }
+                        let actualCount = catalog.assetsByBucket.values.reduce(0) { $0 + $1.count }
                         indexedAlbumCount += 1
-                        membershipCount += catalog.assetsByBucket.values.reduce(0) { $0 + $1.count }
+                        membershipCount += actualCount
+                        processedItemCount = processedBeforeAlbum + actualCount
                     } catch {
                         try Task.checkCancellation()
                         guard generation == request else { return }
@@ -155,9 +186,12 @@ final class AlbumIndexController {
                     }
                 }
                 guard generation == request else { return }
+                completedElapsed = elapsed(at: .now)
+                startedAt = nil
                 if failures.isEmpty {
                     lastUpdatedAt = .now
                     preferences.set(lastUpdatedAt, forKey: successKey(scope))
+                    preferences.set(completedElapsed, forKey: elapsedKey(scope))
                     status = .upToDate
                 } else {
                     status = .failed("\(failures.count) album(s) could not be indexed.")
@@ -190,6 +224,8 @@ final class AlbumIndexController {
     }
 
     func suspend() {
+        completedElapsed = elapsed(at: .now)
+        startedAt = nil
         generation &+= 1
         task?.cancel()
         task = nil
@@ -206,6 +242,9 @@ final class AlbumIndexController {
         albumCount = 0
         indexedAlbumCount = 0
         membershipCount = 0
+        totalItemCount = 0
+        processedItemCount = 0
+        completedElapsed = nil
         failures = []
         lastUpdatedAt = nil
         isPaused = false
@@ -220,6 +259,7 @@ final class AlbumIndexController {
     func removePreferences(namespace: String) {
         preferences.removeObject(forKey: "album-index-paused-\(namespace)")
         preferences.removeObject(forKey: "album-index-success-\(namespace)")
+        preferences.removeObject(forKey: "album-index-elapsed-\(namespace)")
     }
 
     private func pauseKey(_ scope: MediaAccountScope) -> String {
@@ -228,5 +268,9 @@ final class AlbumIndexController {
 
     private func successKey(_ scope: MediaAccountScope) -> String {
         "album-index-success-\(scope.cacheNamespace)"
+    }
+
+    private func elapsedKey(_ scope: MediaAccountScope) -> String {
+        "album-index-elapsed-\(scope.cacheNamespace)"
     }
 }

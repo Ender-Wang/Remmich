@@ -996,7 +996,7 @@ struct AccountSettingsView: View {
 
     private var updatesLibraryIndexClock: Bool {
         scenePhase == .active && (
-            (selectedPage == .index && libraryIndex.status == .indexing)
+            (selectedPage == .index && (libraryIndex.status == .indexing || libraryIndex.albumIndex.status == .indexing))
                 || (selectedPage == .cache && libraryIndex.thumbnailWarmingStatus == .warming)
         )
     }
@@ -1152,18 +1152,23 @@ struct AccountSettingsView: View {
             VStack(spacing: 0) {
                 statistic("Albums", index.albumCount.formatted())
                 statistic("Indexed albums", index.indexedAlbumCount.formatted())
+                statistic("Processed album items", "\(index.processedItemCount.formatted()) / \(index.totalItemCount.formatted())")
                 statistic("Album items", index.status == .indexing ? index.currentAlbumItemCount?.formatted() ?? "—" : "—")
                     .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: index.currentAlbumItemCount)
                 statistic("Current album", index.currentAlbum ?? "—")
                     .lineLimit(1)
-                    .contentTransition(.opacity)
+                    .contentTransition(reduceMotion ? .identity : .numericText())
                     .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: index.currentAlbum)
+                statistic("Elapsed time", index.elapsed(at: libraryIndexClock).map(Self.duration) ?? "—")
+                statistic("Estimated time remaining", index.estimatedRemaining(at: libraryIndexClock).map(Self.duration) ?? "—")
                 statistic("Last synced", Self.syncedDate(index.lastUpdatedAt))
             }
             .lineLimit(1)
             .contentTransition(.numericText())
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: index.indexedAlbumCount)
-            Text("Album items shows the current album’s asset count. Thumbnails use the shared cache.")
+            Text("Asset counts are for this account. Assets in multiple albums count in each. Thumbnails use the shared cache.")
+                .font(.caption2).foregroundStyle(.secondary)
+            Text("Remaining time is estimated from processed asset memberships across all albums. Thumbnails use the shared cache.")
                 .font(.caption2).foregroundStyle(.secondary)
             Text(message.isEmpty ? " " : message)
                 .font(.footnote).foregroundStyle(.red)
@@ -1188,6 +1193,9 @@ struct AccountSettingsView: View {
                 actionRow("Rebuild album index", symbol: "arrow.triangle.2.circlepath")
             }
             .buttonStyle(.plain).disabled(index.status == .indexing || index.isPaused)
+            Text("This rebuilds album lists and local asset metadata. Offline cached files remain separate.")
+                .font(.caption).foregroundStyle(.secondary)
+                .padding(.bottom, 8)
         }
     }
 

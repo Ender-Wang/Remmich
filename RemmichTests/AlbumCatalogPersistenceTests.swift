@@ -47,11 +47,21 @@ struct AlbumCatalogPersistenceTests {
         defer { preferences.removePersistentDomain(forName: suite) }
         let controller = AlbumIndexController(source: source, store: db, transfers: nil, preferences: preferences)
         controller.configure(scope: scope)
+        #expect(controller.elapsed(at: .now) == nil)
+        #expect(controller.estimatedRemaining(at: .now) == nil)
+        #expect(controller.lastUpdatedAt == nil)
         controller.start()
         #expect(await controller.finish())
+        let elapsed = try #require(controller.elapsed(at: .now))
+        #expect(elapsed >= 0)
+        #expect(controller.elapsed(at: Date().addingTimeInterval(60)) == elapsed)
+        #expect(controller.estimatedRemaining(at: .now) == nil)
+        #expect(controller.lastUpdatedAt != nil)
         let albums = try await source.albums()
         #expect(controller.indexedAlbumCount == albums.count)
         #expect(controller.membershipCount == PreviewFixtures.albums.reduce(0) { $0 + $1.assets.count })
+        #expect(controller.totalItemCount == albums.reduce(0) { $0 + $1.assetCount })
+        #expect(controller.processedItemCount == controller.membershipCount)
         for album in albums {
             let catalog = try #require(await db.albumCatalog(scope: scope, albumID: album.id))
             #expect(catalog.groupedCatalogs != nil)
@@ -71,11 +81,30 @@ struct AlbumCatalogPersistenceTests {
         await restored.restore()
         #expect(restored.isPaused)
         #expect(restored.indexedAlbumCount == albums.count)
+        #expect(restored.elapsed(at: .now) != nil)
+        #expect(restored.lastUpdatedAt == controller.lastUpdatedAt)
+        #expect(restored.totalItemCount == controller.totalItemCount)
+        #expect(restored.processedItemCount == controller.processedItemCount)
         controller.resume()
         #expect(await controller.finish())
         controller.start(automatic: false, rebuild: true)
         #expect(await controller.finish())
         #expect(await source.bucketRequests == queries * 2)
+    }
+
+    @Test func readerReportsAssetCountsAsAlbumBucketsFinish() async throws {
+        let source = PreviewAlbumReader()
+        let albums = try await source.albums()
+        let album = try #require(albums.first { $0.assetCount > 0 })
+        var progress: [Int] = []
+        let reader = AlbumTimelineReader(source: source, albumID: album.id) { count in
+            progress.append(count)
+        }
+        let summaries = try await reader.bucketSummaries(query: .init())
+        let assets = await reader.completeCatalogAssets()
+        #expect(progress.count == summaries.count)
+        #expect(progress == progress.sorted())
+        #expect(progress.last == assets.values.reduce(0) { $0 + $1.count })
     }
 
     @Test func addingAlbumTablesPreservesAnExistingSchemaNineIndex() async throws {

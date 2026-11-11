@@ -144,15 +144,18 @@ actor AlbumTimelineReader: CompleteTimelineCatalogReading {
     private var expectedRevision: String
     private var catalog: AlbumCatalog?
     private var hasServedCatalog = false
+    private let progress: (@MainActor @Sendable (Int) -> Void)?
 
     init(source: any TimelineReading, albumID: String, revision: String = "",
-         persistence: (any AlbumCatalogStoring)? = nil, scope: MediaAccountScope? = nil)
+         persistence: (any AlbumCatalogStoring)? = nil, scope: MediaAccountScope? = nil,
+         progress: (@MainActor @Sendable (Int) -> Void)? = nil)
     {
         self.source = source
         self.albumID = albumID
         expectedRevision = revision
         self.persistence = persistence
         self.scope = scope
+        self.progress = progress
     }
 
     private func scoped(_ query: TimelineQuery) -> TimelineQuery {
@@ -186,10 +189,15 @@ actor AlbumTimelineReader: CompleteTimelineCatalogReading {
         let revision = expectedRevision
         let summaries = try await source.bucketSummaries(query: query)
         var complete: [TimelineBucketID: [TimelineAssetSummary]] = [:]
+        var processed = 0
         for summary in summaries {
             try Task.checkCancellation()
             guard request == generation else { throw CancellationError() }
             complete[summary.id] = try await source.assets(in: summary.id, query: query)
+            try Task.checkCancellation()
+            guard request == generation else { throw CancellationError() }
+            processed += complete[summary.id]?.count ?? 0
+            await progress?(processed)
         }
         try Task.checkCancellation()
         guard request == generation else { throw CancellationError() }
