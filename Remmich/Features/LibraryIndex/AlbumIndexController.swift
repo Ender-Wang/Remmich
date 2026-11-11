@@ -11,6 +11,7 @@ final class AlbumIndexController {
     private(set) var indexedAlbumCount = 0
     private(set) var membershipCount = 0
     private(set) var currentAlbum: String?
+    private(set) var currentAlbumItemCount: Int?
     private(set) var failures: [String] = []
     private(set) var lastUpdatedAt: Date?
     private(set) var isPaused = false
@@ -103,6 +104,7 @@ final class AlbumIndexController {
                 if self.generation == request {
                     self.task = nil
                     self.currentAlbum = nil
+                    self.currentAlbumItemCount = nil
                 }
             }
             do {
@@ -118,6 +120,7 @@ final class AlbumIndexController {
                     try Task.checkCancellation()
                     guard self.scope == scope, generation == request else { return }
                     currentAlbum = album.title
+                    currentAlbumItemCount = album.assetCount
                     do {
                         let saved = try await store.albumCatalog(scope: scope, albumID: album.id)
                         let catalog: AlbumCatalog
@@ -191,6 +194,7 @@ final class AlbumIndexController {
         task?.cancel()
         task = nil
         currentAlbum = nil
+        currentAlbumItemCount = nil
         if status == .indexing {
             status = isPaused ? .paused : .idle
         }

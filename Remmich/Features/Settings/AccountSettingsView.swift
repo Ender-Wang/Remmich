@@ -1152,7 +1152,8 @@ struct AccountSettingsView: View {
             VStack(spacing: 0) {
                 statistic("Albums", index.albumCount.formatted())
                 statistic("Indexed albums", index.indexedAlbumCount.formatted())
-                statistic("Album items", index.membershipCount.formatted())
+                statistic("Album items", index.status == .indexing ? index.currentAlbumItemCount?.formatted() ?? "—" : "—")
+                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: index.currentAlbumItemCount)
                 statistic("Current album", index.currentAlbum ?? "—")
                     .lineLimit(1)
                     .contentTransition(.opacity)
@@ -1162,7 +1163,7 @@ struct AccountSettingsView: View {
             .lineLimit(1)
             .contentTransition(.numericText())
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: index.indexedAlbumCount)
-            Text("An asset in multiple albums is counted in each. Thumbnails use the shared cache.")
+            Text("Album items shows the current album’s asset count. Thumbnails use the shared cache.")
                 .font(.caption2).foregroundStyle(.secondary)
             Text(message.isEmpty ? " " : message)
                 .font(.footnote).foregroundStyle(.red)
