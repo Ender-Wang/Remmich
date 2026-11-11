@@ -347,6 +347,7 @@ struct PhotosView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.dismiss) private var dismissCollection
 
     let store: PhotosTimelineStore
     let presentation: PhotosPresentationState
@@ -522,26 +523,68 @@ struct PhotosView: View {
         } message: {
             Text(memoryViewerErrorMessage ?? "The memory’s assets aren’t available.")
         }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if navigationPath.isEmpty, let collectionTitle {
+                HStack(alignment: .top, spacing: 12) {
+                    Button(action: collectionBack) {
+                        Image(systemName: "chevron.backward")
+                            .font(.title3.weight(.semibold)).frame(width: 44, height: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .glassEffect(.regular.interactive(), in: .circle)
+                    .accessibilityLabel("Back")
+                    .highPriorityGesture(LongPressGesture(minimumDuration: 0.35)
+                        .exclusively(before: TapGesture())
+                        .onEnded { result in
+                            switch result {
+                            case .first:
+                                if libraryRange != .all {
+                                    returnToRootTimeline()
+                                } else {
+                                    collectionBack()
+                                }
+                            case .second: collectionBack()
+                            }
+                        })
+                    VStack(spacing: 4) {
+                        Text(collectionTitle)
+                            .font(.headline)
+                            .lineLimit(nil)
+                            .multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if let collectionSubtitle {
+                            Text(collectionSubtitle).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 4)
+                    .accessibilityElement(children: .combine)
+                    if let collectionInfoAction {
+                        Button(action: collectionInfoAction) {
+                            Image(systemName: "info.circle").font(.title3).frame(width: 44, height: 44)
+                        }
+                        .buttonStyle(.plain)
+                        .glassEffect(.regular.interactive(), in: .circle)
+                        .accessibilityLabel("Album Details")
+                    } else {
+                        Color.clear.frame(width: 44, height: 44).accessibilityHidden(true)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(.bar)
+                .background {
+                    Color.clear.contentShape(.rect).onTapGesture {}.accessibilityHidden(true)
+                }
+                .opacity(hasInteractivePreview ? 0 : 1)
+                .allowsHitTesting(!hasInteractivePreview)
+                .accessibilityHidden(hasInteractivePreview)
+            }
+        }
+        .toolbar(collectionTitle == nil ? .automatic : navigationPath.isEmpty ? .hidden : .visible, for: .navigationBar)
         .toolbarBackground(navigationPath.isEmpty ? .hidden : .visible, for: .navigationBar)
         .toolbar {
-            if !hasInteractivePreview, navigationPath.isEmpty, let collectionTitle {
-                ToolbarItem(placement: .principal) {
-                    VStack(spacing: 2) {
-                        Text(collectionTitle).font(.headline).lineLimit(1)
-                        if let collectionSubtitle {
-                            Text(collectionSubtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                        }
-                    }
-                    .accessibilityElement(children: .combine)
-                }
-                if let collectionInfoAction {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button(action: collectionInfoAction) {
-                            Label("Album Details", systemImage: "info.circle")
-                        }
-                    }
-                }
-            }
             if !hasInteractivePreview, !navigationPath.isEmpty || libraryRange != .all {
                 ToolbarItem(placement: .topBarLeading) {
                     Button(action: navigateBack) {
@@ -1066,7 +1109,7 @@ struct PhotosView: View {
     }
 
     private var navigationTitle: String {
-        navigationPath.last?.navigationTitle ?? collectionTitle ?? ""
+        navigationPath.last?.navigationTitle ?? ""
     }
 
     private var previewOverlay: some View {
@@ -1221,6 +1264,14 @@ struct PhotosView: View {
             } else {
                 semanticRuntime.changeScale(coarser: false)
             }
+        }
+    }
+
+    private func collectionBack() {
+        if libraryRange != .all || !navigationPath.isEmpty {
+            navigateBack()
+        } else {
+            dismissCollection()
         }
     }
 

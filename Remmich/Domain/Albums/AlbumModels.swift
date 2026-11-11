@@ -114,7 +114,7 @@ nonisolated enum AlbumSort: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    private func date(in album: AlbumSummary) -> Date? {
+    func date(in album: AlbumSummary) -> Date? {
         switch self {
         case .dateModified: album.updatedAt
         case .dateCreated: album.createdAt

@@ -65,6 +65,13 @@ struct AlbumsTests {
         #expect(AlbumSort.mostRecentPhoto.sorted(values).map(\.id) == ["empty", "b", "a"])
         #expect(AlbumSort.oldestPhoto.sorted(values).map(\.id) == ["empty", "b", "a"])
         #expect(AlbumSort.allCases.map(\.rawValue) == ["Title", "Number of items", "Date modified", "Date created", "Most recent photo", "Oldest photo"])
+        #expect(AlbumSort.dateCreated.date(in: values[0]) == values[0].createdAt)
+        #expect(AlbumSort.dateModified.date(in: values[0]) == values[0].updatedAt)
+        #expect(AlbumSort.mostRecentPhoto.date(in: values[0]) == values[0].endDate)
+        #expect(AlbumSort.oldestPhoto.date(in: values[0]) == values[0].startDate)
+        #expect(AlbumSort.title.date(in: values[0]) == nil)
+        #expect(AlbumSort.itemCount.date(in: values[0]) == nil)
+        #expect(AlbumSort.mostRecentPhoto.date(in: values[2]) == nil)
     }
 
     @Test func scopedReaderPreservesOrderAndExcludesGlobalMemories() async throws {

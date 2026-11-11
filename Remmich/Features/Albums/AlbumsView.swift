@@ -103,7 +103,7 @@ struct AlbumsView: View {
                         ForEach(filtered) { album in albumLink(album, compact: true) }
                     }.padding(.horizontal)
                 } else {
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 155, maximum: 260), spacing: 16), count: columnCount),
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 155, maximum: 260), spacing: 16, alignment: .top), count: columnCount),
                               alignment: .leading, spacing: 20)
                     {
                         ForEach(sort.gridOrder(filtered, columns: columnCount)) { album in albumLink(album, compact: false) }
@@ -193,8 +193,16 @@ struct AlbumsView: View {
             .padding(.horizontal)
             .padding(.vertical, 8)
             .background {
-                TimelineMemoryGradientBackdrop(visible: true, extended: true, reduceMotion: reduceMotion)
-                    .ignoresSafeArea(edges: .top)
+                ZStack {
+                    TimelineMemoryGradientBackdrop(visible: true, extended: true, reduceMotion: reduceMotion)
+                        .ignoresSafeArea(edges: .top)
+                    // The shared blur is noninteractive. Fill the gaps behind
+                    // the controls so taps cannot reach album links below it.
+                    Color.clear
+                        .contentShape(.rect)
+                        .onTapGesture {}
+                        .accessibilityHidden(true)
+                }
             }
         }
         .toolbar(.hidden, for: .navigationBar)
@@ -211,7 +219,7 @@ struct AlbumsView: View {
     }
 
     private func albumLink(_ album: AlbumSummary, compact: Bool) -> some View {
-        NavigationLink(value: album) { AlbumCard(album: album, media: media, compact: compact, persistence: persistence, scope: accountScope) }
+        NavigationLink(value: album) { AlbumCard(album: album, media: media, compact: compact, sort: sort, persistence: persistence, scope: accountScope) }
             .buttonStyle(.plain)
             .accessibilityIdentifier("album-\(album.id)")
     }
@@ -221,6 +229,7 @@ private struct AlbumCard: View {
     let album: AlbumSummary
     let media: MediaLibraryController
     let compact: Bool
+    let sort: AlbumSort
     let persistence: (any AlbumCatalogStoring)?
     let scope: MediaAccountScope?
 
@@ -246,13 +255,22 @@ private struct AlbumCard: View {
 
     private var labels: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(album.title).font(.headline).foregroundStyle(.primary).lineLimit(2)
             HStack(spacing: 4) {
                 if album.isShared {
                     Image(systemName: "person.2.fill")
+                        .accessibilityLabel("Shared album")
                 }
-                Text(album.countLabel)
-            }.font(.subheadline).foregroundStyle(.secondary)
+                if let date = sort.date(in: album) {
+                    Text("\(album.countLabel) · \(date.formatted(.dateTime.month(.abbreviated).day().year()))")
+                } else {
+                    Text(album.countLabel)
+                }
+            }
+            .font(.caption).foregroundStyle(.secondary)
+            .lineLimit(1).minimumScaleFactor(0.85)
+            Text(album.title).font(.headline).foregroundStyle(.primary)
+                .lineLimit(2, reservesSpace: !compact)
+                .multilineTextAlignment(.leading)
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -357,7 +375,6 @@ private struct AlbumDetailView: View {
                    collectionSubtitle: detail.countLabel, collectionInfoAction: { showsDetails = true },
                    compactChromeChanged: { _ in }, tabSelectionState: tabSelectionState,
                    tabDestination: .albums, viewerPresentations: viewerPresentations, showAccount: showAccount)
-            .toolbar(.visible, for: .navigationBar)
             .sheet(isPresented: $showsDetails) {
                 NavigationStack {
                     Form {
