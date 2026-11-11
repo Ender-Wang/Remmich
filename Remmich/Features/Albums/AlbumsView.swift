@@ -263,7 +263,7 @@ private struct AlbumCard: View {
     }
 
     private var labels: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .center, spacing: 4) {
             HStack(spacing: 4) {
                 if album.isShared {
                     Image(systemName: "person.2.fill")
@@ -279,8 +279,8 @@ private struct AlbumCard: View {
             .lineLimit(1).minimumScaleFactor(0.85)
             Text(album.title).font(.headline).foregroundStyle(.primary)
                 .lineLimit(2, reservesSpace: !compact)
-                .multilineTextAlignment(.leading)
-        }.frame(maxWidth: .infinity, alignment: .leading)
+                .multilineTextAlignment(.center)
+        }.frame(maxWidth: .infinity, alignment: .center)
     }
 
     private var cover: some View {
