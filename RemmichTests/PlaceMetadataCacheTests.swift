@@ -27,9 +27,10 @@ struct PlaceCacheFixture {
                                                   city: "Server city", state: "Server state", country: "Server country"), scope: scope)
     }
 
-    func sql(_ sql: String) throws {
+    func sql(_ sql: String, scope: MediaAccountScope) async throws {
+        let files = await store.databaseFiles(scope: scope)
         var db: OpaquePointer?
-        try #require(sqlite3_open(databaseURL.path, &db) == SQLITE_OK)
+        try #require(sqlite3_open(files.cache.path, &db) == SQLITE_OK)
         defer { sqlite3_close(db) }
         try #require(sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK)
     }
@@ -168,7 +169,7 @@ struct PlaceMetadataCacheTests {
         #expect(record.expiresAt == nil)
         #expect(record.isFresh(at: later))
         // Existing successful rows with old expiry timestamps obey the new rule too.
-        try f.sql("UPDATE place_lookups SET expires_at=0 WHERE outcome='found'")
+        try await f.sql("UPDATE place_lookups SET expires_at=0 WHERE outcome='found'", scope: scope)
         let reopened = SQLiteLibraryIndexStore(databaseURL: f.databaseURL)
         #expect(try await reopened.cachedPlace(key, scope: scope)?.isFresh(at: later) == true)
         #expect(try await reopened.beginPlace(key, scope: scope, sessionID: "one", automatic: false, now: later) == nil)
@@ -197,11 +198,10 @@ struct PlaceMetadataCacheTests {
         #expect(try PlaceCacheKey.isPublicService(#require(URL(string: "https://PHOTON.KOMOOT.DE./"))))
     }
 
-    @Test func schemaSevenUpgradePreservesMetadataAndClearingMetadataRemovesPlaces() async throws {
+    @Test func reopensAccountCacheAndClearingMetadataRemovesPlaces() async throws {
         let f = try PlaceCacheFixture()
         defer { f.cleanup() }
         try await f.seed(scope: scope)
-        try f.sql("DROP TABLE asset_places; DROP TABLE place_lookups; DROP TABLE place_accounts; PRAGMA user_version=7;")
         let upgraded = SQLiteLibraryIndexStore(databaseURL: f.databaseURL)
         try await upgraded.prepare(scope: scope)
         #expect(try await upgraded.cachedAssetDetail(id: "asset", scope: scope)?.city == "Server city")
@@ -254,7 +254,7 @@ struct PlaceMetadataCacheTests {
         defer { f.cleanup() }
         try await f.seed(scope: scope)
         try await f.store.configurePlaces(scope: scope, preferences: settings, sessionID: "one")
-        try f.sql("UPDATE place_lookups SET attempts=4")
+        try await f.sql("UPDATE place_lookups SET attempts=4", scope: scope)
         let key = try #require(try await f.store.desiredPlace(assetID: "asset", scope: scope)?.key)
         _ = try #require(try await f.store.beginPlace(key, scope: scope, sessionID: "one", automatic: true, now: .now))
         try await f.store.deactivatePlaces(scope: scope, sessionID: "one")
@@ -270,7 +270,7 @@ struct PlaceMetadataCacheTests {
         let key = try #require(try await f.store.desiredPlace(assetID: "asset", scope: scope)?.key)
         let obsolete = try PlaceCacheKey(endpoint: key.endpoint, coordinate: key.coordinate, language: .english, version: 1)
         let json = try String(decoding: JSONEncoder().encode(obsolete), as: UTF8.self).replacingOccurrences(of: "'", with: "''")
-        try f.sql("UPDATE place_accounts SET selection_version=1; UPDATE place_lookups SET lookup_id='\(obsolete.id)', key_json='\(json)'; UPDATE asset_places SET lookup_id='\(obsolete.id)';")
+        try await f.sql("UPDATE place_accounts SET selection_version=1; UPDATE place_lookups SET lookup_id='\(obsolete.id)', key_json='\(json)'; UPDATE asset_places SET lookup_id='\(obsolete.id)';", scope: scope)
         try await f.store.configurePlaces(scope: scope, preferences: settings, sessionID: "two")
         #expect(try await f.store.desiredPlace(assetID: "asset", scope: scope)?.key.version == PlaceCacheKey.selectionVersion)
         #expect(try await f.store.cachedAssetDetail(id: "asset", scope: scope)?.city == "Server city")

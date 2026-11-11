@@ -413,11 +413,15 @@ final class LibraryIndexController {
             guard !Task.isCancelled, scope == nextScope, sessionRevision == revision else { return nil }
             if !hasActiveSyncWork {
                 indexPaused = savedState.isPaused
+                thumbnailWarmingLastUpdatedAt = savedState.lastCacheSyncAt
                 if indexPaused {
                     status = .paused
                 }
             }
             guard let snapshot = try await store.snapshot(scope: nextScope) else {
+                let report = try await store.storageReport(scope: nextScope)
+                guard !Task.isCancelled, scope == nextScope, sessionRevision == revision else { return nil }
+                storageReport = report
                 Self.logger.info("Library bootstrap unavailable reason=no-accepted-generation")
                 return nil
             }
@@ -425,7 +429,7 @@ final class LibraryIndexController {
             Self.logger.info(
                 "Library bootstrap snapshot loaded generation=\(snapshot.generation) assets=\(snapshot.assets.count) derivatives=\(snapshot.derivatives.count) elapsedMs=\(Self.elapsedMilliseconds(since: bootstrapStartedAt))"
             )
-            async let storageReportTask = store.storageReport(snapshot: snapshot)
+            async let storageReportTask = store.storageReport(snapshot: snapshot, scope: nextScope)
             async let thumbnailsTask = thumbnailCache.indexedThumbnails(
                 from: snapshot,
                 scope: nextScope
@@ -433,7 +437,7 @@ final class LibraryIndexController {
             async let bootstrapTask = Task.detached(priority: .userInitiated) {
                 LibraryTimelineBootstrapBuilder.buildInitial(from: snapshot)
             }.value
-            let (restoredStorageReport, thumbnails, bootstrap) = await (
+            let (restoredStorageReport, thumbnails, bootstrap) = try await (
                 storageReportTask,
                 thumbnailsTask,
                 bootstrapTask
@@ -701,6 +705,16 @@ final class LibraryIndexController {
 
     func hasManualCacheIntent(namespace: String) -> Bool {
         preferences.string(forKey: "library-transfer-cache-intent-\(namespace)") != nil
+    }
+
+    func refreshIndexStorageStatistics() async {
+        guard let expectedScope = scope else { return }
+        let revision = sessionRevision
+        guard let report = try? await store.indexStorageReport(scope: expectedScope),
+              !Task.isCancelled, scope == expectedScope, sessionRevision == revision else { return }
+        storageReport.metadataBytes = report.metadataBytes
+        storageReport.cacheMetadataBytes = report.cacheMetadataBytes
+        storageReport.featureStorage = report.featureStorage
     }
 
     /// Reconcile committed state when the visible app returns from suspension.

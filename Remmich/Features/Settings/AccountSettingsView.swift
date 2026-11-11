@@ -1123,12 +1123,18 @@ struct AccountSettingsView: View {
             }
             .pickerStyle(.segmented)
             .padding(.bottom, 20)
+            VStack(spacing: 0) {
+                statistic("Account catalog", ByteCountFormatter.string(fromByteCount: libraryIndex.storageReport.metadataBytes, countStyle: .file))
+                statistic("Shared asset catalog", libraryIndex.storageReport.featureStorage["assets"].map { ByteCountFormatter.string(fromByteCount: $0.bytes, countStyle: .file) } ?? "—")
+            }
+            .padding(.bottom, 16)
             if selectedIndexSection == .timeline {
                 timelineIndexPage
             } else {
                 albumIndexPage
             }
         }
+        .task(id: [libraryIndex.status, libraryIndex.albumIndex.status]) { await libraryIndex.refreshIndexStorageStatistics() }
     }
 
     private var albumIndexPage: some View {
@@ -1159,6 +1165,10 @@ struct AccountSettingsView: View {
                     .lineLimit(1)
                     .contentTransition(reduceMotion ? .identity : .numericText())
                     .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: index.currentAlbum)
+                statistic("Index database", index.storageStatistics.map { ByteCountFormatter.string(fromByteCount: $0.bytes, countStyle: .file) } ?? "—")
+                statistic("Estimated database storage / 10K assets", index.storageStatistics.flatMap {
+                    Self.sizePerTenThousandEstimate(bytes: $0.bytes, count: $0.assetCount)
+                }?.replacingOccurrences(of: " / 10K assets", with: "") ?? "—")
                 statistic("Elapsed time", index.elapsed(at: libraryIndexClock).map(Self.duration) ?? "—")
                 statistic("Estimated time remaining", index.estimatedRemaining(at: libraryIndexClock).map(Self.duration) ?? "—")
                 statistic("Last synced", Self.syncedDate(index.lastUpdatedAt))
@@ -1166,7 +1176,7 @@ struct AccountSettingsView: View {
             .lineLimit(1)
             .contentTransition(.numericText())
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: index.indexedAlbumCount)
-            Text("Asset counts are for this account. Assets in multiple albums count in each. Thumbnails use the shared cache.")
+            Text("Album table storage is measured after indexing, for this account only. Shared asset records are counted separately above. Assets in multiple albums count in each. Thumbnails use the shared cache.")
                 .font(.caption2).foregroundStyle(.secondary)
             Text("Remaining time is estimated from processed asset memberships across all albums. Thumbnails use the shared cache.")
                 .font(.caption2).foregroundStyle(.secondary)
@@ -1223,17 +1233,13 @@ struct AccountSettingsView: View {
                     statistic("Indexed assets", libraryIndex.indexedAssetCount.formatted())
                     statistic("Photos", libraryIndex.indexedPhotoCount.formatted())
                     statistic("Videos", libraryIndex.indexedVideoCount.formatted())
-                    statistic("Shared index database", ByteCountFormatter.string(fromByteCount: libraryIndex.storageReport.metadataBytes, countStyle: .file))
-                    if let estimate = libraryIndexDatabaseSizeEstimate {
-                        statistic("Estimated database storage / 10K assets", estimate.replacingOccurrences(of: " / 10K assets", with: ""))
-                    }
-                    if let elapsed = libraryIndex.elapsed(at: libraryIndexClock) {
-                        statistic("Elapsed time", Self.duration(elapsed))
-                    }
+                    statistic("Index database", libraryIndex.storageReport.featureStorage["timeline"].map { ByteCountFormatter.string(fromByteCount: $0.bytes, countStyle: .file) } ?? "—")
+                    statistic("Estimated database storage / 10K assets", libraryIndexDatabaseSizeEstimate?.replacingOccurrences(of: " / 10K assets", with: "") ?? "—")
+                    statistic("Elapsed time", libraryIndex.elapsed(at: libraryIndexClock).map(Self.duration) ?? "—")
                     statistic("Estimated time remaining", libraryIndex.status == .indexing ? libraryIndex.estimatedRemaining(at: libraryIndexClock).map(Self.duration) ?? "—" : "—")
                     statistic("Last synced", Self.syncedDate(libraryIndex.lastUpdatedAt))
                 }
-                Text("Database size and its per-10K estimate include all stored accounts. Asset counts and sync progress are for this account.")
+                Text("Timeline table storage is measured after syncing, for this account only. Photos and Videos share this index. Shared asset records are counted separately above; cached media is separate.")
                     .font(.caption2).foregroundStyle(.secondary)
                 if case let .failed(message) = libraryIndex.status {
                     Text(message).font(.footnote).foregroundStyle(.red).textSelection(.enabled)
@@ -1286,6 +1292,7 @@ struct AccountSettingsView: View {
                         }
                     }
                     statistic("Cached storage", ByteCountFormatter.string(fromByteCount: cacheByteCount, countStyle: .file))
+                    statistic("Cache database", ByteCountFormatter.string(fromByteCount: libraryIndex.storageReport.cacheMetadataBytes, countStyle: .file))
                     if let estimate = thumbnailCacheSizeEstimate {
                         statistic("Estimated cache storage / 10K assets", estimate.replacingOccurrences(of: " / 10K assets", with: ""))
                     }
@@ -1369,7 +1376,8 @@ struct AccountSettingsView: View {
     }
 
     private var cacheByteCount: Int64 {
-        libraryIndex.thumbnailWarmingEligibleCount > 0 ? libraryIndex.thumbnailWarmingCachedBytes : libraryIndex.storageReport.derivativeBytes
+        let mediaBytes = libraryIndex.thumbnailWarmingEligibleCount > 0 ? libraryIndex.thumbnailWarmingCachedBytes : libraryIndex.storageReport.derivativeBytes
+        return mediaBytes + libraryIndex.storageReport.cacheMetadataBytes
     }
 
     private func syncHeading(_ presentation: StatusPresentation, active: Bool, diagnostics: String?, title: String? = nil) -> some View {
@@ -1677,10 +1685,10 @@ struct AccountSettingsView: View {
     }
 
     private var libraryIndexDatabaseSizeEstimate: String? {
-        let storedAssetCount = libraryIndex.storedAccounts.reduce(0) { $0 + $1.indexedAssetCount }
+        guard let statistics = libraryIndex.storageReport.featureStorage["timeline"] else { return nil }
         return Self.sizePerTenThousandEstimate(
-            bytes: libraryIndex.storageReport.metadataBytes,
-            count: storedAssetCount
+            bytes: statistics.bytes,
+            count: statistics.assetCount
         )
     }
 

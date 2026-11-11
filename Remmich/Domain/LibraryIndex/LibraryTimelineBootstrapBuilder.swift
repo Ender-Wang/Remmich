@@ -222,7 +222,7 @@ nonisolated enum LibraryTimelineBootstrapBuilder {
     }
 }
 
-private extension LibraryIndexAssetRecord {
+extension LibraryIndexAssetRecord {
     nonisolated var timelineAssetSummary: TimelineAssetSummary {
         TimelineAssetSummary(
             id: id,

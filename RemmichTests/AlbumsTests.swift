@@ -157,7 +157,7 @@ struct AlbumsTests {
         let requests = await recorder.queries
         #expect(requests.count == 2)
         #expect(requests.allSatisfy { $0.albumID == "shared-album" && $0.order == .ascending && $0.orderBy == .createdAt })
-        #expect(requests.allSatisfy { $0.includesStacks && !$0.includesPartners })
+        #expect(requests.allSatisfy { !$0.includesStacks && !$0.includesPartners })
     }
 
     @Test func newestListRequestWinsEvenIfOlderRequestReturnsLater() async {

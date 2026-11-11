@@ -61,10 +61,15 @@ nonisolated protocol AlbumCatalogStoring: Sendable {
     func saveAlbumCatalog(_ catalog: AlbumCatalog, scope: MediaAccountScope, albumID: String) async throws
     func albumList(scope: MediaAccountScope) async throws -> [AlbumSummary]?
     func saveAlbumList(_ albums: [AlbumSummary], scope: MediaAccountScope) async throws
+    func albumStorageStatistics(scope: MediaAccountScope, refresh: Bool) async throws -> FeatureIndexStorage?
     func albumCoverRevision(scope: MediaAccountScope, albumID: String, assetID: String) async throws -> Date?
 }
 
 extension AlbumCatalogStoring {
+    nonisolated func albumStorageStatistics(scope _: MediaAccountScope, refresh _: Bool) async throws -> FeatureIndexStorage? {
+        nil
+    }
+
     nonisolated func albumCoverRevision(scope: MediaAccountScope, albumID: String, assetID: String) async throws -> Date? {
         try await albumCatalog(scope: scope, albumID: albumID)?.assetsByBucket.values
             .lazy.flatMap(\.self).first { $0.id == assetID }?.thumbnailRevision
@@ -161,7 +166,8 @@ actor AlbumTimelineReader: CompleteTimelineCatalogReading {
     private func scoped(_ query: TimelineQuery) -> TimelineQuery {
         var scoped = query
         scoped.albumID = albumID
-        scoped.includesStacks = true
+        // Index every album member, including secondary assets in a stack.
+        scoped.includesStacks = false
         scoped.includesPartners = false
         return scoped
     }
@@ -230,7 +236,7 @@ actor AlbumTimelineReader: CompleteTimelineCatalogReading {
         assetsByBucket
     }
 
-    func preparedGroupedCatalogs() -> TimelineGroupedCatalogCache? {
+    func preparedGroupedCatalogs() async -> TimelineGroupedCatalogCache? {
         catalog?.groupedCatalogs
     }
 

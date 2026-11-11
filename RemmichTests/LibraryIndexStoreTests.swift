@@ -32,13 +32,16 @@ struct LibraryIndexStoreTests {
     @Test func unsupportedSchemaRequiresResetWithoutChangingExistingData() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
+        let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        let scope = Self.scope(userID: "current")
+        let files = await store.databaseFiles(scope: scope)
+        try FileManager.default.createDirectory(at: files.catalog.deletingLastPathComponent(), withIntermediateDirectories: true)
         var handle: OpaquePointer?
-        try #require(sqlite3_open(fixture.databaseURL.path, &handle) == SQLITE_OK)
+        try #require(sqlite3_open(files.catalog.path, &handle) == SQLITE_OK)
         defer { sqlite3_close(handle) }
         try #require(sqlite3_exec(handle, "CREATE TABLE existing_data(value TEXT); INSERT INTO existing_data VALUES('kept'); PRAGMA user_version = 6", nil, nil, nil) == SQLITE_OK)
-        let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
         await #expect(throws: LibraryIndexStoreError.self) {
-            try await store.prepare(scope: Self.scope(userID: "current"))
+            try await store.prepare(scope: scope)
         }
         var statement: OpaquePointer?
         try #require(sqlite3_prepare_v2(handle, "SELECT (SELECT user_version FROM pragma_user_version), value FROM existing_data", -1, &statement, nil) == SQLITE_OK)

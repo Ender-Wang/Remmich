@@ -14,6 +14,7 @@ final class AlbumIndexController {
     private(set) var processedItemCount = 0
     private(set) var currentAlbum: String?
     private(set) var currentAlbumItemCount: Int?
+    private(set) var storageStatistics: FeatureIndexStorage?
     private(set) var failures: [String] = []
     private(set) var lastUpdatedAt: Date?
     private(set) var isPaused = false
@@ -71,6 +72,7 @@ final class AlbumIndexController {
         membershipCount = 0
         totalItemCount = 0
         processedItemCount = 0
+        storageStatistics = nil
         completedElapsed = preferences.object(forKey: elapsedKey(scope)) as? Double
         failures = []
         isPaused = preferences.bool(forKey: pauseKey(scope))
@@ -82,7 +84,16 @@ final class AlbumIndexController {
         guard let scope, task == nil else { return }
         let request = generation
         do {
-            guard let albums = try await store.albumList(scope: scope) else { return }
+            let statistics = try? await store.albumStorageStatistics(scope: scope, refresh: false)
+            guard self.scope == scope, generation == request, task == nil else { return }
+            storageStatistics = statistics
+            guard let albums = try await store.albumList(scope: scope) else {
+                lastUpdatedAt = nil
+                completedElapsed = nil
+                preferences.removeObject(forKey: successKey(scope))
+                preferences.removeObject(forKey: elapsedKey(scope))
+                return
+            }
             var indexed = 0
             var memberships = 0
             var groupsPrepared = true
@@ -186,6 +197,9 @@ final class AlbumIndexController {
                     }
                 }
                 guard generation == request else { return }
+                let statistics = try? await store.albumStorageStatistics(scope: scope, refresh: true)
+                guard generation == request else { return }
+                storageStatistics = statistics
                 completedElapsed = elapsed(at: .now)
                 startedAt = nil
                 if failures.isEmpty {
@@ -244,6 +258,7 @@ final class AlbumIndexController {
         membershipCount = 0
         totalItemCount = 0
         processedItemCount = 0
+        storageStatistics = nil
         completedElapsed = nil
         failures = []
         lastUpdatedAt = nil

@@ -186,17 +186,25 @@ nonisolated struct LibraryIndexSnapshot: Sendable {
     let syncState: LibraryIndexSyncState
 }
 
+nonisolated struct FeatureIndexStorage: Equatable, Sendable {
+    let bytes: Int64
+    let assetCount: Int
+    let measuredAt: Date
+}
+
 nonisolated struct LibraryIndexStorageReport: Equatable, Sendable {
     static let empty = Self(metadataBytes: 0, derivativeBytes: 0, derivativeCount: 0, downloadBytes: 0,
                             downloadCount: 0, originalBytes: 0, playbackBytes: 0)
 
-    let metadataBytes: Int64
+    var metadataBytes: Int64
     let derivativeBytes: Int64
     let derivativeCount: Int
     let downloadBytes: Int64
     let downloadCount: Int
     let originalBytes: Int64
     let playbackBytes: Int64
+    var cacheMetadataBytes: Int64 = 0
+    var featureStorage: [String: FeatureIndexStorage] = [:]
 }
 
 nonisolated struct StoredLibraryAccount: Equatable, Identifiable, Sendable {

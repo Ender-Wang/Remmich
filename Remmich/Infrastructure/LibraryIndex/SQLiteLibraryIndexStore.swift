@@ -1,109 +1,156 @@
 import Foundation
+import OSLog
 import SQLite3
 
 actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
-    static let currentSchemaVersion = 10
+    static let currentSchemaVersion = 1
+    static let currentCacheSchemaVersion = 1
+    private static let logger = Logger(subsystem: "io.github.ender-wang.Remmich", category: "AccountStorage")
 
-    private let databaseURL: URL
+    private let layout: AccountStorageLayout
     private var connection: SQLiteConnection?
+    private var activeNamespace: String?
+    private var removedNamespaces: Set<String> = []
 
     init(databaseURL: URL? = nil) {
         if let databaseURL {
-            self.databaseURL = databaseURL
+            layout = .init(storageDirectory: databaseURL.deletingLastPathComponent())
         } else {
             let base = FileManager.default.urls(
                 for: .applicationSupportDirectory,
                 in: .userDomainMask
             ).first ?? FileManager.default.temporaryDirectory
-            self.databaseURL = base
+            layout = .init(storageDirectory: base
                 .appending(path: "Remmich", directoryHint: .isDirectory)
-                .appending(path: "LibraryIndex", directoryHint: .isDirectory)
-                .appending(path: "library-index.sqlite3")
+                .appending(path: "LibraryIndex", directoryHint: .isDirectory))
         }
     }
 
     func prepare(scope: MediaAccountScope) async throws {
-        let database = try database()
-        try prepareSchema(database)
-        try ensureScope(scope, database: database)
+        _ = try preparedDatabase(scope: scope)
     }
 
     func loadMediaExports(scope: MediaAccountScope) throws -> MediaExportJournal {
+        guard try canRead(scope) else { return .init() }
         let db = try preparedDatabase(scope: scope)
-        guard let json = try db.scalarText("SELECT payload FROM media_exports WHERE scope=?", [.text(scope.cacheNamespace)]) else { return .init() }
+        guard let json = try db.scalarText("SELECT payload FROM main.media_exports WHERE scope=?", [.text(scope.cacheNamespace)]) else { return .init() }
         return try JSONDecoder().decode(MediaExportJournal.self, from: Data(json.utf8))
     }
 
-    func albumCatalog(scope: MediaAccountScope, albumID: String) throws -> AlbumCatalog? {
-        let db = try preparedDatabase()
-        guard let json = try db.scalarText("SELECT payload FROM album_catalogs WHERE scope=? AND album_id=?",
-                                           [.text(scope.cacheNamespace), .text(albumID)]) else { return nil }
-        return try JSONDecoder().decode(AlbumCatalog.self, from: Data(json.utf8))
+    private struct AlbumCatalogState: Codable {
+        let summaries: [TimelineBucketSummary]
+        let revision: String
+        let fetchedAt: Date
+        let groupedCatalogs: TimelineGroupedCatalogCache?
     }
 
-    func albumCoverRevision(scope: MediaAccountScope, albumID: String, assetID: String) throws -> Date? {
-        let db = try preparedDatabase()
-        let revisions = try db.query("""
-        SELECT a.updated_at FROM assets a JOIN sync_state s ON s.scope=a.scope AND s.accepted_generation=a.generation
-        WHERE a.scope=? AND a.asset_id=? AND a.tombstone=0 LIMIT 1
-        """, [.text(scope.cacheNamespace), .text(assetID)]) { $0.date(0) }
-        if let revision = revisions.first {
-            return revision
+    func albumCatalog(scope: MediaAccountScope, albumID: String) throws -> AlbumCatalog? {
+        guard try canRead(scope) else { return nil }
+        let db = try preparedDatabase(scope: scope)
+        guard let json = try db.scalarText("SELECT payload FROM album_catalogs WHERE scope=? AND album_id=?",
+                                           [.text(scope.cacheNamespace), .text(albumID)]) else { return nil }
+        let state = try Self.decode(AlbumCatalogState.self, from: json)
+        let rows = try db.query("""
+        SELECT m.bucket_key,a.payload FROM album_assets m
+        JOIN catalog_assets a ON a.scope=m.scope AND a.asset_id=m.asset_id
+        WHERE m.scope=? AND m.album_id=? ORDER BY m.bucket_key,m.position
+        """, [.text(scope.cacheNamespace), .text(albumID)]) {
+            try (TimelineBucketID(rawValue: $0.text(0)), Self.decode(TimelineAssetSummary.self, from: $0.text(1)))
         }
-        return try albumCatalog(scope: scope, albumID: albumID)?.assetsByBucket.values
-            .lazy.flatMap(\.self).first { $0.id == assetID }?.thumbnailRevision
+        var assets = Dictionary(uniqueKeysWithValues: state.summaries.map { ($0.id, [TimelineAssetSummary]()) })
+        for (bucket, asset) in rows {
+            assets[bucket, default: []].append(asset)
+        }
+        return AlbumCatalog(summaries: state.summaries, assetsByBucket: assets, revision: state.revision,
+                            fetchedAt: state.fetchedAt, groupedCatalogs: state.groupedCatalogs)
+    }
+
+    func albumCoverRevision(scope: MediaAccountScope, albumID _: String, assetID: String) throws -> Date? {
+        guard try canRead(scope) else { return nil }
+        let db = try preparedDatabase(scope: scope)
+        return try db.queryOne("SELECT revision FROM catalog_assets WHERE scope=? AND asset_id=?",
+                               [.text(scope.cacheNamespace), .text(assetID)]) { $0.date(0) }
+    }
+
+    private func saveCanonicalAsset(_ asset: TimelineAssetSummary, scope: MediaAccountScope, database: SQLiteConnection) throws {
+        try database.execute("""
+        INSERT INTO catalog_assets(scope,asset_id,payload,revision) VALUES(?,?,?,?)
+        ON CONFLICT(scope,asset_id) DO UPDATE SET payload=excluded.payload,revision=excluded.revision
+        WHERE excluded.revision >= catalog_assets.revision
+        """, [.text(scope.cacheNamespace), .text(asset.id), .text(Self.encode(asset)), .date(asset.thumbnailRevision)])
     }
 
     func saveAlbumCatalog(_ catalog: AlbumCatalog, scope: MediaAccountScope, albumID: String) throws {
-        let db = try preparedDatabase()
-        guard try db.scalarText("SELECT scope FROM scopes WHERE scope=?", [.text(scope.cacheNamespace)]) != nil else { return }
-        if let list = try albumList(scope: scope), !list.contains(where: { $0.id == albumID }) {
-            return
+        guard try canRead(scope) else { return }
+        let db = try preparedDatabase(scope: scope)
+        guard try db.scalarInt64("SELECT COUNT(*) FROM albums WHERE scope=? AND album_id=?",
+                                 [.text(scope.cacheNamespace), .text(albumID)]) == 1 else { return }
+        try db.transaction {
+            try db.execute("DELETE FROM album_assets WHERE scope=? AND album_id=?", [.text(scope.cacheNamespace), .text(albumID)])
+            for (bucket, assets) in catalog.assetsByBucket {
+                for (position, asset) in assets.enumerated() {
+                    try saveCanonicalAsset(asset, scope: scope, database: db)
+                    try db.execute("""
+                    INSERT INTO album_assets(scope,album_id,asset_id,bucket_key,position) VALUES(?,?,?,?,?)
+                    """, [.text(scope.cacheNamespace), .text(albumID), .text(asset.id), .text(bucket.rawValue), .int(position)])
+                }
+            }
+            let state = AlbumCatalogState(summaries: catalog.summaries, revision: catalog.revision,
+                                          fetchedAt: catalog.fetchedAt, groupedCatalogs: catalog.groupedCatalogs)
+            try db.execute("""
+            INSERT INTO album_catalogs(scope,album_id,payload) VALUES(?,?,?)
+            ON CONFLICT(scope,album_id) DO UPDATE SET payload=excluded.payload
+            """, [.text(scope.cacheNamespace), .text(albumID), .text(Self.encode(state))])
+            try pruneCanonicalAssets(scope: scope, database: db)
         }
-        let json = try String(decoding: JSONEncoder().encode(catalog), as: UTF8.self)
-        try db.execute("""
-        INSERT INTO album_catalogs(scope,album_id,payload) VALUES(?,?,?)
-        ON CONFLICT(scope,album_id) DO UPDATE SET payload=excluded.payload
-        """, [.text(scope.cacheNamespace), .text(albumID), .text(json)])
     }
 
     func albumList(scope: MediaAccountScope) throws -> [AlbumSummary]? {
-        let db = try preparedDatabase()
-        guard let json = try db.scalarText("SELECT payload FROM album_lists WHERE scope=?", [.text(scope.cacheNamespace)]) else { return nil }
-        return try JSONDecoder().decode([AlbumSummary].self, from: Data(json.utf8))
+        guard try canRead(scope) else { return nil }
+        let db = try preparedDatabase(scope: scope)
+        guard try db.scalarInt64("SELECT COUNT(*) FROM album_lists WHERE scope=?", [.text(scope.cacheNamespace)]) == 1 else { return nil }
+        return try db.query("SELECT payload FROM albums WHERE scope=? ORDER BY position", [.text(scope.cacheNamespace)]) {
+            try Self.decode(AlbumSummary.self, from: $0.text(0))
+        }
     }
 
     func saveAlbumList(_ albums: [AlbumSummary], scope: MediaAccountScope) throws {
-        let db = try preparedDatabase()
+        guard try canRead(scope) else { return }
+        let db = try preparedDatabase(scope: scope)
         guard try db.scalarText("SELECT scope FROM scopes WHERE scope=?", [.text(scope.cacheNamespace)]) != nil else { return }
-        let json = try String(decoding: JSONEncoder().encode(albums), as: UTF8.self)
         try db.transaction {
-            try db.execute("""
-            INSERT INTO album_lists(scope,payload) VALUES(?,?)
-            ON CONFLICT(scope) DO UPDATE SET payload=excluded.payload
-            """, [.text(scope.cacheNamespace), .text(json)])
-            let ids = Set(albums.map(\.id))
-            let saved = try db.query("SELECT album_id FROM album_catalogs WHERE scope=?", [.text(scope.cacheNamespace)]) { $0.text(0) }
-            for id in saved where !ids.contains(id) {
-                try db.execute("DELETE FROM album_catalogs WHERE scope=? AND album_id=?", [.text(scope.cacheNamespace), .text(id)])
+            try db.execute("INSERT OR IGNORE INTO album_lists(scope) VALUES(?)", [.text(scope.cacheNamespace)])
+            for (position, album) in albums.enumerated() {
+                try db.execute("""
+                INSERT INTO albums(scope,album_id,payload,position) VALUES(?,?,?,?)
+                ON CONFLICT(scope,album_id) DO UPDATE SET payload=excluded.payload,position=excluded.position
+                """, [.text(scope.cacheNamespace), .text(album.id), .text(Self.encode(album)), .int(position)])
             }
+            let ids = Set(albums.map(\.id))
+            let saved = try db.query("SELECT album_id FROM albums WHERE scope=?", [.text(scope.cacheNamespace)]) { $0.text(0) }
+            for id in saved where !ids.contains(id) {
+                try db.execute("DELETE FROM albums WHERE scope=? AND album_id=?", [.text(scope.cacheNamespace), .text(id)])
+            }
+            try pruneCanonicalAssets(scope: scope, database: db)
         }
     }
 
     func saveMediaExports(_ journal: MediaExportJournal, scope: MediaAccountScope) throws {
+        guard try canRead(scope) else { return }
         // Configuration creates the scope. A late export must not resurrect a
         // deleted account after a sign-out or Clear Local Data operation.
-        let db = try preparedDatabase()
+        let db = try preparedDatabase(scope: scope)
         guard try db.scalarInt64("SELECT COUNT(*) FROM scopes WHERE scope=?", [.text(scope.cacheNamespace)]) == 1 else {
             throw CancellationError()
         }
         let json = try String(decoding: JSONEncoder().encode(journal), as: UTF8.self)
-        try db.execute("INSERT INTO media_exports(scope,payload) VALUES(?,?) ON CONFLICT(scope) DO UPDATE SET payload=excluded.payload", [.text(scope.cacheNamespace), .text(json)])
+        try db.execute("INSERT INTO main.media_exports(scope,payload) VALUES(?,?) ON CONFLICT(scope) DO UPDATE SET payload=excluded.payload", [.text(scope.cacheNamespace), .text(json)])
     }
 
     func recordMediaReceipt(_ receipt: MediaPhotosReceipt, jobID: UUID, filename: String, byteCount: Int64 = 0, scope: MediaAccountScope) throws {
-        let db = try preparedDatabase()
-        guard let json = try db.scalarText("SELECT payload FROM media_exports WHERE scope=?", [.text(scope.cacheNamespace)]) else { throw CancellationError() }
+        guard try canRead(scope) else { return }
+        let db = try preparedDatabase(scope: scope)
+        guard let json = try db.scalarText("SELECT payload FROM main.media_exports WHERE scope=?", [.text(scope.cacheNamespace)]) else { throw CancellationError() }
         var journal = try JSONDecoder().decode(MediaExportJournal.self, from: Data(json.utf8))
         guard let index = journal.jobs.firstIndex(where: { $0.id == jobID && $0.key == receipt.key }) else { throw CancellationError() }
         journal.receipts.removeAll { $0.key == receipt.key }
@@ -327,6 +374,9 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
             [.text(scope.cacheNamespace), .int64(generation)]
         ) ?? 0)
         try database.transaction {
+            for asset in try readAssets(scope: scope, generation: generation, database: database) {
+                try saveCanonicalAsset(asset.timelineAssetSummary, scope: scope, database: database)
+            }
             try database.execute(
                 "UPDATE generations SET state = 'accepted', completed_at = ? WHERE scope = ? AND generation = ?",
                 [.date(Date()), .text(scope.cacheNamespace), .int64(generation)]
@@ -365,17 +415,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
                 "DELETE FROM generations WHERE scope = ? AND generation <> ?",
                 [.text(scope.cacheNamespace), .int64(generation)]
             )
-            try database.execute(
-                """
-                DELETE FROM asset_details
-                WHERE scope = ? AND asset_id NOT IN (
-                    SELECT asset_id FROM assets WHERE scope = ? AND generation = ? AND tombstone = 0
-                )
-                """,
-                [.text(scope.cacheNamespace), .text(scope.cacheNamespace), .int64(generation)]
-            )
-            try pruneUnusedPlaces(scope: scope, database: database)
-            try pruneUnusedDetailStrings(scope: scope, database: database)
+            try pruneCanonicalAssets(scope: scope, database: database)
         }
         return .init(
             generation: generation,
@@ -470,6 +510,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
     }
 
     func snapshot(scope: MediaAccountScope) async throws -> LibraryIndexSnapshot? {
+        guard try canRead(scope) else { return nil }
         let database = try preparedDatabase(scope: scope)
         guard let generation = try database.scalarInt64(
             "SELECT accepted_generation FROM sync_state WHERE scope = ?",
@@ -523,13 +564,17 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
             """,
             [.text(scope.cacheNamespace), .optionalDate(date)]
         )
+        if date != nil {
+            do { try refreshStorageStatistics(features: ["timeline", "assets"], scope: scope, database: database) }
+            catch { Self.logger.error("Catalog storage statistics update failed: \(error.localizedDescription, privacy: .public)") }
+        }
     }
 
     func setLastCacheSyncAt(_ date: Date?, scope: MediaAccountScope) async throws {
         let database = try preparedDatabase(scope: scope)
         try database.execute(
             """
-            INSERT INTO sync_state(scope, last_cache_sync_at) VALUES(?, ?)
+            INSERT INTO cache.cache_state(scope, last_cache_sync_at) VALUES(?, ?)
             ON CONFLICT(scope) DO UPDATE SET last_cache_sync_at = excluded.last_cache_sync_at
             """,
             [.text(scope.cacheNamespace), .optionalDate(date)]
@@ -551,12 +596,13 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
         let database = try preparedDatabase(scope: scope)
         let placeholders = Array(repeating: "?", count: kinds.count).joined(separator: ",")
         try database.execute(
-            "DELETE FROM derivatives WHERE scope = ? AND derivative IN (\(placeholders))",
+            "DELETE FROM cache.derivatives WHERE scope = ? AND derivative IN (\(placeholders))",
             [.text(scope.cacheNamespace)] + kinds.sorted { $0.rawValue < $1.rawValue }.map { .text($0.rawValue) }
         )
     }
 
     func cachedAssetDetail(id: String, scope: MediaAccountScope) async throws -> AssetDetail? {
+        guard try canRead(scope) else { return nil }
         let database = try preparedDatabase(scope: scope)
         return try database.queryOne(
             """
@@ -566,15 +612,15 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
                    details.file_size_bytes, details.iso, details.focal_length,
                    details.aperture, exposure.value, details.latitude, details.longitude,
                    city.value, state.value, country.value
-            FROM asset_details AS details
-            LEFT JOIN asset_detail_strings AS mime ON mime.id = details.mime_type_id
-            LEFT JOIN asset_detail_strings AS camera_make ON camera_make.id = details.camera_make_id
-            LEFT JOIN asset_detail_strings AS camera_model ON camera_model.id = details.camera_model_id
-            LEFT JOIN asset_detail_strings AS lens ON lens.id = details.lens_model_id
-            LEFT JOIN asset_detail_strings AS exposure ON exposure.id = details.exposure_time_id
-            LEFT JOIN asset_detail_strings AS city ON city.id = details.city_id
-            LEFT JOIN asset_detail_strings AS state ON state.id = details.state_id
-            LEFT JOIN asset_detail_strings AS country ON country.id = details.country_id
+            FROM cache.asset_details AS details
+            LEFT JOIN cache.asset_detail_strings AS mime ON mime.id = details.mime_type_id
+            LEFT JOIN cache.asset_detail_strings AS camera_make ON camera_make.id = details.camera_make_id
+            LEFT JOIN cache.asset_detail_strings AS camera_model ON camera_model.id = details.camera_model_id
+            LEFT JOIN cache.asset_detail_strings AS lens ON lens.id = details.lens_model_id
+            LEFT JOIN cache.asset_detail_strings AS exposure ON exposure.id = details.exposure_time_id
+            LEFT JOIN cache.asset_detail_strings AS city ON city.id = details.city_id
+            LEFT JOIN cache.asset_detail_strings AS state ON state.id = details.state_id
+            LEFT JOIN cache.asset_detail_strings AS country ON country.id = details.country_id
             WHERE details.scope = ? AND details.asset_id = ?
             """,
             [.text(scope.cacheNamespace), .text(id)]
@@ -595,9 +641,10 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
     }
 
     func cachedAssetDetailIDs(scope: MediaAccountScope) async throws -> Set<String> {
+        guard try canRead(scope) else { return [] }
         let database = try preparedDatabase(scope: scope)
         return try Set(database.query(
-            "SELECT asset_id FROM asset_details WHERE scope = ?",
+            "SELECT asset_id FROM cache.asset_details WHERE scope = ?",
             [.text(scope.cacheNamespace)]
         ) { row in
             row.text(0)
@@ -629,7 +676,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
             )
             try database.execute(
                 """
-                INSERT INTO asset_details(
+                INSERT INTO cache.asset_details(
                     scope, asset_id, captured_at, original_file_name, mime_type_id,
                     width, height, description, camera_make_id, camera_model_id,
                     lens_model_id, file_size_bytes, iso, focal_length, aperture,
@@ -680,7 +727,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
         let database = try preparedDatabase(scope: scope)
         try database.transaction {
             try database.execute(
-                "DELETE FROM asset_details WHERE scope = ?",
+                "DELETE FROM cache.asset_details WHERE scope = ?",
                 [.text(scope.cacheNamespace)]
             )
             try pruneUnusedPlaces(scope: scope, database: database)
@@ -696,7 +743,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
         let database = try preparedDatabase(scope: scope)
         try database.transaction {
             try database.execute(
-                "DELETE FROM derivatives WHERE scope = ? AND derivative = ?",
+                "DELETE FROM cache.derivatives WHERE scope = ? AND derivative = ?",
                 [.text(scope.cacheNamespace), .text(kind.rawValue)]
             )
             for derivative in derivatives {
@@ -710,18 +757,18 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
         let database = try preparedDatabase(scope: scope)
         let encoded = try Self.encode(preferences)
         try database.transaction {
-            let prior = try database.scalarText("SELECT preferences FROM place_accounts WHERE scope = ?", [.text(scope.cacheNamespace)])
-            let priorSession = try database.scalarText("SELECT session_id FROM place_accounts WHERE scope = ?", [.text(scope.cacheNamespace)])
-            let priorVersion = try database.scalarInt64("SELECT selection_version FROM place_accounts WHERE scope = ?", [.text(scope.cacheNamespace)])
+            let prior = try database.scalarText("SELECT preferences FROM cache.place_accounts WHERE scope = ?", [.text(scope.cacheNamespace)])
+            let priorSession = try database.scalarText("SELECT session_id FROM cache.place_accounts WHERE scope = ?", [.text(scope.cacheNamespace)])
+            let priorVersion = try database.scalarInt64("SELECT selection_version FROM cache.place_accounts WHERE scope = ?", [.text(scope.cacheNamespace)])
             try database.execute("""
-            INSERT INTO place_accounts(scope, preferences, session_id, selection_version) VALUES(?, ?, ?, ?)
+            INSERT INTO cache.place_accounts(scope, preferences, session_id, selection_version) VALUES(?, ?, ?, ?)
             ON CONFLICT(scope) DO UPDATE SET preferences=excluded.preferences, session_id=excluded.session_id, selection_version=excluded.selection_version
             """, [.text(scope.cacheNamespace), .text(encoded), .text(sessionID), .int(PlaceCacheKey.selectionVersion)])
             if priorSession != sessionID {
-                try database.execute("UPDATE place_lookups SET work_state='pending', attempts=MAX(0,attempts-1), lease=NULL WHERE scope=? AND work_state='running'", [.text(scope.cacheNamespace)])
+                try database.execute("UPDATE cache.place_lookups SET work_state='pending', attempts=MAX(0,attempts-1), lease=NULL WHERE scope=? AND work_state='running'", [.text(scope.cacheNamespace)])
             }
             if try prior.map({ try Self.decode(MapsPlacesPreferences.self, from: $0) }) != preferences || priorVersion != Int64(PlaceCacheKey.selectionVersion) {
-                let assets = try database.query("SELECT asset_id, latitude, longitude FROM asset_details WHERE scope=?", [.text(scope.cacheNamespace)]) {
+                let assets = try database.query("SELECT asset_id, latitude, longitude FROM cache.asset_details WHERE scope=?", [.text(scope.cacheNamespace)]) {
                     ($0.text(0), PlaceCoordinate(latitude: $0.optionalDouble(1), longitude: $0.optionalDouble(2)))
                 }
                 for (id, coordinate) in assets {
@@ -733,11 +780,12 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
     }
 
     func deactivatePlaces(scope: MediaAccountScope, sessionID: String) async throws {
-        let database = try preparedDatabase()
+        guard try canRead(scope) else { return }
+        let database = try preparedDatabase(scope: scope)
         try database.transaction {
-            guard try database.scalarText("SELECT session_id FROM place_accounts WHERE scope=?", [.text(scope.cacheNamespace)]) == sessionID else { return }
-            try database.execute("UPDATE place_accounts SET session_id=NULL WHERE scope=?", [.text(scope.cacheNamespace)])
-            try database.execute("UPDATE place_lookups SET work_state='pending', attempts=MAX(0,attempts-1), lease=NULL WHERE scope=? AND work_state='running'", [.text(scope.cacheNamespace)])
+            guard try database.scalarText("SELECT session_id FROM cache.place_accounts WHERE scope=?", [.text(scope.cacheNamespace)]) == sessionID else { return }
+            try database.execute("UPDATE cache.place_accounts SET session_id=NULL WHERE scope=?", [.text(scope.cacheNamespace)])
+            try database.execute("UPDATE cache.place_lookups SET work_state='pending', attempts=MAX(0,attempts-1), lease=NULL WHERE scope=? AND work_state='running'", [.text(scope.cacheNamespace)])
         }
     }
 
@@ -749,8 +797,8 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
         } else if let coordinate = PlaceCoordinate(latitude: detail.latitude, longitude: detail.longitude) {
             let database = try preparedDatabase(scope: scope)
             detail.cachedPlace = try database.queryOne("""
-            SELECT p.location_json FROM place_lookups p
-            JOIN asset_places a ON a.scope=p.scope AND a.lookup_id=p.lookup_id
+            SELECT p.location_json FROM cache.place_lookups p
+            JOIN cache.asset_places a ON a.scope=p.scope AND a.lookup_id=p.lookup_id
             WHERE a.scope=? AND a.asset_id=? AND p.latitude=? AND p.longitude=? AND p.location_json IS NOT NULL
             ORDER BY p.fetched_at DESC LIMIT 1
             """, [.text(scope.cacheNamespace), .text(id), .double(coordinate.latitude), .double(coordinate.longitude)]) {
@@ -761,26 +809,29 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
     }
 
     func desiredPlace(assetID: String, scope: MediaAccountScope) async throws -> CachedPlaceLookup? {
-        let database = try preparedDatabase()
+        guard try canRead(scope) else { return nil }
+        let database = try preparedDatabase(scope: scope)
         return try database.queryOne("""
-        SELECT \(Self.placeColumns) FROM place_lookups p
-        JOIN asset_places a ON a.scope=p.scope AND a.lookup_id=p.lookup_id
+        SELECT \(Self.placeColumns) FROM cache.place_lookups p
+        JOIN cache.asset_places a ON a.scope=p.scope AND a.lookup_id=p.lookup_id
         WHERE a.scope=? AND a.asset_id=? AND a.desired=1
         """, [.text(scope.cacheNamespace), .text(assetID)], map: Self.readPlace)
     }
 
     func cachedPlace(_ key: PlaceCacheKey, scope: MediaAccountScope) async throws -> CachedPlaceLookup? {
-        let database = try preparedDatabase()
-        return try database.queryOne("SELECT \(Self.placeColumns) FROM place_lookups p WHERE scope=? AND lookup_id=?",
+        guard try canRead(scope) else { return nil }
+        let database = try preparedDatabase(scope: scope)
+        return try database.queryOne("SELECT \(Self.placeColumns) FROM cache.place_lookups p WHERE scope=? AND lookup_id=?",
                                      [.text(scope.cacheNamespace), .text(key.id)], map: Self.readPlace)
     }
 
     func beginPlace(_ key: PlaceCacheKey, scope: MediaAccountScope, sessionID: String, automatic: Bool, now: Date) async throws -> String? {
-        let database = try preparedDatabase()
+        guard try canRead(scope) else { return nil }
+        let database = try preparedDatabase(scope: scope)
         var lease: String?
         try database.transaction {
             guard try placeIsOwned(key, scope: scope, sessionID: sessionID, database: database),
-                  let record = try database.queryOne("SELECT \(Self.placeColumns) FROM place_lookups p WHERE scope=? AND lookup_id=?",
+                  let record = try database.queryOne("SELECT \(Self.placeColumns) FROM cache.place_lookups p WHERE scope=? AND lookup_id=?",
                                                      [.text(scope.cacheNamespace), .text(key.id)], map: Self.readPlace),
                   !record.isFresh(at: now), record.work != .running,
                   !automatic || (!PlaceCacheKey.isPublicService(key.endpoint) && record.work != .onDemand),
@@ -788,7 +839,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
                   (!automatic && record.work == .onDemand) || record.attempts < 5 else { return }
             let token = UUID().uuidString
             try database.execute("""
-            UPDATE place_lookups SET work_state='running', attempts=attempts+1, lease=?
+            UPDATE cache.place_lookups SET work_state='running', attempts=attempts+1, lease=?
             WHERE scope=? AND lookup_id=?
             """, [.text(token), .text(scope.cacheNamespace), .text(key.id)])
             lease = token
@@ -800,41 +851,42 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
                      location: PlaceLocation?, error: String?, onDemandOnly: Bool,
                      retryDelay: TimeInterval?, now: Date) async throws -> Bool
     {
-        let database = try preparedDatabase()
+        guard try canRead(scope) else { return false }
+        let database = try preparedDatabase(scope: scope)
         var accepted = false
         try database.transaction {
-            guard try database.scalarText("SELECT lease FROM place_lookups WHERE scope=? AND lookup_id=?",
+            guard try database.scalarText("SELECT lease FROM cache.place_lookups WHERE scope=? AND lookup_id=?",
                                           [.text(scope.cacheNamespace), .text(key.id)]) == lease else { return }
             guard try placeIsOwned(key, scope: scope, sessionID: sessionID, database: database) else {
-                try database.execute("UPDATE place_lookups SET work_state='pending', attempts=MAX(0,attempts-1), lease=NULL WHERE scope=? AND lookup_id=? AND lease=?",
+                try database.execute("UPDATE cache.place_lookups SET work_state='pending', attempts=MAX(0,attempts-1), lease=NULL WHERE scope=? AND lookup_id=? AND lease=?",
                                      [.text(scope.cacheNamespace), .text(key.id), .text(lease)])
                 return
             }
-            let attempts = try database.scalarInt64("SELECT attempts FROM place_lookups WHERE scope=? AND lookup_id=?",
+            let attempts = try database.scalarInt64("SELECT attempts FROM cache.place_lookups WHERE scope=? AND lookup_id=?",
                                                     [.text(scope.cacheNamespace), .text(key.id)]) ?? 1
             if let error {
                 let delay = max(retryDelay ?? 0, min(86400, 60 * pow(2, Double(attempts - 1))))
                 if let location {
                     try database.execute("""
-                    UPDATE place_lookups SET location_json=?, outcome='found', fetched_at=?, expires_at=NULL
+                    UPDATE cache.place_lookups SET location_json=?, outcome='found', fetched_at=?, expires_at=NULL
                     WHERE scope=? AND lookup_id=?
                     """, [.text(Self.encode(location)), .date(now), .text(scope.cacheNamespace), .text(key.id)])
                 }
                 try database.execute("""
-                UPDATE place_lookups SET work_state=?, retry_after=?, last_error=?, lease=NULL
+                UPDATE cache.place_lookups SET work_state=?, retry_after=?, last_error=?, lease=NULL
                 WHERE scope=? AND lookup_id=?
                 """, [.text(onDemandOnly ? "onDemand" : "failed"), .date(now.addingTimeInterval(delay)), .text(error),
                       .text(scope.cacheNamespace), .text(key.id)])
             } else {
                 try database.execute("""
-                UPDATE place_lookups SET location_json=?, outcome=?, work_state='idle',
+                UPDATE cache.place_lookups SET location_json=?, outcome=?, work_state='idle',
                 fetched_at=?, expires_at=?, retry_after=NULL, last_error=NULL, attempts=0, lease=NULL
                 WHERE scope=? AND lookup_id=?
                 """, [.optionalText(location.map { try Self.encode($0) }), .text(location == nil ? "noResult" : "found"),
                       .date(now), .optionalDate(location == nil ? now.addingTimeInterval(86400) : nil),
                       .text(scope.cacheNamespace), .text(key.id)])
                 // Country discovery may select a Local variant for all sharing assets.
-                let ids = try database.query("SELECT asset_id FROM asset_places WHERE scope=? AND lookup_id=? AND desired=1",
+                let ids = try database.query("SELECT asset_id FROM cache.asset_places WHERE scope=? AND lookup_id=? AND desired=1",
                                              [.text(scope.cacheNamespace), .text(key.id)]) { $0.text(0) }
                 for id in ids {
                     try reconcilePlaceAsset(id, coordinate: key.coordinate, scope: scope, database: database)
@@ -846,23 +898,24 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
     }
 
     func cancelPlace(_ key: PlaceCacheKey, scope: MediaAccountScope, lease: String) async throws {
-        let database = try preparedDatabase()
-        try database.execute("UPDATE place_lookups SET work_state='pending', attempts=MAX(0,attempts-1), lease=NULL WHERE scope=? AND lookup_id=? AND lease=?",
+        guard try canRead(scope) else { return }
+        let database = try preparedDatabase(scope: scope)
+        try database.execute("UPDATE cache.place_lookups SET work_state='pending', attempts=MAX(0,attempts-1), lease=NULL WHERE scope=? AND lookup_id=? AND lease=?",
                              [.text(scope.cacheNamespace), .text(key.id), .text(lease)])
     }
 
     func rebuildPlaces(scope: MediaAccountScope, sessionID: String) async throws {
-        let database = try preparedDatabase()
+        let database = try preparedDatabase(scope: scope)
         try database.transaction {
-            guard try database.scalarText("SELECT session_id FROM place_accounts WHERE scope=?", [.text(scope.cacheNamespace)]) == sessionID else { return }
+            guard try database.scalarText("SELECT session_id FROM cache.place_accounts WHERE scope=?", [.text(scope.cacheNamespace)]) == sessionID else { return }
             let records = try database.query("""
-            SELECT \(Self.placeColumns) FROM place_lookups p WHERE scope=? AND work_state!='running'
-            AND EXISTS(SELECT 1 FROM asset_places a WHERE a.scope=p.scope AND a.lookup_id=p.lookup_id AND a.desired=1)
+            SELECT \(Self.placeColumns) FROM cache.place_lookups p WHERE scope=? AND work_state!='running'
+            AND EXISTS(SELECT 1 FROM cache.asset_places a WHERE a.scope=p.scope AND a.lookup_id=p.lookup_id AND a.desired=1)
             """, [.text(scope.cacheNamespace)], map: Self.readPlace)
             for record in records where !PlaceCacheKey.isPublicService(record.key.endpoint) {
                 // Keep the last usable address while refreshing; active requests already fetch fresh data.
                 try database.execute("""
-                UPDATE place_lookups SET work_state='pending', attempts=0, retry_after=NULL, last_error=NULL, lease=NULL,
+                UPDATE cache.place_lookups SET work_state='pending', attempts=0, retry_after=NULL, last_error=NULL, lease=NULL,
                     outcome=CASE WHEN location_json IS NULL THEN 'unresolved' ELSE outcome END
                 WHERE scope=? AND lookup_id=?
                 """, [.text(scope.cacheNamespace), .text(record.key.id)])
@@ -871,17 +924,17 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
     }
 
     func pendingPlaces(scope: MediaAccountScope, retryFailed: Bool, now: Date) async throws -> [CachedPlaceLookup] {
-        let database = try preparedDatabase()
+        let database = try preparedDatabase(scope: scope)
         if retryFailed {
             try database.execute("""
-                                 UPDATE place_lookups SET attempts=0, retry_after=NULL WHERE scope=? AND work_state='failed'
-                                 AND EXISTS(SELECT 1 FROM asset_places a WHERE a.scope=place_lookups.scope AND a.lookup_id=place_lookups.lookup_id AND a.desired=1)
+                                 UPDATE cache.place_lookups SET attempts=0, retry_after=NULL WHERE scope=? AND work_state='failed'
+                                 AND EXISTS(SELECT 1 FROM cache.asset_places a WHERE a.scope=cache.place_lookups.scope AND a.lookup_id=cache.place_lookups.lookup_id AND a.desired=1)
                                  """,
                                  [.text(scope.cacheNamespace)])
         }
         let records = try database.query("""
-        SELECT \(Self.placeColumns) FROM place_lookups p WHERE scope=?
-        AND EXISTS(SELECT 1 FROM asset_places a WHERE a.scope=p.scope AND a.lookup_id=p.lookup_id AND a.desired=1)
+        SELECT \(Self.placeColumns) FROM cache.place_lookups p WHERE scope=?
+        AND EXISTS(SELECT 1 FROM cache.asset_places a WHERE a.scope=p.scope AND a.lookup_id=p.lookup_id AND a.desired=1)
         AND (outcome='unresolved' OR work_state='failed'
              OR (outcome='noResult' AND (expires_at IS NULL OR expires_at <= ?))
              OR (outcome='found' AND work_state!='idle'))
@@ -893,13 +946,13 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
     }
 
     func placeProgress(scope: MediaAccountScope, now: Date) async throws -> PlaceCacheProgress {
-        let database = try preparedDatabase()
+        let database = try preparedDatabase(scope: scope)
         let records = try database.query("""
         SELECT p.outcome, p.work_state, p.expires_at, p.endpoint, p.key_json, p.attempts, p.retry_after, p.last_error,
-               (SELECT COUNT(*) FROM asset_places a WHERE a.scope=p.scope AND a.lookup_id=p.lookup_id AND a.desired=1),
-               (SELECT GROUP_CONCAT(a.asset_id) FROM asset_places a WHERE a.scope=p.scope AND a.lookup_id=p.lookup_id AND a.desired=1)
-        FROM place_lookups p WHERE scope=?
-        AND EXISTS(SELECT 1 FROM asset_places a WHERE a.scope=p.scope AND a.lookup_id=p.lookup_id AND a.desired=1)
+               (SELECT COUNT(*) FROM cache.asset_places a WHERE a.scope=p.scope AND a.lookup_id=p.lookup_id AND a.desired=1),
+               (SELECT GROUP_CONCAT(a.asset_id) FROM cache.asset_places a WHERE a.scope=p.scope AND a.lookup_id=p.lookup_id AND a.desired=1)
+        FROM cache.place_lookups p WHERE scope=?
+        AND EXISTS(SELECT 1 FROM cache.asset_places a WHERE a.scope=p.scope AND a.lookup_id=p.lookup_id AND a.desired=1)
         """, [.text(scope.cacheNamespace)]) { row in
             (row.text(0), row.text(1), row.optionalDate(2), row.text(3), row.text(4), row.int(5), row.optionalDate(6), row.optionalText(7), row.int(8), row.text(9))
         }
@@ -922,10 +975,10 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
     }
 
     func nextPlaceRetry(scope: MediaAccountScope) async throws -> Date? {
-        let database = try preparedDatabase()
+        let database = try preparedDatabase(scope: scope)
         return try database.queryOne("""
-        SELECT MIN(retry_after) FROM place_lookups p WHERE scope=? AND work_state='failed' AND attempts<5
-        AND EXISTS(SELECT 1 FROM asset_places a WHERE a.scope=p.scope AND a.lookup_id=p.lookup_id AND a.desired=1)
+        SELECT MIN(retry_after) FROM cache.place_lookups p WHERE scope=? AND work_state='failed' AND attempts<5
+        AND EXISTS(SELECT 1 FROM cache.asset_places a WHERE a.scope=p.scope AND a.lookup_id=p.lookup_id AND a.desired=1)
         """, [.text(scope.cacheNamespace)]) { $0.optionalDate(0) } ?? nil
     }
 
@@ -941,68 +994,68 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
     }
 
     private func placeIsOwned(_ key: PlaceCacheKey, scope: MediaAccountScope, sessionID: String, database: SQLiteConnection) throws -> Bool {
-        guard try database.scalarText("SELECT session_id FROM place_accounts WHERE scope=?", [.text(scope.cacheNamespace)]) == sessionID else { return false }
+        guard try database.scalarText("SELECT session_id FROM cache.place_accounts WHERE scope=?", [.text(scope.cacheNamespace)]) == sessionID else { return false }
         return try (database.scalarInt64("""
-        SELECT COUNT(*) FROM asset_places a JOIN asset_details d ON a.scope=d.scope AND a.asset_id=d.asset_id
+        SELECT COUNT(*) FROM cache.asset_places a JOIN cache.asset_details d ON a.scope=d.scope AND a.asset_id=d.asset_id
         WHERE a.scope=? AND a.lookup_id=? AND a.desired=1 AND d.latitude=? AND d.longitude=?
         """, [.text(scope.cacheNamespace), .text(key.id), .double(key.coordinate.latitude), .double(key.coordinate.longitude)]) ?? 0) > 0
     }
 
     private func reconcilePlaceAsset(_ assetID: String, coordinate: PlaceCoordinate?, scope: MediaAccountScope, database: SQLiteConnection) throws {
         let namespace = scope.cacheNamespace
-        let priorKeys = try database.query("SELECT lookup_id FROM asset_places WHERE scope=? AND asset_id=?", [.text(namespace), .text(assetID)]) { $0.text(0) }
+        let priorKeys = try database.query("SELECT lookup_id FROM cache.asset_places WHERE scope=? AND asset_id=?", [.text(namespace), .text(assetID)]) { $0.text(0) }
         // Variants remain reusable, but no association may survive a GPS change.
         if let coordinate {
             try database.execute("""
-            DELETE FROM asset_places WHERE scope=? AND asset_id=? AND lookup_id NOT IN
-            (SELECT lookup_id FROM place_lookups WHERE scope=? AND latitude=? AND longitude=?)
+            DELETE FROM cache.asset_places WHERE scope=? AND asset_id=? AND lookup_id NOT IN
+            (SELECT lookup_id FROM cache.place_lookups WHERE scope=? AND latitude=? AND longitude=?)
             """, [.text(namespace), .text(assetID), .text(namespace), .double(coordinate.latitude), .double(coordinate.longitude)])
         } else {
-            try database.execute("DELETE FROM asset_places WHERE scope=? AND asset_id=?", [.text(namespace), .text(assetID)])
+            try database.execute("DELETE FROM cache.asset_places WHERE scope=? AND asset_id=?", [.text(namespace), .text(assetID)])
             try pruneDetachedPlaces(priorKeys, scope: scope, database: database)
             return
         }
         try pruneDetachedPlaces(priorKeys, scope: scope, database: database)
         guard let coordinate,
-              let json = try database.scalarText("SELECT preferences FROM place_accounts WHERE scope=?", [.text(namespace)]) else { return }
+              let json = try database.scalarText("SELECT preferences FROM cache.place_accounts WHERE scope=?", [.text(namespace)]) else { return }
         let preferences = try Self.decode(MapsPlacesPreferences.self, from: json)
         let endpoint = try MapsPlacesPreferences.endpointURL(preferences.endpoint)
         let known = try database.queryOne("""
-        SELECT location_json FROM place_lookups WHERE scope=? AND latitude=? AND longitude=? AND endpoint=? AND location_json IS NOT NULL
+        SELECT location_json FROM cache.place_lookups WHERE scope=? AND latitude=? AND longitude=? AND endpoint=? AND location_json IS NOT NULL
         ORDER BY fetched_at DESC LIMIT 1
         """, [.text(namespace), .double(coordinate.latitude), .double(coordinate.longitude), .text(PlaceCacheKey(endpoint: endpoint, coordinate: coordinate, language: .english).endpoint.absoluteString)]) {
             try Self.decode(PlaceLocation.self, from: $0.text(0)).countryCode
         }
         let key = try PlaceCacheKey(endpoint: endpoint, coordinate: coordinate, language: preferences.language(countryCode: known ?? ""))
         try database.execute("""
-        INSERT OR IGNORE INTO place_lookups(scope,lookup_id,key_json,latitude,longitude,endpoint)
+        INSERT OR IGNORE INTO cache.place_lookups(scope,lookup_id,key_json,latitude,longitude,endpoint)
         VALUES(?,?,?,?,?,?)
         """, [.text(namespace), .text(key.id), .text(Self.encode(key)), .double(coordinate.latitude),
               .double(coordinate.longitude), .text(key.endpoint.absoluteString)])
-        try database.execute("UPDATE asset_places SET desired=0 WHERE scope=? AND asset_id=?", [.text(namespace), .text(assetID)])
+        try database.execute("UPDATE cache.asset_places SET desired=0 WHERE scope=? AND asset_id=?", [.text(namespace), .text(assetID)])
         try database.execute("""
-        INSERT INTO asset_places(scope,asset_id,lookup_id,desired) VALUES(?,?,?,1)
+        INSERT INTO cache.asset_places(scope,asset_id,lookup_id,desired) VALUES(?,?,?,1)
         ON CONFLICT(scope,asset_id,lookup_id) DO UPDATE SET desired=1
         """, [.text(namespace), .text(assetID), .text(key.id)])
     }
 
     private func pruneUnusedPlaces(scope: MediaAccountScope, database: SQLiteConnection) throws {
         try database.execute("""
-        DELETE FROM asset_places WHERE scope=? AND desired=0 AND lookup_id IN
-        (SELECT lookup_id FROM place_lookups WHERE scope=?
+        DELETE FROM cache.asset_places WHERE scope=? AND desired=0 AND lookup_id IN
+        (SELECT lookup_id FROM cache.place_lookups WHERE scope=?
          AND NOT(outcome='found' AND location_json IS NOT NULL) AND (expires_at IS NULL OR expires_at <= ?))
         """, [.text(scope.cacheNamespace), .text(scope.cacheNamespace), .date(Date())])
         try database.execute("""
-        DELETE FROM place_lookups WHERE scope=? AND NOT EXISTS(
-            SELECT 1 FROM asset_places a WHERE a.scope=place_lookups.scope AND a.lookup_id=place_lookups.lookup_id)
+        DELETE FROM cache.place_lookups WHERE scope=? AND NOT EXISTS(
+            SELECT 1 FROM cache.asset_places a WHERE a.scope=cache.place_lookups.scope AND a.lookup_id=cache.place_lookups.lookup_id)
         """, [.text(scope.cacheNamespace)])
     }
 
     private func pruneDetachedPlaces(_ keys: [String], scope: MediaAccountScope, database: SQLiteConnection) throws {
         for key in keys {
             try database.execute("""
-            DELETE FROM place_lookups WHERE scope=? AND lookup_id=? AND NOT EXISTS(
-                SELECT 1 FROM asset_places a WHERE a.scope=place_lookups.scope AND a.lookup_id=place_lookups.lookup_id)
+            DELETE FROM cache.place_lookups WHERE scope=? AND lookup_id=? AND NOT EXISTS(
+                SELECT 1 FROM cache.asset_places a WHERE a.scope=cache.place_lookups.scope AND a.lookup_id=cache.place_lookups.lookup_id)
             """, [.text(scope.cacheNamespace), .text(key)])
         }
     }
@@ -1011,7 +1064,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
         let database = try preparedDatabase(scope: scope)
         let metadataBytes = metadataFileBytes()
         // Reporting progress must not decode the entire asset/group catalog.
-        return try database.queryOne(
+        var report = try database.queryOne(
             """
             SELECT COALESCE(SUM(CASE WHEN derivative IN ('thumbnail','preview','fullSize') THEN byte_count ELSE 0 END),0),
                    COALESCE(SUM(CASE WHEN derivative IN ('thumbnail','preview','fullSize') THEN 1 ELSE 0 END),0),
@@ -1019,41 +1072,97 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
                    COALESCE(SUM(CASE WHEN derivative IN ('original','videoPlayback') THEN 1 ELSE 0 END),0),
                    COALESCE(SUM(CASE WHEN derivative = 'original' THEN byte_count ELSE 0 END),0),
                    COALESCE(SUM(CASE WHEN derivative = 'videoPlayback' THEN byte_count ELSE 0 END),0)
-            FROM derivatives WHERE scope = ?
+            FROM cache.derivatives WHERE scope = ?
             """,
             [.text(scope.cacheNamespace)]
         ) { row in
             LibraryIndexStorageReport(metadataBytes: metadataBytes, derivativeBytes: row.int64(0),
                                       derivativeCount: row.int(1), downloadBytes: row.int64(2), downloadCount: row.int(3),
                                       originalBytes: row.int64(4), playbackBytes: row.int64(5))
-        } ?? storageReport(snapshot: nil)
+        } ?? .empty
+        try addStorageStatistics(to: &report, scope: scope, database: database)
+        return report
     }
 
-    func storageReport(snapshot: LibraryIndexSnapshot) -> LibraryIndexStorageReport {
-        storageReport(snapshot: Optional(snapshot))
-    }
-
-    private func storageReport(snapshot: LibraryIndexSnapshot?) -> LibraryIndexStorageReport {
+    func storageReport(snapshot: LibraryIndexSnapshot, scope: MediaAccountScope) async throws -> LibraryIndexStorageReport {
+        let database = try preparedDatabase(scope: scope)
         let metadataBytes = metadataFileBytes()
-        return .init(
+        var report = LibraryIndexStorageReport(
             metadataBytes: metadataBytes,
-            derivativeBytes: snapshot?.derivatives
+            derivativeBytes: snapshot.derivatives
                 .filter { [.thumbnail, .preview, .fullSize].contains($0.derivative) }
-                .reduce(0) { $0 + $1.byteCount } ?? 0,
-            derivativeCount: snapshot?.derivatives
-                .filter { [.thumbnail, .preview, .fullSize].contains($0.derivative) }.count ?? 0,
-            downloadBytes: snapshot?.derivatives
+                .reduce(0) { $0 + $1.byteCount },
+            derivativeCount: snapshot.derivatives
+                .filter { [.thumbnail, .preview, .fullSize].contains($0.derivative) }.count,
+            downloadBytes: snapshot.derivatives
                 .filter { [.original, .videoPlayback].contains($0.derivative) }
-                .reduce(0) { $0 + $1.byteCount } ?? 0,
-            downloadCount: snapshot?.derivatives
-                .filter { [.original, .videoPlayback].contains($0.derivative) }.count ?? 0,
-            originalBytes: snapshot?.derivatives
+                .reduce(0) { $0 + $1.byteCount },
+            downloadCount: snapshot.derivatives
+                .filter { [.original, .videoPlayback].contains($0.derivative) }.count,
+            originalBytes: snapshot.derivatives
                 .filter { $0.derivative == .original }
-                .reduce(0) { $0 + $1.byteCount } ?? 0,
-            playbackBytes: snapshot?.derivatives
+                .reduce(0) { $0 + $1.byteCount },
+            playbackBytes: snapshot.derivatives
                 .filter { $0.derivative == .videoPlayback }
-                .reduce(0) { $0 + $1.byteCount } ?? 0
+                .reduce(0) { $0 + $1.byteCount }
         )
+        try addStorageStatistics(to: &report, scope: scope, database: database)
+        return report
+    }
+
+    private func addStorageStatistics(to report: inout LibraryIndexStorageReport, scope: MediaAccountScope, database: SQLiteConnection) throws {
+        report.cacheMetadataBytes = AccountStorageLayout.databaseBytes(layout.cache(namespace: scope.cacheNamespace))
+        for (feature, stats) in try database.query("SELECT feature,byte_count,asset_count,measured_at FROM storage_statistics", map: {
+            ($0.text(0), FeatureIndexStorage(bytes: $0.int64(1), assetCount: $0.int(2), measuredAt: $0.date(3)))
+        }) {
+            report.featureStorage[feature] = stats
+        }
+    }
+
+    func indexStorageReport(scope: MediaAccountScope) async throws -> LibraryIndexStorageReport {
+        let database = try preparedDatabase(scope: scope)
+        var report = LibraryIndexStorageReport.empty
+        report.metadataBytes = metadataFileBytes()
+        try addStorageStatistics(to: &report, scope: scope, database: database)
+        return report
+    }
+
+    func albumStorageStatistics(scope: MediaAccountScope, refresh: Bool) async throws -> FeatureIndexStorage? {
+        guard try canRead(scope) else { return nil }
+        let database = try preparedDatabase(scope: scope)
+        if refresh {
+            try refreshStorageStatistics(features: ["albums", "assets"], scope: scope, database: database)
+        }
+        return try database.queryOne("SELECT byte_count,asset_count,measured_at FROM storage_statistics WHERE feature='albums'") {
+            .init(bytes: $0.int64(0), assetCount: $0.int(1), measuredAt: $0.date(2))
+        }
+    }
+
+    private func refreshStorageStatistics(features: [String], scope: MediaAccountScope, database: SQLiteConnection) throws {
+        // Called after sync/maintenance, never from scrolling or UI rendering.
+        let tables = ["assets": ["catalog_assets"], "timeline": ["assets", "grouped_catalogs", "generations", "sync_state"],
+                      "albums": ["albums", "album_lists", "album_catalogs", "album_assets"]]
+        for feature in features {
+            guard let names = tables[feature] else { continue }
+            let placeholders = Array(repeating: "?", count: names.count).joined(separator: ",")
+            let bytes = try database.scalarInt64("""
+            SELECT COALESCE(SUM(d.pgsize),0) FROM dbstat d JOIN main.sqlite_schema s ON d.name=s.name
+            WHERE s.tbl_name IN (\(placeholders))
+            """, names.map { .text($0) }) ?? 0
+            let count: Int64 = switch feature {
+            case "albums": try database.scalarInt64("SELECT COUNT(*) FROM album_assets WHERE scope=?", [.text(scope.cacheNamespace)]) ?? 0
+            case "assets": try database.scalarInt64("SELECT COUNT(*) FROM catalog_assets WHERE scope=?", [.text(scope.cacheNamespace)]) ?? 0
+            default: try database.scalarInt64("""
+                SELECT COUNT(*) FROM assets a JOIN sync_state s ON s.scope=a.scope AND s.accepted_generation=a.generation
+                WHERE a.scope=? AND a.tombstone=0
+                """, [.text(scope.cacheNamespace)]) ?? 0
+            }
+            try database.execute("""
+            INSERT INTO storage_statistics(feature,byte_count,asset_count,measured_at) VALUES(?,?,?,?)
+            ON CONFLICT(feature) DO UPDATE SET byte_count=excluded.byte_count,asset_count=excluded.asset_count,measured_at=excluded.measured_at
+            """, [.text(feature), .int64(bytes), .int64(count), .date(.now)])
+            Self.logger.info("Account catalog statistics updated feature=\(feature, privacy: .public) bytes=\(bytes) assets=\(count) account=\(String(scope.cacheNamespace.prefix(8)), privacy: .public)")
+        }
     }
 
     private func upsert(
@@ -1063,7 +1172,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
     ) throws {
         try database.execute(
             """
-            INSERT INTO derivatives(
+            INSERT INTO cache.derivatives(
                 scope, asset_id, derivative, pixel_width, pixel_height,
                 source_revision, relative_file_key, byte_count, digest,
                 is_verified, last_accessed_at, completed_at
@@ -1090,9 +1199,15 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
     }
 
     func storedAccounts() async throws -> [StoredLibraryAccount] {
-        let database = try database()
-        try prepareSchema(database)
-        return try database.query(
+        var accounts: [StoredLibraryAccount] = []
+        for namespace in try layout.namespaces() where !removedNamespaces.contains(namespace) {
+            accounts += try storedAccounts(database: database(namespace: namespace))
+        }
+        return accounts.sorted { $0.createdAt > $1.createdAt }
+    }
+
+    private func storedAccounts(database: SQLiteConnection) throws -> [StoredLibraryAccount] {
+        try database.query(
             """
             SELECT scopes.scope, scopes.server_identity, scopes.user_id,
                    COALESCE((
@@ -1105,37 +1220,37 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
                          AND assets.tombstone = 0
                    ), 0),
                    COALESCE((
-                       SELECT SUM(byte_count) FROM derivatives
-                       WHERE derivatives.scope = scopes.scope
+                       SELECT SUM(byte_count) FROM cache.derivatives
+                       WHERE cache.derivatives.scope = scopes.scope
                    ), 0),
                    COALESCE((
-                       SELECT COUNT(*) FROM derivatives
-                       WHERE derivatives.scope = scopes.scope
+                       SELECT COUNT(*) FROM cache.derivatives
+                       WHERE cache.derivatives.scope = scopes.scope
                    ), 0),
                    scopes.created_at,
                    state.expected_asset_count, COALESCE(state.is_paused, 0),
-                   (SELECT COUNT(DISTINCT d.asset_id) FROM derivatives AS d
+                   (SELECT COUNT(DISTINCT d.asset_id) FROM cache.derivatives AS d
                     WHERE d.scope = scopes.scope AND d.derivative = 'thumbnail' AND d.is_verified = 1
                       AND EXISTS (SELECT 1 FROM assets AS a WHERE a.scope = d.scope AND a.asset_id = d.asset_id
                                   AND a.generation = state.accepted_generation AND a.tombstone = 0
                                   AND d.source_revision = strftime('%Y-%m-%dT%H:%M:%SZ', a.updated_at, 'unixepoch'))),
-                   (SELECT COUNT(*) FROM asset_details AS m
+                   (SELECT COUNT(*) FROM cache.asset_details AS m
                     WHERE m.scope = scopes.scope
                       AND EXISTS (SELECT 1 FROM assets AS a WHERE a.scope = m.scope AND a.asset_id = m.asset_id
                                   AND a.generation = state.accepted_generation AND a.tombstone = 0)),
-                   (SELECT COUNT(*) FROM asset_details AS m
+                   (SELECT COUNT(*) FROM cache.asset_details AS m
                     WHERE m.scope = scopes.scope
                       AND EXISTS (SELECT 1 FROM assets AS a WHERE a.scope = m.scope AND a.asset_id = m.asset_id
                                   AND a.generation = state.accepted_generation AND a.tombstone = 0
-                                  AND EXISTS (SELECT 1 FROM derivatives AS d WHERE d.scope = a.scope AND d.asset_id = a.asset_id
+                                  AND EXISTS (SELECT 1 FROM cache.derivatives AS d WHERE d.scope = a.scope AND d.asset_id = a.asset_id
                                               AND d.derivative = 'thumbnail' AND d.is_verified = 1
                                               AND d.source_revision = strftime('%Y-%m-%dT%H:%M:%SZ', a.updated_at, 'unixepoch')))),
-                   COALESCE((SELECT SUM(d.byte_count) FROM derivatives AS d
+                   COALESCE((SELECT SUM(d.byte_count) FROM cache.derivatives AS d
                     WHERE d.scope = scopes.scope AND d.derivative = 'thumbnail' AND d.is_verified = 1
                       AND EXISTS (SELECT 1 FROM assets AS a WHERE a.scope = d.scope AND a.asset_id = d.asset_id
                                   AND a.generation = state.accepted_generation AND a.tombstone = 0
                                   AND d.source_revision = strftime('%Y-%m-%dT%H:%M:%SZ', a.updated_at, 'unixepoch'))), 0),
-                   state.last_index_sync_at, state.last_cache_sync_at,
+                   state.last_index_sync_at, (SELECT last_cache_sync_at FROM cache.cache_state c WHERE c.scope=scopes.scope),
                    scopes.account_name, scopes.account_email
             FROM scopes
             LEFT JOIN sync_state AS state ON state.scope = scopes.scope
@@ -1161,48 +1276,43 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
     }
 
     func removeAccount(namespace: String) async throws {
-        let database = try database()
-        try prepareSchema(database)
-        try database.transaction {
-            for table in [
-                "album_catalogs", "album_lists",
-                "media_exports", "asset_places", "place_lookups", "place_accounts", "account_endpoint_aliases", "asset_details", "asset_detail_strings", "derivatives", "grouped_catalogs",
-                "assets", "generations", "sync_state", "scopes",
-            ] {
-                try database.execute(
-                    "DELETE FROM \(table) WHERE scope = ?",
-                    [.text(namespace)]
-                )
-            }
+        guard AccountStorageLayout.isValidNamespace(namespace) else { throw CancellationError() }
+        removedNamespaces.insert(namespace)
+        if activeNamespace == namespace {
+            connection = nil
+            activeNamespace = nil
         }
-        try database.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        try database.execute("VACUUM")
-        try database.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        let directory = layout.directory(namespace: namespace)
+        if FileManager.default.fileExists(atPath: directory.path) {
+            try FileManager.default.removeItem(at: directory)
+        }
     }
 
     func schemaVersion() async throws -> Int {
-        let database = try database()
-        try prepareSchema(database)
-        return try Int(database.scalarInt64("PRAGMA user_version") ?? 0)
+        guard let activeNamespace else { return Self.currentSchemaVersion }
+        return try Int(database(namespace: activeNamespace).scalarInt64("PRAGMA user_version") ?? 0)
     }
 
     /// Call only after successful authentication at the incoming endpoint.
     /// An unrelated endpoint or user ID cannot select another account's scope.
     func sessionReusingRetainedAccount(_ authenticated: AccountSession) async throws -> AccountSession {
-        let database = try database()
-        try prepareSchema(database)
         let endpoint = MediaAccountScope.canonicalServerIdentity(authenticated.apiURL)
-        let exact = try database.queryOne(
-            "SELECT server_identity FROM scopes WHERE server_identity = ? AND user_id = ?",
-            [.text(endpoint), .text(authenticated.userID)]
-        ) { $0.text(0) }
-        let aliases = try database.query(
-            """
-            SELECT DISTINCT scopes.server_identity FROM account_endpoint_aliases aliases
-            JOIN scopes ON scopes.scope = aliases.scope
-            WHERE aliases.endpoint = ? AND scopes.user_id = ?
-            """, [.text(endpoint), .text(authenticated.userID)]
-        ) { $0.text(0) }
+        var exact: String?
+        var aliases: Set<String> = []
+        for namespace in try layout.namespaces() where !removedNamespaces.contains(namespace) {
+            let database = try database(namespace: namespace)
+            exact = try database.queryOne(
+                "SELECT server_identity FROM scopes WHERE server_identity = ? AND user_id = ?",
+                [.text(endpoint), .text(authenticated.userID)]
+            ) { $0.text(0) } ?? exact
+            try aliases.formUnion(database.query(
+                """
+                SELECT DISTINCT scopes.server_identity FROM account_endpoint_aliases aliases
+                JOIN scopes ON scopes.scope = aliases.scope
+                WHERE aliases.endpoint = ? AND scopes.user_id = ?
+                """, [.text(endpoint), .text(authenticated.userID)]
+            ) { $0.text(0) })
+        }
         var session = authenticated
         let identity = exact ?? (aliases.count == 1 ? aliases.first : nil)
         session.cacheServerIdentity = identity == endpoint ? nil : identity
@@ -1212,6 +1322,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
     /// The caller has authenticated this endpoint as the current session's user.
     func recordVerifiedEndpoint(_ endpoint: URL, session: AccountSession) async throws {
         let scope = MediaAccountScope(session: session)
+        removedNamespaces.remove(scope.cacheNamespace)
         let database = try preparedDatabase(scope: scope)
         try database.execute(
             "INSERT OR IGNORE INTO account_endpoint_aliases(scope, endpoint) VALUES(?, ?)",
@@ -1223,6 +1334,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
     /// Only an authenticated/restored session supplies these values, never email matching.
     func recordAccountIdentity(_ session: AccountSession) async throws {
         let scope = MediaAccountScope(session: session)
+        removedNamespaces.remove(scope.cacheNamespace)
         let database = try preparedDatabase(scope: scope)
         try database.execute(
             "UPDATE scopes SET account_name = ?, account_email = ? WHERE scope = ?",
@@ -1230,66 +1342,50 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
         )
     }
 
+    private func canRead(_ scope: MediaAccountScope) throws -> Bool {
+        !removedNamespaces.contains(scope.cacheNamespace)
+            && FileManager.default.fileExists(atPath: layout.catalog(namespace: scope.cacheNamespace).path)
+    }
+
     private func preparedDatabase(scope: MediaAccountScope) throws -> SQLiteConnection {
-        let database = try preparedDatabase()
+        guard !removedNamespaces.contains(scope.cacheNamespace) else { throw CancellationError() }
+        let database = try database(namespace: scope.cacheNamespace)
         try ensureScope(scope, database: database)
         return database
     }
 
-    private func preparedDatabase() throws -> SQLiteConnection {
-        let database = try database()
-        try prepareSchema(database)
-        return database
-    }
-
     private func metadataFileBytes() -> Int64 {
-        [databaseURL, URL(fileURLWithPath: databaseURL.path + "-wal")]
-            .reduce(Int64(0)) { total, url in
-                let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
-                return total + ((attributes?[.size] as? NSNumber)?.int64Value ?? 0)
-            }
+        activeNamespace.map { AccountStorageLayout.databaseBytes(layout.catalog(namespace: $0)) } ?? 0
     }
 
-    private func database() throws -> SQLiteConnection {
-        if let connection {
+    func databaseFiles(scope: MediaAccountScope) -> (catalog: URL, cache: URL) {
+        (layout.catalog(namespace: scope.cacheNamespace), layout.cache(namespace: scope.cacheNamespace))
+    }
+
+    private func database(namespace: String) throws -> SQLiteConnection {
+        guard AccountStorageLayout.isValidNamespace(namespace), !removedNamespaces.contains(namespace) else {
+            throw CancellationError()
+        }
+        if activeNamespace == namespace, let connection {
             return connection
         }
-        try FileManager.default.createDirectory(
-            at: databaseURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        let opened = try SQLiteConnection(url: databaseURL)
+        connection = nil
+        activeNamespace = nil
+        try FileManager.default.createDirectory(at: layout.directory(namespace: namespace), withIntermediateDirectories: true)
+        let opened = try SQLiteConnection(url: layout.catalog(namespace: namespace))
+        try opened.execute("ATTACH DATABASE ? AS cache", [.text(layout.cache(namespace: namespace).path)])
+        try opened.execute("PRAGMA cache.journal_mode = WAL")
+        try opened.execute("PRAGMA cache.synchronous = NORMAL")
+        try prepareSchema(opened)
+        try prepareCacheSchema(opened)
         connection = opened
+        activeNamespace = namespace
         return opened
     }
 
     private func prepareSchema(_ database: SQLiteConnection) throws {
         let version = try Int(database.scalarInt64("PRAGMA user_version") ?? 0)
         if version == Self.currentSchemaVersion {
-            return
-        }
-        if version == 9 {
-            try database.transaction {
-                try createAlbumSchema(database)
-                try database.execute("PRAGMA user_version = \(Self.currentSchemaVersion)")
-            }
-            return
-        }
-        if version == 8 {
-            try database.transaction {
-                try createMediaExportSchema(database)
-                try createAlbumSchema(database)
-                try database.execute("PRAGMA user_version = \(Self.currentSchemaVersion)")
-            }
-            return
-        }
-        if version == 7 {
-            try database.transaction {
-                try createPlaceSchema(database)
-                try createMediaExportSchema(database)
-                try createAlbumSchema(database)
-                try database.execute("PRAGMA user_version = \(Self.currentSchemaVersion)")
-            }
             return
         }
         guard version == 0 else {
@@ -1379,12 +1475,43 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
                 is_paused INTEGER NOT NULL DEFAULT 0,
                 expected_asset_count INTEGER,
                 last_error TEXT,
-                last_index_sync_at REAL,
+                last_index_sync_at REAL
+            )
+            """)
+            try database.execute("""
+            CREATE TABLE IF NOT EXISTS account_endpoint_aliases(
+                scope TEXT NOT NULL,
+                endpoint TEXT NOT NULL,
+                PRIMARY KEY(scope, endpoint),
+                FOREIGN KEY(scope) REFERENCES scopes(scope) ON DELETE CASCADE
+            )
+            """)
+            try createAlbumSchema(database)
+            try createMediaExportSchema(database)
+            try database.execute("PRAGMA user_version = \(Self.currentSchemaVersion)")
+        }
+    }
+
+    private func prepareCacheSchema(_ database: SQLiteConnection) throws {
+        let version = try Int(database.scalarInt64("PRAGMA cache.user_version") ?? 0)
+        guard version != Self.currentCacheSchemaVersion else { return }
+        guard version == 0 else { throw LibraryIndexStoreError.unsupportedSchema(version) }
+        try database.transaction {
+            try database.execute("""
+            CREATE TABLE cache.scopes(
+                scope TEXT PRIMARY KEY, server_identity TEXT NOT NULL,
+                user_id TEXT NOT NULL, created_at REAL NOT NULL,
+                account_name TEXT, account_email TEXT
+            )
+            """)
+            try database.execute("""
+            CREATE TABLE cache.cache_state(
+                scope TEXT PRIMARY KEY REFERENCES scopes(scope) ON DELETE CASCADE,
                 last_cache_sync_at REAL
             )
             """)
             try database.execute("""
-            CREATE TABLE IF NOT EXISTS derivatives(
+            CREATE TABLE IF NOT EXISTS cache.derivatives(
                 scope TEXT NOT NULL,
                 asset_id TEXT NOT NULL,
                 derivative TEXT NOT NULL,
@@ -1401,7 +1528,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
             )
             """)
             try database.execute("""
-            CREATE TABLE IF NOT EXISTS asset_detail_strings(
+            CREATE TABLE IF NOT EXISTS cache.asset_detail_strings(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 scope TEXT NOT NULL,
                 kind TEXT NOT NULL,
@@ -1411,7 +1538,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
             )
             """)
             try database.execute("""
-            CREATE TABLE IF NOT EXISTS asset_details(
+            CREATE TABLE IF NOT EXISTS cache.asset_details(
                 scope TEXT NOT NULL,
                 asset_id TEXT NOT NULL,
                 captured_at REAL NOT NULL,
@@ -1447,47 +1574,67 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
             )
             """)
             try database.execute(
-                "CREATE INDEX IF NOT EXISTS asset_details_scope_cached ON asset_details(scope, cached_at)"
+                "CREATE INDEX IF NOT EXISTS cache.asset_details_scope_cached ON asset_details(scope, cached_at)"
             )
-            try database.execute("""
-            CREATE TABLE IF NOT EXISTS account_endpoint_aliases(
-                scope TEXT NOT NULL,
-                endpoint TEXT NOT NULL,
-                PRIMARY KEY(scope, endpoint),
-                FOREIGN KEY(scope) REFERENCES scopes(scope) ON DELETE CASCADE
-            )
-            """)
             try createPlaceSchema(database)
-            try createMediaExportSchema(database)
-            try createAlbumSchema(database)
-            try database.execute("PRAGMA user_version = \(Self.currentSchemaVersion)")
+            try database.execute("PRAGMA cache.user_version = \(Self.currentCacheSchemaVersion)")
         }
     }
 
     private func createAlbumSchema(_ database: SQLiteConnection) throws {
         try database.execute("""
-        CREATE TABLE IF NOT EXISTS album_catalogs(
+        CREATE TABLE catalog_assets(
             scope TEXT NOT NULL REFERENCES scopes(scope) ON DELETE CASCADE,
-            album_id TEXT NOT NULL, payload TEXT NOT NULL,
+            asset_id TEXT NOT NULL, payload TEXT NOT NULL, revision REAL NOT NULL,
+            PRIMARY KEY(scope,asset_id)
+        )
+        """)
+        try database.execute("""
+        CREATE TABLE albums(
+            scope TEXT NOT NULL REFERENCES scopes(scope) ON DELETE CASCADE,
+            album_id TEXT NOT NULL,payload TEXT NOT NULL,position INTEGER NOT NULL,
             PRIMARY KEY(scope,album_id)
         )
         """)
-        try database.execute("CREATE TABLE IF NOT EXISTS album_lists(scope TEXT PRIMARY KEY REFERENCES scopes(scope) ON DELETE CASCADE,payload TEXT NOT NULL)")
+        try database.execute("CREATE TABLE album_lists(scope TEXT PRIMARY KEY REFERENCES scopes(scope) ON DELETE CASCADE)")
+        try database.execute("""
+        CREATE TABLE album_catalogs(
+            scope TEXT NOT NULL,album_id TEXT NOT NULL,payload TEXT NOT NULL,
+            PRIMARY KEY(scope,album_id),
+            FOREIGN KEY(scope,album_id) REFERENCES albums(scope,album_id) ON DELETE CASCADE
+        )
+        """)
+        try database.execute("""
+        CREATE TABLE album_assets(
+            scope TEXT NOT NULL,album_id TEXT NOT NULL,asset_id TEXT NOT NULL,
+            bucket_key TEXT NOT NULL,position INTEGER NOT NULL,
+            PRIMARY KEY(scope,album_id,asset_id),
+            FOREIGN KEY(scope,album_id) REFERENCES albums(scope,album_id) ON DELETE CASCADE,
+            FOREIGN KEY(scope,asset_id) REFERENCES catalog_assets(scope,asset_id)
+        )
+        """)
+        try database.execute("CREATE INDEX album_assets_asset ON album_assets(scope,asset_id)")
+        try database.execute("""
+        CREATE TABLE storage_statistics(
+            feature TEXT PRIMARY KEY,byte_count INTEGER NOT NULL,
+            asset_count INTEGER NOT NULL,measured_at REAL NOT NULL
+        )
+        """)
     }
 
     private func createMediaExportSchema(_ database: SQLiteConnection) throws {
-        try database.execute("CREATE TABLE IF NOT EXISTS media_exports(scope TEXT PRIMARY KEY REFERENCES scopes(scope) ON DELETE CASCADE, payload TEXT NOT NULL)")
+        try database.execute("CREATE TABLE IF NOT EXISTS main.media_exports(scope TEXT PRIMARY KEY REFERENCES scopes(scope) ON DELETE CASCADE, payload TEXT NOT NULL)")
     }
 
     private func createPlaceSchema(_ database: SQLiteConnection) throws {
         try database.execute("""
-        CREATE TABLE IF NOT EXISTS place_accounts(
+        CREATE TABLE IF NOT EXISTS cache.place_accounts(
             scope TEXT PRIMARY KEY REFERENCES scopes(scope) ON DELETE CASCADE,
             preferences TEXT NOT NULL, session_id TEXT, selection_version INTEGER NOT NULL
         )
         """)
         try database.execute("""
-        CREATE TABLE IF NOT EXISTS place_lookups(
+        CREATE TABLE IF NOT EXISTS cache.place_lookups(
             scope TEXT NOT NULL REFERENCES scopes(scope) ON DELETE CASCADE,
             lookup_id TEXT NOT NULL, key_json TEXT NOT NULL,
             latitude REAL NOT NULL, longitude REAL NOT NULL, endpoint TEXT NOT NULL,
@@ -1498,7 +1645,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
         )
         """)
         try database.execute("""
-        CREATE TABLE IF NOT EXISTS asset_places(
+        CREATE TABLE IF NOT EXISTS cache.asset_places(
             scope TEXT NOT NULL, asset_id TEXT NOT NULL, lookup_id TEXT NOT NULL,
             desired INTEGER NOT NULL DEFAULT 1,
             PRIMARY KEY(scope, asset_id, lookup_id),
@@ -1506,10 +1653,10 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
             FOREIGN KEY(scope, lookup_id) REFERENCES place_lookups(scope, lookup_id) ON DELETE CASCADE
         )
         """)
-        try database.execute("CREATE UNIQUE INDEX IF NOT EXISTS asset_places_desired ON asset_places(scope, asset_id) WHERE desired = 1")
-        try database.execute("CREATE INDEX IF NOT EXISTS asset_places_lookup ON asset_places(scope, lookup_id, desired)")
-        try database.execute("CREATE INDEX IF NOT EXISTS place_work ON place_lookups(scope, work_state, retry_after)")
-        try database.execute("CREATE INDEX IF NOT EXISTS place_coordinates ON place_lookups(scope, latitude, longitude, endpoint, fetched_at)")
+        try database.execute("CREATE UNIQUE INDEX IF NOT EXISTS cache.asset_places_desired ON asset_places(scope, asset_id) WHERE desired = 1")
+        try database.execute("CREATE INDEX IF NOT EXISTS cache.asset_places_lookup ON asset_places(scope, lookup_id, desired)")
+        try database.execute("CREATE INDEX IF NOT EXISTS cache.place_work ON place_lookups(scope, work_state, retry_after)")
+        try database.execute("CREATE INDEX IF NOT EXISTS cache.place_coordinates ON place_lookups(scope, latitude, longitude, endpoint, fetched_at)")
     }
 
     private func ensureScope(_ scope: MediaAccountScope, database: SQLiteConnection) throws {
@@ -1527,6 +1674,24 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
             "INSERT OR IGNORE INTO sync_state(scope, is_paused) VALUES(?, 0)",
             [.text(scope.cacheNamespace)]
         )
+        try database.execute("""
+        INSERT OR IGNORE INTO cache.scopes(scope,server_identity,user_id,created_at)
+        VALUES(?,?,?,?)
+        """, [.text(scope.cacheNamespace), .text(scope.serverIdentity), .text(scope.userID), .date(.now)])
+        try database.execute("INSERT OR IGNORE INTO cache.cache_state(scope) VALUES(?)", [.text(scope.cacheNamespace)])
+    }
+
+    private func pruneCanonicalAssets(scope: MediaAccountScope, database: SQLiteConnection) throws {
+        // Membership ownership, not timeline visibility, determines lifetime.
+        // New collection tables must join this policy before they are shipped.
+        try database.execute("""
+        DELETE FROM catalog_assets WHERE scope=?
+          AND NOT EXISTS(SELECT 1 FROM album_assets m
+                         WHERE m.scope=catalog_assets.scope AND m.asset_id=catalog_assets.asset_id)
+          AND NOT EXISTS(SELECT 1 FROM assets a JOIN sync_state s
+                         ON s.scope=a.scope AND s.accepted_generation=a.generation
+                         WHERE a.scope=catalog_assets.scope AND a.asset_id=catalog_assets.asset_id AND a.tombstone=0)
+        """, [.text(scope.cacheNamespace)])
     }
 
     private func requireBuildingGeneration(
@@ -1553,11 +1718,11 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
               !value.isEmpty
         else { return nil }
         try database.execute(
-            "INSERT OR IGNORE INTO asset_detail_strings(scope, kind, value) VALUES(?, ?, ?)",
+            "INSERT OR IGNORE INTO cache.asset_detail_strings(scope, kind, value) VALUES(?, ?, ?)",
             [.text(scope.cacheNamespace), .text(kind), .text(value)]
         )
         return try database.scalarInt64(
-            "SELECT id FROM asset_detail_strings WHERE scope = ? AND kind = ? AND value = ?",
+            "SELECT id FROM cache.asset_detail_strings WHERE scope = ? AND kind = ? AND value = ?",
             [.text(scope.cacheNamespace), .text(kind), .text(value)]
         )
     }
@@ -1568,16 +1733,16 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
     ) throws {
         try database.execute(
             """
-            DELETE FROM asset_detail_strings
+            DELETE FROM cache.asset_detail_strings
             WHERE scope = ? AND id NOT IN (
-                SELECT mime_type_id FROM asset_details WHERE scope = ?
-                UNION SELECT camera_make_id FROM asset_details WHERE scope = ?
-                UNION SELECT camera_model_id FROM asset_details WHERE scope = ?
-                UNION SELECT lens_model_id FROM asset_details WHERE scope = ?
-                UNION SELECT exposure_time_id FROM asset_details WHERE scope = ?
-                UNION SELECT city_id FROM asset_details WHERE scope = ?
-                UNION SELECT state_id FROM asset_details WHERE scope = ?
-                UNION SELECT country_id FROM asset_details WHERE scope = ?
+                SELECT mime_type_id FROM cache.asset_details WHERE scope = ?
+                UNION SELECT camera_make_id FROM cache.asset_details WHERE scope = ?
+                UNION SELECT camera_model_id FROM cache.asset_details WHERE scope = ?
+                UNION SELECT lens_model_id FROM cache.asset_details WHERE scope = ?
+                UNION SELECT exposure_time_id FROM cache.asset_details WHERE scope = ?
+                UNION SELECT city_id FROM cache.asset_details WHERE scope = ?
+                UNION SELECT state_id FROM cache.asset_details WHERE scope = ?
+                UNION SELECT country_id FROM cache.asset_details WHERE scope = ?
             )
             """,
             Array(repeating: .text(scope.cacheNamespace), count: 9)
@@ -1654,7 +1819,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
             SELECT asset_id, derivative, pixel_width, pixel_height, source_revision,
                    relative_file_key, byte_count, digest, is_verified,
                    last_accessed_at, completed_at
-            FROM derivatives WHERE scope = ?
+            FROM cache.derivatives WHERE scope = ?
             ORDER BY asset_id, derivative, pixel_width, pixel_height
             """,
             [.text(scope.cacheNamespace)]
@@ -1682,7 +1847,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
                    is_paused, expected_asset_count, last_error,
                    (SELECT COUNT(*) FROM assets
                     WHERE scope = ? AND generation = sync_state.accepted_generation AND tombstone = 0),
-                   last_index_sync_at, last_cache_sync_at
+                   last_index_sync_at, (SELECT last_cache_sync_at FROM cache.cache_state c WHERE c.scope=sync_state.scope)
             FROM sync_state WHERE scope = ?
             """,
             [.text(scope.cacheNamespace), .text(scope.cacheNamespace)]

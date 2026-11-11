@@ -78,7 +78,7 @@ struct LibraryCacheStatisticsTests {
         #expect(live.downloadBytes == 1400)
         #expect(live.downloadCount == 2)
         let snapshot = try #require(try await store.snapshot(scope: scope))
-        let restored = await store.storageReport(snapshot: snapshot)
+        let restored = try await store.storageReport(snapshot: snapshot, scope: scope)
         #expect(live.derivativeBytes == restored.derivativeBytes)
         #expect(live.downloadBytes == restored.downloadBytes)
         try await store.upsert(derivatives: [record(.thumbnail, bytes: 350)], scope: scope)

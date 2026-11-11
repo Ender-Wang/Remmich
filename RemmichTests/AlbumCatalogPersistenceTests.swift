@@ -89,6 +89,10 @@ struct AlbumCatalogPersistenceTests {
         #expect(await controller.finish())
         controller.start(automatic: false, rebuild: true)
         #expect(await controller.finish())
+        for album in albums {
+            let rebuilt = try #require(await db.albumCatalog(scope: scope, albumID: album.id))
+            #expect(rebuilt.groupedCatalogs != nil)
+        }
         #expect(await source.bucketRequests == queries * 2)
     }
 
@@ -102,31 +106,36 @@ struct AlbumCatalogPersistenceTests {
         }
         let summaries = try await reader.bucketSummaries(query: .init())
         let assets = await reader.completeCatalogAssets()
+        let concreteGroups = try #require(await reader.preparedGroupedCatalogs())
+        let completeReader: any CompleteTimelineCatalogReading = reader
+        let protocolGroups = try #require(await completeReader.preparedGroupedCatalogs())
+        #expect(!concreteGroups.catalog(for: .day).entries.isEmpty)
+        #expect(concreteGroups.catalog(for: .day).entries.map(\.stableKey) == protocolGroups.catalog(for: .day).entries.map(\.stableKey))
         #expect(progress.count == summaries.count)
         #expect(progress == progress.sorted())
         #expect(progress.last == assets.values.reduce(0) { $0 + $1.count })
     }
 
-    @Test func addingAlbumTablesPreservesAnExistingSchemaNineIndex() async throws {
+    @Test func catalogAndCacheHaveIndependentSchemas() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let url = directory.appending(path: "index.sqlite3")
-        let initial = SQLiteLibraryIndexStore(databaseURL: url)
+        let store = SQLiteLibraryIndexStore(databaseURL: directory.appending(path: "old.sqlite3"))
         let scope = MediaAccountScope(session: .fixture)
-        try await initial.prepare(scope: scope)
-        var handle: OpaquePointer?
-        try #require(sqlite3_open(url.path, &handle) == SQLITE_OK)
-        defer { sqlite3_close(handle) }
-        let sql = "CREATE TABLE album_upgrade_probe(value TEXT); INSERT INTO album_upgrade_probe VALUES('kept'); DROP TABLE album_catalogs; DROP TABLE album_lists; PRAGMA user_version=9;"
-        try #require(sqlite3_exec(handle, sql, nil, nil, nil) == SQLITE_OK)
-        let upgraded = SQLiteLibraryIndexStore(databaseURL: url)
-        #expect(try await upgraded.schemaVersion() == SQLiteLibraryIndexStore.currentSchemaVersion)
-        var statement: OpaquePointer?
-        try #require(sqlite3_prepare_v2(handle, "SELECT value FROM album_upgrade_probe", -1, &statement, nil) == SQLITE_OK)
-        defer { sqlite3_finalize(statement) }
-        #expect(sqlite3_step(statement) == SQLITE_ROW)
-        #expect(String(cString: sqlite3_column_text(statement, 0)) == "kept")
-        #expect(try await upgraded.albumList(scope: scope) == nil)
+        try await store.prepare(scope: scope)
+        let files = await store.databaseFiles(scope: scope)
+        #expect(files.catalog != files.cache)
+        for (url, count) in [(files.catalog, 0), (files.cache, 3)] {
+            var handle: OpaquePointer?
+            try #require(sqlite3_open(url.path, &handle) == SQLITE_OK)
+            defer { sqlite3_close(handle) }
+            var statement: OpaquePointer?
+            let sql = "SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name IN ('derivatives','asset_details','place_lookups')"
+            try #require(sqlite3_prepare_v2(handle, sql, -1, &statement, nil) == SQLITE_OK)
+            defer { sqlite3_finalize(statement) }
+            #expect(sqlite3_step(statement) == SQLITE_ROW)
+            #expect(sqlite3_column_int(statement, 0) == count)
+        }
+        #expect(try await store.albumList(scope: scope) == nil)
     }
 
     @Test func reopensCompleteCatalogWithoutNetworkAndDeletesItWithAccountData() async throws {
