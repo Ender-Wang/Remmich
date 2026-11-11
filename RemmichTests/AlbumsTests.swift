@@ -7,24 +7,48 @@ import Testing
 struct AlbumsTests {
     @Test func headerResizeDoesNotMasqueradeAsAReverseScroll() {
         var tracker = PhotosChromeTracker()
-        let start = AlbumScrollGeometry(offset: 100, topInset: 171, viewportHeight: 620, contentHeight: 2000)
-        let scrolled = AlbumScrollGeometry(offset: 160, topInset: 171, viewportHeight: 620, contentHeight: 2000)
+        let start = AlbumScrollGeometry(offset: 160, topInset: 171, viewportHeight: 620, contentHeight: 2000)
+        let scrolled = AlbumScrollGeometry(offset: 100, topInset: 171, viewportHeight: 620, contentHeight: 2000)
         let delta = scrolled.scrollDelta(from: start)
         #expect(delta == -60)
-        #expect(tracker.update(offsetDelta: delta ?? 0, bottomGap: scrolled.offset,
+        #expect(tracker.update(offsetDelta: delta ?? 0, bottomGap: scrolled.bottomGap,
                                userScrolling: true, programmaticJump: false) == true)
         // The capture reports a -60-point rebase as the viewport grows.
-        let resizing = AlbumScrollGeometry(offset: 100, topInset: 171, viewportHeight: 624, contentHeight: 2000)
+        let resizing = AlbumScrollGeometry(offset: 40, topInset: 171, viewportHeight: 624, contentHeight: 2000)
         #expect(resizing.scrollDelta(from: scrolled) == nil)
         tracker.scrollingEnded()
         #expect(tracker.isCompact)
-        let settled = AlbumScrollGeometry(offset: 100, topInset: 117, viewportHeight: 674, contentHeight: 2000)
+        let settled = AlbumScrollGeometry(offset: 40, topInset: 117, viewportHeight: 674, contentHeight: 2000)
         #expect(settled.scrollDelta(from: resizing) == nil)
-        let reversed = AlbumScrollGeometry(offset: 40, topInset: 117, viewportHeight: 674, contentHeight: 2000)
-        #expect(tracker.update(offsetDelta: reversed.scrollDelta(from: settled) ?? 0, bottomGap: reversed.offset,
+        let reversed = AlbumScrollGeometry(offset: 100, topInset: 117, viewportHeight: 674, contentHeight: 2000)
+        #expect(tracker.update(offsetDelta: reversed.scrollDelta(from: settled) ?? 0, bottomGap: reversed.bottomGap,
                                userScrolling: true, programmaticJump: false) == false)
         let remeasured = AlbumScrollGeometry(offset: 10, topInset: 117, viewportHeight: 674, contentHeight: 1900)
         #expect(remeasured.scrollDelta(from: reversed) == nil)
+    }
+
+    @Test func bottomBounceCannotToggleAlbumHeader() {
+        var tracker = PhotosChromeTracker()
+        let bottom = AlbumScrollGeometry(offset: 1520, topInset: 100, viewportHeight: 600, contentHeight: 2000, bottomInset: 20)
+        let bounced = AlbumScrollGeometry(offset: 1582, topInset: 100, viewportHeight: 600, contentHeight: 2000, bottomInset: 20)
+        #expect(bottom.bottomGap == 0)
+        #expect(bounced.bottomGap == 0)
+        #expect(tracker.update(offsetDelta: bounced.scrollDelta(from: bottom) ?? 0, bottomGap: bounced.bottomGap,
+                               userScrolling: true, programmaticJump: false) == nil)
+        #expect(!tracker.isCompact)
+        #expect(tracker.update(offsetDelta: bottom.scrollDelta(from: bounced) ?? 0, bottomGap: bottom.bottomGap,
+                               userScrolling: true, programmaticJump: false) == nil)
+        #expect(!tracker.isCompact)
+        let away = AlbumScrollGeometry(offset: 1460, topInset: 100, viewportHeight: 600, contentHeight: 2000, bottomInset: 20)
+        #expect(away.bottomGap == 60)
+        #expect(away.scrollDelta(from: bottom) == -60)
+        #expect(tracker.update(offsetDelta: away.scrollDelta(from: bottom) ?? 0, bottomGap: away.bottomGap,
+                               userScrolling: true, programmaticJump: false) == true)
+        #expect(tracker.update(offsetDelta: bottom.scrollDelta(from: away) ?? 0, bottomGap: bottom.bottomGap,
+                               userScrolling: true, programmaticJump: false) == false)
+        #expect(tracker.update(offsetDelta: away.scrollDelta(from: bottom) ?? 0, bottomGap: away.bottomGap,
+                               userScrolling: true, programmaticJump: false) == nil)
+        #expect(!tracker.isCompact)
     }
 
     private func album(_ id: String, name: String, count: Int = 0,

@@ -5,11 +5,16 @@ nonisolated struct AlbumScrollGeometry: Equatable {
     let topInset: CGFloat
     let viewportHeight: CGFloat
     let contentHeight: CGFloat
+    var bottomInset: CGFloat = 0
+
+    var bottomGap: CGFloat {
+        max(0, contentHeight + bottomInset - viewportHeight - offset + topInset)
+    }
 
     func scrollDelta(from previous: Self) -> CGFloat? {
-        guard topInset == previous.topInset, viewportHeight == previous.viewportHeight,
+        guard topInset == previous.topInset, bottomInset == previous.bottomInset, viewportHeight == previous.viewportHeight,
               contentHeight == previous.contentHeight else { return nil }
-        return previous.offset - offset
+        return offset - previous.offset
     }
 }
 
@@ -43,6 +48,8 @@ struct AlbumsView: View {
     @State private var showsList = false
     @State private var chromeTracker = PhotosChromeTracker()
     @State private var searchHidden = false
+    @State private var searchRowHeight: CGFloat = 44
+    @State private var scopePickerHeight: CGFloat = 32
     @State private var userScrolling = false
     @State private var listScrollPosition = ScrollPosition(edge: .bottom)
     @State private var listVisible = false
@@ -75,6 +82,10 @@ struct AlbumsView: View {
         sort.sorted(store.albums.filter {
             (scope == .all || $0.isShared) && (query.isEmpty || $0.title.localizedStandardContains(query))
         }, direction: sortDirection)
+    }
+
+    private var expandedHeaderHeight: CGFloat {
+        searchRowHeight + 10 + scopePickerHeight + 16
     }
 
     var body: some View {
@@ -126,6 +137,10 @@ struct AlbumsView: View {
         }
         .defaultScrollAnchor(.bottom)
         .ignoresSafeArea(.container, edges: .horizontal)
+        // Like timeline Memories, compact chrome must not resize the viewport
+        // or change the scroll clearance while the user is dragging.
+        .contentMargins(.top, expandedHeaderHeight, for: .scrollContent)
+        .contentMargins(.top, expandedHeaderHeight, for: .scrollIndicators)
         .scrollPosition($listScrollPosition)
         .onAppear { listVisible = true }
         .onDisappear { listVisible = false }
@@ -144,7 +159,7 @@ struct AlbumsView: View {
         .onScrollGeometryChange(for: AlbumScrollGeometry.self) {
             AlbumScrollGeometry(offset: max(0, $0.contentOffset.y + $0.contentInsets.top),
                                 topInset: $0.contentInsets.top, viewportHeight: $0.containerSize.height,
-                                contentHeight: $0.contentSize.height)
+                                contentHeight: $0.contentSize.height, bottomInset: $0.contentInsets.bottom)
         } action: { old, new in
             guard !searchFocused else { return }
             // Inset animations and lazy content measurement can rebase the
@@ -154,61 +169,73 @@ struct AlbumsView: View {
                 chromeTracker.scrollingEnded()
                 return
             }
-            // Reverse the top-origin delta for the timeline chrome tracker.
-            if let hidden = chromeTracker.update(offsetDelta: delta, bottomGap: new.offset,
+            // Match the bottom-anchored main timelines' scroll convention.
+            if let hidden = chromeTracker.update(offsetDelta: delta, bottomGap: new.bottomGap,
                                                  userScrolling: userScrolling, programmaticJump: false)
             {
                 withAnimation(reduceMotion ? nil : .smooth(duration: 0.25)) { searchHidden = hidden }
             }
         }
         .refreshable { await store.load() }
-        .safeAreaInset(edge: .top) {
-            VStack(spacing: 10) {
-                if !searchHidden {
-                    HStack(spacing: 12) {
-                        HStack(spacing: 8) {
-                            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                            TextField("Search Albums", text: $query)
-                                .focused($searchFocused)
-                                .textInputAutocapitalization(.never)
-                                .autocorrectionDisabled()
-                                .submitLabel(.search)
-                                .accessibilityIdentifier("albums-search")
-                            if !query.isEmpty {
-                                Button { query = "" } label: {
-                                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel("Clear Search")
+        .overlay(alignment: .top) {
+            VStack(spacing: 0) {
+                HStack(spacing: 12) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                        TextField("Search Albums", text: $query)
+                            .focused($searchFocused)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .submitLabel(.search)
+                            .accessibilityIdentifier("albums-search")
+                        if !query.isEmpty {
+                            Button { query = "" } label: {
+                                Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
                             }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Clear Search")
                         }
-                        .padding(.horizontal, 14)
-                        .frame(minHeight: 44)
-                        .background(.quaternary, in: .capsule)
-                        Menu {
-                            Picker("Sort Albums", selection: $sort) {
-                                ForEach(AlbumSort.allCases) { Text($0.rawValue).tag($0) }
-                            }
-                            Divider()
-                            Picker("Order", selection: $sortDirection) {
-                                ForEach(AlbumSortDirection.allCases) { Text($0.rawValue).tag($0) }
-                            }
-                            .pickerStyle(.inline)
-                            Divider()
-                            Toggle("List View", isOn: $showsList)
-                        } label: {
-                            Image(systemName: "arrow.up.arrow.down").frame(width: 44, height: 44)
-                        }
-                        .buttonStyle(.plain)
-                        .glassEffect(.regular.interactive(), in: .circle)
-                        .accessibilityLabel("Album Options")
                     }
-                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .padding(.horizontal, 14)
+                    .frame(minHeight: 44)
+                    .background(.quaternary, in: .capsule)
+                    Menu {
+                        Picker("Sort Albums", selection: $sort) {
+                            ForEach(AlbumSort.allCases) { Text($0.rawValue).tag($0) }
+                        }
+                        Divider()
+                        Picker("Order", selection: $sortDirection) {
+                            ForEach(AlbumSortDirection.allCases) { Text($0.rawValue).tag($0) }
+                        }
+                        .pickerStyle(.inline)
+                        Divider()
+                        Toggle("List View", isOn: $showsList)
+                    } label: {
+                        Image(systemName: "arrow.up.arrow.down").frame(width: 44, height: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .glassEffect(.regular.interactive(), in: .circle)
+                    .accessibilityLabel("Album Options")
                 }
+                .fixedSize(horizontal: false, vertical: true)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                    guard height > 0, abs(searchRowHeight - height) > 0.5 else { return }
+                    searchRowHeight = height
+                }
+                .frame(height: searchHidden ? 0 : searchRowHeight, alignment: .top)
+                .opacity(searchHidden ? 0 : 1)
+                .clipped()
+                .allowsHitTesting(!searchHidden)
+                .accessibilityHidden(searchHidden)
                 Picker("Album scope", selection: $scope) {
                     ForEach(AlbumScope.allCases) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                    guard height > 0, abs(scopePickerHeight - height) > 0.5 else { return }
+                    scopePickerHeight = height
+                }
+                .padding(.top, searchHidden ? 0 : 10)
             }
             .padding(.horizontal)
             .padding(.vertical, 8)
