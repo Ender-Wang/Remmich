@@ -52,6 +52,7 @@ struct AppShellView: View {
     @State private var viewerPresentations = AssetViewerPresentationStore()
     @State private var photosContentLoading = true
     @State private var videosContentLoading = true
+    @State private var albumsContentLoading = true
 
     var body: some View {
         @Bindable var navigation = tabSelectionState
@@ -170,7 +171,9 @@ struct AppShellView: View {
                                    scrollToLatestRequest: albumsScrollRequest,
                                    persistence: sessionController?.libraryIndexStore, scope: MediaAccountScope(session: session),
                                    viewerPresentations: viewerPresentations,
-                                   tabSelectionState: tabSelectionState, tabBarTop: $tabBarTop, showAccount: showAccount)
+                                   tabSelectionState: tabSelectionState, tabBarTop: $tabBarTop,
+                                   loadingVisibilityChanged: primaryContentLoadingChanged == nil ? nil : { albumsContentLoading = $0 },
+                                   showAccount: showAccount)
                     }
                 }
             ),
@@ -417,6 +420,7 @@ struct AppShellView: View {
         switch tabSelectionState.selection {
         case .photos: return photosPath.isEmpty && photosContentLoading
         case .videos: return videosPath.isEmpty && videosContentLoading
+        case .albums: return albumsPath.isEmpty && albumsContentLoading
         default: return false
         }
     }

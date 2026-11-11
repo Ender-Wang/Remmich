@@ -33,6 +33,7 @@ struct AlbumsView: View {
     let viewerPresentations: AssetViewerPresentationStore
     let tabSelectionState: NativeTabSelectionState
     @Binding var tabBarTop: CGFloat
+    let loadingVisibilityChanged: ((Bool) -> Void)?
     let showAccount: () -> Void
     @State private var store: AlbumsStore
     @State private var scope: AlbumScope = .all
@@ -52,7 +53,8 @@ struct AlbumsView: View {
          scrollToLatestRequest: Int = 0,
          persistence: (any AlbumCatalogStoring)? = nil, scope: MediaAccountScope? = nil,
          viewerPresentations: AssetViewerPresentationStore, tabSelectionState: NativeTabSelectionState,
-         tabBarTop: Binding<CGFloat>, showAccount: @escaping () -> Void)
+         tabBarTop: Binding<CGFloat>, loadingVisibilityChanged: ((Bool) -> Void)? = nil,
+         showAccount: @escaping () -> Void)
     {
         self.source = source
         self.media = media
@@ -64,6 +66,7 @@ struct AlbumsView: View {
         self.viewerPresentations = viewerPresentations
         self.tabSelectionState = tabSelectionState
         _tabBarTop = tabBarTop
+        self.loadingVisibilityChanged = loadingVisibilityChanged
         self.showAccount = showAccount
         _store = State(initialValue: AlbumsStore(reader: source, persistence: persistence, scope: scope))
     }
@@ -78,6 +81,14 @@ struct AlbumsView: View {
         GeometryReader { geometry in
             albumContent(availableWidth: geometry.size.width + geometry.safeAreaInsets.leading + geometry.safeAreaInsets.trailing)
         }
+        .overlay {
+            if loadingVisibilityChanged == nil {
+                LoadingStateView(isLoading: !store.hasLoaded && store.errorMessage == nil, label: "Loading albums")
+            }
+        }
+        .onChange(of: !store.hasLoaded && store.errorMessage == nil, initial: true) { _, loading in
+            loadingVisibilityChanged?(loading)
+        }
     }
 
     private func albumContent(availableWidth: CGFloat) -> some View {
@@ -90,7 +101,7 @@ struct AlbumsView: View {
                     }.padding(.horizontal)
                 }
                 if !store.hasLoaded, store.errorMessage == nil {
-                    ProgressView("Loading Albums").padding(40)
+                    Color.clear
                 } else if store.errorMessage != nil, !store.hasLoaded {
                     ErrorStateView(title: "Couldn’t Load Albums") { Task { await store.load() } }
                 } else if filtered.isEmpty {
