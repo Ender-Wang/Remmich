@@ -211,7 +211,11 @@ final class AlbumIndexController {
                     status = .failed("\(failures.count) album(s) could not be indexed.")
                 }
                 await transfers?.finishAlbumIndexPass(namespace: scope.cacheNamespace)
-                Self.logger.info("Album index pass finished albums=\(self.indexedAlbumCount)/\(self.albumCount) memberships=\(self.membershipCount) failures=\(self.failures.count)")
+                let completedAlbums = indexedAlbumCount
+                let totalAlbums = albumCount
+                let memberships = membershipCount
+                let failureCount = failures.count
+                Self.logger.info("Album index pass finished albums=\(completedAlbums)/\(totalAlbums) memberships=\(memberships) failures=\(failureCount)")
             } catch {
                 guard generation == request, !Task.isCancelled else { return }
                 failures = [error.localizedDescription]
@@ -227,7 +231,9 @@ final class AlbumIndexController {
         preferences.set(true, forKey: pauseKey(scope))
         suspend()
         status = .paused
-        Self.logger.info("Album index paused albums=\(self.indexedAlbumCount)/\(self.albumCount)")
+        let completedAlbums = indexedAlbumCount
+        let totalAlbums = albumCount
+        Self.logger.info("Album index paused albums=\(completedAlbums)/\(totalAlbums)")
     }
 
     func resume() {
