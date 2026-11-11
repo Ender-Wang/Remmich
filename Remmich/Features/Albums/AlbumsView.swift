@@ -8,7 +8,9 @@ nonisolated struct AlbumScrollGeometry: Equatable {
     var bottomInset: CGFloat = 0
 
     var bottomGap: CGFloat {
-        max(0, contentHeight + bottomInset - viewportHeight - offset + topInset)
+        // SwiftUI's measured content extent already includes the scroll
+        // margins. Offset is normalized by the top inset at collection time.
+        max(0, contentHeight - viewportHeight - offset)
     }
 
     func scrollDelta(from previous: Self) -> CGFloat? {

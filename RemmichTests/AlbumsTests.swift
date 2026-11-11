@@ -29,8 +29,8 @@ struct AlbumsTests {
 
     @Test func bottomBounceCannotToggleAlbumHeader() {
         var tracker = PhotosChromeTracker()
-        let bottom = AlbumScrollGeometry(offset: 1520, topInset: 100, viewportHeight: 600, contentHeight: 2000, bottomInset: 20)
-        let bounced = AlbumScrollGeometry(offset: 1582, topInset: 100, viewportHeight: 600, contentHeight: 2000, bottomInset: 20)
+        let bottom = AlbumScrollGeometry(offset: 1400, topInset: 100, viewportHeight: 600, contentHeight: 2000, bottomInset: 20)
+        let bounced = AlbumScrollGeometry(offset: 1462, topInset: 100, viewportHeight: 600, contentHeight: 2000, bottomInset: 20)
         #expect(bottom.bottomGap == 0)
         #expect(bounced.bottomGap == 0)
         #expect(tracker.update(offsetDelta: bounced.scrollDelta(from: bottom) ?? 0, bottomGap: bounced.bottomGap,
@@ -39,7 +39,7 @@ struct AlbumsTests {
         #expect(tracker.update(offsetDelta: bottom.scrollDelta(from: bounced) ?? 0, bottomGap: bottom.bottomGap,
                                userScrolling: true, programmaticJump: false) == nil)
         #expect(!tracker.isCompact)
-        let away = AlbumScrollGeometry(offset: 1460, topInset: 100, viewportHeight: 600, contentHeight: 2000, bottomInset: 20)
+        let away = AlbumScrollGeometry(offset: 1340, topInset: 100, viewportHeight: 600, contentHeight: 2000, bottomInset: 20)
         #expect(away.bottomGap == 60)
         #expect(away.scrollDelta(from: bottom) == -60)
         #expect(tracker.update(offsetDelta: away.scrollDelta(from: bottom) ?? 0, bottomGap: away.bottomGap,
@@ -49,6 +49,35 @@ struct AlbumsTests {
         #expect(tracker.update(offsetDelta: away.scrollDelta(from: bottom) ?? 0, bottomGap: away.bottomGap,
                                userScrolling: true, programmaticJump: false) == nil)
         #expect(!tracker.isCompact)
+    }
+
+    @Test func capturedBottomOverscrollDoesNotCountInsetsTwice() {
+        var tracker = PhotosChromeTracker()
+        // 07:09 device capture: raw offset 6540 + top inset 163 equals
+        // measured content 7331 - viewport 628 at the settled bottom.
+        let bottom = AlbumScrollGeometry(offset: 6540 + 163, topInset: 163,
+                                         viewportHeight: 628, contentHeight: 7331, bottomInset: 83)
+        #expect(bottom.bottomGap == 0)
+        var previous = bottom
+        // The old calculation reported a 175-point gap at offset 6774
+        // during the rebound and compacted the header while overscrolled.
+        let capturedOffsets: [CGFloat] = [6785.666666666667, 6795, 6778, 6774, 6703]
+        for offset in capturedOffsets {
+            let current = AlbumScrollGeometry(offset: offset, topInset: 163,
+                                              viewportHeight: 628, contentHeight: 7331, bottomInset: 83)
+            #expect(current.bottomGap == 0)
+            #expect(tracker.update(offsetDelta: current.scrollDelta(from: previous) ?? 0,
+                                   bottomGap: current.bottomGap, userScrolling: true,
+                                   programmaticJump: false) == nil)
+            #expect(!tracker.isCompact)
+            previous = current
+        }
+        let away = AlbumScrollGeometry(offset: 6643, topInset: 163,
+                                       viewportHeight: 628, contentHeight: 7331, bottomInset: 83)
+        #expect(away.bottomGap == 60)
+        #expect(tracker.update(offsetDelta: away.scrollDelta(from: bottom) ?? 0,
+                               bottomGap: away.bottomGap, userScrolling: true,
+                               programmaticJump: false) == true)
     }
 
     private func album(_ id: String, name: String, count: Int = 0,
