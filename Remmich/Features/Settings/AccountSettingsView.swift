@@ -38,6 +38,7 @@ struct AccountSettingsView: View {
     private struct ProfileCardSummary {
         let percentage: Double?
         let status: String
+        var isIndexing = false
 
         var percentageText: String {
             percentage?.formatted(.number.precision(.fractionLength(0 ... 1))) ?? "—"
@@ -542,7 +543,8 @@ struct AccountSettingsView: View {
         let percentage = total > 0
             ? (Self.progressFraction(completed: completed, total: total) * 1000).rounded(.down) / 10
             : (isComplete ? 100.0 : nil)
-        return ProfileCardSummary(percentage: percentage, status: status)
+        return ProfileCardSummary(percentage: percentage, status: status,
+                                  isIndexing: page == .index && libraryIndex.status == .indexing)
     }
 
     private func syncCardLabel(_ summary: ProfileCardSummary) -> some View {
@@ -574,20 +576,17 @@ struct AccountSettingsView: View {
         case .upToDate: "Up to date"
         case .failed: "Needs attention"
         }
-        return ProfileCardSummary(percentage: percentage, status: status)
+        return ProfileCardSummary(percentage: percentage, status: status, isIndexing: index.status == .indexing)
     }
 
     private func indexCardStatus(_ title: String, summary: ProfileCardSummary) -> some View {
-        ViewThatFits(in: .horizontal) {
-            Text("\(title) · \(summary.percentage.map { _ in summary.percentageText + "% · " } ?? "")\(summary.status)")
-                .fixedSize()
-            Text("\(title) · \(summary.status)")
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .contentTransition(.opacity)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: summary.status)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: summary.percentage)
+        let detail = summary.isIndexing && summary.percentage != nil ? summary.percentageText + "%" : summary.status
+        return Text("\(title) · \(detail)")
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentTransition(.opacity)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: summary.status)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: summary.percentage)
     }
 
     private func animatedCardStatus(_ text: String) -> some View {
