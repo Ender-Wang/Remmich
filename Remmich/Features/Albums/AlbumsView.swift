@@ -104,6 +104,7 @@ struct AlbumsView: View {
             .padding(.vertical)
         }
         .defaultScrollAnchor(.bottom)
+        .ignoresSafeArea(.container, edges: .horizontal)
         .scrollPosition($listScrollPosition)
         .onAppear { listVisible = true }
         .onDisappear { listVisible = false }
