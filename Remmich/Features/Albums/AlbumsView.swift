@@ -38,6 +38,7 @@ struct AlbumsView: View {
     @State private var scope: AlbumScope = .all
     @State private var query = ""
     @State private var sort: AlbumSort = .mostRecentPhoto
+    @State private var sortDirection: AlbumSortDirection = .ascending
     @State private var showsList = false
     @State private var chromeTracker = PhotosChromeTracker()
     @State private var searchHidden = false
@@ -70,7 +71,7 @@ struct AlbumsView: View {
     private var filtered: [AlbumSummary] {
         sort.sorted(store.albums.filter {
             (scope == .all || $0.isShared) && (query.isEmpty || $0.title.localizedStandardContains(query))
-        })
+        }, direction: sortDirection)
     }
 
     var body: some View {
@@ -117,6 +118,8 @@ struct AlbumsView: View {
         .scrollPosition($listScrollPosition)
         .onAppear { listVisible = true }
         .onDisappear { listVisible = false }
+        .onChange(of: sort) { listScrollPosition.scrollTo(edge: .bottom) }
+        .onChange(of: sortDirection) { listScrollPosition.scrollTo(edge: .bottom) }
         .onChange(of: scrollToLatestRequest) {
             guard listVisible else { return }
             withAnimation(reduceMotion ? nil : .smooth(duration: 0.35)) { listScrollPosition.scrollTo(edge: .bottom) }
@@ -175,6 +178,12 @@ struct AlbumsView: View {
                             Picker("Sort Albums", selection: $sort) {
                                 ForEach(AlbumSort.allCases) { Text($0.rawValue).tag($0) }
                             }
+                            Divider()
+                            Picker("Order", selection: $sortDirection) {
+                                ForEach(AlbumSortDirection.allCases) { Text($0.rawValue).tag($0) }
+                            }
+                            .pickerStyle(.inline)
+                            Divider()
                             Toggle("List View", isOn: $showsList)
                         } label: {
                             Image(systemName: "arrow.up.arrow.down").frame(width: 44, height: 44)

@@ -71,6 +71,15 @@ extension AlbumCatalogStoring {
     }
 }
 
+nonisolated enum AlbumSortDirection: String, CaseIterable, Identifiable, Sendable {
+    case ascending = "Ascending"
+    case descending = "Descending"
+
+    var id: Self {
+        self
+    }
+}
+
 nonisolated enum AlbumSort: String, CaseIterable, Identifiable, Sendable {
     case title = "Title"
     case itemCount = "Number of items"
@@ -83,16 +92,16 @@ nonisolated enum AlbumSort: String, CaseIterable, Identifiable, Sendable {
         self
     }
 
-    func sorted(_ albums: [AlbumSummary]) -> [AlbumSummary] {
-        albums.sorted { lhs, rhs in
+    func sorted(_ albums: [AlbumSummary], direction: AlbumSortDirection = .ascending) -> [AlbumSummary] {
+        let firstToLast = albums.sorted { lhs, rhs in
             switch self {
             case .itemCount where lhs.assetCount != rhs.assetCount: return lhs.assetCount > rhs.assetCount
             case .dateModified, .dateCreated, .mostRecentPhoto, .oldestPhoto:
                 switch (date(in: lhs), date(in: rhs)) {
                 case let (left?, right?) where left != right:
-                    return left < right
-                case (_?, nil): return false
-                case (nil, _?): return true
+                    return self == .oldestPhoto ? left < right : left > right
+                case (_?, nil): return true
+                case (nil, _?): return false
                 default: break
                 }
             default: break
@@ -100,17 +109,15 @@ nonisolated enum AlbumSort: String, CaseIterable, Identifiable, Sendable {
             let comparison = lhs.title.localizedStandardCompare(rhs.title)
             return comparison == .orderedSame ? lhs.id < rhs.id : comparison == .orderedAscending
         }
+        // The first match lives at the bottom, where album browsing begins.
+        return direction == .ascending ? Array(firstToLast.reversed()) : firstToLast
     }
 
-    /// Preserve chronological rows while showing the newer member at the left.
+    /// Read each row left-to-right while advancing from the bottom upward.
     func gridOrder(_ sortedAlbums: [AlbumSummary], columns: Int) -> [AlbumSummary] {
-        switch self {
-        case .title, .itemCount: return sortedAlbums
-        case .dateModified, .dateCreated, .mostRecentPhoto, .oldestPhoto:
-            let width = max(1, columns)
-            return stride(from: 0, to: sortedAlbums.count, by: width).flatMap { start in
-                sortedAlbums[start ..< min(start + width, sortedAlbums.count)].reversed()
-            }
+        let width = max(1, columns)
+        return stride(from: 0, to: sortedAlbums.count, by: width).flatMap { start in
+            sortedAlbums[start ..< min(start + width, sortedAlbums.count)].reversed()
         }
     }
 

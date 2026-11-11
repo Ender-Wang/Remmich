@@ -39,20 +39,18 @@ struct AlbumsTests {
 
     @Test func sortingUsesNaturalNamesAndStableTies() {
         let values = [album("b", name: "Trip 10"), album("a", name: "Trip 2"), album("c", name: "Trip 2", count: 4)]
-        #expect(AlbumSort.title.sorted(values).map(\.id) == ["a", "c", "b"])
-        #expect(AlbumSort.itemCount.sorted(values).first?.id == "c")
+        #expect(AlbumSort.title.sorted(values).map(\.id) == ["b", "c", "a"])
+        #expect(AlbumSort.itemCount.sorted(values).last?.id == "c")
     }
 
     @Test func chronologicalGridKeepsNewerAlbumsLeftWithinEachRow() {
         let values = (1 ... 5).map { album(String($0), name: "Album \($0)", end: TimeInterval($0)) }
-        for sort in [AlbumSort.dateCreated, .dateModified, .mostRecentPhoto, .oldestPhoto] {
+        for sort in AlbumSort.allCases {
             #expect(sort.gridOrder(values, columns: 2).map(\.id) == ["2", "1", "4", "3", "5"])
             #expect(sort.gridOrder(values, columns: 3).map(\.id) == ["3", "2", "1", "5", "4"])
             #expect(sort.gridOrder(values, columns: 1) == values)
             #expect(sort.gridOrder([], columns: 2).isEmpty)
         }
-        #expect(AlbumSort.title.gridOrder(values, columns: 2) == values)
-        #expect(AlbumSort.itemCount.gridOrder(values, columns: 3) == values)
         #expect(AlbumSort.mostRecentPhoto.sorted(values) == values)
     }
 
@@ -63,7 +61,7 @@ struct AlbumsTests {
         #expect(AlbumSort.dateCreated.sorted(values).map(\.id) == ["empty", "b", "a"])
         #expect(AlbumSort.dateModified.sorted(values).map(\.id) == ["empty", "a", "b"])
         #expect(AlbumSort.mostRecentPhoto.sorted(values).map(\.id) == ["empty", "b", "a"])
-        #expect(AlbumSort.oldestPhoto.sorted(values).map(\.id) == ["empty", "b", "a"])
+        #expect(AlbumSort.oldestPhoto.sorted(values).map(\.id) == ["empty", "a", "b"])
         #expect(AlbumSort.allCases.map(\.rawValue) == ["Title", "Number of items", "Date modified", "Date created", "Most recent photo", "Oldest photo"])
         #expect(AlbumSort.dateCreated.date(in: values[0]) == values[0].createdAt)
         #expect(AlbumSort.dateModified.date(in: values[0]) == values[0].updatedAt)
@@ -72,6 +70,28 @@ struct AlbumsTests {
         #expect(AlbumSort.title.date(in: values[0]) == nil)
         #expect(AlbumSort.itemCount.date(in: values[0]) == nil)
         #expect(AlbumSort.mostRecentPhoto.date(in: values[2]) == nil)
+    }
+
+    @Test func sortDirectionPlacesTheFirstMatchAtTheBottom() {
+        let values = [album("a", name: "A", count: 10, created: 30, modified: 10, start: 20, end: 50),
+                      album("b", name: "B", count: 30, created: 10, modified: 30, start: 10, end: 40),
+                      album("c", name: "C", count: 20, created: 20, modified: 20, start: 30, end: 60)]
+        let bottomIDs: [AlbumSort: String] = [.title: "a", .itemCount: "b", .dateCreated: "a",
+                                              .dateModified: "b", .mostRecentPhoto: "c", .oldestPhoto: "b"]
+        for sort in AlbumSort.allCases {
+            let ascending = sort.sorted(values)
+            let descending = sort.sorted(values, direction: .descending)
+            #expect(ascending.last?.id == bottomIDs[sort])
+            #expect(descending == Array(ascending.reversed()))
+            for columns in [1, 2, 3] {
+                let grid = sort.gridOrder(ascending, columns: columns)
+                let rows = stride(from: 0, to: grid.count, by: columns).map {
+                    Array(grid[$0 ..< min($0 + columns, grid.count)])
+                }
+                #expect(rows.reversed().flatMap(\.self) == descending)
+            }
+        }
+        #expect(AlbumSortDirection.allCases.map(\.rawValue) == ["Ascending", "Descending"])
     }
 
     @Test func scopedReaderPreservesOrderAndExcludesGlobalMemories() async throws {
