@@ -375,6 +375,7 @@ struct PhotosView: View {
     @Namespace private var viewerNamespace
     @State private var viewportRuntime = TimelineViewportRuntime()
     @State private var windowTopInset: CGFloat = 0
+    @State private var collectionHeaderHeight: CGFloat = 0
     @State private var compactChrome = false
     @State private var semanticMemoryScaleVisible = true
     @State private var viewerOwnsTimelineChrome = false
@@ -523,7 +524,7 @@ struct PhotosView: View {
         } message: {
             Text(memoryViewerErrorMessage ?? "The memory’s assets aren’t available.")
         }
-        .safeAreaInset(edge: .top, spacing: 0) {
+        .overlay(alignment: .top) {
             if navigationPath.isEmpty, let collectionTitle {
                 HStack(alignment: .top, spacing: 12) {
                     Button(action: collectionBack) {
@@ -573,9 +574,16 @@ struct PhotosView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
-                .background(.bar)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                    guard abs(collectionHeaderHeight - height) > 0.5 else { return }
+                    collectionHeaderHeight = height
+                }
                 .background {
-                    Color.clear.contentShape(.rect).onTapGesture {}.accessibilityHidden(true)
+                    ZStack {
+                        TimelineMemoryGradientBackdrop(visible: true, extended: true, reduceMotion: reduceMotion)
+                            .ignoresSafeArea(edges: .top)
+                        Color.clear.contentShape(.rect).onTapGesture {}.accessibilityHidden(true)
+                    }
                 }
                 .opacity(hasInteractivePreview ? 0 : 1)
                 .allowsHitTesting(!hasInteractivePreview)
@@ -871,8 +879,9 @@ struct PhotosView: View {
                 && navigationPath.isEmpty
                 && store.memoryLaneState == .loaded
                 && !store.memories.isEmpty
-            let topClearance = topInset + (reservesMemoryLane ? TimelineMemoryLaneSafeArea.laneHeight : 0)
-            let pinnedHeaderTopClearance = topInset + (memoryLaneVisible ? TimelineMemoryLaneSafeArea.laneHeight : 0)
+            let albumHeaderClearance = collectionTitle != nil && navigationPath.isEmpty ? collectionHeaderHeight : 0
+            let topClearance = topInset + albumHeaderClearance + (reservesMemoryLane ? TimelineMemoryLaneSafeArea.laneHeight : 0)
+            let pinnedHeaderTopClearance = topInset + albumHeaderClearance + (memoryLaneVisible ? TimelineMemoryLaneSafeArea.laneHeight : 0)
             Group {
                 if let semanticCatalog {
                     TimelineSemanticCollectionView(
