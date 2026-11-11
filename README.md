@@ -92,7 +92,7 @@ Updated **November 10, 2026**. The timeline runs from future plans at the top, t
 
 | Priority | Feature | Status | Intended outcome |
 | --- | --- | --- | --- |
-| Now · M6 | Real Albums | In progress | Server-backed discovery and the shared viewer are implemented; device verification is next. |
+| Now · M6 | Real Albums | In progress | Server-backed browsing and account-isolated indexing; further refinements are ongoing. |
 | M5 | Download Pause/Resume | Available | Retain manual pauses across relaunch and recover interrupted downloads automatically where supported. |
 | M5 | Sharing | Available | Share the viewed tier with supported metadata; Live Photos share their still. |
 | M5 | Download and Save to Photos | Available | Save selected quality to Photos → Remmich; background transfers, progress, cancel/retry and Downloads History. |
@@ -105,7 +105,7 @@ These are the current implementation priorities, not separate committed release 
 
 ### Verification still open
 
-- **Albums:** M6 source builds replace album demo data with server reads. Owned/shared access, large albums, return position and iPhone/iPad presentation await device verification. The published 0.5.0 release still has demo Albums.
+- **Albums:** M6 source builds replace album demo data with server reads. Album indexing and rebuilds are verified on device; further refinements and broader device checks remain. The published 0.5.0 release still has demo Albums.
 - **Sharing:** Preview metadata-only copying is device-verified. Broader formats, destinations, iPad presentation and automated test coverage still need verification.
 - **Downloads:** earlier Full-tier errors, broader format/Live Photo and background-relaunch cases still need verification. Pause/Resume controls and the restored byte-count handoff are device-verified; comprehensive interruption/relaunch coverage and new automated fixtures remain unverified. Partial-data reuse depends on iOS and server support; a download may restart when it cannot resume.
 - **Custom Photon instance:** batch caching and explicit Cache Rebuild are implemented, but the maintainer has not yet run the NAS Rebuild end to end on a physical device. Public-server demand fetching and landmark names have device acceptance. The latest Rebuild [focused CI passed](https://github.com/Ender-Wang/Remmich/actions/runs/42461148263).
