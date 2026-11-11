@@ -102,6 +102,18 @@ nonisolated enum AlbumSort: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
+    /// Preserve chronological rows while showing the newer member at the left.
+    func gridOrder(_ sortedAlbums: [AlbumSummary], columns: Int) -> [AlbumSummary] {
+        switch self {
+        case .title, .itemCount: return sortedAlbums
+        case .dateModified, .dateCreated, .mostRecentPhoto, .oldestPhoto:
+            let width = max(1, columns)
+            return stride(from: 0, to: sortedAlbums.count, by: width).flatMap { start in
+                sortedAlbums[start ..< min(start + width, sortedAlbums.count)].reversed()
+            }
+        }
+    }
+
     private func date(in album: AlbumSummary) -> Date? {
         switch self {
         case .dateModified: album.updatedAt

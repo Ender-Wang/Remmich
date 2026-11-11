@@ -74,7 +74,14 @@ struct AlbumsView: View {
     }
 
     var body: some View {
-        ScrollView {
+        GeometryReader { geometry in
+            albumContent(availableWidth: geometry.size.width + geometry.safeAreaInsets.leading + geometry.safeAreaInsets.trailing)
+        }
+    }
+
+    private func albumContent(availableWidth: CGFloat) -> some View {
+        let columnCount = max(1, Int((availableWidth - 32 + 16) / (155 + 16)))
+        return ScrollView {
             VStack(spacing: 16) {
                 if let error = store.errorMessage, !store.albums.isEmpty {
                     Button { Task { await store.load() } } label: {
@@ -96,9 +103,11 @@ struct AlbumsView: View {
                         ForEach(filtered) { album in albumLink(album, compact: true) }
                     }.padding(.horizontal)
                 } else {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 155, maximum: 260), spacing: 16)], spacing: 20) {
-                        ForEach(filtered) { album in albumLink(album, compact: false) }
-                    }.padding(.horizontal)
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 155, maximum: 260), spacing: 16), count: columnCount),
+                              alignment: .leading, spacing: 20)
+                    {
+                        ForEach(sort.gridOrder(filtered, columns: columnCount)) { album in albumLink(album, compact: false) }
+                    }.padding(.horizontal, 16)
                 }
             }
             .padding(.vertical)

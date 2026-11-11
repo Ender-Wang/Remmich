@@ -43,6 +43,19 @@ struct AlbumsTests {
         #expect(AlbumSort.itemCount.sorted(values).first?.id == "c")
     }
 
+    @Test func chronologicalGridKeepsNewerAlbumsLeftWithinEachRow() {
+        let values = (1 ... 5).map { album(String($0), name: "Album \($0)", end: TimeInterval($0)) }
+        for sort in [AlbumSort.dateCreated, .dateModified, .mostRecentPhoto, .oldestPhoto] {
+            #expect(sort.gridOrder(values, columns: 2).map(\.id) == ["2", "1", "4", "3", "5"])
+            #expect(sort.gridOrder(values, columns: 3).map(\.id) == ["3", "2", "1", "5", "4"])
+            #expect(sort.gridOrder(values, columns: 1) == values)
+            #expect(sort.gridOrder([], columns: 2).isEmpty)
+        }
+        #expect(AlbumSort.title.gridOrder(values, columns: 2) == values)
+        #expect(AlbumSort.itemCount.gridOrder(values, columns: 3) == values)
+        #expect(AlbumSort.mostRecentPhoto.sorted(values) == values)
+    }
+
     @Test func albumAndPhotoDateSortsUseDistinctFieldsAndKeepNewestAtBottom() {
         let values = [album("a", name: "A", created: 30, modified: 10, start: 20, end: 50),
                       album("b", name: "B", created: 10, modified: 30, start: 10, end: 40),
