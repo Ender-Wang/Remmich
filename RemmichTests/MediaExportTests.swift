@@ -86,6 +86,23 @@ struct MediaExportTests {
         #expect(item.fraction == nil)
     }
 
+    @Test func exportWritesRequirePreparedAccountStorage() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteLibraryIndexStore(databaseURL: root.appending(path: "library.sqlite3"))
+        let scope = Self.scope()
+        let item = job()
+        let journal = MediaExportJournal(jobs: [item])
+        await #expect(throws: CancellationError.self) {
+            try await store.saveMediaExports(journal, scope: scope)
+        }
+        let files = await store.databaseFiles(scope: scope)
+        #expect(!FileManager.default.fileExists(atPath: files.catalog.deletingLastPathComponent().path))
+        try await store.prepare(scope: scope)
+        try await store.saveMediaExports(journal, scope: scope)
+        #expect(try await store.loadMediaExports(scope: scope).jobs.first?.id == item.id)
+    }
+
     @Test func exportJournalSurvivesRelaunchAndAccountRemovalDoesNotRecreateScope() async throws {
         let root = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -191,6 +208,9 @@ struct MediaExportTests {
         let second = Self.scope(userID: "other")
         exports.configure(media: media, scope: first)
         try await wait { exports.ready }
+        let files = await store.databaseFiles(scope: first)
+        #expect(FileManager.default.fileExists(atPath: files.catalog.path))
+        #expect(FileManager.default.fileExists(atPath: files.cache.path))
         exports.enqueue(asset: asset("belongs-to-first"), tier: .original)
         exports.configure(media: media, scope: second)
         try await wait { exports.ready }

@@ -136,7 +136,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
     }
 
     func saveMediaExports(_ journal: MediaExportJournal, scope: MediaAccountScope) throws {
-        guard try canRead(scope) else { return }
+        guard try canRead(scope) else { throw CancellationError() }
         // Configuration creates the scope. A late export must not resurrect a
         // deleted account after a sign-out or Clear Local Data operation.
         let db = try preparedDatabase(scope: scope)
@@ -148,7 +148,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
     }
 
     func recordMediaReceipt(_ receipt: MediaPhotosReceipt, jobID: UUID, filename: String, byteCount: Int64 = 0, scope: MediaAccountScope) throws {
-        guard try canRead(scope) else { return }
+        guard try canRead(scope) else { throw CancellationError() }
         let db = try preparedDatabase(scope: scope)
         guard let json = try db.scalarText("SELECT payload FROM main.media_exports WHERE scope=?", [.text(scope.cacheNamespace)]) else { throw CancellationError() }
         var journal = try JSONDecoder().decode(MediaExportJournal.self, from: Data(json.utf8))
@@ -526,7 +526,8 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
     }
 
     func derivativeRecords(scope: MediaAccountScope) async throws -> [LibraryIndexDerivativeRecord] {
-        try readDerivatives(scope: scope, database: preparedDatabase(scope: scope))
+        guard try canRead(scope) else { return [] }
+        return try readDerivatives(scope: scope, database: preparedDatabase(scope: scope))
     }
 
     func setPaused(_ paused: Bool, scope: MediaAccountScope) async throws {
@@ -1061,6 +1062,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
     }
 
     func storageReport(scope: MediaAccountScope) async throws -> LibraryIndexStorageReport {
+        guard try canRead(scope) else { return .empty }
         let database = try preparedDatabase(scope: scope)
         let metadataBytes = metadataFileBytes()
         // Reporting progress must not decode the entire asset/group catalog.
@@ -1085,6 +1087,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
     }
 
     func storageReport(snapshot: LibraryIndexSnapshot, scope: MediaAccountScope) async throws -> LibraryIndexStorageReport {
+        guard try canRead(scope) else { return .empty }
         let database = try preparedDatabase(scope: scope)
         let metadataBytes = metadataFileBytes()
         var report = LibraryIndexStorageReport(
@@ -1120,6 +1123,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
     }
 
     func indexStorageReport(scope: MediaAccountScope) async throws -> LibraryIndexStorageReport {
+        guard try canRead(scope) else { return .empty }
         let database = try preparedDatabase(scope: scope)
         var report = LibraryIndexStorageReport.empty
         report.metadataBytes = metadataFileBytes()

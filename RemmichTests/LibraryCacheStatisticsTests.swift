@@ -84,7 +84,12 @@ struct LibraryCacheStatisticsTests {
         try await store.upsert(derivatives: [record(.thumbnail, bytes: 350)], scope: scope)
         #expect(try await store.storageReport(scope: scope).derivativeBytes == 550)
         try await store.removeAccount(namespace: scope.cacheNamespace)
-        #expect(try await store.storageReport(scope: scope).derivativeBytes == 0)
+        #expect(try await store.storageReport(scope: scope) == .empty)
+        #expect(try await store.storageReport(snapshot: snapshot, scope: scope) == .empty)
+        #expect(try await store.indexStorageReport(scope: scope) == .empty)
+        #expect(try await store.derivativeRecords(scope: scope).isEmpty)
+        let removedFiles = await store.databaseFiles(scope: scope)
+        #expect(!FileManager.default.fileExists(atPath: removedFiles.catalog.deletingLastPathComponent().path))
         #expect(try await store.storageReport(scope: other).derivativeBytes == 9000)
     }
 

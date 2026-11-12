@@ -72,6 +72,10 @@ final class MediaExportController: NSObject {
                 _ = try? await previousWrites?.value
                 guard generation == owner else { return }
                 retiringWorkers.removeAll()
+                // Opening an authenticated account initializes its storage;
+                // later journal writes must never recreate a deleted account.
+                try await store.prepare(scope: scope)
+                guard generation == owner else { return }
                 var loaded = try await store.loadMediaExports(scope: scope)
                 guard generation == owner else { return }
                 for index in loaded.jobs.indices where loaded.jobs[index].stage.isActive {
