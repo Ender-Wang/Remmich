@@ -550,6 +550,15 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
             _ tabBarController: UITabBarController,
             shouldSelectTab tab: UITab
         ) -> Bool {
+            // Handle Albums reselection before UIKit's default pop-to-root.
+            // Its current destination owns the existing scroll-to-latest request.
+            if !isUpdatingTabs, pageInteractionController == nil,
+               !parent.isViewerPresented, tab === albumsTab,
+               tabBarController.selectedTab === tab
+            {
+                publishSelection(destination: .albums, selectedTab: tab, previousTab: tab)
+                return false
+            }
             guard !isUpdatingTabs,
                   pageInteractionController == nil,
                   parent.pageSwipeEnabled,
