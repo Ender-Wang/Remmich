@@ -55,6 +55,7 @@ struct AlbumsView: View {
     @State private var userScrolling = false
     @State private var listScrollPosition = ScrollPosition(edge: .bottom)
     @State private var listVisible = false
+    @Namespace private var albumTransition
     @FocusState private var searchFocused: Bool
 
     init(source: any AlbumReading & TimelineReading, media: MediaLibraryController,
@@ -263,14 +264,18 @@ struct AlbumsView: View {
                             persistence: persistence, scope: accountScope,
                             viewerPresentations: viewerPresentations,
                             tabSelectionState: tabSelectionState, tabBarTop: $tabBarTop, showAccount: showAccount)
+                .navigationTransition(.zoom(sourceID: album.id, in: albumTransition))
         }
         .accessibilityIdentifier("albums-root")
     }
 
     private func albumLink(_ album: AlbumSummary, compact: Bool) -> some View {
-        NavigationLink(value: album) { AlbumCard(album: album, media: media, compact: compact, sort: sort, persistence: persistence, scope: accountScope) }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("album-\(album.id)")
+        NavigationLink(value: album) {
+            AlbumCard(album: album, media: media, compact: compact, sort: sort, persistence: persistence,
+                      scope: accountScope, transitionNamespace: albumTransition)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("album-\(album.id)")
     }
 }
 
@@ -281,6 +286,7 @@ private struct AlbumCard: View {
     let sort: AlbumSort
     let persistence: (any AlbumCatalogStoring)?
     let scope: MediaAccountScope?
+    let transitionNamespace: Namespace.ID
 
     var body: some View {
         Group {
@@ -326,6 +332,9 @@ private struct AlbumCard: View {
     private var cover: some View {
         AlbumCover(album: album, media: media, persistence: persistence, scope: scope)
             .clipShape(.rect(cornerRadius: compact ? 12 : DesignMetrics.defaultCornerRadius))
+            .matchedTransitionSource(id: album.id, in: transitionNamespace) { source in
+                source.clipShape(.rect(cornerRadius: compact ? 12 : DesignMetrics.defaultCornerRadius))
+            }
     }
 }
 
