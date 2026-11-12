@@ -215,6 +215,7 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
     var albumsScrollRequest: Int = 0
     let groupedScrollRequests: [NativeTabDestination: Int]
     let groupedMediaOwner: NativeTabDestination
+    var timelineRangeRequestGeneration = 0
     let libraryContentRevision: NativeLibraryContentRevision
     let photosRetapped: () -> Void
     let videosRetapped: () -> Void
@@ -445,10 +446,11 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
             {
                 albumsController.rootView = hostedRoot(next.albums)
             }
-            if previous.photosScrollRequest != next.photosScrollRequest {
+            let rangeRequestChanged = previous.timelineRangeRequestGeneration != next.timelineRangeRequestGeneration
+            if previous.photosScrollRequest != next.photosScrollRequest || rangeRequestChanged {
                 photosController.rootView = hostedRoot(next.photos)
             }
-            if previous.videosScrollRequest != next.videosScrollRequest {
+            if previous.videosScrollRequest != next.videosScrollRequest || rangeRequestChanged {
                 videosController.rootView = hostedRoot(next.videos)
             }
             if didResolveLibrary,

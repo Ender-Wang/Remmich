@@ -415,6 +415,7 @@ struct PhotosView: View {
         navigationPath: Binding<[PhotosRangeRoute]>,
         tabBarTop: Binding<CGFloat>,
         rotationState: TimelineRotationState? = nil,
+        timelineRuntime: TimelineSemanticRuntime? = nil,
         scrollToLatestRequest: Int = 0,
         requestedLibraryRange: TimelineLibraryRangeRequest? = nil,
         requestedLibraryRangeHandled: @escaping () -> Void = {},
@@ -438,6 +439,7 @@ struct PhotosView: View {
         _navigationPath = navigationPath
         _tabBarTop = tabBarTop
         self.rotationState = rotationState
+        _semanticRuntime = State(initialValue: timelineRuntime ?? TimelineSemanticRuntime())
         self.scrollToLatestRequest = scrollToLatestRequest
         self.requestedLibraryRange = requestedLibraryRange
         self.requestedLibraryRangeHandled = requestedLibraryRangeHandled
@@ -485,7 +487,7 @@ struct PhotosView: View {
         }
         .navigationTitle(navigationTitle)
         .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(hasInteractivePreview || (collectionTitle != nil && (!navigationPath.isEmpty || libraryRange != .all)))
+        .navigationBarBackButtonHidden(hasInteractivePreview || collectionTitle != nil || !navigationPath.isEmpty || libraryRange != .all)
         .nativeEdgeBackAction(active: viewerRoute == nil && (hasInteractivePreview || !navigationPath.isEmpty || libraryRange != .all),
                               animatesContent: assetPreview == nil, action: navigateBack)
         .environment(\.timelineAssetPreviewAction, previewAction)
@@ -525,6 +527,17 @@ struct PhotosView: View {
             Text(memoryViewerErrorMessage ?? "The memory’s assets aren’t available.")
         }
         .overlay(alignment: .top) {
+            if collectionTitle == nil || !navigationPath.isEmpty, UIDevice.current.userInterfaceIdiom == .phone,
+               !hasInteractivePreview, !navigationPath.isEmpty || libraryRange != .all
+            {
+                HStack {
+                    TimelineBackButton(identifier: "timeline-range-back", back: navigateBack,
+                                       returnToTimeline: returnToRootTimeline)
+                    Spacer()
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+            }
             if navigationPath.isEmpty, let collectionTitle {
                 HStack(alignment: .top, spacing: 12) {
                     Button(action: collectionBack) {
@@ -590,25 +603,18 @@ struct PhotosView: View {
                 .accessibilityHidden(hasInteractivePreview)
             }
         }
-        .toolbar(collectionTitle == nil ? .automatic : navigationPath.isEmpty ? .hidden : .visible, for: .navigationBar)
-        .toolbarBackground(navigationPath.isEmpty ? .hidden : .visible, for: .navigationBar)
+        .toolbar(UIDevice.current.userInterfaceIdiom == .phone || (collectionTitle != nil && navigationPath.isEmpty) ? .hidden : .visible, for: .navigationBar)
+        .toolbarBackground(UIDevice.current.userInterfaceIdiom == .phone || navigationPath.isEmpty ? .hidden : .visible, for: .navigationBar)
         .toolbar {
-            if !hasInteractivePreview, !navigationPath.isEmpty || libraryRange != .all {
+            // Album roots already own Back in their multiline header overlay.
+            if UIDevice.current.userInterfaceIdiom == .pad, !hasInteractivePreview,
+               !navigationPath.isEmpty || (collectionTitle == nil && libraryRange != .all)
+            {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button(action: navigateBack) {
-                        Label("Back", systemImage: "chevron.backward")
-                    }
-                    .accessibilityIdentifier("timeline-range-back")
-                    .highPriorityGesture(LongPressGesture(minimumDuration: 0.35)
-                        .exclusively(before: TapGesture())
-                        .onEnded { result in
-                            switch result {
-                            case .first: returnToRootTimeline()
-                            case .second: navigateBack()
-                            }
-                        })
-                    .accessibilityAction(named: "Return to Timeline", returnToRootTimeline)
+                    TimelineBackButton(identifier: "timeline-range-back", back: navigateBack,
+                                       returnToTimeline: returnToRootTimeline)
                 }
+                .sharedBackgroundVisibility(.hidden)
             }
             if UIDevice.current.userInterfaceIdiom == .pad,
                let title = navigationPath.last?.navigationTitle
@@ -869,9 +875,7 @@ struct PhotosView: View {
             let barHeight = tabBarTop > 0
                 ? max(0, frame.maxY - tabBarTop)
                 : TimelineRangeGridLayout.minimumBottomNavigationHeight(isPhone: isPhone, viewportSize: geometry.size)
-            let topInset = collectionTitle == nil
-                ? TimelineMemoryLaneSafeArea.topInset(proposed: geometry.safeAreaInsets.top, window: windowTopInset)
-                : 0
+            let topInset = TimelineMemoryLaneSafeArea.topInset(proposed: geometry.safeAreaInsets.top, window: windowTopInset)
             // Keep the row's scroll clearance while compact chrome hides it,
             // so showing the row does not move the timeline underneath it.
             let bottomClearance = isPhone ? barHeight : 0
@@ -902,7 +906,7 @@ struct PhotosView: View {
                         },
                         previewAsset: previewAction,
                         selectGroup: { route, coverID in
-                            selectRoute(semanticRoute(route, coverID: coverID))
+                            selectRoute(semanticRoute(route, coverID: coverID), representativeAssetID: coverID)
                         },
                         scaleChanged: semanticScaleChanged,
                         transitionScaleChanged: semanticTransitionScaleChanged,
@@ -959,7 +963,7 @@ struct PhotosView: View {
                 windowTopInset = inset
             }
         }
-        .ignoresSafeArea(.container, edges: collectionTitle == nil ? [.top, .horizontal, .bottom] : [.horizontal, .bottom])
+        .ignoresSafeArea(.container, edges: [.top, .horizontal, .bottom])
         .safeAreaInset(edge: .top, spacing: 0) {
             if case let .failed(message) = store.refreshState {
                 TimelineRefreshError(message: message) {
@@ -1017,6 +1021,9 @@ struct PhotosView: View {
     }
 
     private func semanticScaleChanged(_ scale: TimelineSemanticScale) {
+        if libraryRange == .all, !scale.isAssets {
+            semanticRuntime.lastVisitedAssetID = nil
+        }
         var transaction = Transaction(animation: nil)
         transaction.disablesAnimations = true
         withTransaction(transaction) {
@@ -1104,11 +1111,16 @@ struct PhotosView: View {
                 updateReturningAssetSources()
             },
             assetSelected: { asset, assets in
+                semanticRuntime.lastVisitedAssetID = asset.id
                 presentViewer(AssetViewerRoute(
                     selectedAsset: asset,
                     initialAssets: assets,
                     origin: .scoped(route: route, contentName: contentName)
                 ))
+            },
+            focusChanged: { assetID in
+                guard navigationPath.last == route, viewerRoute == nil else { return }
+                semanticRuntime.lastVisitedAssetID = assetID
             }
         )
         .navigationTitle(route.navigationTitle)
@@ -1249,7 +1261,10 @@ struct PhotosView: View {
         presentViewer(route, sourceOverride: (target, preview.previewImage ?? preview.image))
     }
 
-    private func selectRoute(_ route: PhotosRangeRoute) {
+    private func selectRoute(_ route: PhotosRangeRoute, representativeAssetID: String? = nil) {
+        if let representativeAssetID {
+            semanticRuntime.lastVisitedAssetID = representativeAssetID
+        }
         withAnimation(.smooth(duration: 0.25)) {
             navigationPath.append(route)
         }
@@ -1286,6 +1301,7 @@ struct PhotosView: View {
 
     private func returnToRootTimeline() {
         retireDismissedPreview()
+        semanticRuntime.prepareRootReturn()
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) {

@@ -745,6 +745,7 @@ struct PhotosRangeAssetsView: View {
     @State private var visibleAssets: [String: Date] = [:]
     @State private var layoutAnchorID: String?
     @State private var layoutRestoreTask: Task<Void, Never>?
+    var focusChanged: (String) -> Void = { _ in }
 
     var body: some View {
         ZStack {
@@ -883,7 +884,7 @@ struct PhotosRangeAssetsView: View {
     }
 
     private var centerVisibleAssetID: String? {
-        let ordered = visibleAssets.sorted { $0.value < $1.value }
+        let ordered = visibleAssets.sorted { $0.value == $1.value ? $0.key < $1.key : $0.value < $1.value }
         guard !ordered.isEmpty else { return nil }
         return ordered[ordered.count / 2].key
     }
@@ -907,6 +908,9 @@ struct PhotosRangeAssetsView: View {
             visibleAssets[asset.id] = asset.captureLocalDate
         } else {
             visibleAssets.removeValue(forKey: asset.id)
+        }
+        if let centerVisibleAssetID {
+            focusChanged(centerVisibleAssetID)
         }
         viewportChanged(asset, visible)
     }

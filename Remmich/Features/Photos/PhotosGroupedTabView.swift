@@ -25,6 +25,8 @@ struct PhotosGroupedTabView: View {
     let assetDetails: any AssetDetailReading
     let contentName: String
     let rangePinched: (PhotosGroupedTabKind, PhotosPinchGesture) -> Void
+    let timelineRuntime: TimelineSemanticRuntime
+    let returnToTimeline: () -> Void
     var viewerVisibilityChanged: (Bool) -> Void = { _ in }
     let showAccount: () -> Void
 
@@ -66,12 +68,25 @@ struct PhotosGroupedTabView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(.hidden, for: .navigationBar)
             .toolbar {
+                if path.isEmpty, UIDevice.current.userInterfaceIdiom == .pad {
+                    ToolbarItem(placement: .topBarLeading) { backButton }
+                        .sharedBackgroundVisibility(.hidden)
+                }
                 AccountToolbarButton(action: showAccount)
             }
             .navigationDestination(for: PhotosRangeRoute.self) { route in
                 destination(route)
             }
         }
+        .toolbar(UIDevice.current.userInterfaceIdiom == .phone ? .hidden : .visible, for: .navigationBar)
+        .overlay(alignment: .topLeading) {
+            if UIDevice.current.userInterfaceIdiom == .phone, viewerRoute == nil {
+                backButton
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+            }
+        }
+        .nativeEdgeBackAction(active: isSelected && viewerRoute == nil, action: backOneLevel)
         .overlay {
             if let viewerRoute {
                 AssetViewerView(
@@ -107,17 +122,27 @@ struct PhotosGroupedTabView: View {
             onPinch: pinchAssetLayout,
             transitionNamespace: viewerNamespace,
             assetSelected: { asset, assets in
+                timelineRuntime.lastVisitedAssetID = asset.id
                 viewerRoute = AssetViewerRoute(
                     selectedAsset: asset,
                     initialAssets: assets,
                     origin: .scoped(route: route, contentName: contentName)
                 )
+            },
+            focusChanged: { assetID in
+                guard path.last == route, viewerRoute == nil else { return }
+                timelineRuntime.lastVisitedAssetID = assetID
             }
         )
         .navigationTitle(route.navigationTitle)
         .navigationBarTitleDisplayMode(.inline)
-        .toolbarBackground(.visible, for: .navigationBar)
+        .navigationBarBackButtonHidden(true)
+        .toolbarBackground(UIDevice.current.userInterfaceIdiom == .phone ? .hidden : .visible, for: .navigationBar)
         .toolbar {
+            if UIDevice.current.userInterfaceIdiom == .pad {
+                ToolbarItem(placement: .topBarLeading) { backButton }
+                    .sharedBackgroundVisibility(.hidden)
+            }
             if UIDevice.current.userInterfaceIdiom == .pad {
                 ToolbarItem(placement: .principal) {
                     TimelineRangeNavigationTitle(title: route.navigationTitle)
@@ -126,7 +151,25 @@ struct PhotosGroupedTabView: View {
         }
     }
 
-    private func open(_ route: PhotosRangeRoute, initialAssetID _: String?) {
+    private var backButton: some View {
+        TimelineBackButton(identifier: "timeline-grouped-back", back: backOneLevel) {
+            path = []
+            returnToTimeline()
+        }
+    }
+
+    private func backOneLevel() {
+        if !path.isEmpty {
+            path.removeLast()
+        } else if let gesture = PhotosPinchGesture(magnification: 1.5) {
+            rangePinched(kind, gesture)
+        }
+    }
+
+    private func open(_ route: PhotosRangeRoute, initialAssetID: String?) {
+        if let initialAssetID {
+            timelineRuntime.lastVisitedAssetID = initialAssetID
+        }
         path.append(route)
     }
 

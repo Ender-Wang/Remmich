@@ -26,6 +26,8 @@ struct AppShellView: View {
     @State private var tabSelectionState = NativeTabSelectionState()
     @State private var tabContentActivationState = NativeTabContentActivationState()
     @State private var timelineRotationState = TimelineRotationState()
+    @State private var photosTimelineRuntime = TimelineSemanticRuntime()
+    @State private var videosTimelineRuntime = TimelineSemanticRuntime()
     @State private var tabBarTop: CGFloat = 0
     @State private var compactPhotosTabs = false
     @State private var compactVideosTabs = false
@@ -69,6 +71,7 @@ struct AppShellView: View {
             albumsScrollRequest: albumsScrollRequest,
             groupedScrollRequests: groupedScrollRequests,
             groupedMediaOwner: groupedMediaOwner,
+            timelineRangeRequestGeneration: rangeRequestGeneration,
             libraryContentRevision: .init(
                 profile: profile,
                 activeRoute: activeRoute,
@@ -104,6 +107,7 @@ struct AppShellView: View {
                             navigationPath: $photosPath,
                             tabBarTop: $tabBarTop,
                             rotationState: timelineRotationState,
+                            timelineRuntime: photosTimelineRuntime,
                             scrollToLatestRequest: photosScrollRequest,
                             requestedLibraryRange: photosRangeRequest,
                             requestedLibraryRangeHandled: { photosRangeRequest = nil },
@@ -138,6 +142,7 @@ struct AppShellView: View {
                             navigationPath: $videosPath,
                             tabBarTop: $tabBarTop,
                             rotationState: timelineRotationState,
+                            timelineRuntime: videosTimelineRuntime,
                             scrollToLatestRequest: videosScrollRequest,
                             requestedLibraryRange: videosRangeRequest,
                             requestedLibraryRangeHandled: { videosRangeRequest = nil },
@@ -218,6 +223,8 @@ struct AppShellView: View {
                         assetDetails: assetDetails,
                         contentName: groupedMediaContentName,
                         rangePinched: pinchGroupedRange,
+                        timelineRuntime: groupedTimelineRuntime,
+                        returnToTimeline: returnGroupedTimelineToRoot,
                         viewerVisibilityChanged: setViewerPresented,
                         showAccount: showAccount
                     )
@@ -241,6 +248,8 @@ struct AppShellView: View {
                         assetDetails: assetDetails,
                         contentName: groupedMediaContentName,
                         rangePinched: pinchGroupedRange,
+                        timelineRuntime: groupedTimelineRuntime,
+                        returnToTimeline: returnGroupedTimelineToRoot,
                         viewerVisibilityChanged: setViewerPresented,
                         showAccount: showAccount
                     )
@@ -264,6 +273,8 @@ struct AppShellView: View {
                         assetDetails: assetDetails,
                         contentName: groupedMediaContentName,
                         rangePinched: pinchGroupedRange,
+                        timelineRuntime: groupedTimelineRuntime,
+                        returnToTimeline: returnGroupedTimelineToRoot,
                         viewerVisibilityChanged: setViewerPresented,
                         showAccount: showAccount
                     )
@@ -345,6 +356,14 @@ struct AppShellView: View {
         .onChange(of: viewerPresented || !viewerPresentations.entries.isEmpty) { _, presented in
             libraryIndex.setTimelinePublicationDeferred(presented)
         }
+        .onChange(of: tabSelectionState.selection) { previous, current in
+            guard current == .years || current == .months || current == .weeks else { return }
+            if previous == .photos {
+                photosTimelineRuntime.beginGrouping()
+            } else if previous == .videos {
+                videosTimelineRuntime.beginGrouping()
+            }
+        }
         .onDisappear { viewerPresentations.removeAll() }
         .environment(\.assetLocations, sessionController?.locations)
     }
@@ -386,6 +405,23 @@ struct AppShellView: View {
             }
         case (.years, .coarser):
             break
+        }
+    }
+
+    private var groupedTimelineRuntime: TimelineSemanticRuntime {
+        groupedMediaOwner == .videos ? videosTimelineRuntime : photosTimelineRuntime
+    }
+
+    private func returnGroupedTimelineToRoot() {
+        groupedTimelineRuntime.prepareRootReturn()
+        rangeRequestGeneration &+= 1
+        let request = TimelineLibraryRangeRequest(range: .all, generation: rangeRequestGeneration)
+        if groupedMediaOwner == .videos {
+            videosRangeRequest = request
+            tabSelectionState.selection = .videos
+        } else {
+            photosRangeRequest = request
+            tabSelectionState.selection = .photos
         }
     }
 

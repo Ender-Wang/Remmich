@@ -565,6 +565,64 @@ struct TimelineSemanticZoomTests {
         }
     }
 
+    @Test(arguments: [TimelineSemanticScale.day, .week, .month, .year], [false, true])
+    @MainActor func rootReturnUsesVisitedAssetOrPreGroupingViewport(groupedScale: TimelineSemanticScale, visited: Bool) throws {
+        let catalog = TimelineSemanticCatalog(assets: (0 ..< 300).map {
+            asset(String(format: "%03d", $0), String(format: "2027-01-%02dT12:00:00Z", $0 / 10 + 1))
+        })
+        let controller = TimelineSemanticCollectionController()
+        defer { controller.stop() }
+        let media = MediaLibraryController()
+        let runtime = TimelineSemanticRuntime()
+        func input(_ scale: TimelineSemanticScale, active: Bool = true) -> TimelineSemanticCollectionView {
+            .init(catalog: catalog, revision: 1, scale: scale, media: media, namespace: nil,
+                  bottomClearance: 96, topClearance: 64, runtime: runtime, latestRequest: 0, isActive: active,
+                  hiddenThumbnailID: nil, hiddenLivePhotoID: nil, selectAsset: { _, _ in }, selectGroup: { _, _ in },
+                  scaleChanged: { _ in }, scrolled: { _, _, _ in }, visibleAssetsChanged: { _, _, _ in }, refresh: {})
+        }
+        controller.update(input(.square))
+        controller.view.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        controller.view.setNeedsLayout()
+        controller.view.layoutIfNeeded()
+        let collection = try #require(controller.view.subviews.compactMap { $0 as? UICollectionView }.first)
+        collection.setContentOffset(CGPoint(x: 0, y: collection.contentSize.height * 0.35), animated: false)
+        collection.layoutIfNeeded()
+        let originalOffset = collection.contentOffset.y
+        controller.update(input(groupedScale))
+        if visited {
+            // A child date view hides the grouped list; normal Back reveals it.
+            controller.update(input(groupedScale, active: false))
+            controller.update(input(groupedScale))
+        }
+        let selectedID = catalog.assets[200].id
+        controller.prepareRootReturn(assetID: visited ? selectedID : nil)
+        controller.update(input(.square))
+        collection.layoutIfNeeded()
+        if visited {
+            let dataSource = try #require(collection.dataSource as? UICollectionViewDiffableDataSource<Int, String>)
+            let path = try #require(dataSource.indexPath(for: selectedID))
+            let frame = try #require(collection.collectionViewLayout.layoutAttributesForItem(at: path)).frame
+            #expect(abs(frame.midY - collection.bounds.midY) < 1)
+        } else {
+            #expect(abs(collection.contentOffset.y - originalOffset) < 1)
+        }
+        let returnedOffset = collection.contentOffset.y
+        controller.update(input(groupedScale))
+        controller.prepareRootReturn(assetID: nil)
+        controller.update(input(.square))
+        #expect(abs(collection.contentOffset.y - returnedOffset) < 1)
+        // Compact date tabs leave the root collection at its asset scale.
+        // They must share its bookmark and restore it when the root reactivates.
+        runtime.controller = controller
+        runtime.beginGrouping()
+        controller.update(input(.square, active: false))
+        runtime.lastVisitedAssetID = visited ? selectedID : nil
+        runtime.prepareRootReturn()
+        controller.update(input(.square))
+        #expect(abs(collection.contentOffset.y - returnedOffset) < 1)
+        #expect(runtime.lastVisitedAssetID == nil)
+    }
+
     @Test @MainActor func collectionStagesTargetAndAppliesBottomClearanceOnce() throws {
         let catalog = TimelineSemanticCatalog(assets: (0 ..< 60).map { asset(String(format: "%03d", $0), "2027-01-01T12:00:00Z") })
         let controller = TimelineSemanticCollectionController()
@@ -837,6 +895,45 @@ struct TimelineSemanticZoomTests {
         controller.stop()
         #expect(publications == 0)
         withExtendedLifetime(subscriptions) {}
+    }
+
+    @Test @MainActor func toolbarBackDispatchesHoldOnRecognitionAndTapOnCompletion() {
+        var backs = 0
+        var rootReturns = 0
+        let coordinator = TimelineBackGestureSurface.Coordinator(back: { backs += 1 }, returnToTimeline: { rootReturns += 1 })
+        let recognizer = SemanticTestPinch()
+        recognizer.testState = .began
+        coordinator.tapped(recognizer)
+        coordinator.held(recognizer)
+        #expect(backs == 0 && rootReturns == 1)
+        recognizer.testState = .changed
+        coordinator.held(recognizer)
+        recognizer.testState = .ended
+        coordinator.held(recognizer)
+        #expect(rootReturns == 1)
+        coordinator.tapped(recognizer)
+        #expect(backs == 1)
+        recognizer.testState = .cancelled
+        coordinator.held(recognizer)
+        coordinator.tapped(recognizer)
+        #expect(backs == 1 && rootReturns == 1)
+    }
+
+    @Test @MainActor func coverVisibilityDefersRepresentableUpdatesAndRejectsSupersededChanges() async {
+        let visibility = TimelineSemanticCoverVisibility(isVisible: false)
+        var publications = 0
+        let subscription = visibility.objectWillChange.sink { publications += 1 }
+        visibility.setVisible(true, deferred: true)
+        #expect(!visibility.isVisible && publications == 0)
+        visibility.setVisible(false, deferred: true)
+        await Task.yield()
+        #expect(!visibility.isVisible && publications == 0)
+        visibility.setVisible(true, deferred: true)
+        for _ in 0 ..< 100 where !visibility.isVisible {
+            await Task.yield()
+        }
+        #expect(visibility.isVisible && publications == 1)
+        withExtendedLifetime(subscription) {}
     }
 
     @Test @MainActor func coverVisibilityPublishesOnlyLiveVisibilityChanges() {
