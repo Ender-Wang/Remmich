@@ -527,16 +527,27 @@ struct PhotosView: View {
             Text(memoryViewerErrorMessage ?? "The memory’s assets aren’t available.")
         }
         .overlay(alignment: .top) {
-            if collectionTitle == nil || !navigationPath.isEmpty, UIDevice.current.userInterfaceIdiom == .phone,
-               !hasInteractivePreview, !navigationPath.isEmpty || libraryRange != .all
-            {
-                HStack {
-                    TimelineBackButton(identifier: "timeline-range-back", back: navigateBack,
-                                       returnToTimeline: returnToRootTimeline)
-                    Spacer()
+            if UIDevice.current.userInterfaceIdiom == .phone {
+                let showsBack = !hasInteractivePreview
+                    && (!navigationPath.isEmpty || (collectionTitle == nil && libraryRange != .all))
+                GeometryReader { geometry in
+                    HStack {
+                        TimelineBackButton(identifier: "timeline-range-back", back: navigateBack,
+                                           returnToTimeline: returnToRootTimeline)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .offset(x: showsBack || reduceMotion ? 0 : -max(0, geometry.frame(in: .global).minX) - 76)
+                    .opacity(reduceMotion && !showsBack ? 0 : 1)
+                    .allowsHitTesting(showsBack)
+                    .accessibilityHidden(!showsBack)
+                    .animation(reduceMotion ? .easeInOut(duration: 0.2) : .spring(duration: 0.32, bounce: 0), value: showsBack)
+                    // Retarget the mounted spring to retain velocity when
+                    // navigation reverses, independently of collection updates.
+                    .transaction { $0.disablesAnimations = false }
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
+                .frame(height: 60)
             }
             if navigationPath.isEmpty, let collectionTitle {
                 HStack(alignment: .top, spacing: 12) {
