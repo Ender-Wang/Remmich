@@ -56,6 +56,7 @@ struct AlbumsView: View {
     @State private var listScrollPosition = ScrollPosition(edge: .bottom)
     @State private var listVisible = false
     @Namespace private var albumTransition
+    @State private var timelineSessions = AlbumTimelineSessions()
     @FocusState private var searchFocused: Bool
 
     init(source: any AlbumReading & TimelineReading, media: MediaLibraryController,
@@ -262,6 +263,7 @@ struct AlbumsView: View {
             AlbumDetailView(album: album, source: source, media: media, assetDetails: assetDetails,
                             activeEndpoint: activeEndpoint, scrollToLatestRequest: scrollToLatestRequest,
                             persistence: persistence, scope: accountScope,
+                            timelineRuntime: timelineSessions.runtime(albumID: album.id, namespace: accountScope?.cacheNamespace ?? "unscoped"),
                             viewerPresentations: viewerPresentations,
                             tabSelectionState: tabSelectionState, tabBarTop: $tabBarTop, showAccount: showAccount)
                 .navigationTransition(.zoom(sourceID: album.id, in: albumTransition))
@@ -379,6 +381,20 @@ private struct AlbumCover: View {
     }
 }
 
+@MainActor
+private final class AlbumTimelineSessions {
+    private var runtimes: [String: [String: TimelineSemanticRuntime]] = [:]
+
+    func runtime(albumID: String, namespace: String) -> TimelineSemanticRuntime {
+        if let runtime = runtimes[namespace]?[albumID] {
+            return runtime
+        }
+        let runtime = TimelineSemanticRuntime()
+        runtimes[namespace, default: [:]][albumID] = runtime
+        return runtime
+    }
+}
+
 private struct AlbumDetailView: View {
     let album: AlbumSummary
     let source: any AlbumReading & TimelineReading
@@ -386,6 +402,7 @@ private struct AlbumDetailView: View {
     let assetDetails: any AssetDetailReading
     let activeEndpoint: URL?
     let scrollToLatestRequest: Int
+    let timelineRuntime: TimelineSemanticRuntime
     let viewerPresentations: AssetViewerPresentationStore
     let tabSelectionState: NativeTabSelectionState
     @Binding var tabBarTop: CGFloat
@@ -405,6 +422,7 @@ private struct AlbumDetailView: View {
          assetDetails: any AssetDetailReading, activeEndpoint: URL?,
          scrollToLatestRequest: Int,
          persistence: (any AlbumCatalogStoring)?, scope: MediaAccountScope?,
+         timelineRuntime: TimelineSemanticRuntime,
          viewerPresentations: AssetViewerPresentationStore, tabSelectionState: NativeTabSelectionState,
          tabBarTop: Binding<CGFloat>, showAccount: @escaping () -> Void)
     {
@@ -414,6 +432,7 @@ private struct AlbumDetailView: View {
         self.assetDetails = assetDetails
         self.activeEndpoint = activeEndpoint
         self.scrollToLatestRequest = scrollToLatestRequest
+        self.timelineRuntime = timelineRuntime
         self.viewerPresentations = viewerPresentations
         self.tabSelectionState = tabSelectionState
         _tabBarTop = tabBarTop
@@ -427,7 +446,8 @@ private struct AlbumDetailView: View {
 
     var body: some View {
         PhotosView(store: store, presentation: presentation, media: media, assetDetails: assetDetails,
-                   navigationPath: $path, tabBarTop: $tabBarTop, scrollToLatestRequest: scrollToLatestRequest,
+                   navigationPath: $path, tabBarTop: $tabBarTop, timelineRuntime: timelineRuntime,
+                   scrollToLatestRequest: scrollToLatestRequest,
                    contentName: detail.title,
                    rootAccessibilityID: "album-assets-\(album.id)", collectionTitle: detail.title,
                    collectionSubtitle: detail.countLabel, collectionInfoAction: { showsDetails = true },

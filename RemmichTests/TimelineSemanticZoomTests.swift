@@ -623,6 +623,43 @@ struct TimelineSemanticZoomTests {
         #expect(runtime.lastVisitedAssetID == nil)
     }
 
+    @Test @MainActor func browsingPositionSurvivesControllerReplacementWithoutCrossingRuntimes() throws {
+        let catalog = TimelineSemanticCatalog(assets: (0 ..< 300).map {
+            asset(String(format: "%03d", $0), "2027-01-01T12:00:00Z")
+        })
+        let media = MediaLibraryController()
+        let runtime = TimelineSemanticRuntime()
+        func makeController(_ runtime: TimelineSemanticRuntime, startsEmpty: Bool = false) throws -> (TimelineSemanticCollectionController, UICollectionView) {
+            let controller = TimelineSemanticCollectionController()
+            if startsEmpty {
+                controller.update(.init(catalog: TimelineSemanticCatalog(assets: []), revision: 0, scale: .square, media: media, namespace: nil,
+                                        bottomClearance: 96, topClearance: 64, runtime: runtime, latestRequest: 0, isActive: true,
+                                        hiddenThumbnailID: nil, hiddenLivePhotoID: nil, selectAsset: { _, _ in }, selectGroup: { _, _ in },
+                                        scaleChanged: { _ in }, scrolled: { _, _, _ in }, visibleAssetsChanged: { _, _, _ in }, refresh: {}))
+            }
+            controller.update(.init(catalog: catalog, revision: 1, scale: .square, media: media, namespace: nil,
+                                    bottomClearance: 96, topClearance: 64, runtime: runtime, latestRequest: 0, isActive: true,
+                                    hiddenThumbnailID: nil, hiddenLivePhotoID: nil, selectAsset: { _, _ in }, selectGroup: { _, _ in },
+                                    scaleChanged: { _ in }, scrolled: { _, _, _ in }, visibleAssetsChanged: { _, _, _ in }, refresh: {}))
+            controller.view.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+            controller.view.setNeedsLayout()
+            controller.view.layoutIfNeeded()
+            return try (controller, #require(controller.view.subviews.compactMap { $0 as? UICollectionView }.first))
+        }
+        let (original, collection) = try makeController(runtime)
+        collection.setContentOffset(CGPoint(x: 0, y: collection.contentSize.height * 0.35), animated: false)
+        collection.layoutIfNeeded()
+        let expectedOffset = collection.contentOffset.y
+        original.stop()
+        let (restored, restoredCollection) = try makeController(runtime, startsEmpty: true)
+        defer { restored.stop() }
+        #expect(abs(restoredCollection.contentOffset.y - expectedOffset) < 1)
+        let (other, otherCollection) = try makeController(TimelineSemanticRuntime())
+        defer { other.stop() }
+        #expect(abs(otherCollection.contentOffset.y - expectedOffset) > 100)
+        #expect(abs(otherCollection.contentOffset.y - (otherCollection.contentSize.height - otherCollection.bounds.height + 96)) < 1)
+    }
+
     @Test @MainActor func collectionStagesTargetAndAppliesBottomClearanceOnce() throws {
         let catalog = TimelineSemanticCatalog(assets: (0 ..< 60).map { asset(String(format: "%03d", $0), "2027-01-01T12:00:00Z") })
         let controller = TimelineSemanticCollectionController()

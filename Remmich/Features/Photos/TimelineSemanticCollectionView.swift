@@ -10,6 +10,7 @@ import UIKit
 final class TimelineSemanticRuntime {
     weak var controller: TimelineSemanticCollectionController?
     var lastVisitedAssetID: String?
+    fileprivate var browsingAnchor: TimelineRootReturnAnchor?
 
     func dismissalTarget(assetID: String, aspectRatio: Double) -> AssetViewerDismissalTarget? {
         controller?.dismissalTarget(assetID: assetID, aspectRatio: aspectRatio)
@@ -671,6 +672,15 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         lastSize = view.bounds.size
         completeProjections.removeAll()
         guard let catalog else { return }
+        if let anchor = pendingRootReturn, scale.isAssets, input?.isActive == true,
+           let asset = catalog.assetIndexes[anchor.assetID]
+        {
+            install(makeProjection(scale: scale, focus: asset), focusing: asset,
+                    viewportY: anchor.viewportFraction * collection.bounds.height,
+                    latest: anchor.atLatest, alignTop: anchor.atTop && !anchor.atLatest)
+            pendingRootReturn = nil
+            return
+        }
         let asset = focus.map(representativeIndex) ?? max(0, catalog.assets.count - 1)
         let next = makeProjection(scale: scale, focus: asset)
         install(next, focusing: asset, viewportY: focusY.map { $0 / sourceHeight * view.bounds.height },
@@ -709,6 +719,9 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         }
         let previous = input
         input = value
+        if previous == nil, pendingRootReturn == nil {
+            pendingRootReturn = value.runtime.browsingAnchor
+        }
         if pendingRootReturn == nil, let previous, revision == value.revision, scale == value.scale,
            previous.isActive == value.isActive, previous.latestRequest == value.latestRequest,
            previous.hiddenThumbnailID == value.hiddenThumbnailID, previous.hiddenLivePhotoID == value.hiddenLivePhotoID,
@@ -746,7 +759,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         let pinnedInsetChanged = abs(layout.pinnedHeaderTopInset - pinnedInset) > 0.5
         let latestRequested = value.latestRequest != lastLatestRequest
         lastLatestRequest = value.latestRequest
-        let jumpToLatest = latestRequested && value.isActive
+        let jumpToLatest = latestRequested && value.isActive && (previous != nil || pendingRootReturn == nil)
         let oldOffsetY = collection.contentOffset.y
         isInstalling = true
         collection.contentInset = UIEdgeInsets(top: value.topClearance, left: 0, bottom: value.bottomClearance, right: 0)
@@ -773,7 +786,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         // A latest request can arrive in the same SwiftUI transaction as a new
         // catalog. Build its final destination once instead of installing the
         // old focus and immediately replacing it with the newest window.
-        if let anchor = pendingRootReturn, scale.isAssets, value.isActive,
+        if let anchor = pendingRootReturn, scale.isAssets, value.isActive, !value.catalog.assets.isEmpty,
            value.catalog.assetIndexes[anchor.assetID] == nil
         {
             pendingRootReturn = preGroupingAnchor.flatMap {
@@ -1825,6 +1838,9 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
     }
 
     func stop() {
+        if let runtime = input?.runtime {
+            runtime.browsingAnchor = currentBrowsingAnchor() ?? preGroupingAnchor ?? runtime.browsingAnchor
+        }
         interrupted()
         windowExpansionTask?.cancel()
         windowExpansionTask = nil
@@ -1849,13 +1865,19 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
     }
 
     func captureRootReturnOrigin() {
+        if let anchor = currentBrowsingAnchor() {
+            preGroupingAnchor = anchor
+        }
+    }
+
+    private func currentBrowsingAnchor() -> TimelineRootReturnAnchor? {
         guard projection?.scale.isAssets == true,
-              let item = focusedItem(at: CGPoint(x: collection.bounds.midX, y: collection.bounds.midY)), let catalog else { return }
+              let item = focusedItem(at: CGPoint(x: collection.bounds.midX, y: collection.bounds.midY)), let catalog else { return nil }
         // update() may already hold the destination scale. Measure the
         // bookmark's edge against the still-installed asset projection.
         let atLatest = projection.map { $0.nodeRange.upperBound == catalog.count(at: $0.scale) } == true
             && layout.height - collection.contentOffset.y - collection.bounds.height + collection.contentInset.bottom < 24
-        preGroupingAnchor = TimelineRootReturnAnchor(
+        return TimelineRootReturnAnchor(
             assetID: catalog.assets[representativeIndex(item)].id,
             viewportFraction: (item.frame.midY - collection.contentOffset.y) / max(1, collection.bounds.height),
             atLatest: atLatest, atTop: collection.contentOffset.y <= -collection.contentInset.top + 1
