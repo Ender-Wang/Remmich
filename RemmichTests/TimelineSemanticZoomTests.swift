@@ -884,8 +884,35 @@ struct TimelineSemanticZoomTests {
 
         let collection = try #require(controller.view.subviews.compactMap { $0 as? UICollectionView }.first)
         #expect(controller.installationCount == before + 1)
-        #expect(abs(collection.contentSize.height - collection.contentOffset.y - collection.bounds.height + 96) < 0.5)
+        let remaining = collection.contentSize.height - collection.contentOffset.y - collection.bounds.height + 96
+        #expect(remaining >= -0.5 && remaining <= collection.bounds.height + 0.5)
         controller.stop()
+    }
+
+    @Test func latestScrollSettlesWithinOneMaterializedViewport() {
+        #expect(TimelineLatestScrollPolicy.startOffset(distance: 9900, destination: 10000, minimumOffset: -64, viewportHeight: 800, reduceMotion: false) == 9200)
+        #expect(TimelineLatestScrollPolicy.startOffset(distance: 100, destination: 10000, minimumOffset: -64, viewportHeight: 800, reduceMotion: false) == 9900)
+        #expect(TimelineLatestScrollPolicy.startOffset(distance: 0, destination: 10000, minimumOffset: -64, viewportHeight: 800, reduceMotion: false) == 10000)
+        #expect(TimelineLatestScrollPolicy.startOffset(distance: 9900, destination: 10000, minimumOffset: -64, viewportHeight: 800, reduceMotion: true) == 10000)
+        #expect(TimelineLatestScrollPolicy.startOffset(distance: 9900, destination: 100, minimumOffset: -64, viewportHeight: 800, reduceMotion: false) == -64)
+    }
+
+    @Test func latestScrollSpringRetainsVelocityAndIsRefreshRateIndependent() {
+        var singleStep = TimelineLatestScrollSpring(position: 0, velocity: 900, destination: 1000)
+        var splitStep = singleStep
+        _ = singleStep.advance(by: 1.0 / 60)
+        _ = splitStep.advance(by: 1.0 / 120)
+        _ = splitStep.advance(by: 1.0 / 120)
+        #expect(abs(singleStep.position - splitStep.position) < 0.0001)
+        #expect(abs(singleStep.velocity - splitStep.velocity) < 0.0001)
+        let position = singleStep.position
+        let velocity = singleStep.velocity
+        singleStep.destination = 1400
+        #expect(singleStep.position == position && singleStep.velocity == velocity)
+        for _ in 0 ..< 120 {
+            _ = singleStep.advance(by: 1.0 / 120)
+        }
+        #expect(singleStep.position == 1400 && singleStep.velocity == 0)
     }
 
     @Test @MainActor func returningFromYearsRetiresCoverObserversWithoutPublishing() throws {

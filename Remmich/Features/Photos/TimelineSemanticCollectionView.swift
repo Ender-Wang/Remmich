@@ -86,6 +86,38 @@ struct TimelineSemanticCollectionView: UIViewControllerRepresentable {
     }
 }
 
+nonisolated enum TimelineLatestScrollPolicy {
+    static func startOffset(distance: CGFloat, destination: CGFloat, minimumOffset: CGFloat, viewportHeight: CGFloat, reduceMotion: Bool) -> CGFloat {
+        guard !reduceMotion else { return destination }
+        let travel = min(max(0, distance), max(0, viewportHeight))
+        return max(minimumOffset, destination - travel)
+    }
+}
+
+nonisolated struct TimelineLatestScrollSpring {
+    var position: CGFloat
+    var velocity: CGFloat
+    var destination: CGFloat
+
+    mutating func advance(by elapsed: TimeInterval) -> Bool {
+        // Analytic critically damped motion stays stable across variable refresh
+        // rates and retains velocity when the destination changes.
+        let frequency: CGFloat = 20
+        let time = CGFloat(max(0, elapsed))
+        let displacement = position - destination
+        let coefficient = velocity + frequency * displacement
+        let decay = exp(-frequency * time)
+        position = destination + (displacement + coefficient * time) * decay
+        velocity = (velocity - frequency * coefficient * time) * decay
+        if abs(position - destination) < 0.5, abs(velocity) < 5 {
+            position = destination
+            velocity = 0
+            return true
+        }
+        return false
+    }
+}
+
 private final class TimelineSemanticCollectionLayout: UICollectionViewLayout {
     var frames: [CGRect] = []
     var headerIndices: [Int] = [] {
@@ -544,6 +576,11 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
     private var lastSize = CGSize.zero
     private var lastOffset: CGFloat = 0
     private var lastLatestRequest = 0
+    private var latestScrollSpring: TimelineLatestScrollSpring?
+    private var latestScrollDisplayLink: CADisplayLink?
+    private var latestScrollTimestamp: CFTimeInterval?
+    private var scrollSampleTimestamp: CFTimeInterval?
+    private var scrollVelocity: CGFloat = 0
     private var lastVisibleIDs = Set<String>()
     private var gesture: TimelineSemanticZoomGesture?
     private var pinchCentroid = CGPoint.zero
@@ -661,6 +698,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         guard view.bounds.width > 0, view.bounds.height > 0 else { return }
         let changed = lastSize != view.bounds.size
         guard changed else { return }
+        cancelLatestScroll()
         let focus = focusedItem(at: CGPoint(x: collection.bounds.midX, y: collection.bounds.midY))
         let focusY = focus.map { $0.frame.midY - collection.contentOffset.y }
         let sourceHeight = max(1, collection.bounds.height)
@@ -760,7 +798,11 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         let latestRequested = value.latestRequest != lastLatestRequest
         lastLatestRequest = value.latestRequest
         let jumpToLatest = latestRequested && value.isActive && (previous != nil || pendingRootReturn == nil)
+        if !jumpToLatest, needsCatalog || needsScale || bottomInsetChanged || !value.isActive {
+            cancelLatestScroll()
+        }
         let oldOffsetY = collection.contentOffset.y
+        let oldBottomGap = max(0, layout.height - oldOffsetY - collection.bounds.height + collection.contentInset.bottom)
         isInstalling = true
         collection.contentInset = UIEdgeInsets(top: value.topClearance, left: 0, bottom: value.bottomClearance, right: 0)
         layout.pinnedHeaderTopInset = pinnedInset
@@ -802,10 +844,19 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             pendingRootReturn = nil
         } else if jumpToLatest {
             pendingRootReturn = nil
-            if lastSize.width > 0 {
+            if latestScrollSpring != nil, !needsCatalog, !needsScale {
+                // The same running spring already targets latest. Repeated
+                // retaps must not reinstall its window or reset its velocity.
+            } else if lastSize.width > 0 {
+                let velocity = latestScrollSpring?.velocity
+                    ?? (scrollSampleTimestamp.map { CACurrentMediaTime() - $0 < 0.15 } == true ? scrollVelocity : 0)
+                cancelLatestScroll()
                 let focus = max(0, value.catalog.assets.count - 1)
                 install(makeProjection(scale: scale, focus: focus), focusing: focus, viewportY: nil, latest: true,
                         refreshContents: needsCatalog)
+                if previous != nil {
+                    settleLatestScroll(distance: needsCatalog || needsScale ? collection.bounds.height : oldBottomGap, velocity: velocity)
+                }
             }
         } else if needsCatalog || needsScale || projectionMissing || bottomInsetChanged {
             let focus = oldFocusID.flatMap { value.catalog.assetIndexes[$0] } ?? max(0, value.catalog.assets.count - 1)
@@ -842,6 +893,65 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         guard let projection, let catalog else { return true }
         return projection.nodeRange.upperBound == catalog.count(at: scale)
             && layout.height - collection.contentOffset.y - collection.bounds.height + collection.contentInset.bottom < 24
+    }
+
+    private func settleLatestScroll(distance: CGFloat, velocity: CGFloat) {
+        let destination = collection.contentOffset
+        let start = TimelineLatestScrollPolicy.startOffset(
+            distance: distance, destination: destination.y, minimumOffset: -collection.contentInset.top,
+            viewportHeight: collection.bounds.height,
+            reduceMotion: UIAccessibility.isReduceMotionEnabled
+        )
+        guard destination.y - start > 1 else { return }
+        // Only the destination window is materialized. Settle through its last
+        // viewport instead of scrolling through unmaterialized history.
+        isInstalling = true
+        collection.setContentOffset(CGPoint(x: destination.x, y: start), animated: false)
+        collection.layoutIfNeeded()
+        lastOffset = start
+        scrollSampleTimestamp = nil
+        isInstalling = false
+        latestScrollSpring = .init(position: start, velocity: velocity, destination: destination.y)
+        latestScrollTimestamp = nil
+        let link = CADisplayLink(target: self, selector: #selector(advanceLatestScroll(_:)))
+        latestScrollDisplayLink = link
+        link.add(to: .main, forMode: .common)
+    }
+
+    private func cancelLatestScroll() {
+        latestScrollDisplayLink?.invalidate()
+        latestScrollDisplayLink = nil
+        latestScrollSpring = nil
+        latestScrollTimestamp = nil
+    }
+
+    @objc private func advanceLatestScroll(_ link: CADisplayLink) {
+        guard var spring = latestScrollSpring, input?.isActive == true,
+              !collection.isTracking, !collection.isDragging else { cancelLatestScroll(); return }
+        if UIAccessibility.isReduceMotionEnabled {
+            cancelLatestScroll()
+            collection.setContentOffset(CGPoint(x: 0, y: spring.destination), animated: false)
+            publishScrollGestureBoundary()
+            publishViewport()
+            return
+        }
+        let elapsed = latestScrollTimestamp.map { link.timestamp - $0 } ?? link.duration
+        latestScrollTimestamp = link.timestamp
+        let finished = spring.advance(by: elapsed)
+        let bounded = min(max(-collection.contentInset.top, spring.position),
+                          max(0, layout.height - collection.bounds.height + collection.contentInset.bottom))
+        if bounded != spring.position {
+            spring.position = bounded
+            spring.velocity = 0
+        }
+        latestScrollSpring = spring
+        collection.setContentOffset(CGPoint(x: 0, y: spring.position), animated: false)
+        if finished {
+            cancelLatestScroll()
+            scrollVelocity = 0
+            publishScrollGestureBoundary()
+            publishViewport()
+        }
     }
 
     private func makeProjection(scale: TimelineSemanticScale, focus: Int, range: Range<Int>? = nil) -> TimelineSemanticProjection {
@@ -1122,6 +1232,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
     @objc private func pinched(_ recognizer: UIPinchGestureRecognizer) {
         switch recognizer.state {
         case .began:
+            cancelLatestScroll()
             finishPresentation()
             cancelTransitionWarmup()
             guard input?.isActive == true, let focused = focusedItem(at: recognizer.location(in: collection)) else { return }
@@ -1830,6 +1941,8 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
     }
 
     @objc private func interrupted() {
+        cancelLatestScroll()
+        collection?.setContentOffset(collection.contentOffset, animated: false)
         gesture = nil
         cancelTransitionWarmup()
         windowExpansionTask?.cancel()
@@ -1927,6 +2040,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
     }
 
     func scrollViewWillBeginDragging(_: UIScrollView) {
+        cancelLatestScroll()
         guard input?.isActive == true, gesture == nil, animator == nil else { return }
         publishScrollGestureBoundary()
         cancelTransitionWarmup()
@@ -1936,6 +2050,11 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         guard !isInstalling, gesture == nil, animator == nil, input?.isActive == true else { return }
+        let now = CACurrentMediaTime()
+        if let previous = scrollSampleTimestamp, now > previous {
+            scrollVelocity = (scrollView.contentOffset.y - lastOffset) / (now - previous)
+        }
+        scrollSampleTimestamp = now
         updateVisibleHeaderAppearances()
         let gap = bottomGap(for: scrollView)
         input?.scrolled(scrollView.contentOffset.y - lastOffset, gap, scrollView.isDragging || scrollView.isDecelerating)
