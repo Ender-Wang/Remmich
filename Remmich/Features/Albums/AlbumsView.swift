@@ -48,13 +48,15 @@ struct AlbumsView: View {
     @State private var query = ""
     @State private var sort: AlbumSort = .mostRecentPhoto
     @State private var sortDirection: AlbumSortDirection = .ascending
+    @State private var isReordering = false
+    @State private var reorderGeneration = 0
     @State private var showsList = false
     @State private var chromeTracker = PhotosChromeTracker()
     @State private var searchHidden = false
     @State private var searchRowHeight: CGFloat = 44
     @State private var scopePickerHeight: CGFloat = 32
     @State private var userScrolling = false
-    @State private var listScrollPosition = ScrollPosition(edge: .bottom)
+    @State private var visibleAlbumID: String?
     @State private var listVisible = false
     @Namespace private var albumTransition
     @State private var timelineSessions = AlbumTimelineSessions()
@@ -111,176 +113,211 @@ struct AlbumsView: View {
 
     private func albumContent(availableWidth: CGFloat) -> some View {
         let columnCount = max(1, Int((availableWidth - 32 + 16) / (155 + 16)))
-        return ScrollView {
-            VStack(spacing: 16) {
-                if let error = store.errorMessage, !store.albums.isEmpty {
-                    Button { Task { await store.load() } } label: {
-                        Label(error, systemImage: "arrow.clockwise").font(.callout)
-                    }.padding(.horizontal)
+        let coverWidth = min(260, max(1, (availableWidth - 32 - CGFloat(columnCount - 1) * 16) / CGFloat(columnCount)))
+        let displayedAlbums = showsList ? filtered : sort.gridOrder(filtered, columns: columnCount)
+        return ScrollViewReader { proxy in
+            ScrollView {
+                VStack(spacing: 16) {
+                    if let error = store.errorMessage, !store.albums.isEmpty {
+                        Button { Task { await store.load() } } label: {
+                            Label(error, systemImage: "arrow.clockwise").font(.callout)
+                        }.padding(.horizontal)
+                    }
+                    if !store.hasLoaded, store.errorMessage == nil {
+                        Color.clear
+                    } else if store.errorMessage != nil, !store.hasLoaded {
+                        ErrorStateView(title: "Couldn’t Load Albums") { Task { await store.load() } }
+                    } else if filtered.isEmpty {
+                        ContentUnavailableView(
+                            query.isEmpty ? (scope == .shared ? "No Shared Albums" : "No Albums") : "No Results",
+                            systemImage: "rectangle.stack",
+                            description: Text(query.isEmpty ? "Albums available to this account will appear here." : "Try another album name.")
+                        )
+                    } else {
+                        LazyVGrid(columns: showsList ? [GridItem(.flexible())]
+                            : Array(repeating: GridItem(.flexible(minimum: 155, maximum: 260), spacing: 16, alignment: .top), count: columnCount),
+                            alignment: .leading, spacing: showsList ? 12 : 20)
+                        {
+                            ForEach(displayedAlbums) { album in albumLink(album, compact: showsList, coverWidth: coverWidth) }
+                        }
+                        .scrollTargetLayout()
+                        .padding(.horizontal, 16)
+                        .transition(.identity)
+                    }
                 }
-                if !store.hasLoaded, store.errorMessage == nil {
-                    Color.clear
-                } else if store.errorMessage != nil, !store.hasLoaded {
-                    ErrorStateView(title: "Couldn’t Load Albums") { Task { await store.load() } }
-                } else if filtered.isEmpty {
-                    ContentUnavailableView(
-                        query.isEmpty ? (scope == .shared ? "No Shared Albums" : "No Albums") : "No Results",
-                        systemImage: "rectangle.stack",
-                        description: Text(query.isEmpty ? "Albums available to this account will appear here." : "Try another album name.")
-                    )
-                } else if showsList {
-                    LazyVStack(spacing: 12) {
-                        ForEach(filtered) { album in albumLink(album, compact: true) }
-                    }.padding(.horizontal)
-                } else {
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 155, maximum: 260), spacing: 16, alignment: .top), count: columnCount),
-                              alignment: .leading, spacing: 20)
-                    {
-                        ForEach(sort.gridOrder(filtered, columns: columnCount)) { album in albumLink(album, compact: false) }
-                    }.padding(.horizontal, 16)
+                .padding(.vertical)
+            }
+            .defaultScrollAnchor(.bottom, for: .initialOffset)
+            .ignoresSafeArea(.container, edges: .horizontal)
+            // Like timeline Memories, compact chrome must not resize the viewport
+            // or change the scroll clearance while the user is dragging.
+            .contentMargins(.top, expandedHeaderHeight, for: .scrollContent)
+            .contentMargins(.top, expandedHeaderHeight, for: .scrollIndicators)
+            .scrollPosition(id: $visibleAlbumID, anchor: .center)
+            .onAppear { listVisible = true }
+            .onDisappear {
+                listVisible = false
+                reorderGeneration &+= 1
+                isReordering = false
+            }
+            .onChange(of: scrollToLatestRequest) {
+                guard listVisible, let lastID = displayedAlbums.last?.id else { return }
+                withAnimation(reduceMotion ? nil : .smooth(duration: 0.35)) { proxy.scrollTo(lastID, anchor: .bottom) }
+            }
+            .onScrollPhaseChange { _, phase in
+                userScrolling = phase == .interacting || phase == .decelerating
+                if !userScrolling {
+                    chromeTracker.scrollingEnded()
                 }
             }
-            .padding(.vertical)
-        }
-        .defaultScrollAnchor(.bottom)
-        .ignoresSafeArea(.container, edges: .horizontal)
-        // Like timeline Memories, compact chrome must not resize the viewport
-        // or change the scroll clearance while the user is dragging.
-        .contentMargins(.top, expandedHeaderHeight, for: .scrollContent)
-        .contentMargins(.top, expandedHeaderHeight, for: .scrollIndicators)
-        .scrollPosition($listScrollPosition)
-        .onAppear { listVisible = true }
-        .onDisappear { listVisible = false }
-        .onChange(of: sort) { listScrollPosition.scrollTo(edge: .bottom) }
-        .onChange(of: sortDirection) { listScrollPosition.scrollTo(edge: .bottom) }
-        .onChange(of: scrollToLatestRequest) {
-            guard listVisible else { return }
-            withAnimation(reduceMotion ? nil : .smooth(duration: 0.35)) { listScrollPosition.scrollTo(edge: .bottom) }
-        }
-        .onScrollPhaseChange { _, phase in
-            userScrolling = phase == .interacting || phase == .decelerating
-            if !userScrolling {
-                chromeTracker.scrollingEnded()
+            .onScrollGeometryChange(for: AlbumScrollGeometry.self) {
+                AlbumScrollGeometry(offset: max(0, $0.contentOffset.y + $0.contentInsets.top),
+                                    topInset: $0.contentInsets.top, viewportHeight: $0.containerSize.height,
+                                    contentHeight: $0.contentSize.height, bottomInset: $0.contentInsets.bottom)
+            } action: { old, new in
+                guard !searchFocused else { return }
+                // Inset animations and lazy content measurement can rebase the
+                // offset without a finger changing direction. They are layout,
+                // not scroll travel, and must not reverse the header decision.
+                guard let delta = new.scrollDelta(from: old) else {
+                    chromeTracker.scrollingEnded()
+                    return
+                }
+                // Match the bottom-anchored main timelines' scroll convention.
+                if let hidden = chromeTracker.update(offsetDelta: delta, bottomGap: new.bottomGap,
+                                                     userScrolling: userScrolling, programmaticJump: false)
+                {
+                    withAnimation(reduceMotion ? nil : .smooth(duration: 0.25)) { searchHidden = hidden }
+                }
             }
-        }
-        .onScrollGeometryChange(for: AlbumScrollGeometry.self) {
-            AlbumScrollGeometry(offset: max(0, $0.contentOffset.y + $0.contentInsets.top),
-                                topInset: $0.contentInsets.top, viewportHeight: $0.containerSize.height,
-                                contentHeight: $0.contentSize.height, bottomInset: $0.contentInsets.bottom)
-        } action: { old, new in
-            guard !searchFocused else { return }
-            // Inset animations and lazy content measurement can rebase the
-            // offset without a finger changing direction. They are layout,
-            // not scroll travel, and must not reverse the header decision.
-            guard let delta = new.scrollDelta(from: old) else {
-                chromeTracker.scrollingEnded()
-                return
-            }
-            // Match the bottom-anchored main timelines' scroll convention.
-            if let hidden = chromeTracker.update(offsetDelta: delta, bottomGap: new.bottomGap,
-                                                 userScrolling: userScrolling, programmaticJump: false)
-            {
-                withAnimation(reduceMotion ? nil : .smooth(duration: 0.25)) { searchHidden = hidden }
-            }
-        }
-        .refreshable { await store.load() }
-        .overlay(alignment: .top) {
-            VStack(spacing: 0) {
-                HStack(spacing: 12) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                        TextField("Search Albums", text: $query)
-                            .focused($searchFocused)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .submitLabel(.search)
-                            .accessibilityIdentifier("albums-search")
-                        if !query.isEmpty {
-                            Button { query = "" } label: {
-                                Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+            .refreshable { await store.load() }
+            .overlay(alignment: .top) {
+                VStack(spacing: 0) {
+                    HStack(spacing: 12) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                            TextField("Search Albums", text: $query)
+                                .focused($searchFocused)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                                .submitLabel(.search)
+                                .accessibilityIdentifier("albums-search")
+                            if !query.isEmpty {
+                                Button { query = "" } label: {
+                                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Clear Search")
                             }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Clear Search")
                         }
+                        .padding(.horizontal, 14)
+                        .frame(minHeight: 44)
+                        .background(.quaternary, in: .capsule)
+                        Menu {
+                            Picker("Sort Albums", selection: Binding(get: { sort }, set: { updateAlbumLayout(sort: $0, direction: sortDirection) })) {
+                                ForEach(AlbumSort.allCases) { Text($0.rawValue).tag($0) }
+                            }
+                            Divider()
+                            Picker("Order", selection: Binding(get: { sortDirection }, set: { updateAlbumLayout(sort: sort, direction: $0) })) {
+                                ForEach(AlbumSortDirection.allCases) { Text($0.rawValue).tag($0) }
+                            }
+                            .pickerStyle(.inline)
+                            Divider()
+                            Toggle("List View", isOn: Binding(get: { showsList }, set: { updateAlbumLayout(sort: sort, direction: sortDirection, list: $0) }))
+                        } label: {
+                            Image(systemName: "arrow.up.arrow.down").frame(width: 44, height: 44)
+                        }
+                        .buttonStyle(.plain)
+                        .glassEffect(.regular.interactive(), in: .circle)
+                        .accessibilityLabel("Album Options")
                     }
-                    .padding(.horizontal, 14)
-                    .frame(minHeight: 44)
-                    .background(.quaternary, in: .capsule)
-                    Menu {
-                        Picker("Sort Albums", selection: $sort) {
-                            ForEach(AlbumSort.allCases) { Text($0.rawValue).tag($0) }
-                        }
-                        Divider()
-                        Picker("Order", selection: $sortDirection) {
-                            ForEach(AlbumSortDirection.allCases) { Text($0.rawValue).tag($0) }
-                        }
-                        .pickerStyle(.inline)
-                        Divider()
-                        Toggle("List View", isOn: $showsList)
-                    } label: {
-                        Image(systemName: "arrow.up.arrow.down").frame(width: 44, height: 44)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                        guard height > 0, abs(searchRowHeight - height) > 0.5 else { return }
+                        searchRowHeight = height
                     }
-                    .buttonStyle(.plain)
-                    .glassEffect(.regular.interactive(), in: .circle)
-                    .accessibilityLabel("Album Options")
+                    .frame(height: searchHidden ? 0 : searchRowHeight, alignment: .top)
+                    .opacity(searchHidden ? 0 : 1)
+                    .clipped()
+                    .allowsHitTesting(!searchHidden)
+                    .accessibilityHidden(searchHidden)
+                    Picker("Album scope", selection: $scope) {
+                        ForEach(AlbumScope.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                        guard height > 0, abs(scopePickerHeight - height) > 0.5 else { return }
+                        scopePickerHeight = height
+                    }
+                    .padding(.top, searchHidden ? 0 : 10)
                 }
-                .fixedSize(horizontal: false, vertical: true)
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
-                    guard height > 0, abs(searchRowHeight - height) > 0.5 else { return }
-                    searchRowHeight = height
-                }
-                .frame(height: searchHidden ? 0 : searchRowHeight, alignment: .top)
-                .opacity(searchHidden ? 0 : 1)
-                .clipped()
-                .allowsHitTesting(!searchHidden)
-                .accessibilityHidden(searchHidden)
-                Picker("Album scope", selection: $scope) {
-                    ForEach(AlbumScope.allCases) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
-                    guard height > 0, abs(scopePickerHeight - height) > 0.5 else { return }
-                    scopePickerHeight = height
-                }
-                .padding(.top, searchHidden ? 0 : 10)
-            }
-            .padding(.horizontal)
-            .padding(.vertical, 8)
-            .background {
-                ZStack {
-                    TimelineMemoryGradientBackdrop(visible: true, extended: true, reduceMotion: reduceMotion)
-                        .ignoresSafeArea(edges: .top)
-                    // The shared blur is noninteractive. Fill the gaps behind
-                    // the controls so taps cannot reach album links below it.
-                    Color.clear
-                        .contentShape(.rect)
-                        .onTapGesture {}
-                        .accessibilityHidden(true)
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+                .background {
+                    ZStack {
+                        TimelineMemoryGradientBackdrop(visible: true, extended: true, reduceMotion: reduceMotion)
+                            .ignoresSafeArea(edges: .top)
+                        // The shared blur is noninteractive. Fill the gaps behind
+                        // the controls so taps cannot reach album links below it.
+                        Color.clear
+                            .contentShape(.rect)
+                            .onTapGesture {}
+                            .accessibilityHidden(true)
+                    }
                 }
             }
+            .toolbar(.hidden, for: .navigationBar)
+            .scrollDismissesKeyboard(.interactively)
+            .task(id: activeEndpoint) { await store.load() }
+            .navigationDestination(for: AlbumSummary.self) { album in
+                AlbumDetailView(album: album, source: source, media: media, assetDetails: assetDetails,
+                                activeEndpoint: activeEndpoint, scrollToLatestRequest: scrollToLatestRequest,
+                                persistence: persistence, scope: accountScope,
+                                timelineRuntime: timelineSessions.runtime(albumID: album.id, namespace: accountScope?.cacheNamespace ?? "unscoped"),
+                                viewerPresentations: viewerPresentations,
+                                tabSelectionState: tabSelectionState, tabBarTop: $tabBarTop, showAccount: showAccount)
+                    .navigationTransition(.zoom(sourceID: album.id, in: albumTransition))
+            }
+            .accessibilityIdentifier("albums-root")
         }
-        .toolbar(.hidden, for: .navigationBar)
-        .scrollDismissesKeyboard(.interactively)
-        .task(id: activeEndpoint) { await store.load() }
-        .navigationDestination(for: AlbumSummary.self) { album in
-            AlbumDetailView(album: album, source: source, media: media, assetDetails: assetDetails,
-                            activeEndpoint: activeEndpoint, scrollToLatestRequest: scrollToLatestRequest,
-                            persistence: persistence, scope: accountScope,
-                            timelineRuntime: timelineSessions.runtime(albumID: album.id, namespace: accountScope?.cacheNamespace ?? "unscoped"),
-                            viewerPresentations: viewerPresentations,
-                            tabSelectionState: tabSelectionState, tabBarTop: $tabBarTop, showAccount: showAccount)
-                .navigationTransition(.zoom(sourceID: album.id, in: albumTransition))
-        }
-        .accessibilityIdentifier("albums-root")
     }
 
-    private func albumLink(_ album: AlbumSummary, compact: Bool) -> some View {
-        Button { openAlbum(album) } label: {
+    private func albumLink(_ album: AlbumSummary, compact: Bool, coverWidth: CGFloat) -> some View {
+        Button {
+            guard !isReordering else { return }
+            openAlbum(album)
+        } label: {
             AlbumCard(album: album, media: media, compact: compact, sort: sort, persistence: persistence,
-                      scope: accountScope, transitionNamespace: albumTransition)
+                      scope: accountScope, transitionNamespace: albumTransition, coverWidth: coverWidth)
         }
         .buttonStyle(.plain)
+        .allowsHitTesting(!isReordering)
+        .id(album.id)
+        .transition(.identity)
         .accessibilityIdentifier("album-\(album.id)")
+    }
+
+    private func updateAlbumLayout(sort nextSort: AlbumSort, direction: AlbumSortDirection, list: Bool? = nil) {
+        let nextList = list ?? showsList
+        guard sort != nextSort || sortDirection != direction || showsList != nextList else { return }
+        if sort != nextSort || sortDirection != direction {
+            // A density change keeps the current album; sorting must not chase
+            // that album to its new rank across the whole collection.
+            visibleAlbumID = nil
+        }
+        reorderGeneration &+= 1
+        let request = reorderGeneration
+        isReordering = !reduceMotion
+        withAnimation(reduceMotion ? nil : .smooth(duration: 0.35), completionCriteria: .removed) {
+            sort = nextSort
+            sortDirection = direction
+            showsList = nextList
+            // The existing bottom anchor and scroll position own the viewport.
+            // Do not co-animate another scroll request with album rearrangement.
+        } completion: {
+            guard reorderGeneration == request else { return }
+            isReordering = false
+        }
     }
 }
 
@@ -292,21 +329,15 @@ private struct AlbumCard: View {
     let persistence: (any AlbumCatalogStoring)?
     let scope: MediaAccountScope?
     let transitionNamespace: Namespace.ID
+    let coverWidth: CGFloat
 
     var body: some View {
-        Group {
+        let layout = compact ? AnyLayout(HStackLayout(spacing: 12)) : AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+        return layout {
+            cover.frame(width: compact ? 72 : coverWidth, height: compact ? 72 : coverWidth * 0.75)
+            labels
             if compact {
-                HStack(spacing: 12) {
-                    cover.frame(width: 72, height: 72)
-                    labels
-                    Spacer(minLength: 0)
-                    Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
-                }
-            } else {
-                VStack(alignment: .leading, spacing: 8) {
-                    cover.aspectRatio(4 / 3, contentMode: .fit)
-                    labels
-                }
+                Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
             }
         }
         .contentShape(.rect)
