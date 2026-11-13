@@ -222,10 +222,10 @@ actor AlbumTimelineReader: CompleteTimelineCatalogReading {
         return summaries
     }
 
-    func needsRefresh(for revision: String, now: Date = .now) -> Bool {
+    func needsRefresh(for revision: String) -> Bool {
         expectedRevision = revision
         guard let catalog else { return true }
-        return catalog.revision != revision || now.timeIntervalSince(catalog.fetchedAt) >= 900
+        return catalog.revision != revision
     }
 
     func assets(in bucketID: TimelineBucketID, query _: TimelineQuery) async throws -> [TimelineAssetSummary] {

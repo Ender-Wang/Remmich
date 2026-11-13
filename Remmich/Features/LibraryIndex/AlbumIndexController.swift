@@ -120,7 +120,7 @@ final class AlbumIndexController {
 
     func start(automatic: Bool = true, rebuild: Bool = false) {
         guard let scope, let source, task == nil, !isPaused else { return }
-        if automatic, status == .upToDate, let lastUpdatedAt, Date().timeIntervalSince(lastUpdatedAt) < 900 {
+        if automatic, !rebuild, status == .upToDate, let lastUpdatedAt, Date().timeIntervalSince(lastUpdatedAt) < 900 {
             return
         }
         generation &+= 1
@@ -152,6 +152,8 @@ final class AlbumIndexController {
                 membershipCount = 0
                 totalItemCount = albums.reduce(0) { $0 + $1.assetCount }
                 processedItemCount = 0
+                var reusedAlbums = 0
+                var refreshedAlbums = 0
                 for album in albums {
                     try Task.checkCancellation()
                     guard self.scope == scope, generation == request else { return }
@@ -161,15 +163,14 @@ final class AlbumIndexController {
                     do {
                         let saved = try await store.albumCatalog(scope: scope, albumID: album.id)
                         let catalog: AlbumCatalog
-                        if !rebuild, let saved, saved.revision == album.catalogRevision,
-                           Date().timeIntervalSince(saved.fetchedAt) < 900
-                        {
+                        if !rebuild, let saved, saved.revision == album.catalogRevision {
                             catalog = try await saved.preparingGroups()
                             if saved.groupedCatalogs == nil {
                                 try Task.checkCancellation()
                                 guard generation == request else { return }
                                 try await store.saveAlbumCatalog(catalog, scope: scope, albumID: album.id)
                             }
+                            reusedAlbums += 1
                         } else {
                             let reader = AlbumTimelineReader(source: source, albumID: album.id, revision: album.catalogRevision) { [weak self] count in
                                 guard let self, generation == request, self.scope == scope else { return }
@@ -183,6 +184,7 @@ final class AlbumIndexController {
                             try Task.checkCancellation()
                             guard self.scope == scope, generation == request else { return }
                             try await store.saveAlbumCatalog(catalog, scope: scope, albumID: album.id)
+                            refreshedAlbums += 1
                         }
                         try Task.checkCancellation()
                         guard generation == request else { return }
@@ -215,7 +217,9 @@ final class AlbumIndexController {
                 let totalAlbums = albumCount
                 let memberships = membershipCount
                 let failureCount = failures.count
-                Self.logger.info("Album index pass finished albums=\(completedAlbums)/\(totalAlbums) memberships=\(memberships) failures=\(failureCount)")
+                let reusedCount = reusedAlbums
+                let refreshedCount = refreshedAlbums
+                Self.logger.info("Album index pass finished albums=\(completedAlbums)/\(totalAlbums) memberships=\(memberships) reused=\(reusedCount) refreshed=\(refreshedCount) failures=\(failureCount)")
             } catch {
                 guard generation == request, !Task.isCancelled else { return }
                 failures = [error.localizedDescription]

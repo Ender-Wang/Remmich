@@ -6,12 +6,21 @@ import Testing
 private actor RecordingAlbumIndexSource: AlbumReading, TimelineReading {
     private let source: PreviewAlbumReader
     private(set) var bucketRequests = 0
+    private var changedAlbumID: String?
     @MainActor init() {
         source = PreviewAlbumReader()
     }
 
     func albums() async throws -> [AlbumSummary] {
-        try await source.albums()
+        var albums = try await source.albums()
+        if let index = albums.firstIndex(where: { $0.id == changedAlbumID }) {
+            albums[index].lastModifiedAssetTimestamp = Date(timeIntervalSince1970: 2_000_000_000)
+        }
+        return albums
+    }
+
+    func markChanged(_ albumID: String) {
+        changedAlbumID = albumID
     }
 
     func album(id: String) async throws -> AlbumSummary {
@@ -35,7 +44,7 @@ private actor RecordingAlbumIndexSource: AlbumReading, TimelineReading {
 @Suite("Album metadata persistence", .serialized)
 @MainActor
 struct AlbumCatalogPersistenceTests {
-    @Test func automaticIndexBuildsEveryAlbumAndReusesFreshCatalogsUntilRebuild() async throws {
+    @Test func indexReusesOldUnchangedCatalogsAndRefreshesChangedAlbumsOrRebuild() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let scope = MediaAccountScope(session: .fixture)
@@ -72,9 +81,20 @@ struct AlbumCatalogPersistenceTests {
             }
         }
         let queries = await source.bucketRequests
+        for album in albums {
+            let saved = try #require(await db.albumCatalog(scope: scope, albumID: album.id))
+            let old = AlbumCatalog(summaries: saved.summaries, assetsByBucket: saved.assetsByBucket,
+                                   revision: saved.revision, fetchedAt: Date().addingTimeInterval(-86400), groupedCatalogs: saved.groupedCatalogs)
+            try await db.saveAlbumCatalog(old, scope: scope, albumID: album.id)
+        }
         controller.start(automatic: false)
         #expect(await controller.finish())
         #expect(await source.bucketRequests == queries)
+        let changed = try #require(albums.first)
+        await source.markChanged(changed.id)
+        controller.start(automatic: false)
+        #expect(await controller.finish())
+        #expect(await source.bucketRequests == queries + 1)
         controller.pause()
         let restored = AlbumIndexController(source: source, store: db, transfers: nil, preferences: preferences)
         restored.configure(scope: scope)
@@ -87,13 +107,13 @@ struct AlbumCatalogPersistenceTests {
         #expect(restored.processedItemCount == controller.processedItemCount)
         controller.resume()
         #expect(await controller.finish())
-        controller.start(automatic: false, rebuild: true)
+        controller.start(rebuild: true)
         #expect(await controller.finish())
         for album in albums {
             let rebuilt = try #require(await db.albumCatalog(scope: scope, albumID: album.id))
             #expect(rebuilt.groupedCatalogs != nil)
         }
-        #expect(await source.bucketRequests == queries * 2)
+        #expect(await source.bucketRequests == queries * 2 + 1)
     }
 
     @Test func readerReportsAssetCountsAsAlbumBucketsFinish() async throws {
@@ -155,7 +175,7 @@ struct AlbumCatalogPersistenceTests {
         for summary in summaries {
             assets[summary.id] = try await source.assets(in: summary.id, query: query)
         }
-        let catalog = AlbumCatalog(summaries: summaries, assetsByBucket: assets, revision: album.catalogRevision, fetchedAt: .now)
+        let catalog = AlbumCatalog(summaries: summaries, assetsByBucket: assets, revision: album.catalogRevision, fetchedAt: Date().addingTimeInterval(-86400))
         try await db.saveAlbumList(albums, scope: scope)
         try await db.saveAlbumCatalog(catalog, scope: scope, albumID: album.id)
 
@@ -172,8 +192,8 @@ struct AlbumCatalogPersistenceTests {
         let persistedGroups = try #require(await reopened.albumCatalog(scope: scope, albumID: album.id)?.groupedCatalogs)
         #expect(preparedGroups.catalog(for: .day).entries.map(\.stableKey) == persistedGroups.catalog(for: .day).entries.map(\.stableKey))
         #expect(preparedGroups.catalog(for: .week).entries.map(\.assetCount) == persistedGroups.catalog(for: .week).entries.map(\.assetCount))
-        #expect(await !(reader.needsRefresh(for: album.catalogRevision, now: catalog.fetchedAt)))
-        #expect(await reader.needsRefresh(for: album.catalogRevision, now: catalog.fetchedAt.addingTimeInterval(901)))
+        #expect(await !(reader.needsRefresh(for: album.catalogRevision)))
+        #expect(await reader.needsRefresh(for: "changed-revision"))
 
         do { _ = try await reader.bucketSummaries(query: .init()) }
         catch { /* Failed refresh must leave the saved complete snapshot intact. */ }
