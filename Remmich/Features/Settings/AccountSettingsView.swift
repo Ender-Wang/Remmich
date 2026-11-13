@@ -140,6 +140,13 @@ struct AccountSettingsView: View {
     @State private var albumIndexCardSummary: ProfileCardSummary?
     @State private var selectedPage = SettingsPage.home
     @State private var selectedIndexSection = IndexSection.timeline
+    @State private var indexSwipeOrigin: IndexSection?
+    @State private var indexSwipeRejected = false
+    @GestureState private var indexSwipeTracking = false
+    @State private var indexSwipeOffset: CGFloat = 0
+    @State private var indexPageWidth: CGFloat = 1
+    @State private var timelineIndexHeight: CGFloat = 0
+    @State private var albumIndexHeight: CGFloat = 0
     @State private var pageHistory: [SettingsPage] = []
     @State private var cardFrames: [SettingsPage: CGRect] = [:]
     @State private var expandedCard: SettingsPage?
@@ -1118,7 +1125,7 @@ struct AccountSettingsView: View {
 
     private var indexPage: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Picker("Index", selection: $selectedIndexSection) {
+            Picker("Index", selection: Binding(get: { selectedIndexSection }, set: selectIndexSection)) {
                 ForEach(IndexSection.allCases, id: \.self) { Text($0.rawValue).tag($0) }
             }
             .pickerStyle(.segmented)
@@ -1128,13 +1135,85 @@ struct AccountSettingsView: View {
                 statistic("Shared asset catalog", libraryIndex.storageReport.featureStorage["assets"].map { ByteCountFormatter.string(fromByteCount: $0.bytes, countStyle: .file) } ?? "—")
             }
             .padding(.bottom, 16)
-            if selectedIndexSection == .timeline {
-                timelineIndexPage
-            } else {
-                albumIndexPage
-            }
+            indexSectionPager
         }
         .task(id: [libraryIndex.status, libraryIndex.albumIndex.status]) { await libraryIndex.refreshIndexStorageStatistics() }
+    }
+
+    private var indexSectionPager: some View {
+        let height = selectedIndexSection == .timeline ? timelineIndexHeight : albumIndexHeight
+        return ZStack(alignment: .topLeading) {
+            timelineIndexPage
+                .frame(maxWidth: .infinity)
+                .fixedSize(horizontal: false, vertical: true)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { timelineIndexHeight = $0 }
+                .offset(x: (selectedIndexSection == .timeline ? 0 : -indexPageWidth) + indexSwipeOffset)
+                .allowsHitTesting(selectedIndexSection == .timeline && indexSwipeOrigin == nil)
+                .accessibilityHidden(selectedIndexSection != .timeline)
+            albumIndexPage
+                .frame(maxWidth: .infinity)
+                .fixedSize(horizontal: false, vertical: true)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { albumIndexHeight = $0 }
+                .offset(x: (selectedIndexSection == .albums ? 0 : indexPageWidth) + indexSwipeOffset)
+                .allowsHitTesting(selectedIndexSection == .albums && indexSwipeOrigin == nil)
+                .accessibilityHidden(selectedIndexSection != .albums)
+        }
+        .frame(height: height > 0 ? height : nil, alignment: .top)
+        .frame(maxWidth: .infinity)
+        .clipped()
+        .contentShape(.rect)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { indexPageWidth = max(1, $0) }
+        .simultaneousGesture(indexSectionSwipe)
+        .onChange(of: indexSwipeTracking) { _, tracking in
+            guard !tracking else { return }
+            // GestureState also resets on cancellation, where onEnded is absent.
+            Task { @MainActor in
+                guard !indexSwipeTracking else { return }
+                indexSwipeRejected = false
+                if indexSwipeOrigin != nil {
+                    selectIndexSection(selectedIndexSection)
+                }
+            }
+        }
+    }
+
+    private func selectIndexSection(_ section: IndexSection) {
+        withAnimation(reduceMotion ? nil : .smooth(duration: 0.3)) {
+            selectedIndexSection = section
+            indexSwipeOrigin = nil
+            indexSwipeOffset = 0
+        }
+    }
+
+    private var indexSectionSwipe: some Gesture {
+        DragGesture(minimumDistance: 10, coordinateSpace: .global)
+            .updating($indexSwipeTracking) { _, tracking, _ in tracking = true }
+            .onChanged { value in
+                guard !reduceMotion, selectedPage == .index, !isPageTransitioning else { return }
+                if indexSwipeOrigin == nil {
+                    guard !indexSwipeRejected else { return }
+                    guard value.startLocation.x >= 32 || value.velocity.width < 0,
+                          HorizontalPageSwipePolicy.canBegin(velocityX: value.velocity.width, velocityY: value.velocity.height),
+                          selectedIndexSection == .timeline ? value.velocity.width < 0 : value.velocity.width > 0
+                    else {
+                        indexSwipeRejected = true
+                        return
+                    }
+                    indexSwipeOrigin = selectedIndexSection
+                }
+                let translation = value.translation.width
+                indexSwipeOffset = selectedIndexSection == .timeline
+                    ? max(-indexPageWidth, min(0, translation))
+                    : min(indexPageWidth, max(0, translation))
+            }
+            .onEnded { value in
+                indexSwipeRejected = false
+                guard let origin = indexSwipeOrigin else { return }
+                let direction: CGFloat = origin == .timeline ? -1 : 1
+                let progress = HorizontalPageSwipePolicy.progress(distance: value.translation.width * direction, width: indexPageWidth)
+                let complete = HorizontalPageSwipePolicy.shouldFinish(progress: progress, forwardVelocity: value.velocity.width * direction)
+                selectIndexSection(complete ? (origin == .timeline ? .albums : .timeline) : origin)
+            }
     }
 
     private var albumIndexPage: some View {

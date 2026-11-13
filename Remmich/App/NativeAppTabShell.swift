@@ -651,16 +651,16 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
             guard let interaction = pageInteractionController else { return }
             let progress = pageInteractionProgress(using: recognizer, in: controller)
             let velocity = recognizer.velocity(in: controller.view).x
-            let advancesInTransitionDirection: Bool = switch pageInteractionDirection {
+            let forwardVelocity: CGFloat = switch pageInteractionDirection {
             case .next:
-                velocity < -420
+                -velocity
             case .previous:
-                velocity > 420
+                velocity
             case nil:
-                false
+                0
             }
 
-            if progress >= 0.35 || advancesInTransitionDirection {
+            if HorizontalPageSwipePolicy.shouldFinish(progress: progress, forwardVelocity: forwardVelocity) {
                 finishPageInteraction(interaction, in: controller)
             } else {
                 cancelPageInteraction(in: controller)
@@ -752,8 +752,7 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
             using recognizer: UIPanGestureRecognizer,
             in controller: UITabBarController
         ) -> CGFloat {
-            let width = max(controller.view.bounds.width, 1)
-            return min(max(abs(recognizer.translation(in: controller.view).x) / width, 0), 1)
+            HorizontalPageSwipePolicy.progress(distance: abs(recognizer.translation(in: controller.view).x), width: controller.view.bounds.width)
         }
 
         private func publishSelection(
@@ -842,8 +841,7 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
             else { return false }
 
             let velocity = pagePanRecognizer.velocity(in: controller.view)
-            guard abs(velocity.x) > abs(velocity.y) * 1.2,
-                  abs(velocity.x) > 80
+            guard HorizontalPageSwipePolicy.canBegin(velocityX: velocity.x, velocityY: velocity.y)
             else { return false }
 
             let direction: NativeTabPageDirection = velocity.x < 0 ? .next : .previous

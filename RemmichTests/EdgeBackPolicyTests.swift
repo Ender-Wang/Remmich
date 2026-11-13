@@ -3,6 +3,20 @@ import Testing
 @testable import Remmich
 
 struct EdgeBackPolicyTests {
+    @Test func horizontalPagesShareStartAndCompletionThresholds() {
+        #expect(HorizontalPageSwipePolicy.canBegin(velocityX: -81, velocityY: 0))
+        #expect(!HorizontalPageSwipePolicy.canBegin(velocityX: 80, velocityY: 0))
+        #expect(!HorizontalPageSwipePolicy.canBegin(velocityX: 120, velocityY: 100))
+        #expect(HorizontalPageSwipePolicy.canBegin(velocityX: 121, velocityY: 100))
+        #expect(!HorizontalPageSwipePolicy.shouldFinish(progress: 0.349, forwardVelocity: 420))
+        #expect(HorizontalPageSwipePolicy.shouldFinish(progress: 0.35, forwardVelocity: 0))
+        #expect(HorizontalPageSwipePolicy.shouldFinish(progress: 0.01, forwardVelocity: 421))
+        #expect(!HorizontalPageSwipePolicy.shouldFinish(progress: 0.01, forwardVelocity: -421))
+        #expect(HorizontalPageSwipePolicy.progress(distance: 140, width: 400) == 0.35)
+        #expect(HorizontalPageSwipePolicy.progress(distance: -1, width: 400) == 0)
+        #expect(HorizontalPageSwipePolicy.progress(distance: 600, width: 400) == 1)
+    }
+
     @Test func leftEdgeRequiresAnInwardHorizontalStart() {
         #expect(EdgeBackPolicy.canBegin(velocityX: 200, velocityY: 30))
         #expect(!EdgeBackPolicy.canBegin(velocityX: -200, velocityY: 0))
