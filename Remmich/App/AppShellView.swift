@@ -66,6 +66,7 @@ struct AppShellView: View {
             compactOwner: compactTabOwner,
             isViewerPresented: viewerPresented,
             pageSwipeEnabled: pageSwipeEnabled,
+            pageInteractionChanged: { tabSelectionState.isPageInteractionActive = $0 },
             photosScrollRequest: photosScrollRequest,
             videosScrollRequest: videosScrollRequest,
             albumsScrollRequest: albumsScrollRequest,
@@ -178,6 +179,12 @@ struct AppShellView: View {
                                    viewerPresentations: viewerPresentations,
                                    tabSelectionState: tabSelectionState, tabBarTop: $tabBarTop,
                                    loadingVisibilityChanged: primaryContentLoadingChanged == nil ? nil : { albumsContentLoading = $0 },
+                                   openAlbum: { album in
+                                       guard albumsPath.isEmpty, tabSelectionState.canActivateContent(in: .albums) else {
+                                           return
+                                       }
+                                       withAnimation { albumsPath.append(album) }
+                                   },
                                    showAccount: showAccount)
                     }
                 }
@@ -364,7 +371,10 @@ struct AppShellView: View {
                 videosTimelineRuntime.beginGrouping()
             }
         }
-        .onDisappear { viewerPresentations.removeAll() }
+        .onDisappear {
+            tabSelectionState.isPageInteractionActive = false
+            viewerPresentations.removeAll()
+        }
         .environment(\.assetLocations, sessionController?.locations)
     }
 

@@ -5,6 +5,26 @@ import Testing
 @Suite("Read-only Albums")
 @MainActor
 struct AlbumsTests {
+    @Test func albumActivationWaitsForRootPageOwnership() {
+        let state = NativeTabSelectionState()
+        state.selection = .albums
+        #expect(state.canActivateContent(in: .albums))
+        state.isPageInteractionActive = true
+        // A committed swipe finishes before the published selection changes.
+        #expect(!state.canActivateContent(in: .albums))
+        state.selection = .videos
+        #expect(!state.canActivateContent(in: .albums))
+        state.isPageInteractionActive = false
+        #expect(!state.canActivateContent(in: .albums))
+        state.selection = .albums
+        #expect(state.canActivateContent(in: .albums))
+        state.isPageInteractionActive = true
+        #expect(!state.canActivateContent(in: .albums))
+        // A cancelled swipe gives ownership back to Albums for the next tap.
+        state.isPageInteractionActive = false
+        #expect(state.canActivateContent(in: .albums))
+    }
+
     @Test func headerResizeDoesNotMasqueradeAsAReverseScroll() {
         var tracker = PhotosChromeTracker()
         let start = AlbumScrollGeometry(offset: 160, topInset: 171, viewportHeight: 620, contentHeight: 2000)

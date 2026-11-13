@@ -41,6 +41,7 @@ struct AlbumsView: View {
     let tabSelectionState: NativeTabSelectionState
     @Binding var tabBarTop: CGFloat
     let loadingVisibilityChanged: ((Bool) -> Void)?
+    let openAlbum: (AlbumSummary) -> Void
     let showAccount: () -> Void
     @State private var store: AlbumsStore
     @State private var scope: AlbumScope = .all
@@ -65,6 +66,7 @@ struct AlbumsView: View {
          persistence: (any AlbumCatalogStoring)? = nil, scope: MediaAccountScope? = nil,
          viewerPresentations: AssetViewerPresentationStore, tabSelectionState: NativeTabSelectionState,
          tabBarTop: Binding<CGFloat>, loadingVisibilityChanged: ((Bool) -> Void)? = nil,
+         openAlbum: @escaping (AlbumSummary) -> Void,
          showAccount: @escaping () -> Void)
     {
         self.source = source
@@ -78,6 +80,7 @@ struct AlbumsView: View {
         self.tabSelectionState = tabSelectionState
         _tabBarTop = tabBarTop
         self.loadingVisibilityChanged = loadingVisibilityChanged
+        self.openAlbum = openAlbum
         self.showAccount = showAccount
         _store = State(initialValue: AlbumsStore(reader: source, persistence: persistence, scope: scope))
     }
@@ -272,7 +275,7 @@ struct AlbumsView: View {
     }
 
     private func albumLink(_ album: AlbumSummary, compact: Bool) -> some View {
-        NavigationLink(value: album) {
+        Button { openAlbum(album) } label: {
             AlbumCard(album: album, media: media, compact: compact, sort: sort, persistence: persistence,
                       scope: accountScope, transitionNamespace: albumTransition)
         }

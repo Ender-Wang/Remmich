@@ -7,6 +7,11 @@ import UIKit
 @Observable
 final class NativeTabSelectionState {
     var selection: NativeTabDestination = .photos
+    @ObservationIgnored var isPageInteractionActive = false
+
+    func canActivateContent(in destination: NativeTabDestination) -> Bool {
+        selection == destination && !isPageInteractionActive
+    }
 }
 
 @MainActor
@@ -210,6 +215,7 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
     let compactOwner: NativeTabDestination?
     let isViewerPresented: Bool
     let pageSwipeEnabled: Bool
+    var pageInteractionChanged: (Bool) -> Void = { _ in }
     let photosScrollRequest: Int
     let videosScrollRequest: Int
     var albumsScrollRequest: Int = 0
@@ -618,6 +624,7 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
             pageInteractionDirection = direction
             pageInteractionDestination = destination
             pageInteractionPreviousTab = previousTab
+            parent.pageInteractionChanged(true)
             pendingPageDirection = direction
             isUpdatingTabs = true
             controller.selectedTab = tab(for: destination)
@@ -738,6 +745,7 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
             pageInteractionController = nil
             pageInteractionDestination = nil
             pageInteractionPreviousTab = nil
+            parent.pageInteractionChanged(false)
         }
 
         private func pageInteractionProgress(
