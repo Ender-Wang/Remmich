@@ -141,8 +141,6 @@ struct AccountSettingsView: View {
     @State private var selectedPage = SettingsPage.home
     @State private var selectedIndexSection = IndexSection.timeline
     @State private var indexSwipeOrigin: IndexSection?
-    @State private var indexSwipeRejected = false
-    @GestureState private var indexSwipeTracking = false
     @State private var indexSwipeOffset: CGFloat = 0
     @State private var indexPageWidth: CGFloat = 1
     @State private var timelineIndexHeight: CGFloat = 0
@@ -1163,18 +1161,7 @@ struct AccountSettingsView: View {
         .clipped()
         .contentShape(.rect)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { indexPageWidth = max(1, $0) }
-        .simultaneousGesture(indexSectionSwipe)
-        .onChange(of: indexSwipeTracking) { _, tracking in
-            guard !tracking else { return }
-            // GestureState also resets on cancellation, where onEnded is absent.
-            Task { @MainActor in
-                guard !indexSwipeTracking else { return }
-                indexSwipeRejected = false
-                if indexSwipeOrigin != nil {
-                    selectIndexSection(selectedIndexSection)
-                }
-            }
-        }
+        .gesture(indexSectionSwipe)
     }
 
     private func selectIndexSection(_ section: IndexSection) {
@@ -1185,35 +1172,33 @@ struct AccountSettingsView: View {
         }
     }
 
-    private var indexSectionSwipe: some Gesture {
-        DragGesture(minimumDistance: 10, coordinateSpace: .global)
-            .updating($indexSwipeTracking) { _, tracking, _ in tracking = true }
-            .onChanged { value in
-                guard !reduceMotion, selectedPage == .index, !isPageTransitioning else { return }
-                if indexSwipeOrigin == nil {
-                    guard !indexSwipeRejected else { return }
-                    guard value.startLocation.x >= 32 || value.velocity.width < 0,
-                          HorizontalPageSwipePolicy.canBegin(velocityX: value.velocity.width, velocityY: value.velocity.height),
-                          selectedIndexSection == .timeline ? value.velocity.width < 0 : value.velocity.width > 0
-                    else {
-                        indexSwipeRejected = true
-                        return
-                    }
-                    indexSwipeOrigin = selectedIndexSection
-                }
-                let translation = value.translation.width
-                indexSwipeOffset = selectedIndexSection == .timeline
-                    ? max(-indexPageWidth, min(0, translation))
-                    : min(indexPageWidth, max(0, translation))
-            }
-            .onEnded { value in
-                indexSwipeRejected = false
-                guard let origin = indexSwipeOrigin else { return }
-                let direction: CGFloat = origin == .timeline ? -1 : 1
-                let progress = HorizontalPageSwipePolicy.progress(distance: value.translation.width * direction, width: indexPageWidth)
-                let complete = HorizontalPageSwipePolicy.shouldFinish(progress: progress, forwardVelocity: value.velocity.width * direction)
-                selectIndexSection(complete ? (origin == .timeline ? .albums : .timeline) : origin)
-            }
+    private var indexSectionSwipe: IndexSectionPan {
+        IndexSectionPan(enabled: !reduceMotion && selectedPage == .index && !isPageTransitioning,
+                        direction: selectedIndexSection == .timeline ? -1 : 1,
+                        update: handleIndexSectionPan)
+    }
+
+    private func handleIndexSectionPan(_ state: UIGestureRecognizer.State, translation: CGPoint, velocity: CGPoint) {
+        switch state {
+        case .began:
+            indexSwipeOrigin = selectedIndexSection
+        case .changed:
+            guard let origin = indexSwipeOrigin else { return }
+            indexSwipeOffset = origin == .timeline
+                ? max(-indexPageWidth, min(0, translation.x))
+                : min(indexPageWidth, max(0, translation.x))
+        case .ended:
+            guard let origin = indexSwipeOrigin else { return }
+            let direction: CGFloat = origin == .timeline ? -1 : 1
+            let progress = HorizontalPageSwipePolicy.progress(distance: translation.x * direction, width: indexPageWidth)
+            let complete = HorizontalPageSwipePolicy.shouldFinish(progress: progress, forwardVelocity: velocity.x * direction)
+            selectIndexSection(complete ? (origin == .timeline ? .albums : .timeline) : origin)
+        case .cancelled, .failed:
+            guard indexSwipeOrigin != nil else { return }
+            selectIndexSection(selectedIndexSection)
+        default:
+            break
+        }
     }
 
     private var albumIndexPage: some View {
@@ -1255,17 +1240,6 @@ struct AccountSettingsView: View {
             .lineLimit(1)
             .contentTransition(.numericText())
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: index.indexedAlbumCount)
-            Text("Album table storage is measured after indexing, for this account only. Shared asset records are counted separately above. Assets in multiple albums count in each. Thumbnails use the shared cache.")
-                .font(.caption2).foregroundStyle(.secondary)
-            Text("Remaining time is estimated from processed asset memberships across all albums. Thumbnails use the shared cache.")
-                .font(.caption2).foregroundStyle(.secondary)
-            Text(message.isEmpty ? " " : message)
-                .font(.footnote).foregroundStyle(.red)
-                .lineLimit(2, reservesSpace: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .opacity(message.isEmpty ? 0 : 1)
-                .accessibilityHidden(message.isEmpty)
-                .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: message)
             summaryActionButton(actionTitle, width: 96) {
                 if index.status == .indexing {
                     index.pause()
@@ -1279,9 +1253,19 @@ struct AccountSettingsView: View {
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: actionTitle)
             Divider().padding(.top, 8)
             Button { index.start(automatic: false, rebuild: true) } label: {
-                actionRow("Rebuild album index", symbol: "arrow.triangle.2.circlepath")
+                actionRow("Rebuild index", symbol: "arrow.triangle.2.circlepath")
             }
             .buttonStyle(.plain).disabled(index.status == .indexing || index.isPaused)
+            Text("Album table storage is measured after indexing, for this account only. Shared asset records are counted separately above. Assets in multiple albums count in each. Thumbnails use the shared cache.")
+                .font(.caption2).foregroundStyle(.secondary)
+            Text("Remaining time is estimated from processed asset memberships across all albums. Thumbnails use the shared cache.")
+                .font(.caption2).foregroundStyle(.secondary)
+            if !message.isEmpty {
+                Text(message)
+                    .font(.footnote).foregroundStyle(.red)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
             Text("This rebuilds album lists and local asset metadata. Offline cached files remain separate.")
                 .font(.caption).foregroundStyle(.secondary)
                 .padding(.bottom, 8)
@@ -1318,11 +1302,6 @@ struct AccountSettingsView: View {
                     statistic("Estimated time remaining", libraryIndex.status == .indexing ? libraryIndex.estimatedRemaining(at: libraryIndexClock).map(Self.duration) ?? "—" : "—")
                     statistic("Last synced", Self.syncedDate(libraryIndex.lastUpdatedAt))
                 }
-                Text("Timeline table storage is measured after syncing, for this account only. Photos and Videos share this index. Shared asset records are counted separately above; cached media is separate.")
-                    .font(.caption2).foregroundStyle(.secondary)
-                if case let .failed(message) = libraryIndex.status {
-                    Text(message).font(.footnote).foregroundStyle(.red).textSelection(.enabled)
-                }
                 summaryActionButton(indexPhase.action.title) {
                     switch indexPhase.action {
                     case .sync: libraryIndex.syncNow()
@@ -1338,8 +1317,16 @@ struct AccountSettingsView: View {
                 actionRow("Rebuild index", symbol: "arrow.triangle.2.circlepath")
             }
             .buttonStyle(.plain).disabled(libraryIndex.status == .indexing)
+            Text("Timeline table storage is measured after syncing, for this account only. Photos and Videos share this index. Shared asset records are counted separately above; cached media is separate.")
+                .font(.caption2).foregroundStyle(.secondary)
+                .padding(.top, 10)
+            if case let .failed(message) = libraryIndex.status {
+                Text(message).font(.footnote).foregroundStyle(.red).textSelection(.enabled)
+                    .padding(.top, 10)
+            }
             Text("This rebuilds local metadata. Offline cached files remain separate.")
                 .font(.caption).foregroundStyle(.secondary)
+                .padding(.top, 10)
                 .padding(.bottom, 8)
         }
     }
