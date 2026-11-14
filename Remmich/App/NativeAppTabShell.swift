@@ -92,6 +92,24 @@ enum NativeTabPageDirection: Equatable {
 }
 
 @MainActor
+enum NativePageSlideAnimation {
+    static let duration: TimeInterval = 0.36
+
+    static func makeAnimator(from source: UIView, to destination: UIView,
+                             direction: NativeTabPageDirection, width: CGFloat) -> UIViewPropertyAnimator
+    {
+        let travel = direction == .next ? width : -width
+        let sourceTransform = source.transform
+        let destinationTransform = destination.transform
+        destination.transform = destinationTransform.translatedBy(x: travel, y: 0)
+        return UIViewPropertyAnimator(duration: duration, curve: .easeInOut) {
+            source.transform = sourceTransform.translatedBy(x: -travel, y: 0)
+            destination.transform = destinationTransform
+        }
+    }
+}
+
+@MainActor
 enum NativeTabTransitionTrace {
     private static let signposter = OSSignposter(
         subsystem: "io.github.ender-wang.Remmich",
@@ -932,7 +950,7 @@ private final class NativeTabPageAnimator: NSObject, UIViewControllerAnimatedTra
     }
 
     func transitionDuration(using _: (any UIViewControllerContextTransitioning)?) -> TimeInterval {
-        0.36
+        NativePageSlideAnimation.duration
     }
 
     func animateTransition(using transitionContext: any UIViewControllerContextTransitioning) {
@@ -956,18 +974,11 @@ private final class NativeTabPageAnimator: NSObject, UIViewControllerAnimatedTra
 
         let container = transitionContext.containerView
         let width = container.bounds.width
-        let travel = direction == .next ? width : -width
         toView.frame = transitionContext.finalFrame(for: toController)
-        toView.transform = CGAffineTransform(translationX: travel, y: 0)
         container.addSubview(toView)
 
-        let animator = UIViewPropertyAnimator(
-            duration: transitionDuration(using: transitionContext),
-            curve: .easeInOut
-        ) {
-            fromView.transform = CGAffineTransform(translationX: -travel, y: 0)
-            toView.transform = .identity
-        }
+        let animator = NativePageSlideAnimation.makeAnimator(from: fromView, to: toView,
+                                                             direction: direction, width: width)
         animator.addCompletion { [weak self] _ in
             fromView.transform = .identity
             toView.transform = .identity

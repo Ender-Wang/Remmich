@@ -1,3 +1,4 @@
+import Observation
 import SwiftUI
 import UIKit
 
@@ -33,9 +34,25 @@ private enum AlbumDiscoveryScrollTarget: Hashable {
     case content
 }
 
+private nonisolated struct AlbumScopeContentGeometry: Equatable {
+    let scope: String
+    let height: CGFloat
+}
+
+private struct AlbumScopeCaptureKey: Equatable {
+    let albums: [AlbumSummary]
+    let query: String
+    let sort: AlbumSort
+    let direction: AlbumSortDirection
+    let list: Bool
+    let labelHeight: CGFloat
+    let viewport: CGSize
+}
+
 struct AlbumsView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
+    @Environment(\.scenePhase) private var scenePhase
     let source: any AlbumReading & TimelineReading
     let media: MediaLibraryController
     let assetDetails: any AssetDetailReading
@@ -51,6 +68,7 @@ struct AlbumsView: View {
     let showAccount: () -> Void
     @State private var store: AlbumsStore
     @State private var scope: AlbumScope = .all
+    @State private var contentScope: AlbumScope = .all
     @State private var query = ""
     @State private var sort: AlbumSort = .mostRecentPhoto
     @State private var sortDirection: AlbumSortDirection = .ascending
@@ -72,6 +90,7 @@ struct AlbumsView: View {
     @State private var listVisible = false
     @Namespace private var albumTransition
     @State private var timelineSessions = AlbumTimelineSessions()
+    @State private var scopeSlide = AlbumScopeSlide()
     @FocusState private var searchFocused: Bool
 
     init(source: any AlbumReading & TimelineReading, media: MediaLibraryController,
@@ -101,7 +120,7 @@ struct AlbumsView: View {
 
     private var filtered: [AlbumSummary] {
         sort.sorted(store.albums.filter {
-            (scope == .all || $0.isShared) && (query.isEmpty || $0.title.localizedStandardContains(query))
+            (contentScope == .all || $0.isShared) && (query.isEmpty || $0.title.localizedStandardContains(query))
         }, direction: sortDirection)
     }
 
@@ -143,7 +162,7 @@ struct AlbumsView: View {
                         ErrorStateView(title: "Couldn’t Load Albums") { Task { await store.load() } }
                     } else if filtered.isEmpty {
                         ContentUnavailableView(
-                            query.isEmpty ? (scope == .shared ? "No Shared Albums" : "No Albums") : "No Results",
+                            query.isEmpty ? (contentScope == .shared ? "No Shared Albums" : "No Albums") : "No Results",
                             systemImage: "rectangle.stack",
                             description: Text(query.isEmpty ? "Albums available to this account will appear here." : "Try another album name.")
                         )
@@ -177,6 +196,10 @@ struct AlbumsView: View {
                     }
                 }
                 .padding(.vertical)
+                .onGeometryChange(for: AlbumScopeContentGeometry.self) {
+                    AlbumScopeContentGeometry(scope: contentScope.rawValue, height: $0.size.height)
+                } action: { scopeSlide.contentChanged($0) }
+                .background { AlbumScopeSlideAnchor(slide: scopeSlide) }
                 // Explicit bottom requests include the trailing clearance.
                 // This stable target installs no content-resize anchoring.
                 .id(AlbumDiscoveryScrollTarget.content)
@@ -191,10 +214,16 @@ struct AlbumsView: View {
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
                 reflowViewport.frame = frame
             }
-            .onAppear { listVisible = true }
+            .onAppear {
+                if contentScope != scope, !scopeSlide.isActive {
+                    contentScope = scope
+                }
+                listVisible = true
+            }
             .onDisappear {
                 listVisible = false
                 cancelAlbumReflow()
+                scopeSlide.cancel(clearCache: true)
                 // Navigation retains this ScrollView. Geometry callbacks report
                 // changes, so an unchanged frame is not sent again on return.
                 // Keep its measured geometry; visibility gates input while hidden.
@@ -202,6 +231,7 @@ struct AlbumsView: View {
             .onChange(of: scrollToLatestRequest) {
                 guard listVisible, !filtered.isEmpty else { return }
                 cancelAlbumReflow()
+                scopeSlide.cancel(clearCache: true)
                 withAnimation(reduceMotion ? nil : .smooth(duration: 0.35)) { proxy.scrollTo(AlbumDiscoveryScrollTarget.content, anchor: .bottom) }
             }
             .onScrollPhaseChange { _, phase in
@@ -218,6 +248,7 @@ struct AlbumsView: View {
                                     topInset: $0.contentInsets.top, viewportHeight: $0.containerSize.height,
                                     contentHeight: $0.contentSize.height, bottomInset: $0.contentInsets.bottom)
             } action: { old, new in
+                scopeSlide.scrollChanged(scope: contentScope.rawValue, geometry: new)
                 if old.viewportHeight != new.viewportHeight || old.topInset != new.topInset || old.bottomInset != new.bottomInset {
                     cancelAlbumReflow()
                 }
@@ -246,19 +277,59 @@ struct AlbumsView: View {
                 }
             }
             .refreshable { await store.load() }
-            .onChange(of: scope) {
+            .onChange(of: contentScope) {
                 cancelAlbumReflow()
                 // A scope is a new collection. Sort/mode changes continue to
                 // use their existing viewport and touched-album policies.
                 withTransaction(Transaction(animation: nil)) {
                     proxy.scrollTo(AlbumDiscoveryScrollTarget.content, anchor: .bottom)
                 }
+                scopeSlide.start()
             }
             .onChange(of: Set(filtered.map(\.id))) { _, _ in cancelAlbumReflow() }
-            .onChange(of: metrics) { _, _ in cancelAlbumReflow() }
-            .onChange(of: reduceMotion) { _, _ in cancelAlbumReflow() }
-            .onChange(of: voiceOverEnabled) { _, _ in cancelAlbumReflow() }
-            .onChange(of: tabSelectionState.selection) { _, _ in cancelAlbumReflow() }
+            .onChange(of: metrics) { _, _ in
+                cancelAlbumReflow()
+                scopeSlide.cancel(clearCache: true)
+            }
+            .onChange(of: reduceMotion) { _, _ in
+                cancelAlbumReflow()
+                scopeSlide.cancel(clearCache: true)
+            }
+            .onChange(of: voiceOverEnabled) { _, _ in
+                cancelAlbumReflow()
+                scopeSlide.cancel(clearCache: true)
+            }
+            .onChange(of: scenePhase) { _, phase in
+                if phase != .active {
+                    scopeSlide.cancel(clearCache: true)
+                } else if contentScope != scope {
+                    contentScope = scope
+                }
+            }
+            .onChange(of: tabSelectionState.selection) { _, _ in
+                cancelAlbumReflow()
+                scopeSlide.cancel(clearCache: true)
+            }
+            .onChange(of: query) { _, _ in scopeSlide.cancel(clearCache: true) }
+            .onChange(of: store.albums) { _, _ in scopeSlide.cancel(clearCache: true) }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+                scopeSlide.cancel(clearCache: true)
+            }
+            .onChange(of: scopeSlide.phase) { _, new in
+                // Cached viewport motion gets its own render pass. Building
+                // All's live card tree must not delay its first visible frame.
+                if new == .installing || new == .idle, contentScope != scope {
+                    withTransaction(Transaction(animation: nil)) { contentScope = scope }
+                }
+            }
+            .allowsHitTesting(!scopeSlide.isActive)
+            .overlay {
+                AlbumScopeSlideHost(slide: scopeSlide)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .ignoresSafeArea(.container, edges: [.top, .horizontal])
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
             .overlay(alignment: .topLeading) {
                 AlbumLabelMeasurement()
                     .frame(width: coverWidth)
@@ -309,6 +380,7 @@ struct AlbumsView: View {
                         .buttonStyle(.plain)
                         .glassEffect(.regular.interactive(), in: .circle)
                         .accessibilityLabel("Album Options")
+                        .allowsHitTesting(!scopeSlide.isActive)
                     }
                     .fixedSize(horizontal: false, vertical: true)
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
@@ -320,10 +392,11 @@ struct AlbumsView: View {
                     .clipped()
                     .allowsHitTesting(!searchHidden)
                     .accessibilityHidden(searchHidden)
-                    Picker("Album scope", selection: $scope) {
+                    Picker("Album scope", selection: Binding(get: { scope }, set: selectAlbumScope)) {
                         ForEach(AlbumScope.allCases) { Text($0.rawValue).tag($0) }
                     }
                     .pickerStyle(.segmented)
+                    .allowsHitTesting(!scopeSlide.isActive)
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
                         guard height > 0, abs(scopePickerHeight - height) > 0.5 else { return }
                         scopePickerHeight = height
@@ -397,8 +470,32 @@ struct AlbumsView: View {
         .accessibilityAction { activateAlbum(album, accessibility: true) }
     }
 
+    private func selectAlbumScope(_ next: AlbumScope) {
+        guard scope != next, !scopeSlide.isActive else { return }
+        let canCacheSource = !isReordering && !pinchInteraction.isActive
+        cancelAlbumReflow()
+        withTransaction(Transaction(animation: nil)) {
+            if !reduceMotion, listVisible, store.hasLoaded {
+                let viewport = reflowViewport.usableFrame
+                scopeSlide.prepare(current: contentScope.rawValue, target: next.rawValue,
+                                   key: AlbumScopeCaptureKey(albums: store.albums, query: query, sort: sort,
+                                                             direction: sortDirection, list: showsList,
+                                                             labelHeight: albumLabelHeight, viewport: viewport.size),
+                                   cacheSource: canCacheSource, viewport: viewport,
+                                   direction: next == .shared ? .next : .previous)
+                scopeSlide.start()
+            }
+            scope = next
+            // Cache misses still prepare new content behind the outgoing image.
+            // A cache hit already has all pixels needed for the entire slide.
+            if !scopeSlide.isActive || !scopeSlide.hasPreparedIncoming {
+                contentScope = next
+            }
+        }
+    }
+
     private func activateAlbum(_ album: AlbumSummary, accessibility: Bool = false) {
-        guard !isReordering, !pinchInteraction.isActive,
+        guard !isReordering, !pinchInteraction.isActive, !scopeSlide.isActive,
               accessibility || !pinchInteraction.blocksAlbumActivation
         else { return }
         openAlbum(album)
@@ -440,7 +537,7 @@ struct AlbumsView: View {
     }
 
     private func canReceiveAlbumPinch(at point: CGPoint) -> Bool {
-        listVisible && tabSelectionState.canActivateContent(in: .albums)
+        listVisible && !scopeSlide.isActive && tabSelectionState.canActivateContent(in: .albums)
             && reflowViewport.usableFrame.contains(point)
     }
 
@@ -500,6 +597,272 @@ struct AlbumsView: View {
             reflowViewport.finishInteractiveMotion(destinationSize: metrics.itemSize(progress: target), generation: reorderGeneration)
             albumLayoutProgress = target
         }
+    }
+}
+
+/// Local viewport wiring; both album scopes and root pages use the same animator.
+@MainActor
+@Observable
+private final class AlbumScopeSlide {
+    enum Phase: String { case idle, preparing, animating, installing }
+    private(set) var phase = Phase.idle
+    var isActive: Bool {
+        phase != .idle
+    }
+
+    var hasPreparedIncoming: Bool {
+        capturedIncoming
+    }
+
+    @ObservationIgnored weak var anchor: UIView?
+    @ObservationIgnored weak var stageHost: UIView?
+    @ObservationIgnored private weak var scrollView: UIScrollView?
+    @ObservationIgnored private var cover: UIView?
+    @ObservationIgnored private var outgoing: UIView?
+    @ObservationIgnored private var incoming: UIView?
+    @ObservationIgnored private var animator: UIViewPropertyAnimator?
+    @ObservationIgnored private var targetScope = ""
+    @ObservationIgnored private var capturedIncoming = false
+    @ObservationIgnored private var cachedViewports: [String: UIView] = [:]
+    @ObservationIgnored private var cacheKey: AlbumScopeCaptureKey?
+    @ObservationIgnored private var cacheStyle = UIUserInterfaceStyle.unspecified
+    @ObservationIgnored private var readinessTimeout: Task<Void, Never>?
+    @ObservationIgnored private var contentGeometry: AlbumScopeContentGeometry?
+    @ObservationIgnored private var scrollGeometry: AlbumScrollGeometry?
+    @ObservationIgnored private var direction = NativeTabPageDirection.next
+    @ObservationIgnored private var generation = 0
+
+    func prepare(current: String, target: String, key: AlbumScopeCaptureKey,
+                 cacheSource: Bool, viewport: CGRect, direction: NativeTabPageDirection)
+    {
+        cancel()
+        var ancestor = anchor?.superview
+        while let view = ancestor, !(view is UIScrollView) {
+            ancestor = view.superview
+        }
+        guard let scroll = ancestor as? UIScrollView,
+              let window = scroll.window, let stageHost, stageHost.window === window,
+              !stageHost.isDescendant(of: scroll),
+              !stageHost.bounds.isEmpty, !viewport.isEmpty else { return }
+        if cacheKey != key || cacheStyle != scroll.traitCollection.userInterfaceStyle {
+            cachedViewports.removeAll()
+            cacheKey = key
+            cacheStyle = scroll.traitCollection.userInterfaceStyle
+        }
+        // Use UIKit's current frame; a root transition can leave SwiftUI's
+        // last global x-coordinate offscreen until its next geometry callback.
+        let nativeFrame = scroll.convert(scroll.bounds, to: window)
+        let bottom = nativeFrame.maxY - scroll.adjustedContentInset.bottom
+        // Keep the real header above both pages. Its material must sample the
+        // sliding content under it, including the region above the album rows.
+        let top = nativeFrame.minY
+        let nativeViewport = CGRect(x: nativeFrame.minX, y: top,
+                                    width: nativeFrame.width, height: bottom - top)
+        let crop = scroll.convert(nativeViewport, from: window).intersection(scroll.bounds)
+        guard !crop.isEmpty,
+              let captured = scroll.resizableSnapshotView(from: crop, afterScreenUpdates: false, withCapInsets: .zero)
+        else { return }
+        let container = UIView(frame: scroll.convert(crop, to: stageHost))
+        container.clipsToBounds = true
+        container.isUserInteractionEnabled = false
+        container.accessibilityElementsHidden = true
+        let resolved = scroll.backgroundColor?.resolvedColor(with: scroll.traitCollection)
+        let background: UIColor = if let resolved, resolved.cgColor.alpha == 1 {
+            resolved
+        } else {
+            UIColor.systemBackground.resolvedColor(with: scroll.traitCollection)
+        }
+        container.backgroundColor = background
+        container.isOpaque = true
+        let from = UIView(frame: container.bounds)
+        let to = UIView(frame: container.bounds)
+        from.backgroundColor = background
+        to.backgroundColor = background
+        from.isOpaque = true
+        to.isOpaque = true
+        from.isUserInteractionEnabled = false
+        to.isUserInteractionEnabled = false
+        from.accessibilityElementsHidden = true
+        to.accessibilityElementsHidden = true
+        to.isHidden = true
+        captured.frame = CGRect(origin: .zero, size: crop.size)
+        captured.isUserInteractionEnabled = false
+        captured.accessibilityElementsHidden = true
+        from.addSubview(captured)
+        let nativeBottom = max(-scroll.adjustedContentInset.top,
+                               scroll.contentSize.height + scroll.adjustedContentInset.bottom - scroll.bounds.height)
+        if cacheSource, abs(scroll.contentOffset.y - nativeBottom) < 1 {
+            cachedViewports[current] = captured
+        }
+        let cached = cachedViewports[target]
+        if let cached, cached.bounds.size == crop.size {
+            cached.frame = to.bounds
+            to.addSubview(cached)
+            capturedIncoming = true
+        } else {
+            capturedIncoming = false
+        }
+        container.addSubview(from)
+        container.addSubview(to)
+        stageHost.addSubview(container)
+        cover = container
+        outgoing = from
+        incoming = to
+        scrollView = scroll
+        targetScope = target
+        self.direction = direction
+        phase = .preparing
+        armTimeout(for: .preparing)
+    }
+
+    func start() {
+        guard phase == .preparing, capturedIncoming, let outgoing, let incoming else { return }
+        readinessTimeout?.cancel()
+        readinessTimeout = nil
+        let request = generation
+        // UIKit animates only owned viewport stages. SwiftUI can install the
+        // incoming collection behind them without rebasing an animated view.
+        let animation = NativePageSlideAnimation.makeAnimator(from: outgoing, to: incoming,
+                                                              direction: direction, width: outgoing.bounds.width)
+        incoming.isHidden = false
+        animation.addCompletion { [weak self] _ in
+            guard let self, generation == request else { return }
+            beginInstallation()
+        }
+        animator = animation
+        phase = .animating
+        animation.startAnimation()
+    }
+
+    func contentChanged(_ value: AlbumScopeContentGeometry) {
+        if phase == .installing, value.scope != targetScope {
+            return
+        }
+        contentGeometry = value
+        if let scrollGeometry {
+            _ = finishInstallation(scope: value.scope, geometry: scrollGeometry)
+                || captureIncoming(scope: value.scope, geometry: scrollGeometry)
+        }
+    }
+
+    func scrollChanged(scope: String, geometry: AlbumScrollGeometry) {
+        scrollGeometry = geometry
+        _ = finishInstallation(scope: scope, geometry: geometry) || captureIncoming(scope: scope, geometry: geometry)
+    }
+
+    private func nativeContentIsReady(scope: String, geometry: AlbumScrollGeometry) -> Bool {
+        guard isActive, scope == targetScope,
+              let contentGeometry, contentGeometry.scope == scope,
+              abs(contentGeometry.height - geometry.contentHeight) < 1,
+              let scrollView,
+              abs(scrollView.contentSize.height - geometry.contentHeight) < 1,
+              abs(scrollView.adjustedContentInset.top - geometry.topInset) < 1,
+              abs(scrollView.adjustedContentInset.bottom - geometry.bottomInset) < 1,
+              abs(max(0, scrollView.contentOffset.y + scrollView.adjustedContentInset.top) - geometry.offset) < 1,
+              abs(geometry.offset - max(0, geometry.contentHeight - geometry.viewportHeight)) < 1
+        else { return false }
+        return true
+    }
+
+    private func captureIncoming(scope: String, geometry: AlbumScrollGeometry) -> Bool {
+        guard phase == .preparing, !capturedIncoming, nativeContentIsReady(scope: scope, geometry: geometry),
+              let scrollView, let cover, let incoming else { return false }
+        capturedIncoming = true
+        let crop = scrollView.convert(cover.bounds, from: cover).intersection(scrollView.bounds)
+        guard !crop.isEmpty,
+              let captured = scrollView.resizableSnapshotView(from: crop, afterScreenUpdates: true, withCapInsets: .zero)
+        else {
+            cancel()
+            return false
+        }
+        UIView.performWithoutAnimation {
+            captured.frame = CGRect(origin: .zero, size: crop.size)
+            captured.isUserInteractionEnabled = false
+            captured.accessibilityElementsHidden = true
+            incoming.addSubview(captured)
+        }
+        cachedViewports[targetScope] = captured
+        start()
+        return true
+    }
+
+    private func beginInstallation() {
+        animator = nil
+        phase = .installing
+        if let scrollGeometry, finishInstallation(scope: targetScope, geometry: scrollGeometry) {
+            return
+        }
+        armTimeout(for: .installing)
+    }
+
+    private func finishInstallation(scope: String, geometry: AlbumScrollGeometry) -> Bool {
+        guard phase == .installing, nativeContentIsReady(scope: scope, geometry: geometry) else { return false }
+        cancel()
+        return true
+    }
+
+    private func armTimeout(for waitingPhase: Phase) {
+        readinessTimeout?.cancel()
+        let request = generation
+        readinessTimeout = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(500))
+            guard !Task.isCancelled, let self, generation == request, phase == waitingPhase else { return }
+            cancel()
+        }
+    }
+
+    func cancel(clearCache: Bool = false) {
+        generation &+= 1
+        readinessTimeout?.cancel()
+        readinessTimeout = nil
+        if animator?.state == .active {
+            animator?.stopAnimation(true)
+        }
+        animator = nil
+        cover?.removeFromSuperview()
+        cover = nil
+        outgoing = nil
+        incoming = nil
+        scrollView = nil
+        capturedIncoming = false
+        if clearCache {
+            cachedViewports.removeAll()
+            cacheKey = nil
+        }
+        phase = .idle
+    }
+}
+
+/// Declare the native stage below the complete SwiftUI header, rather than
+/// inserting a sibling above SwiftUI's shared drawing surface at runtime.
+private struct AlbumScopeSlideHost: UIViewRepresentable {
+    let slide: AlbumScopeSlide
+
+    func makeUIView(context _: Context) -> UIView {
+        let view = UIView()
+        view.isUserInteractionEnabled = false
+        view.accessibilityElementsHidden = true
+        slide.stageHost = view
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context _: Context) {
+        slide.stageHost = uiView
+    }
+}
+
+private struct AlbumScopeSlideAnchor: UIViewRepresentable {
+    let slide: AlbumScopeSlide
+    func makeUIView(context _: Context) -> UIView {
+        let view = UIView()
+        view.isUserInteractionEnabled = false
+        view.accessibilityElementsHidden = true
+        slide.anchor = view
+        return view
+    }
+
+    func updateUIView(_ view: UIView, context _: Context) {
+        slide.anchor = view
     }
 }
 
