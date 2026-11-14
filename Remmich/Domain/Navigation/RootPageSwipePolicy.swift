@@ -11,3 +11,10 @@ nonisolated enum RootPageSwipePolicy {
             && !(librarySelected && libraryAccountPresented)
     }
 }
+
+nonisolated enum NativeTabPageAnimationPolicy {
+    /// Tapping the tab bar remains available when a page owns horizontal drags.
+    static func allowsTap(viewerPresented: Bool, reduceMotion: Bool) -> Bool {
+        !viewerPresented && !reduceMotion
+    }
+}

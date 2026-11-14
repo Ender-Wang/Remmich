@@ -567,9 +567,8 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
             }
             guard !isUpdatingTabs,
                   pageInteractionController == nil,
-                  parent.pageSwipeEnabled,
-                  !parent.isViewerPresented,
-                  !UIAccessibility.isReduceMotionEnabled,
+                  NativeTabPageAnimationPolicy.allowsTap(viewerPresented: parent.isViewerPresented,
+                                                         reduceMotion: UIAccessibility.isReduceMotionEnabled),
                   let selectedTab = tabBarController.selectedTab,
                   selectedTab !== tab,
                   let source = destination(for: selectedTab),

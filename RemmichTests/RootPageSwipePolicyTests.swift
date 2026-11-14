@@ -2,6 +2,14 @@ import Testing
 @testable import Remmich
 
 struct RootPageSwipePolicyTests {
+    @Test func expandedProfileBlocksDraggingButRetainsAnimatedTabTaps() {
+        #expect(!RootPageSwipePolicy.allowsPaging(viewerPresented: false, hasNavigationDestination: false,
+                                                  librarySelected: true, libraryAccountPresented: true))
+        #expect(NativeTabPageAnimationPolicy.allowsTap(viewerPresented: false, reduceMotion: false))
+        #expect(!NativeTabPageAnimationPolicy.allowsTap(viewerPresented: true, reduceMotion: false))
+        #expect(!NativeTabPageAnimationPolicy.allowsTap(viewerPresented: false, reduceMotion: true))
+    }
+
     @Test func retainedLibraryProfileOnlyBlocksPagingWhileLibraryIsSelected() {
         // Reproduce: Library -> expand Profile -> tap Photos -> return to Library.
         for librarySelected in [true, false, true] {
