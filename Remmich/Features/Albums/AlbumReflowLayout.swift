@@ -16,6 +16,18 @@ nonisolated struct AlbumReflowMetrics: Equatable {
         max(72, labelHeight)
     }
 
+    func itemSize(progress: CGFloat) -> CGSize {
+        CGSize(width: interpolate(coverWidth, width, progress), height: interpolate(cardHeight, listHeight, progress))
+    }
+
+    /// Read the current presentation from the same item-size samples that drive
+    /// native anchoring, so a second pinch can interrupt a settling transition.
+    func progress(for size: CGSize) -> CGFloat? {
+        let span = listHeight - cardHeight
+        guard size.height.isFinite, abs(span) > 0.5 else { return nil }
+        return min(1, max(0, (size.height - cardHeight) / span))
+    }
+
     func height(count: Int, list: Bool) -> CGFloat {
         guard count > 0 else { return 0 }
         let rows = list ? count : (count + columns - 1) / columns
@@ -90,6 +102,24 @@ nonisolated struct AlbumReflowAnchor: Equatable {
     let unitY: CGFloat
     let itemFrame: CGRect
     let viewportFrame: CGRect
+    var focus: AlbumReflowFocus?
+
+    func alignment(for height: CGFloat) -> CGFloat {
+        guard let focus, height.isFinite, height > 0 else { return unitY }
+        let space = viewportFrame.height - height
+        guard space > 0.5 else { return 0.5 }
+        // A native ID scroll aligns the same fraction of the item and viewport.
+        // Vary that fraction to hold the original point inside the pinched album
+        // under its viewport location as the album's height changes.
+        // UnitPoint supports positions outside 0...1. Keep those fractions for
+        // partially visible albums; the scroll view owns actual range clamping.
+        return (focus.viewportUnitY * viewportFrame.height - focus.itemUnitY * height) / space
+    }
+}
+
+nonisolated struct AlbumReflowFocus: Equatable {
+    let viewportUnitY: CGFloat
+    let itemUnitY: CGFloat
 }
 
 nonisolated struct AlbumReflowItemGeometry: Equatable {
@@ -106,22 +136,35 @@ final class AlbumReflowViewport {
     var items: [String: CGRect] = [:]
     private var motionAnchor: AlbumReflowAnchor?
     private var motionGeneration = 0
-    private var destinationSize = CGSize.zero
+    private var destinationSize: CGSize?
     private var sampledSize = CGSize.zero
 
-    func anchor(in albumIDs: [String]) -> AlbumReflowAnchor? {
-        guard frame.height > 0, visibleHeight > 0 else { return nil }
+    var usableFrame: CGRect {
+        guard frame.height > 0, visibleHeight > 0 else { return .zero }
         // Albums reserves only a top scroll-content margin. The remaining
         // container is bottom-aligned within the ScrollView's measured frame.
         let height = min(frame.height, visibleHeight)
-        let visible = CGRect(x: frame.minX, y: frame.maxY - height, width: frame.width, height: height)
+        return CGRect(x: frame.minX, y: frame.maxY - height, width: frame.width, height: height)
+    }
+
+    func anchor(in albumIDs: [String], at point: CGPoint? = nil) -> AlbumReflowAnchor? {
+        let visible = usableFrame
+        guard !visible.isEmpty else { return nil }
+        if let point {
+            guard point.x.isFinite, point.y.isFinite, visible.contains(point) else { return nil }
+        }
         let candidates = albumIDs.compactMap { id -> (id: String, frame: CGRect)? in
             guard let item = items[id], item.height > 0, item.intersects(visible) else { return nil }
             return (id, item)
         }
         let fullyVisible = candidates.filter { $0.frame.minY >= visible.minY && $0.frame.maxY <= visible.maxY }
-        let pool = fullyVisible.isEmpty ? candidates : fullyVisible
+        let pool = point != nil || fullyVisible.isEmpty ? candidates : fullyVisible
         guard let item = pool.min(by: {
+            if let point {
+                let left = distance(from: point, to: $0.frame)
+                let right = distance(from: point, to: $1.frame)
+                return left == right ? $0.id < $1.id : left < right
+            }
             let left = abs($0.frame.midY - visible.midY)
             let right = abs($1.frame.midY - visible.midY)
             return left == right ? $0.id < $1.id : left < right
@@ -130,7 +173,20 @@ final class AlbumReflowViewport {
         // item and viewport. Solve that equation at the current position.
         let space = visible.height - item.frame.height
         let unitY = space > 0.5 ? min(1, max(0, (item.frame.minY - visible.minY) / space)) : 0.5
-        return AlbumReflowAnchor(albumID: item.id, unitY: unitY, itemFrame: item.frame, viewportFrame: visible)
+        let focus = point.map { point in
+            // In a grid gap, use the nearest edge of the selected album. This
+            // keeps the first alignment request from moving an existing item.
+            let y = min(item.frame.maxY, max(item.frame.minY, point.y))
+            return AlbumReflowFocus(viewportUnitY: (y - visible.minY) / visible.height,
+                                    itemUnitY: (y - item.frame.minY) / item.frame.height)
+        }
+        return AlbumReflowAnchor(albumID: item.id, unitY: unitY, itemFrame: item.frame, viewportFrame: visible, focus: focus)
+    }
+
+    private func distance(from point: CGPoint, to rect: CGRect) -> CGFloat {
+        let x = max(0, max(rect.minX - point.x, point.x - rect.maxX))
+        let y = max(0, max(rect.minY - point.y, point.y - rect.maxY))
+        return x * x + y * y
     }
 
     func reset() {
@@ -140,12 +196,21 @@ final class AlbumReflowViewport {
         items = [:]
     }
 
-    func beginMotion(anchor: AlbumReflowAnchor?, destinationSize: CGSize, generation: Int) {
+    func beginMotion(anchor: AlbumReflowAnchor?, destinationSize: CGSize?, generation: Int) {
         motionAnchor = anchor
         motionGeneration = generation
         self.destinationSize = destinationSize
         sampledSize = anchor?.itemFrame.size ?? .zero
-        if close(sampledSize, destinationSize, tolerance: 0.01) {
+        if let destinationSize, close(sampledSize, destinationSize, tolerance: 0.01) {
+            motionAnchor = nil
+        }
+    }
+
+    func finishInteractiveMotion(destinationSize: CGSize, generation: Int) {
+        guard generation >= motionGeneration else { return }
+        motionGeneration = generation
+        self.destinationSize = destinationSize
+        if close(sampledSize, destinationSize, tolerance: 0.25) {
             motionAnchor = nil
         }
     }
@@ -154,7 +219,9 @@ final class AlbumReflowViewport {
     /// not advance the plan, and the final size is applied once before release.
     func consumeMotionSample(albumID: String, size: CGSize, generation: Int) -> AlbumReflowAnchor? {
         guard generation == motionGeneration, let anchor = motionAnchor, anchor.albumID == albumID else { return nil }
-        let finished = close(size, destinationSize, tolerance: 0.25)
+        // Interactive motion has no destination until release. Reaching an
+        // endpoint must keep the anchor alive for a reversal in the same pinch.
+        let finished = destinationSize.map { close(size, $0, tolerance: 0.25) } ?? false
         guard finished || !close(size, sampledSize, tolerance: 0.01) else { return nil }
         sampledSize = size
         if finished {

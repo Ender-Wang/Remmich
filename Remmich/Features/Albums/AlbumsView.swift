@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 nonisolated struct AlbumScrollGeometry: Equatable {
     let offset: CGFloat
@@ -30,6 +31,7 @@ enum AlbumScope: String, CaseIterable, Identifiable {
 
 struct AlbumsView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
     let source: any AlbumReading & TimelineReading
     let media: MediaLibraryController
     let assetDetails: any AssetDetailReading
@@ -51,6 +53,8 @@ struct AlbumsView: View {
     @State private var isReordering = false
     @State private var reorderGeneration = 0
     @State private var showsList = false
+    @State private var albumLayoutProgress: CGFloat = 0
+    @State private var pinchSettling = false
     @State private var chromeTracker = PhotosChromeTracker()
     @State private var searchHidden = false
     @State private var searchRowHeight: CGFloat = 44
@@ -60,6 +64,7 @@ struct AlbumsView: View {
     @State private var albumLabelHeight: CGFloat = 58
     @State private var reflowCompletion = AlbumReflowCompletion()
     @State private var reflowViewport = AlbumReflowViewport()
+    @State private var pinchInteraction = AlbumPinchInteraction()
     @State private var listVisible = false
     @Namespace private var albumTransition
     @State private var timelineSessions = AlbumTimelineSessions()
@@ -140,27 +145,38 @@ struct AlbumsView: View {
                             description: Text(query.isEmpty ? "Albums available to this account will appear here." : "Try another album name.")
                         )
                     } else {
-                        AlbumReflowLayout(progress: showsList ? 1 : 0, metrics: metrics) {
+                        AlbumReflowLayout(progress: albumLayoutProgress, metrics: metrics) {
                             ForEach(filtered) { album in
-                                albumLink(album, compact: showsList, metrics: metrics, proxy: proxy, generation: request)
+                                albumLink(album, compact: showsList, progress: albumLayoutProgress,
+                                          metrics: metrics, proxy: proxy, generation: request)
                             }
                         }
+                        .gesture(AlbumPinchGesture(enabled: listVisible && !voiceOverEnabled,
+                                                   canBegin: { canBeginAlbumPinch(at: $0) },
+                                                   canReceive: { canReceiveAlbumPinch(at: $0) },
+                                                   newInputBegan: { pinchInteraction.prepareForNewInput() },
+                                                   update: { state, magnification, location in
+                                                       handleAlbumPinch(state: state, magnification: magnification,
+                                                                        location: location, metrics: metrics)
+                                                   }))
                         .scrollTargetLayout()
                         .padding(.horizontal, 16)
                         .transition(.identity)
                         .transaction { transaction in
                             guard reflowCompletion.claim(request) else { return }
                             transaction.addAnimationCompletion(criteria: .removed) {
-                                guard reorderGeneration == request else { return }
+                                guard reorderGeneration == request, !pinchInteraction.isActive else { return }
                                 isReordering = false
+                                pinchSettling = false
                             }
                         }
-                        .animation(isReordering && !reduceMotion ? .smooth(duration: 0.35) : nil, value: request)
+                        .animation(isReordering && !pinchInteraction.isActive && !reduceMotion ? .smooth(duration: 0.35) : nil, value: request)
                     }
                 }
                 .padding(.vertical)
             }
             .ignoresSafeArea(.container, edges: .horizontal)
+            .scrollDisabled(pinchInteraction.isActive)
             // Like timeline Memories, compact chrome must not resize the viewport
             // or change the scroll clearance while the user is dragging.
             .contentMargins(.top, expandedHeaderHeight, for: .scrollContent)
@@ -171,20 +187,21 @@ struct AlbumsView: View {
             .onAppear { listVisible = true }
             .onDisappear {
                 listVisible = false
-                reorderGeneration &+= 1
-                isReordering = false
-                reflowViewport.reset()
+                cancelAlbumReflow()
+                // Navigation retains this ScrollView. Geometry callbacks report
+                // changes, so an unchanged frame is not sent again on return.
+                // Keep its measured geometry; visibility gates input while hidden.
             }
             .onChange(of: scrollToLatestRequest) {
                 guard listVisible, let lastID = displayedAlbums.last?.id else { return }
-                reflowViewport.cancelMotion()
+                cancelAlbumReflow()
                 withAnimation(reduceMotion ? nil : .smooth(duration: 0.35)) { proxy.scrollTo(lastID, anchor: .bottom) }
             }
             .onScrollPhaseChange { _, phase in
-                if phase == .interacting {
+                if phase == .interacting, !pinchInteraction.isActive {
                     reflowViewport.cancelMotion()
                 }
-                userScrolling = phase == .interacting || phase == .decelerating
+                userScrolling = !pinchInteraction.isActive && (phase == .interacting || phase == .decelerating)
                 if !userScrolling {
                     chromeTracker.scrollingEnded()
                 }
@@ -195,7 +212,7 @@ struct AlbumsView: View {
                                     contentHeight: $0.contentSize.height, bottomInset: $0.contentInsets.bottom)
             } action: { old, new in
                 if old.viewportHeight != new.viewportHeight || old.topInset != new.topInset || old.bottomInset != new.bottomInset {
-                    reflowViewport.cancelMotion()
+                    cancelAlbumReflow()
                 }
                 reflowViewport.visibleHeight = new.viewportHeight
                 if !initialAlbumsPositioned, store.hasLoaded, let lastID = displayedAlbums.last?.id,
@@ -225,6 +242,8 @@ struct AlbumsView: View {
             .onChange(of: Set(filtered.map(\.id))) { _, _ in cancelAlbumReflow() }
             .onChange(of: metrics) { _, _ in cancelAlbumReflow() }
             .onChange(of: reduceMotion) { _, _ in cancelAlbumReflow() }
+            .onChange(of: voiceOverEnabled) { _, _ in cancelAlbumReflow() }
+            .onChange(of: tabSelectionState.selection) { _, _ in cancelAlbumReflow() }
             .overlay(alignment: .topLeading) {
                 AlbumLabelMeasurement()
                     .frame(width: coverWidth)
@@ -327,19 +346,16 @@ struct AlbumsView: View {
         }
     }
 
-    private func albumLink(_ album: AlbumSummary, compact: Bool, metrics: AlbumReflowMetrics,
+    private func albumLink(_ album: AlbumSummary, compact: Bool, progress: CGFloat, metrics: AlbumReflowMetrics,
                            proxy: ScrollViewProxy, generation: Int) -> some View
     {
-        Button {
-            guard !isReordering else { return }
-            openAlbum(album)
-        } label: {
-            AlbumCard(album: album, media: media, compact: compact, sort: sort, persistence: persistence,
+        Button { activateAlbum(album) } label: {
+            AlbumCard(album: album, media: media, compact: compact, progress: progress, sort: sort, persistence: persistence,
                       scope: accountScope, transitionNamespace: albumTransition, coverWidth: metrics.coverWidth,
                       listWidth: metrics.width, isReordering: isReordering)
                 // Retain the accepted inner text/layout endpoints. The outer
                 // wrapper reports the current animated proposal to scrolling.
-                .frame(height: compact ? metrics.listHeight : metrics.cardHeight, alignment: .top)
+                .frame(height: metrics.itemSize(progress: progress).height, alignment: .top)
                 .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .top)
         }
         .buttonStyle(.plain)
@@ -347,7 +363,7 @@ struct AlbumsView: View {
         // this boundary, sort interpolation can span far-apart text positions
         // in multi-thousand-point drawing surfaces across the scroll content.
         .geometryGroup()
-        .allowsHitTesting(!isReordering)
+        .allowsHitTesting(!isReordering || pinchInteraction.isActive || pinchSettling)
         .id(album.id)
         .transition(.identity)
         .onGeometryChange(for: AlbumReflowItemGeometry.self) {
@@ -357,12 +373,20 @@ struct AlbumsView: View {
             reflowViewport.items[album.id] = geometry.frame
             if let anchor = reflowViewport.consumeMotionSample(albumID: album.id, size: geometry.size, generation: generation) {
                 withTransaction(Transaction(animation: nil)) {
-                    proxy.scrollTo(anchor.albumID, anchor: UnitPoint(x: 0.5, y: anchor.unitY))
+                    proxy.scrollTo(anchor.albumID, anchor: UnitPoint(x: 0.5, y: anchor.alignment(for: geometry.size.height)))
                 }
             }
         }
         .onDisappear { reflowViewport.items[album.id] = nil }
         .accessibilityIdentifier("album-\(album.id)")
+        .accessibilityAction { activateAlbum(album, accessibility: true) }
+    }
+
+    private func activateAlbum(_ album: AlbumSummary, accessibility: Bool = false) {
+        guard !isReordering, !pinchInteraction.isActive,
+              accessibility || !pinchInteraction.blocksAlbumActivation
+        else { return }
+        openAlbum(album)
     }
 
     private func updateAlbumLayout(sort nextSort: AlbumSort, direction: AlbumSortDirection, list: Bool? = nil,
@@ -370,27 +394,97 @@ struct AlbumsView: View {
     {
         let nextList = list ?? showsList
         guard sort != nextSort || sortDirection != direction || showsList != nextList else { return }
+        pinchInteraction.end(cancelled: true)
         let changesSort = sort != nextSort || sortDirection != direction
         let anchor = showsList != nextList && !changesSort ? reflowViewport.anchor(in: filtered.map(\.id)) : nil
         withTransaction(Transaction(animation: nil)) {
             reorderGeneration &+= 1
-            let destination = CGSize(width: nextList ? metrics.width : metrics.coverWidth,
-                                     height: nextList ? metrics.listHeight : metrics.cardHeight)
+            pinchSettling = false
+            let destination = metrics.itemSize(progress: nextList ? 1 : 0)
             reflowViewport.beginMotion(anchor: anchor, destinationSize: destination, generation: reorderGeneration)
             isReordering = !reduceMotion
             sort = nextSort
             sortDirection = direction
             showsList = nextList
+            albumLayoutProgress = nextList ? 1 : 0
             // Only the album layout installs animation. Its selected item's
             // actual size drives anchoring; completion never requests scrolling.
         }
     }
 
     private func cancelAlbumReflow() {
-        reflowViewport.cancelMotion()
-        guard isReordering else { return }
-        reorderGeneration &+= 1
-        isReordering = false
+        withTransaction(Transaction(animation: nil)) {
+            pinchInteraction.end(cancelled: true)
+            reflowViewport.cancelMotion()
+            guard isReordering || pinchSettling || albumLayoutProgress != (showsList ? 1 : 0) else { return }
+            reorderGeneration &+= 1
+            isReordering = false
+            pinchSettling = false
+            albumLayoutProgress = showsList ? 1 : 0
+        }
+    }
+
+    private func canReceiveAlbumPinch(at point: CGPoint) -> Bool {
+        listVisible && tabSelectionState.canActivateContent(in: .albums)
+            && reflowViewport.usableFrame.contains(point)
+    }
+
+    private func canBeginAlbumPinch(at point: CGPoint) -> Bool {
+        canReceiveAlbumPinch(at: point) && store.hasLoaded && !filtered.isEmpty
+            && (!isReordering || pinchSettling) && !searchFocused && !voiceOverEnabled && !pinchInteraction.isActive
+    }
+
+    private func handleAlbumPinch(state: UIGestureRecognizer.State, magnification: CGFloat, location: CGPoint, metrics: AlbumReflowMetrics) {
+        switch state {
+        case .began:
+            guard canBeginAlbumPinch(at: location),
+                  let anchor = reflowViewport.anchor(in: filtered.map(\.id), at: location) else { return }
+            let progress = pinchSettling ? metrics.progress(for: anchor.itemFrame.size) ?? albumLayoutProgress : albumLayoutProgress
+            withTransaction(Transaction(animation: nil)) {
+                reorderGeneration &+= 1
+                pinchSettling = false
+                isReordering = true
+                userScrolling = false
+                chromeTracker.scrollingEnded()
+                albumLayoutProgress = progress
+                reflowViewport.beginMotion(anchor: anchor, destinationSize: nil, generation: reorderGeneration)
+                pinchInteraction.begin(showsList: showsList, anchor: anchor, progress: progress)
+            }
+        case .changed, .ended:
+            guard listVisible, tabSelectionState.canActivateContent(in: .albums), !searchFocused, !voiceOverEnabled else {
+                cancelAlbumReflow()
+                return
+            }
+            if let progress = pinchInteraction.update(magnification: magnification), !reduceMotion {
+                withTransaction(Transaction(animation: nil)) {
+                    albumLayoutProgress = progress
+                }
+            }
+            if state == .ended {
+                finishAlbumPinch(metrics: metrics, cancelled: false)
+            }
+        case .cancelled, .failed:
+            finishAlbumPinch(metrics: metrics, cancelled: true)
+        default:
+            break
+        }
+    }
+
+    private func finishAlbumPinch(metrics: AlbumReflowMetrics, cancelled: Bool) {
+        guard let result = pinchInteraction.end(cancelled: cancelled) else { return }
+        guard filtered.contains(where: { $0.id == result.anchor.albumID }) else {
+            cancelAlbumReflow()
+            return
+        }
+        withTransaction(Transaction(animation: nil)) {
+            reorderGeneration &+= 1
+            let target: CGFloat = result.list ? 1 : 0
+            pinchSettling = !reduceMotion && abs(albumLayoutProgress - target) > 0.001
+            isReordering = pinchSettling
+            showsList = result.list
+            reflowViewport.finishInteractiveMotion(destinationSize: metrics.itemSize(progress: target), generation: reorderGeneration)
+            albumLayoutProgress = target
+        }
     }
 }
 
@@ -407,6 +501,7 @@ private struct AlbumCard: View {
     let album: AlbumSummary
     let media: MediaLibraryController
     let compact: Bool
+    let progress: CGFloat
     let sort: AlbumSort
     let persistence: (any AlbumCatalogStoring)?
     let scope: MediaAccountScope?
@@ -418,16 +513,16 @@ private struct AlbumCard: View {
     @State private var intersectsViewport = false
 
     var body: some View {
-        AlbumCardReflowLayout(progress: compact ? 1 : 0, coverWidth: coverWidth, listWidth: listWidth) {
+        AlbumCardReflowLayout(progress: progress, coverWidth: coverWidth, listWidth: listWidth) {
             cover
             labels(compact: false)
-                .opacity(compact ? 0 : 1)
+                .opacity(1 - progress)
                 .accessibilityHidden(compact)
             labels(compact: true)
-                .opacity(compact ? 1 : 0)
+                .opacity(progress)
                 .accessibilityHidden(!compact)
             Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
-                .opacity(compact ? 1 : 0)
+                .opacity(progress)
                 .accessibilityHidden(!compact)
         }
         .contentShape(.rect)
@@ -469,9 +564,9 @@ private struct AlbumCard: View {
     private var cover: some View {
         AlbumCover(album: album, media: media, persistence: persistence, scope: scope,
                    requestWidth: coverWidth, isActive: coverVisible)
-            .clipShape(.rect(cornerRadius: compact ? 12 : DesignMetrics.defaultCornerRadius))
+            .clipShape(.rect(cornerRadius: DesignMetrics.defaultCornerRadius + (12 - DesignMetrics.defaultCornerRadius) * progress))
             .matchedTransitionSource(id: album.id, in: transitionNamespace) { source in
-                source.clipShape(.rect(cornerRadius: compact ? 12 : DesignMetrics.defaultCornerRadius))
+                source.clipShape(.rect(cornerRadius: DesignMetrics.defaultCornerRadius + (12 - DesignMetrics.defaultCornerRadius) * progress))
             }
     }
 }
