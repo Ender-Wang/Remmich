@@ -56,7 +56,10 @@ struct AlbumsView: View {
     @State private var searchRowHeight: CGFloat = 44
     @State private var scopePickerHeight: CGFloat = 32
     @State private var userScrolling = false
-    @State private var visibleAlbumID: String?
+    @State private var initialAlbumsPositioned = false
+    @State private var albumLabelHeight: CGFloat = 58
+    @State private var reflowCompletion = AlbumReflowCompletion()
+    @State private var reflowViewport = AlbumReflowViewport()
     @State private var listVisible = false
     @Namespace private var albumTransition
     @State private var timelineSessions = AlbumTimelineSessions()
@@ -114,6 +117,9 @@ struct AlbumsView: View {
     private func albumContent(availableWidth: CGFloat) -> some View {
         let columnCount = max(1, Int((availableWidth - 32 + 16) / (155 + 16)))
         let coverWidth = min(260, max(1, (availableWidth - 32 - CGFloat(columnCount - 1) * 16) / CGFloat(columnCount)))
+        let metrics = AlbumReflowMetrics(width: max(1, availableWidth - 32), columns: columnCount,
+                                         coverWidth: coverWidth, labelHeight: albumLabelHeight)
+        let request = reorderGeneration
         let displayedAlbums = showsList ? filtered : sort.gridOrder(filtered, columns: columnCount)
         return ScrollViewReader { proxy in
             ScrollView {
@@ -134,37 +140,50 @@ struct AlbumsView: View {
                             description: Text(query.isEmpty ? "Albums available to this account will appear here." : "Try another album name.")
                         )
                     } else {
-                        LazyVGrid(columns: showsList ? [GridItem(.flexible())]
-                            : Array(repeating: GridItem(.flexible(minimum: 155, maximum: 260), spacing: 16, alignment: .top), count: columnCount),
-                            alignment: .leading, spacing: showsList ? 12 : 20)
-                        {
-                            ForEach(displayedAlbums) { album in albumLink(album, compact: showsList, coverWidth: coverWidth) }
+                        AlbumReflowLayout(progress: showsList ? 1 : 0, metrics: metrics) {
+                            ForEach(filtered) { album in
+                                albumLink(album, compact: showsList, metrics: metrics, proxy: proxy, generation: request)
+                            }
                         }
                         .scrollTargetLayout()
                         .padding(.horizontal, 16)
                         .transition(.identity)
+                        .transaction { transaction in
+                            guard reflowCompletion.claim(request) else { return }
+                            transaction.addAnimationCompletion(criteria: .removed) {
+                                guard reorderGeneration == request else { return }
+                                isReordering = false
+                            }
+                        }
+                        .animation(isReordering && !reduceMotion ? .smooth(duration: 0.35) : nil, value: request)
                     }
                 }
                 .padding(.vertical)
             }
-            .defaultScrollAnchor(.bottom, for: .initialOffset)
             .ignoresSafeArea(.container, edges: .horizontal)
             // Like timeline Memories, compact chrome must not resize the viewport
             // or change the scroll clearance while the user is dragging.
             .contentMargins(.top, expandedHeaderHeight, for: .scrollContent)
             .contentMargins(.top, expandedHeaderHeight, for: .scrollIndicators)
-            .scrollPosition(id: $visibleAlbumID, anchor: .center)
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
+                reflowViewport.frame = frame
+            }
             .onAppear { listVisible = true }
             .onDisappear {
                 listVisible = false
                 reorderGeneration &+= 1
                 isReordering = false
+                reflowViewport.reset()
             }
             .onChange(of: scrollToLatestRequest) {
                 guard listVisible, let lastID = displayedAlbums.last?.id else { return }
+                reflowViewport.cancelMotion()
                 withAnimation(reduceMotion ? nil : .smooth(duration: 0.35)) { proxy.scrollTo(lastID, anchor: .bottom) }
             }
             .onScrollPhaseChange { _, phase in
+                if phase == .interacting {
+                    reflowViewport.cancelMotion()
+                }
                 userScrolling = phase == .interacting || phase == .decelerating
                 if !userScrolling {
                     chromeTracker.scrollingEnded()
@@ -175,6 +194,18 @@ struct AlbumsView: View {
                                     topInset: $0.contentInsets.top, viewportHeight: $0.containerSize.height,
                                     contentHeight: $0.contentSize.height, bottomInset: $0.contentInsets.bottom)
             } action: { old, new in
+                if old.viewportHeight != new.viewportHeight || old.topInset != new.topInset || old.bottomInset != new.bottomInset {
+                    reflowViewport.cancelMotion()
+                }
+                reflowViewport.visibleHeight = new.viewportHeight
+                if !initialAlbumsPositioned, store.hasLoaded, let lastID = displayedAlbums.last?.id,
+                   new.contentHeight >= metrics.height(count: filtered.count, list: showsList)
+                {
+                    // Consume before requesting so the resulting geometry cannot
+                    // re-arm initial placement during a later mode change.
+                    initialAlbumsPositioned = true
+                    withTransaction(Transaction(animation: nil)) { proxy.scrollTo(lastID, anchor: .bottom) }
+                }
                 guard !searchFocused else { return }
                 // Inset animations and lazy content measurement can rebase the
                 // offset without a finger changing direction. They are layout,
@@ -191,6 +222,20 @@ struct AlbumsView: View {
                 }
             }
             .refreshable { await store.load() }
+            .onChange(of: Set(filtered.map(\.id))) { _, _ in cancelAlbumReflow() }
+            .onChange(of: metrics) { _, _ in cancelAlbumReflow() }
+            .onChange(of: reduceMotion) { _, _ in cancelAlbumReflow() }
+            .overlay(alignment: .topLeading) {
+                AlbumLabelMeasurement()
+                    .frame(width: coverWidth)
+                    .hidden()
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                        guard height > 0, abs(albumLabelHeight - height) > 0.01 else { return }
+                        albumLabelHeight = height
+                    }
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
             .overlay(alignment: .top) {
                 VStack(spacing: 0) {
                     HStack(spacing: 12) {
@@ -214,16 +259,16 @@ struct AlbumsView: View {
                         .frame(minHeight: 44)
                         .background(.quaternary, in: .capsule)
                         Menu {
-                            Picker("Sort Albums", selection: Binding(get: { sort }, set: { updateAlbumLayout(sort: $0, direction: sortDirection) })) {
+                            Picker("Sort Albums", selection: Binding(get: { sort }, set: { updateAlbumLayout(sort: $0, direction: sortDirection, metrics: metrics) })) {
                                 ForEach(AlbumSort.allCases) { Text($0.rawValue).tag($0) }
                             }
                             Divider()
-                            Picker("Order", selection: Binding(get: { sortDirection }, set: { updateAlbumLayout(sort: sort, direction: $0) })) {
+                            Picker("Order", selection: Binding(get: { sortDirection }, set: { updateAlbumLayout(sort: sort, direction: $0, metrics: metrics) })) {
                                 ForEach(AlbumSortDirection.allCases) { Text($0.rawValue).tag($0) }
                             }
                             .pickerStyle(.inline)
                             Divider()
-                            Toggle("List View", isOn: Binding(get: { showsList }, set: { updateAlbumLayout(sort: sort, direction: sortDirection, list: $0) }))
+                            Toggle("List View", isOn: Binding(get: { showsList }, set: { updateAlbumLayout(sort: sort, direction: sortDirection, list: $0, metrics: metrics) }))
                         } label: {
                             Image(systemName: "arrow.up.arrow.down").frame(width: 44, height: 44)
                         }
@@ -282,41 +327,74 @@ struct AlbumsView: View {
         }
     }
 
-    private func albumLink(_ album: AlbumSummary, compact: Bool, coverWidth: CGFloat) -> some View {
+    private func albumLink(_ album: AlbumSummary, compact: Bool, metrics: AlbumReflowMetrics,
+                           proxy: ScrollViewProxy, generation: Int) -> some View
+    {
         Button {
             guard !isReordering else { return }
             openAlbum(album)
         } label: {
             AlbumCard(album: album, media: media, compact: compact, sort: sort, persistence: persistence,
-                      scope: accountScope, transitionNamespace: albumTransition, coverWidth: coverWidth)
+                      scope: accountScope, transitionNamespace: albumTransition, coverWidth: metrics.coverWidth,
+                      isReordering: isReordering)
+                // Retain the accepted inner text/layout endpoints. The outer
+                // wrapper reports the current animated proposal to scrolling.
+                .frame(height: compact ? metrics.listHeight : metrics.cardHeight, alignment: .top)
+                .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .top)
         }
         .buttonStyle(.plain)
         .allowsHitTesting(!isReordering)
         .id(album.id)
         .transition(.identity)
+        .onGeometryChange(for: AlbumReflowItemGeometry.self) {
+            AlbumReflowItemGeometry(frame: $0.frame(in: .global), size: $0.size)
+        } action: { geometry in
+            guard generation == reorderGeneration else { return }
+            reflowViewport.items[album.id] = geometry.frame
+            if let anchor = reflowViewport.consumeMotionSample(albumID: album.id, size: geometry.size, generation: generation) {
+                withTransaction(Transaction(animation: nil)) {
+                    proxy.scrollTo(anchor.albumID, anchor: UnitPoint(x: 0.5, y: anchor.unitY))
+                }
+            }
+        }
+        .onDisappear { reflowViewport.items[album.id] = nil }
         .accessibilityIdentifier("album-\(album.id)")
     }
 
-    private func updateAlbumLayout(sort nextSort: AlbumSort, direction: AlbumSortDirection, list: Bool? = nil) {
+    private func updateAlbumLayout(sort nextSort: AlbumSort, direction: AlbumSortDirection, list: Bool? = nil,
+                                   metrics: AlbumReflowMetrics)
+    {
         let nextList = list ?? showsList
         guard sort != nextSort || sortDirection != direction || showsList != nextList else { return }
-        if sort != nextSort || sortDirection != direction {
-            // A density change keeps the current album; sorting must not chase
-            // that album to its new rank across the whole collection.
-            visibleAlbumID = nil
-        }
-        reorderGeneration &+= 1
-        let request = reorderGeneration
-        isReordering = !reduceMotion
-        withAnimation(reduceMotion ? nil : .smooth(duration: 0.35), completionCriteria: .removed) {
+        let changesSort = sort != nextSort || sortDirection != direction
+        let anchor = showsList != nextList && !changesSort ? reflowViewport.anchor(in: filtered.map(\.id)) : nil
+        withTransaction(Transaction(animation: nil)) {
+            reorderGeneration &+= 1
+            let destination = CGSize(width: nextList ? metrics.width : metrics.coverWidth,
+                                     height: nextList ? metrics.listHeight : metrics.cardHeight)
+            reflowViewport.beginMotion(anchor: anchor, destinationSize: destination, generation: reorderGeneration)
+            isReordering = !reduceMotion
             sort = nextSort
             sortDirection = direction
             showsList = nextList
-            // The existing bottom anchor and scroll position own the viewport.
-            // Do not co-animate another scroll request with album rearrangement.
-        } completion: {
-            guard reorderGeneration == request else { return }
-            isReordering = false
+            // Only the album layout installs animation. Its selected item's
+            // actual size drives anchoring; completion never requests scrolling.
+        }
+    }
+
+    private func cancelAlbumReflow() {
+        reflowViewport.cancelMotion()
+        guard isReordering else { return }
+        reorderGeneration &+= 1
+        isReordering = false
+    }
+}
+
+private struct AlbumLabelMeasurement: View {
+    var body: some View {
+        VStack(spacing: 4) {
+            Text("1 item").font(.caption).lineLimit(1)
+            Text("Album").font(.headline).lineLimit(2, reservesSpace: true)
         }
     }
 }
@@ -330,6 +408,9 @@ private struct AlbumCard: View {
     let scope: MediaAccountScope?
     let transitionNamespace: Namespace.ID
     let coverWidth: CGFloat
+    let isReordering: Bool
+    @State private var coverVisible = false
+    @State private var intersectsViewport = false
 
     var body: some View {
         let layout = compact ? AnyLayout(HStackLayout(spacing: 12)) : AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
@@ -342,6 +423,17 @@ private struct AlbumCard: View {
         }
         .contentShape(.rect)
         .accessibilityElement(children: .combine)
+        .onScrollVisibilityChange(threshold: 0.01) { visible in
+            intersectsViewport = visible
+            if visible || !isReordering {
+                coverVisible = visible
+            }
+        }
+        .onChange(of: isReordering) { _, active in
+            if !active {
+                coverVisible = intersectsViewport
+            }
+        }
     }
 
     private var labels: some View {
@@ -366,7 +458,8 @@ private struct AlbumCard: View {
     }
 
     private var cover: some View {
-        AlbumCover(album: album, media: media, persistence: persistence, scope: scope)
+        AlbumCover(album: album, media: media, persistence: persistence, scope: scope,
+                   requestWidth: coverWidth, isActive: coverVisible)
             .clipShape(.rect(cornerRadius: compact ? 12 : DesignMetrics.defaultCornerRadius))
             .matchedTransitionSource(id: album.id, in: transitionNamespace) { source in
                 source.clipShape(.rect(cornerRadius: compact ? 12 : DesignMetrics.defaultCornerRadius))
@@ -381,14 +474,16 @@ private struct AlbumCover: View {
 
     let persistence: (any AlbumCatalogStoring)?
     let scope: MediaAccountScope?
+    let requestWidth: CGFloat
+    let isActive: Bool
     @State private var revision: Date?
 
     var body: some View {
         GeometryReader { geometry in
-            let descriptor = album.thumbnailAssetID.flatMap { id in
+            let descriptor = (isActive ? album.thumbnailAssetID : nil).flatMap { id in
                 revision.map { MediaRequestDescriptor(assetID: id, updatedAt: $0, derivative: .thumbnail,
-                                                      targetPixels: .init(width: Int(max(1, geometry.size.width) * displayScale),
-                                                                          height: Int(max(1, geometry.size.height) * displayScale))) }
+                                                      targetPixels: .init(width: Int(max(1, requestWidth) * displayScale),
+                                                                          height: Int(max(1, requestWidth * 0.75) * displayScale))) }
             }
             Group {
                 if let descriptor {
@@ -402,8 +497,8 @@ private struct AlbumCover: View {
             .clipped()
         }
         .accessibilityHidden(true)
-        .task(id: "\(album.thumbnailAssetID ?? "none")|\(album.catalogRevision)") {
-            guard let assetID = album.thumbnailAssetID else { return }
+        .task(id: "\(album.thumbnailAssetID ?? "none")|\(album.catalogRevision)|\(isActive)") {
+            guard isActive, let assetID = album.thumbnailAssetID else { return }
             let canonical: Date? = if let persistence, let scope {
                 try? await persistence.albumCoverRevision(scope: scope, albumID: album.id, assetID: assetID)
             } else {
