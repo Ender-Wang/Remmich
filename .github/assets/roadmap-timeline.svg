@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="2444" viewBox="0 0 1000 2444" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="2336" viewBox="0 0 1000 2336" role="img" aria-labelledby="title desc">
   <title id="title">Remmich roadmap — Future, Now, then history</title>
-  <desc id="desc">Future milestones lead down to Now: M6 server-backed Albums. Completed M5 features include Download Pause/Resume and Sharing on November 10, 2026, with Download and Save to Photos and earlier achievements below in date order. Native Live Photo sharing is limited by the investigated Apple APIs. Feature icons sit on the central connecting line.</desc>
+  <desc id="desc">Updated November 14, 2026. Future milestones M10 through M8 lead down to Now: M7 read-only Library collections, in progress. M6 Albums is complete, including indexing, navigation and interactive Card/List pinch. Completed M5 features and earlier achievements follow below. Library collections still use demo data until their server-backed implementation is available.</desc>
   <style>
     .bg{fill:#f8fafc}.card{fill:#fff;stroke:#dbe3ee;stroke-width:1.5}.now{fill:#eef2ff;stroke:#818cf8;stroke-width:1.5}
     .spine{fill:none;stroke:#cbd5e1;stroke-width:3}.branch{stroke:#94a3b8;stroke-width:2}.dot{fill:#6366f1;stroke:#f8fafc;stroke-width:5}
@@ -27,10 +27,10 @@
     <g id="calendar" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="17" rx="3"/><path d="M7 2v6m10-6v6M3 11h18m-13 5h1m6 0h1"/></g>
     <g id="foundation" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 2 10 5-10 5L2 7l10-5Zm-10 10 10 5 10-5M2 17l10 5 10-5"/></g>
   </defs>
-  <rect class="bg" width="1000" height="2444" rx="24"/>
+  <rect class="bg" width="1000" height="2336" rx="24"/>
   <text x="40" y="43" class="label">REMMICH / FEATURE TIMELINE</text>
-  <text x="960" y="43" text-anchor="end" class="date">UPDATED NOV 9, 2026</text>
-  <path class="spine" d="M500 112V2380"/>
+  <text x="960" y="43" text-anchor="end" class="date">UPDATED NOV 14, 2026</text>
+  <path class="spine" d="M500 112V2272"/>
 
   <path class="branch" d="M500 112H542"/><circle class="dot" cx="500" cy="112" r="8"/>
   <rect class="planned" x="542" y="72" width="420" height="94" rx="14"/>
@@ -55,137 +55,132 @@
 
   <path class="branch" d="M458 436H500"/><circle class="dot" cx="500" cy="436" r="17"/>
   <use href="#foundation" transform="translate(488 424)" style="color:#818cf8"/>
-  <rect class="planned" x="38" y="396" width="420" height="94" rx="14"/>
-  <text x="58" y="420" class="future-label">M7 · PLANNED</text>
+  <rect class="now" x="38" y="396" width="420" height="94" rx="14"/>
+  <text x="58" y="420" class="label">NOW · M7 · IN PROGRESS</text>
   <text x="58" y="446" class="future-heading">Library collections</text>
   <text x="58" y="472" class="body">Favorites, Archive, People, Places, Memories, Folders</text>
 
-  <path class="branch" d="M500 544H542"/><circle class="dot" cx="500" cy="544" r="17"/>
-  <use href="#accounts" transform="translate(488 532)" style="color:#818cf8"/>
-  <rect class="planned" x="542" y="504" width="420" height="94" rx="14"/>
-  <text x="562" y="528" class="future-label">M7 OPTIONS · CONDITIONAL, NOT SCHEDULED</text>
-  <text x="562" y="554" class="future-heading">More shared &amp; protected collections</text>
-  <text x="562" y="580" class="body">Shared links, partner content, Locked Folder; Trash?</text>
-
-  <path class="branch" d="M458 652H500"/><circle class="dot" cx="500" cy="652" r="17"/>
+  <g transform="translate(0 -108)">
+  <path class="branch" d="M500 652H542"/><circle class="dot" cx="500" cy="652" r="17"/>
   <use href="#photo" transform="translate(488 640)" style="color:#34b3a0"/>
-  <rect class="now" x="38" y="612" width="420" height="94" rx="14"/>
-  <text x="58" y="636" class="label">NOW · M6 · IN PROGRESS</text>
-  <text x="58" y="662" class="future-heading">Server-backed Albums</text>
-  <text x="58" y="688" class="body">Owned/shared browsing, Album Index &amp; shared viewer</text>
+  <rect class="card" x="542" y="612" width="420" height="94" rx="14"/>
+  <text x="562" y="636" class="date">NOV 14 · 2026</text>
+  <text x="562" y="662" class="heading">Albums</text>
+  <text x="562" y="688" class="body">Album Index, Card/List pinch &amp; navigation</text>
 
-  <path class="branch" d="M500 760H542"/><circle class="dot" cx="500" cy="760" r="17"/>
+  <path class="branch" d="M458 760H500"/><circle class="dot" cx="500" cy="760" r="17"/>
   <use href="#download" transform="translate(488 748)" style="color:#818cf8"/>
-  <rect class="card" x="542" y="720" width="420" height="94" rx="14"/>
-  <text x="562" y="744" class="date">NOV 10 · 2026</text>
-  <text x="562" y="770" class="heading">Download Pause/Resume</text>
-  <text x="562" y="796" class="body">Persistent pauses &amp; automatic interruption recovery</text>
+  <rect class="card" x="38" y="720" width="420" height="94" rx="14"/>
+  <text x="58" y="744" class="date">NOV 10 · 2026</text>
+  <text x="58" y="770" class="heading">Download Pause/Resume</text>
+  <text x="58" y="796" class="body">Persistent pauses &amp; automatic interruption recovery</text>
 
-  <path class="branch" d="M458 868H500"/><circle class="dot" cx="500" cy="868" r="17"/>
-  <rect class="card" x="38" y="828" width="420" height="94" rx="14"/>
+  <path class="branch" d="M500 868H542"/><circle class="dot" cx="500" cy="868" r="17"/>
+  <rect class="card" x="542" y="828" width="420" height="94" rx="14"/>
   <use href="#export" transform="translate(488 856)" style="color:#818cf8"/>
-  <text x="58" y="852" class="date">NOV 10 · 2026</text>
-  <text x="58" y="878" class="heading">Sharing</text>
-  <text x="58" y="904" class="body">Viewed quality, native share sheet &amp; metadata</text>
+  <text x="562" y="852" class="date">NOV 10 · 2026</text>
+  <text x="562" y="878" class="heading">Sharing</text>
+  <text x="562" y="904" class="body">Viewed quality, native share sheet &amp; metadata</text>
 
-  <path class="branch" d="M500 976H542"/><circle class="dot" cx="500" cy="976" r="17"/>
-  <rect class="card" x="542" y="936" width="420" height="94" rx="14"/>
+  <path class="branch" d="M458 976H500"/><circle class="dot" cx="500" cy="976" r="17"/>
+  <rect class="card" x="38" y="936" width="420" height="94" rx="14"/>
   <use href="#download" transform="translate(488 964)" style="color:#818cf8"/>
-  <text x="562" y="960" class="date">NOV 9 · 2026</text>
-  <text x="562" y="986" class="heading">Download &amp; Save to Photos</text>
-  <text x="562" y="1012" class="body">Background transfers, cancel/retry &amp; history</text>
+  <text x="58" y="960" class="date">NOV 9 · 2026</text>
+  <text x="58" y="986" class="heading">Download &amp; Save to Photos</text>
+  <text x="58" y="1012" class="body">Background transfers, cancel/retry &amp; history</text>
 
   <g transform="translate(0 864)">
 
-  <path class="branch" d="M458 220H500"/><circle class="dot" cx="500" cy="220" r="7"/>
-  <rect class="card" x="38" y="180" width="420" height="94" rx="14"/>
+  <path class="branch" d="M500 220H542"/><circle class="dot" cx="500" cy="220" r="7"/>
+  <rect class="card" x="542" y="180" width="420" height="94" rx="14"/>
   <use href="#cache" transform="translate(488 208)" style="color:#818cf8"/>
-  <text x="58" y="204" class="date">NOV 8 · 2026</text>
-  <text x="58" y="230" class="heading">Places join the offline cache</text>
-  <text x="58" y="256" class="body">Shared results, enclosing areas &amp; Rebuild refresh</text>
+  <text x="562" y="204" class="date">NOV 8 · 2026</text>
+  <text x="562" y="230" class="heading">Places join the offline cache</text>
+  <text x="562" y="256" class="body">Shared results, enclosing areas &amp; Rebuild refresh</text>
 
-  <path class="branch" d="M500 328H542"/><circle class="dot" cx="500" cy="328" r="7"/>
-  <rect class="card" x="542" y="288" width="420" height="94" rx="14"/>
+  <path class="branch" d="M458 328H500"/><circle class="dot" cx="500" cy="328" r="7"/>
+  <rect class="card" x="38" y="288" width="420" height="94" rx="14"/>
   <use href="#map" transform="translate(488 316)" style="color:#34b3a0"/>
-  <text x="562" y="312" class="date">NOV 7 · 2026</text>
-  <text x="562" y="338" class="heading">Localized places &amp; asset maps</text>
-  <text x="562" y="364" class="body">Photon names, country preferences &amp; Info maps</text>
+  <text x="58" y="312" class="date">NOV 7 · 2026</text>
+  <text x="58" y="338" class="heading">Localized places &amp; asset maps</text>
+  <text x="58" y="364" class="body">Photon names, country preferences &amp; Info maps</text>
 
-  <path class="branch" d="M458 436H500"/><circle class="dot" cx="500" cy="436" r="7"/>
-  <rect class="card" x="38" y="396" width="420" height="94" rx="14"/>
+  <path class="branch" d="M500 436H542"/><circle class="dot" cx="500" cy="436" r="7"/>
+  <rect class="card" x="542" y="396" width="420" height="94" rx="14"/>
   <use href="#preview" transform="translate(488 424)" style="color:#a78bfa"/>
-  <text x="58" y="420" class="date">NOV 6 · 2026</text>
-  <text x="58" y="446" class="heading">Preview &amp; interruptible transitions</text>
-  <text x="58" y="472" class="body">Hold to preview · tap to open · swipe to dismiss</text>
+  <text x="562" y="420" class="date">NOV 6 · 2026</text>
+  <text x="562" y="446" class="heading">Preview &amp; interruptible transitions</text>
+  <text x="562" y="472" class="body">Hold to preview · tap to open · swipe to dismiss</text>
 
-  <path class="branch" d="M500 544H542"/><circle class="dot" cx="500" cy="544" r="7"/>
-  <rect class="card" x="542" y="504" width="420" height="94" rx="14"/>
+  <path class="branch" d="M458 544H500"/><circle class="dot" cx="500" cy="544" r="7"/>
+  <rect class="card" x="38" y="504" width="420" height="94" rx="14"/>
   <use href="#offline" transform="translate(488 532)" style="color:#38a6ce"/>
-  <text x="562" y="528" class="date">NOV 5 · 2026</text>
-  <text x="562" y="554" class="heading">Offline startup &amp; Now Playing</text>
-  <text x="562" y="580" class="body">Independent cached loading &amp; upcoming memories</text>
+  <text x="58" y="528" class="date">NOV 5 · 2026</text>
+  <text x="58" y="554" class="heading">Offline startup &amp; Now Playing</text>
+  <text x="58" y="580" class="body">Independent cached loading &amp; upcoming memories</text>
 
-  <path class="branch" d="M458 652H500"/><circle class="dot" cx="500" cy="652" r="7"/>
-  <rect class="card" x="38" y="612" width="420" height="94" rx="14"/>
+  <path class="branch" d="M500 652H542"/><circle class="dot" cx="500" cy="652" r="7"/>
+  <rect class="card" x="542" y="612" width="420" height="94" rx="14"/>
   <use href="#accounts" transform="translate(488 640)" style="color:#818cf8"/>
-  <text x="58" y="636" class="date">NOV 3 · 2026</text>
-  <text x="58" y="662" class="heading">Durable sync &amp; saved accounts</text>
-  <text x="58" y="688" class="body">Background transfers, failover &amp; account switching</text>
+  <text x="562" y="636" class="date">NOV 3 · 2026</text>
+  <text x="562" y="662" class="heading">Durable sync &amp; saved accounts</text>
+  <text x="562" y="688" class="body">Background transfers, failover &amp; account switching</text>
 
-  <path class="branch" d="M500 760H542"/><circle class="dot" cx="500" cy="760" r="7"/>
-  <rect class="card" x="542" y="720" width="420" height="94" rx="14"/>
+  <path class="branch" d="M458 760H500"/><circle class="dot" cx="500" cy="760" r="7"/>
+  <rect class="card" x="38" y="720" width="420" height="94" rx="14"/>
   <use href="#video" transform="translate(488 748)" style="color:#e99455"/>
-  <text x="562" y="744" class="date">NOV 1 · 2026</text>
-  <text x="562" y="770" class="heading">Streaming video, PiP &amp; appearance</text>
-  <text x="562" y="796" class="body">Native playback, profile cards &amp; alternate icons</text>
+  <text x="58" y="744" class="date">NOV 1 · 2026</text>
+  <text x="58" y="770" class="heading">Streaming video, PiP &amp; appearance</text>
+  <text x="58" y="796" class="body">Native playback, profile cards &amp; alternate icons</text>
 
-  <path class="branch" d="M458 868H500"/><circle class="dot" cx="500" cy="868" r="7"/>
-  <rect class="card" x="38" y="828" width="420" height="94" rx="14"/>
+  <path class="branch" d="M500 868H542"/><circle class="dot" cx="500" cy="868" r="7"/>
+  <rect class="card" x="542" y="828" width="420" height="94" rx="14"/>
   <use href="#zoom" transform="translate(488 856)" style="color:#a78bfa"/>
-  <text x="58" y="852" class="date">OCT 28 · 2026</text>
-  <text x="58" y="878" class="heading" font-size="17" style="font-size:17px">Interactive memories &amp; semantic zoom</text>
-  <text x="58" y="904" class="body">Continuous timeline zoom &amp; sticky date headers</text>
+  <text x="562" y="852" class="date">OCT 28 · 2026</text>
+  <text x="562" y="878" class="heading" font-size="17" style="font-size:17px">Interactive memories &amp; semantic zoom</text>
+  <text x="562" y="904" class="body">Continuous timeline zoom &amp; sticky date headers</text>
 
-  <path class="branch" d="M500 976H542"/><circle class="dot" cx="500" cy="976" r="7"/>
-  <rect class="card" x="542" y="936" width="420" height="94" rx="14"/>
+  <path class="branch" d="M458 976H500"/><circle class="dot" cx="500" cy="976" r="7"/>
+  <rect class="card" x="38" y="936" width="420" height="94" rx="14"/>
   <use href="#navigation" transform="translate(488 964)" style="color:#38a6ce"/>
-  <text x="562" y="960" class="date">OCT 25 · 2026</text>
-  <text x="562" y="986" class="heading">Native navigation &amp; offline viewing</text>
-  <text x="562" y="1012" class="body">Page swipes, offline Info &amp; Live Photo controls</text>
+  <text x="58" y="960" class="date">OCT 25 · 2026</text>
+  <text x="58" y="986" class="heading">Native navigation &amp; offline viewing</text>
+  <text x="58" y="1012" class="body">Page swipes, offline Info &amp; Live Photo controls</text>
 
-  <path class="branch" d="M458 1084H500"/><circle class="dot" cx="500" cy="1084" r="7"/>
-  <rect class="card" x="38" y="1044" width="420" height="94" rx="14"/>
+  <path class="branch" d="M500 1084H542"/><circle class="dot" cx="500" cy="1084" r="7"/>
+  <rect class="card" x="542" y="1044" width="420" height="94" rx="14"/>
   <use href="#cache" transform="translate(488 1072)" style="color:#818cf8"/>
-  <text x="58" y="1068" class="date">OCT 22 · 2026</text>
-  <text x="58" y="1094" class="heading">Persistent index &amp; managed cache</text>
-  <text x="58" y="1120" class="body">Incremental sync, local bootstrap &amp; cache controls</text>
+  <text x="562" y="1068" class="date">OCT 22 · 2026</text>
+  <text x="562" y="1094" class="heading">Persistent index &amp; managed cache</text>
+  <text x="562" y="1120" class="body">Incremental sync, local bootstrap &amp; cache controls</text>
 
-  <path class="branch" d="M500 1192H542"/><circle class="dot" cx="500" cy="1192" r="7"/>
-  <rect class="card" x="542" y="1152" width="420" height="94" rx="14"/>
+  <path class="branch" d="M458 1192H500"/><circle class="dot" cx="500" cy="1192" r="7"/>
+  <rect class="card" x="38" y="1152" width="420" height="94" rx="14"/>
   <use href="#photo" transform="translate(488 1180)" style="color:#34b3a0"/>
-  <text x="562" y="1176" class="date">OCT 17 · 2026</text>
-  <text x="562" y="1202" class="heading">Memories, date cards &amp; the viewer</text>
-  <text x="562" y="1228" class="body">Editorial mosaics, still-image zoom &amp; asset Info</text>
+  <text x="58" y="1176" class="date">OCT 17 · 2026</text>
+  <text x="58" y="1202" class="heading">Memories, date cards &amp; the viewer</text>
+  <text x="58" y="1228" class="body">Editorial mosaics, still-image zoom &amp; asset Info</text>
 
-  <path class="branch" d="M458 1300H500"/><circle class="dot" cx="500" cy="1300" r="7"/>
-  <rect class="card" x="38" y="1260" width="420" height="94" rx="14"/>
+  <path class="branch" d="M500 1300H542"/><circle class="dot" cx="500" cy="1300" r="7"/>
+  <rect class="card" x="542" y="1260" width="420" height="94" rx="14"/>
   <use href="#calendar" transform="translate(488 1288)" style="color:#e99455"/>
-  <text x="58" y="1284" class="date">OCT 14 · 2026</text>
-  <text x="58" y="1310" class="heading">Timeline browsing &amp; Videos</text>
-  <text x="58" y="1336" class="body">Latest at bottom, layouts &amp; date-range drill-down</text>
+  <text x="562" y="1284" class="date">OCT 14 · 2026</text>
+  <text x="562" y="1310" class="heading">Timeline browsing &amp; Videos</text>
+  <text x="562" y="1336" class="body">Latest at bottom, layouts &amp; date-range drill-down</text>
 
-  <path class="branch" d="M500 1408H542"/><circle class="dot" cx="500" cy="1408" r="7"/>
-  <rect class="card" x="542" y="1368" width="420" height="94" rx="14"/>
+  <path class="branch" d="M458 1408H500"/><circle class="dot" cx="500" cy="1408" r="7"/>
+  <rect class="card" x="38" y="1368" width="420" height="94" rx="14"/>
   <use href="#photo" transform="translate(488 1396)" style="color:#34b3a0"/>
-  <text x="562" y="1392" class="date">OCT 8 · 2026</text>
-  <text x="562" y="1418" class="heading">Real Photos &amp; shared media loading</text>
-  <text x="562" y="1444" class="body">Authenticated images, caching &amp; the live timeline</text>
+  <text x="58" y="1392" class="date">OCT 8 · 2026</text>
+  <text x="58" y="1418" class="heading">Real Photos &amp; shared media loading</text>
+  <text x="58" y="1444" class="body">Authenticated images, caching &amp; the live timeline</text>
 
-  <path class="branch" d="M458 1516H500"/><circle class="dot" cx="500" cy="1516" r="7"/>
-  <rect class="card" x="38" y="1476" width="420" height="80" rx="14"/>
+  <path class="branch" d="M500 1516H542"/><circle class="dot" cx="500" cy="1516" r="7"/>
+  <rect class="card" x="542" y="1476" width="420" height="80" rx="14"/>
   <use href="#foundation" transform="translate(488 1504)" style="color:#818cf8"/>
-  <text x="58" y="1500" class="date">SEP 30 · 2026</text>
-  <text x="58" y="1526" class="heading">Project foundation</text>
-  <text x="58" y="1548" class="body">Native shell, secure connection &amp; CI</text>
+  <text x="562" y="1500" class="date">SEP 30 · 2026</text>
+  <text x="562" y="1526" class="heading">Project foundation</text>
+  <text x="562" y="1548" class="body">Native shell, secure connection &amp; CI</text>
+  </g>
   </g>
 </svg>
