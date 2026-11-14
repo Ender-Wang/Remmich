@@ -12,7 +12,8 @@
 	</array>
 	<key>NSAppTransportSecurity</key>
 	<dict>
-		<key>NSAllowsLocalNetworking</key>
+		<!-- Users configure their own Immich and Photon HTTP or HTTPS endpoints. -->
+		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
