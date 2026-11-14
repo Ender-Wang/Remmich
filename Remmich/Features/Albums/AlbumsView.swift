@@ -343,6 +343,10 @@ struct AlbumsView: View {
                 .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .top)
         }
         .buttonStyle(.plain)
+        // Resolve each album's movement before drawing its descendants. Without
+        // this boundary, sort interpolation can span far-apart text positions
+        // in multi-thousand-point drawing surfaces across the scroll content.
+        .geometryGroup()
         .allowsHitTesting(!isReordering)
         .id(album.id)
         .transition(.identity)
