@@ -1470,7 +1470,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             (destination.frame.intersects(targetArea) || destinationIndex == targetPinnedHeader)
             && (destination.isHeader || !nextScale.isAssets)
         {
-            if assetLayoutOnly && destination.isHeader && carriedHeaderIDs.contains(destination.id) {
+            if assetLayoutOnly, destination.isHeader, carriedHeaderIDs.contains(destination.id) {
                 continue
             }
             let destinationFrame = destinationIndex == targetPinnedHeader
