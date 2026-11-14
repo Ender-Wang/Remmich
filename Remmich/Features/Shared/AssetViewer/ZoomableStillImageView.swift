@@ -449,7 +449,8 @@ private struct ZoomableImageScrollView: UIViewRepresentable {
         }
         context.coordinator.updateFitRect(
             fitRect,
-            animated: animatesFitChanges && !reduceMotion
+            animation: animatesFitChanges && !reduceMotion && !context.transaction.disablesAnimations
+                ? context.transaction.animation : nil
         )
         let imageView = context.coordinator.canvas.imageView
         if imageView.image !== image {
@@ -484,7 +485,7 @@ private struct ZoomableImageScrollView: UIViewRepresentable {
         private var isLivePhotoPressActive = false
         private var requestedFitRect = CGRect.zero
         private var didApplyInitialFitRect = false
-        private var shouldAnimateFitChange = false
+        private var requestedFitAnimation: Animation?
         var zoomChanged: (Bool) -> Void
         var livePhotoPressChanged: (Bool) -> Void
         var toggleChrome: () -> Void
@@ -534,9 +535,9 @@ private struct ZoomableImageScrollView: UIViewRepresentable {
             }
         }
 
-        func updateFitRect(_ rect: CGRect, animated: Bool) {
+        func updateFitRect(_ rect: CGRect, animation: Animation?) {
             requestedFitRect = rect
-            shouldAnimateFitChange = animated
+            requestedFitAnimation = animation
             guard let scrollView,
                   !isZoomTransitionActive,
                   scrollView.zoomScale <= scrollView.minimumZoomScale + 0.01
@@ -639,16 +640,18 @@ private struct ZoomableImageScrollView: UIViewRepresentable {
             guard canvas.fitRect != requestedFitRect else { return }
             canvas.layoutIfNeeded()
             canvas.fitRect = requestedFitRect
-            if didApplyInitialFitRect, shouldAnimateFitChange {
-                UIView.animate(
-                    withDuration: 0.28,
-                    delay: 0,
-                    options: [.beginFromCurrentState, .allowUserInteraction]
-                ) {
+            let animation = didApplyInitialFitRect ? requestedFitAnimation : nil
+            if let animation {
+                // Share SwiftUI's presentation-value animation with Info.
+                // A separate UIKit duration lets the photo finish while the
+                // panel is still reflowing after a first-open update.
+                UIView.animate(animation) {
                     self.canvas.layoutIfNeeded()
                 }
             } else {
-                canvas.layoutIfNeeded()
+                UIView.performWithoutAnimation {
+                    canvas.layoutIfNeeded()
+                }
             }
             didApplyInitialFitRect = true
         }
