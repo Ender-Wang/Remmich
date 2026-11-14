@@ -29,6 +29,10 @@ enum AlbumScope: String, CaseIterable, Identifiable {
     }
 }
 
+private enum AlbumDiscoveryScrollTarget: Hashable {
+    case content
+}
+
 struct AlbumsView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
@@ -125,7 +129,6 @@ struct AlbumsView: View {
         let metrics = AlbumReflowMetrics(width: max(1, availableWidth - 32), columns: columnCount,
                                          coverWidth: coverWidth, labelHeight: albumLabelHeight)
         let request = reorderGeneration
-        let displayedAlbums = showsList ? filtered : sort.gridOrder(filtered, columns: columnCount)
         return ScrollViewReader { proxy in
             ScrollView {
                 VStack(spacing: 16) {
@@ -174,6 +177,9 @@ struct AlbumsView: View {
                     }
                 }
                 .padding(.vertical)
+                // Explicit bottom requests include the trailing clearance.
+                // This stable target installs no content-resize anchoring.
+                .id(AlbumDiscoveryScrollTarget.content)
             }
             .ignoresSafeArea(.container, edges: .horizontal)
             .scrollDisabled(pinchInteraction.isActive)
@@ -181,6 +187,7 @@ struct AlbumsView: View {
             // or change the scroll clearance while the user is dragging.
             .contentMargins(.top, expandedHeaderHeight, for: .scrollContent)
             .contentMargins(.top, expandedHeaderHeight, for: .scrollIndicators)
+            .defaultScrollAnchor(.bottom, for: .alignment)
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
                 reflowViewport.frame = frame
             }
@@ -193,9 +200,9 @@ struct AlbumsView: View {
                 // Keep its measured geometry; visibility gates input while hidden.
             }
             .onChange(of: scrollToLatestRequest) {
-                guard listVisible, let lastID = displayedAlbums.last?.id else { return }
+                guard listVisible, !filtered.isEmpty else { return }
                 cancelAlbumReflow()
-                withAnimation(reduceMotion ? nil : .smooth(duration: 0.35)) { proxy.scrollTo(lastID, anchor: .bottom) }
+                withAnimation(reduceMotion ? nil : .smooth(duration: 0.35)) { proxy.scrollTo(AlbumDiscoveryScrollTarget.content, anchor: .bottom) }
             }
             .onScrollPhaseChange { _, phase in
                 if phase == .interacting, !pinchInteraction.isActive {
@@ -215,13 +222,13 @@ struct AlbumsView: View {
                     cancelAlbumReflow()
                 }
                 reflowViewport.visibleHeight = new.viewportHeight
-                if !initialAlbumsPositioned, store.hasLoaded, let lastID = displayedAlbums.last?.id,
+                if !initialAlbumsPositioned, store.hasLoaded, !filtered.isEmpty,
                    new.contentHeight >= metrics.height(count: filtered.count, list: showsList)
                 {
                     // Consume before requesting so the resulting geometry cannot
                     // re-arm initial placement during a later mode change.
                     initialAlbumsPositioned = true
-                    withTransaction(Transaction(animation: nil)) { proxy.scrollTo(lastID, anchor: .bottom) }
+                    withTransaction(Transaction(animation: nil)) { proxy.scrollTo(AlbumDiscoveryScrollTarget.content, anchor: .bottom) }
                 }
                 guard !searchFocused else { return }
                 // Inset animations and lazy content measurement can rebase the
@@ -239,6 +246,14 @@ struct AlbumsView: View {
                 }
             }
             .refreshable { await store.load() }
+            .onChange(of: scope) {
+                cancelAlbumReflow()
+                // A scope is a new collection. Sort/mode changes continue to
+                // use their existing viewport and touched-album policies.
+                withTransaction(Transaction(animation: nil)) {
+                    proxy.scrollTo(AlbumDiscoveryScrollTarget.content, anchor: .bottom)
+                }
+            }
             .onChange(of: Set(filtered.map(\.id))) { _, _ in cancelAlbumReflow() }
             .onChange(of: metrics) { _, _ in cancelAlbumReflow() }
             .onChange(of: reduceMotion) { _, _ in cancelAlbumReflow() }
