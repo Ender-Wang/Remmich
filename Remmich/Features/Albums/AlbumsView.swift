@@ -336,7 +336,7 @@ struct AlbumsView: View {
         } label: {
             AlbumCard(album: album, media: media, compact: compact, sort: sort, persistence: persistence,
                       scope: accountScope, transitionNamespace: albumTransition, coverWidth: metrics.coverWidth,
-                      isReordering: isReordering)
+                      listWidth: metrics.width, isReordering: isReordering)
                 // Retain the accepted inner text/layout endpoints. The outer
                 // wrapper reports the current animated proposal to scrolling.
                 .frame(height: compact ? metrics.listHeight : metrics.cardHeight, alignment: .top)
@@ -412,18 +412,23 @@ private struct AlbumCard: View {
     let scope: MediaAccountScope?
     let transitionNamespace: Namespace.ID
     let coverWidth: CGFloat
+    let listWidth: CGFloat
     let isReordering: Bool
     @State private var coverVisible = false
     @State private var intersectsViewport = false
 
     var body: some View {
-        let layout = compact ? AnyLayout(HStackLayout(spacing: 12)) : AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
-        return layout {
-            cover.frame(width: compact ? 72 : coverWidth, height: compact ? 72 : coverWidth * 0.75)
-            labels
-            if compact {
-                Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
-            }
+        AlbumCardReflowLayout(progress: compact ? 1 : 0, coverWidth: coverWidth, listWidth: listWidth) {
+            cover
+            labels(compact: false)
+                .opacity(compact ? 0 : 1)
+                .accessibilityHidden(compact)
+            labels(compact: true)
+                .opacity(compact ? 1 : 0)
+                .accessibilityHidden(!compact)
+            Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
+                .opacity(compact ? 1 : 0)
+                .accessibilityHidden(!compact)
         }
         .contentShape(.rect)
         .accessibilityElement(children: .combine)
@@ -440,7 +445,7 @@ private struct AlbumCard: View {
         }
     }
 
-    private var labels: some View {
+    private func labels(compact: Bool) -> some View {
         VStack(alignment: .center, spacing: 4) {
             HStack(spacing: 4) {
                 if album.isShared {
