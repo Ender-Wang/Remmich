@@ -958,6 +958,15 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
             (row.text(0), row.text(1), row.optionalDate(2), row.text(3), row.text(4), row.int(5), row.optionalDate(6), row.optionalText(7), row.int(8), row.text(9))
         }
         var progress = PlaceCacheProgress()
+        // Coverage follows the same coordinate-matched fallback as metadata
+        // reads. Provider refresh work is counted separately below.
+        progress.cached = try Int(database.scalarInt64("""
+        SELECT COUNT(DISTINCT a.asset_id) FROM cache.asset_places a
+        JOIN cache.place_lookups p ON a.scope=p.scope AND a.lookup_id=p.lookup_id
+        JOIN cache.asset_details d ON a.scope=d.scope AND a.asset_id=d.asset_id
+        WHERE a.scope=? AND p.latitude=d.latitude AND p.longitude=d.longitude
+        AND p.location_json IS NOT NULL
+        """, [.text(scope.cacheNamespace)]) ?? 0)
         for (outcome, work, expiry, endpoint, keyJSON, attempts, retry, error, count, ids) in records {
             progress.eligible += count
             if work == "idle", outcome == "found" || (outcome == "noResult" && expiry.map { $0 > now } == true) {

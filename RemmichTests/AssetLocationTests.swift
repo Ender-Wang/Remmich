@@ -348,6 +348,123 @@ struct AssetLocationTests {
         locations.reset()
     }
 
+    @Test @MainActor func freshMetadataWakesRetryWaitWithoutRetryingFailedCoordinatesEarly() async throws {
+        let fixture = try PlaceCacheFixture()
+        defer { fixture.cleanup() }
+        let account = scope("metadata-wake")
+        try await fixture.seed(scope: account)
+        let client = CacheLifecyclePlaceClient(failingLongitude: 121)
+        let locations = try AssetLocationStore(defaults: #require(UserDefaults(suiteName: UUID().uuidString)),
+                                               client: client, store: fixture.store, requestInterval: .zero)
+        locations.configure(scope: account)
+        try locations.save(.init(endpoint: "https://places.example"))
+        let work = Task { await locations.refreshCachedPlaces(retryFailed: false) { true } }
+        defer { work.cancel() }
+        for _ in 0 ..< 200 {
+            if try await fixture.store.nextPlaceRetry(scope: account) != nil {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let failed = try #require(try await fixture.store.desiredPlace(assetID: "asset", scope: account))
+        let retry = try #require(failed.retryAfter)
+        #expect(retry > Date())
+        try await fixture.seed(scope: account, id: "new", longitude: 122)
+        locations.cachedMetadataDidChange()
+        for _ in 0 ..< 200 {
+            if locations.progress.resolved == 1 {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(locations.progress.resolved == 1)
+        #expect(locations.progress.failed == 1)
+        #expect(await client.longitudes == [121, 122])
+        let unchanged = try #require(try await fixture.store.desiredPlace(assetID: "asset", scope: account))
+        #expect(unchanged.attempts == failed.attempts)
+        #expect(unchanged.retryAfter == retry)
+        work.cancel()
+        await work.value
+        locations.reset()
+    }
+
+    @Test @MainActor func cacheControlsOwnBothWorkersAndSlowPlacesDoNotBlockMetadata() async throws {
+        let fixture = try PlaceCacheFixture()
+        defer { fixture.cleanup() }
+        let session = SavedSessionRegistryTests.session("cache-lifecycle")
+        let account = MediaAccountScope(session: session)
+        let generation = try await fixture.store.beginGeneration(scope: account)
+        let images = fixture.directory.appending(path: "images")
+        let directory = images.appending(path: "\(account.cacheNamespace)/thumbnail")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        for id in ["one", "two"] {
+            let asset = LibraryIndexAssetRecord(id: id, ownerID: session.userID, kind: .image, livePhotoVideoID: nil,
+                                                capturedAt: .now, uploadedAt: .now, updatedAt: Date(timeIntervalSince1970: 100), checksum: nil,
+                                                width: nil, height: nil, aspectRatio: 1, durationMilliseconds: nil, isFavorite: false,
+                                                visibility: "timeline", isTrashed: false, isOffline: false, bucketKey: "2026-11-01", dayKey: "2026-11-01",
+                                                weekKey: "2026-W44", monthKey: "2026-11", yearKey: "2026")
+            try await fixture.store.upsert(assets: [asset], generation: generation, scope: account)
+            try Data([1]).write(to: directory.appending(path: "\(id).jpg"))
+            try await fixture.store.upsert(derivatives: [.init(assetID: id, derivative: .thumbnail, pixelSize: nil,
+                                                               sourceRevision: asset.updatedAt.ISO8601Format(), relativeFileKey: "thumbnail/\(id).jpg", byteCount: 1,
+                                                               digest: "fixture", isVerified: true, lastAccessedAt: .now, completedAt: .now)], scope: account)
+        }
+        _ = try await fixture.store.acceptGeneration(generation, watermark: nil, historicalCursor: nil, expectedAssetCount: 2, scope: account)
+        let defaults = try #require(UserDefaults(suiteName: UUID().uuidString))
+        let client = CacheLifecyclePlaceClient(paused: true)
+        let locations = AssetLocationStore(defaults: defaults, client: client, store: fixture.store, requestInterval: .zero)
+        locations.configure(scope: account)
+        try locations.save(.init(endpoint: "https://places.example"))
+        let details = CacheLifecycleAssetDetails()
+        let controller = LibraryIndexController(source: EmptyPlaceTimeline(), store: fixture.store,
+                                                assetDetails: details, locations: locations, cacheRootURL: images,
+                                                resourceConditions: { .init(lowPowerMode: false, thermalState: .nominal) }, preferences: defaults)
+        defer { controller.suspend(); locations.reset() }
+        try await controller.restoreBackgroundState(session: session)
+        #expect(controller.configureTransferContinuation(session: session, endpoint: session.apiURL))
+        controller.syncThumbnailCache()
+        for _ in 0 ..< 400 {
+            if await client.active == 1 {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        // The original empty place pass must restart before asset two finishes.
+        #expect(await client.active == 1)
+        #expect(controller.thumbnailWarmingMetadataCount == 1)
+        #expect(controller.thumbnailWarmingStatus == .warming)
+        await details.releaseSecond()
+        for _ in 0 ..< 200 {
+            if controller.thumbnailWarmingStatus == .off {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(controller.thumbnailWarmingMetadataCount == 2)
+        #expect(controller.thumbnailWarmingStatus == .off)
+        #expect(controller.placesAreRunning)
+        controller.pauseThumbnailCache()
+        #expect(controller.thumbnailWarmingPaused)
+        #expect(!controller.placesAreRunning)
+        for _ in 0 ..< 200 {
+            if await client.active == 0 {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        await client.resume()
+        controller.syncThumbnailCache()
+        for _ in 0 ..< 200 {
+            if locations.progress.resolved == 2, !controller.placesAreRunning {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(!controller.thumbnailWarmingPaused)
+        #expect(locations.progress.resolved == 2)
+        #expect(!controller.placesAreRunning)
+    }
+
     @MainActor private func scope(_ user: String) -> MediaAccountScope {
         .init(session: AccountSession(apiURL: URL(string: "https://immich.example/api")!, accessToken: "test",
                                       userID: user, userEmail: "test@example.com", name: "Test", isAdmin: false,
@@ -365,6 +482,58 @@ struct AssetLocationTests {
 private actor EmptyRegionalPlaceClient: PlaceLookingUp {
     func lookup(_: PlaceCoordinate, endpoint _: URL, language _: PlaceLanguage) async throws -> PlaceLocation? {
         nil
+    }
+}
+
+private actor CacheLifecyclePlaceClient: PlaceLookingUp {
+    private(set) var longitudes: [Double] = []
+    private(set) var active = 0
+    private var paused: Bool
+    private let failingLongitude: Double?
+
+    init(paused: Bool = false, failingLongitude: Double? = nil) {
+        self.paused = paused
+        self.failingLongitude = failingLongitude
+    }
+
+    func lookup(_ coordinate: PlaceCoordinate, endpoint _: URL, language: PlaceLanguage) async throws -> PlaceLocation? {
+        longitudes.append(coordinate.longitude)
+        active += 1
+        defer { active -= 1 }
+        while paused {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        if coordinate.longitude == failingLongitude {
+            throw URLError(.timedOut)
+        }
+        return try AssetLocationTests.response(language).location(language: language)
+    }
+
+    func resume() {
+        paused = false
+    }
+}
+
+private actor CacheLifecycleAssetDetails: AssetDetailReading {
+    private var secondReleased = false
+
+    func assetDetail(id: String) async throws -> AssetDetail {
+        if id == "one" {
+            // Cross the cache's one-second progress-coalescing interval.
+            try await Task.sleep(for: .milliseconds(1100))
+        } else {
+            while !secondReleased {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+        }
+        return AssetDetail(id: id, capturedAt: .now, originalFileName: "\(id).jpg", originalMimeType: "image/jpeg",
+                           width: 400, height: 600, description: nil, cameraMake: nil, cameraModel: nil, lensModel: nil,
+                           fileSizeBytes: nil, iso: nil, focalLength: nil, aperture: nil, exposureTime: nil,
+                           latitude: 31, longitude: id == "one" ? 121 : 122, city: nil, state: nil, country: nil)
+    }
+
+    func releaseSecond() {
+        secondReleased = true
     }
 }
 

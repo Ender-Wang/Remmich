@@ -26,6 +26,8 @@ import SwiftUI
     @ObservationIgnored private let requestInterval: Duration
     @ObservationIgnored private var activeRequest: UUID?
     @ObservationIgnored private var waitingRequests: [(id: UUID, automatic: Bool, continuation: CheckedContinuation<Void, Error>)] = []
+    @ObservationIgnored private(set) var cachedMetadataRevision: UInt64 = 0
+    @ObservationIgnored private var retryWait: (id: UUID, task: Task<Void, Error>)?
 
     init(defaults: UserDefaults = .standard, client: any PlaceLookingUp = PhotonPlaceClient(),
          store: any LibraryIndexStoring = SQLiteLibraryIndexStore(), requestInterval: Duration = .seconds(1))
@@ -54,6 +56,8 @@ import SwiftUI
     }
 
     func reset() {
+        retryWait?.task.cancel()
+        cachedMetadataRevision &+= 1
         let previous = configuration
         let oldScope = scope
         let oldSession = sessionID
@@ -104,7 +108,7 @@ import SwiftUI
                     await reloadProgress()
                     let automatic = automaticCachingAllowed
                     let report = progress
-                    Self.logger.info("Place cache configured automatic=\(automatic) eligible=\(report.eligible) resolved=\(report.resolved) pending=\(report.pending) failed=\(report.failed)")
+                    Self.logger.info("Place cache configured automatic=\(automatic) eligible=\(report.eligible) cached=\(report.cached) resolved=\(report.resolved) pending=\(report.pending) failed=\(report.failed)")
                     preferencesDidChange?()
                 }
             } catch {
@@ -180,12 +184,19 @@ import SwiftUI
             Self.logger.info("Place cache pass started retryFailed=\(retryFailed)")
             var resetFailures = retryFailed
             while !Task.isCancelled, token == sessionID, shouldContinue() {
+                let metadataRevision = cachedMetadataRevision
                 let pending = try await store.pendingPlaces(scope: scope, retryFailed: resetFailures, now: .now)
                 resetFailures = false
                 if pending.isEmpty {
-                    guard let retry = try await store.nextPlaceRetry(scope: scope) else { break }
+                    let retry = try await store.nextPlaceRetry(scope: scope)
                     await reloadProgress()
-                    try await Task.sleep(for: .seconds(max(1, retry.timeIntervalSinceNow)))
+                    guard token == sessionID else { throw CancellationError() }
+                    // A metadata commit during the reads above must not be lost.
+                    if metadataRevision != cachedMetadataRevision {
+                        continue
+                    }
+                    guard let retry else { break }
+                    try await waitForPlaceRetry(until: retry)
                     continue
                 }
                 for record in pending {
@@ -207,7 +218,34 @@ import SwiftUI
         if token == sessionID {
             await reloadProgress()
             let report = progress
-            Self.logger.info("Place cache pass finished cancelled=\(Task.isCancelled) eligible=\(report.eligible) resolved=\(report.resolved) pending=\(report.pending) failed=\(report.failed)")
+            Self.logger.info("Place cache pass finished cancelled=\(Task.isCancelled) eligible=\(report.eligible) cached=\(report.cached) resolved=\(report.resolved) pending=\(report.pending) failed=\(report.failed)")
+        }
+    }
+
+    /// Wake only the queue scan; never cancel a lookup or bypass its durable backoff.
+    func cachedMetadataDidChange() {
+        cachedMetadataRevision &+= 1
+        retryWait?.task.cancel()
+    }
+
+    private func waitForPlaceRetry(until date: Date) async throws {
+        let id = UUID()
+        let wait = Task { try await Task.sleep(for: .seconds(max(1, date.timeIntervalSinceNow))) }
+        retryWait = (id, wait)
+        defer {
+            if retryWait?.id == id {
+                retryWait = nil
+            }
+        }
+        try await withTaskCancellationHandler {
+            do { try await wait.value }
+            catch is CancellationError {
+                // Metadata arrival interrupts this sleep; cancellation of the
+                // owning cache run still stops the worker.
+                try Task.checkCancellation()
+            }
+        } onCancel: {
+            wait.cancel()
         }
     }
 

@@ -1234,10 +1234,19 @@ final class LibraryIndexController {
         placeRunID = run
         placesAreRunning = locations.automaticCachingAllowed
         placeTask = Task { [weak self] in
-            await locations.refreshCachedPlaces(retryFailed: retryFailed) { [weak self] in
-                guard let self else { return false }
-                return placeRunID == run && self.scope == scope && !thumbnailWarmingPaused
-                    && resourceConditions().waitReason == nil
+            var resetFailures = retryFailed
+            while !Task.isCancelled {
+                let metadataRevision = locations.cachedMetadataRevision
+                await locations.refreshCachedPlaces(retryFailed: resetFailures) { [weak self] in
+                    guard let self else { return false }
+                    return placeRunID == run && self.scope == scope && !thumbnailWarmingPaused
+                        && resourceConditions().waitReason == nil
+                }
+                resetFailures = false
+                guard let self, placeRunID == run, self.scope == scope else { return }
+                guard !thumbnailWarmingPaused, resourceConditions().waitReason == nil,
+                      locations.automaticCachingAllowed, locations.lastStorageError == nil,
+                      metadataRevision != locations.cachedMetadataRevision else { break }
             }
             guard let self, placeRunID == run else { return }
             placeTask = nil
@@ -1484,7 +1493,14 @@ final class LibraryIndexController {
         warmingRunID: UInt64
     ) async {
         guard warmingRunID == self.warmingRunID else { return }
+        let metadataChanged = progress.metadataCachedCount != thumbnailWarmingMetadataCount
         applyThumbnailWarmingProgress(progress, updateWorkSample: true)
+        if metadataChanged {
+            // Progress is coalesced by the cache worker. Schedule place work
+            // alongside it without awaiting any Photon network requests.
+            locations?.cachedMetadataDidChange()
+            refreshPlaces()
+        }
         if Date().timeIntervalSince(lastLiveStorageReportAt) >= 5, let expectedScope = scope {
             lastLiveStorageReportAt = Date()
             let report = try? await store.storageReport(scope: expectedScope)

@@ -54,6 +54,9 @@ nonisolated struct CachedPlaceLookup: Codable, Equatable, Sendable {
 
 nonisolated struct PlaceCacheProgress: Equatable, Sendable {
     var eligible = 0
+    /// Assets with a usable stored tag, including fallback tags from another URL.
+    var cached = 0
+    /// Completed lookups for the currently selected provider/language.
     var resolved = 0
     var pending = 0
     var failed = 0

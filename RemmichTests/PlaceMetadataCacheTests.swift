@@ -181,6 +181,36 @@ struct PlaceMetadataCacheTests {
         #expect(try await reopened.cachedAssetMetadata(id: "asset", scope: scope)?.cachedPlace == location)
     }
 
+    @Test func cachedTagCoverageSurvivesURLChangesWithoutDoubleCountingOrKeepingChangedGPS() async throws {
+        let f = try PlaceCacheFixture()
+        defer { f.cleanup() }
+        try await f.seed(scope: scope)
+        try await f.seed(scope: scope, id: "same")
+        try await f.store.configurePlaces(scope: scope, preferences: settings, sessionID: "one")
+        let original = try #require(try await f.store.desiredPlace(assetID: "asset", scope: scope)?.key)
+        let originalLease = try #require(try await f.store.beginPlace(original, scope: scope, sessionID: "one", automatic: true, now: .now))
+        #expect(try await finish(f, original, lease: originalLease))
+        #expect(try await f.store.placeProgress(scope: scope, now: .now).cached == 2)
+        try await f.store.configurePlaces(scope: scope, preferences: .init(endpoint: "https://other.example"), sessionID: "one")
+        let switched = try await f.store.placeProgress(scope: scope, now: .now)
+        #expect(switched.cached == 2)
+        #expect(switched.resolved == 0)
+        #expect(switched.pending == 2)
+        #expect(try await f.store.cachedAssetMetadata(id: "asset", scope: scope)?.cachedPlace == location)
+        let replacement = try #require(try await f.store.desiredPlace(assetID: "asset", scope: scope)?.key)
+        let replacementLease = try #require(try await f.store.beginPlace(replacement, scope: scope, sessionID: "one", automatic: true, now: .now))
+        #expect(try await finish(f, replacement, lease: replacementLease))
+        #expect(try await f.store.placeProgress(scope: scope, now: .now).cached == 2)
+        try await f.seed(scope: scope, id: "same", longitude: 122)
+        let changed = try await f.store.placeProgress(scope: scope, now: .now)
+        #expect(changed.eligible == 2)
+        #expect(changed.cached == 1)
+        let otherAccount = MediaAccountScope(session: SavedSessionRegistryTests.session("other-places"))
+        try await f.seed(scope: otherAccount)
+        try await f.store.configurePlaces(scope: otherAccount, preferences: settings, sessionID: "two")
+        #expect(try await f.store.placeProgress(scope: otherAccount, now: .now).cached == 0)
+    }
+
     @Test func publicServiceIsDemandOnlyAndDeletedAccountCannotBeRecreatedByLateCompletion() async throws {
         let f = try PlaceCacheFixture()
         defer { f.cleanup() }

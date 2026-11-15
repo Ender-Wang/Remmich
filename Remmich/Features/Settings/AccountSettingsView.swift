@@ -1348,7 +1348,7 @@ struct AccountSettingsView: View {
                 VStack(spacing: 0) {
                     statistic("Cached thumbnails", cacheThumbnailCount.formatted())
                     statistic("Cached metadata records", (libraryIndex.thumbnailWarmingEligibleCount > 0 ? libraryIndex.thumbnailWarmingMetadataCount : 0).formatted())
-                    statistic("Cached place tags", "\(libraryIndex.placeProgress.resolved.formatted()) / \(libraryIndex.placeProgress.eligible.formatted()) GPS assets")
+                    statistic("Cached place tags", "\(libraryIndex.placeProgress.cached.formatted()) / \(libraryIndex.placeProgress.eligible.formatted()) GPS assets")
                     statistic("Place caching", libraryIndex.automaticPlacesAllowed ? "Custom instance" : "When viewed · Public Photon")
                     if libraryIndex.automaticPlacesAllowed {
                         statistic("Place tags pending", libraryIndex.placeProgress.pending.formatted())

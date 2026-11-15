@@ -159,7 +159,7 @@ struct SavedAccountsView: View {
         }
         activeIndex = "Index: \(percentage(index.indexedAssetCount, index.expectedAssetCount)) · \(indexStatus) · \(index.indexedAssetCount.formatted()) / \(index.expectedAssetCount.formatted()) assets"
         let places = index.automaticPlacesAllowed
-            ? "Places: \(index.placeProgress.resolved)/\(index.placeProgress.eligible) · \(index.placeProgress.pending) pending · \(index.placeProgress.failed) failed"
+            ? "Places: \(index.placeProgress.cached)/\(index.placeProgress.eligible) cached · \(index.placeProgress.pending) pending · \(index.placeProgress.failed) failed"
             : "Places: when viewed"
         activeCache = "Cache: \(percentage(index.thumbnailWarmingCachedCount, index.thumbnailWarmingEligibleCount)) · \(cacheStatus) · \(index.thumbnailWarmingThumbnailCount.formatted()) thumbnails · \(index.thumbnailWarmingMetadataCount.formatted()) metadata · \(ByteCountFormatter.string(fromByteCount: index.thumbnailWarmingCachedBytes, countStyle: .file)) thumbnails · \(places)"
     }
