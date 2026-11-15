@@ -14,6 +14,7 @@ struct ImmichThumbnail: View {
     var priority: ImageRequest.Priority = .normal
     var placeholderImage: UIImage?
     var logoPlaceholderCaption: RemmichCoverPlaceholder.Caption?
+    var animatesImageLoading = true
     var didLoad: (ImageResponse) -> Void = { _ in }
 
     @State private var retryID = 0
@@ -23,7 +24,7 @@ struct ImmichThumbnail: View {
         let isCacheOnly = request?.options.contains(.returnCacheDataDontLoad) == true
         LazyImage(
             request: request,
-            transaction: .init(animation: .easeOut(duration: 0.18))
+            transaction: .init(animation: animatesImageLoading ? .easeOut(duration: 0.18) : nil)
         ) { state in
             ZStack {
                 if showsBackground {
@@ -86,6 +87,6 @@ struct ImmichThumbnail: View {
                 )
                 .clipped()
         }
-        .transition(.opacity)
+        .transition(animatesImageLoading ? .opacity : .identity)
     }
 }

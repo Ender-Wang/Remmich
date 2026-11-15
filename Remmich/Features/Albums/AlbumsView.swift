@@ -889,7 +889,7 @@ private struct AlbumCard: View {
     let listWidth: CGFloat
     let isReordering: Bool
     @State private var coverVisible = false
-    @State private var intersectsViewport = false
+    @State private var withinCoverWindow = false
 
     var body: some View {
         AlbumCardReflowLayout(progress: progress, coverWidth: coverWidth, listWidth: listWidth) {
@@ -906,15 +906,23 @@ private struct AlbumCard: View {
         }
         .contentShape(.rect)
         .accessibilityElement(children: .combine)
-        .onScrollVisibilityChange(threshold: 0.01) { visible in
-            intersectsViewport = visible
-            if visible || !isReordering {
-                coverVisible = visible
+        .onGeometryChange(for: Bool.self) { geometry in
+            guard let viewport = geometry.bounds(of: .scrollView(axis: .vertical)),
+                  !viewport.isEmpty, geometry.size.width > 0, geometry.size.height > 0 else { return false }
+            // The enclosing viewport is expressed in this card's local space.
+            // Prepare one card-height before entry and keep it for the same
+            // distance after exit. Only crossing this window publishes state.
+            let window = viewport.insetBy(dx: 0, dy: -geometry.size.height)
+            return CGRect(origin: .zero, size: geometry.size).intersects(window)
+        } action: { nearViewport in
+            withinCoverWindow = nearViewport
+            if nearViewport || !isReordering {
+                coverVisible = nearViewport
             }
         }
         .onChange(of: isReordering) { _, active in
             if !active {
-                coverVisible = intersectsViewport
+                coverVisible = withinCoverWindow
             }
         }
     }
@@ -970,7 +978,7 @@ private struct AlbumCover: View {
             }
             Group {
                 if let descriptor {
-                    ImmichThumbnail(descriptor: descriptor, media: media)
+                    ImmichThumbnail(descriptor: descriptor, media: media, animatesImageLoading: false)
                 } else {
                     Rectangle().fill(.quaternary)
                         .overlay { Image(systemName: "rectangle.stack").foregroundStyle(.secondary) }
