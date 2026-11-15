@@ -349,14 +349,22 @@ struct AccountSettingsView: View {
                 }
             }
         )) { Button("OK", role: .cancel) {} } message: { Text(appIcons.errorMessage ?? "") }
-        .onChange(of: selectedPage) {
-            if selectedPage == .account {
+        .onChange(of: selectedPage) { previous, next in
+            if previous == .connection, next != .connection {
+                restoreConnectionDraft()
+            }
+            if next == .account {
                 libraryIndex.refreshStoredAccounts()
             }
             guard showsBrand, let frame = brandFrames[selectedPage] else { return }
             withAnimation(reduceMotion ? nil : .smooth(duration: 0.4)) { brandFrame = frame }
         }
-        .onDisappear { pageTransition?.cancel() }
+        .onDisappear {
+            pageTransition?.cancel()
+            if selectedPage == .connection {
+                restoreConnectionDraft()
+            }
+        }
         .task { appIcons.refresh(); libraryIndex.refreshStoredAccounts() }
         .task(id: connectionLatencyTargets) {
             let targets = connectionLatencyTargets
@@ -2161,9 +2169,7 @@ struct AccountSettingsView: View {
             switch result {
             case let .saved(savedProfile):
                 profile = savedProfile
-                primaryAddress = savedProfile.primaryEndpoint.map(ConnectionAddressFormatting.serverAddress) ?? ""
-                let fallbacks = savedProfile.fallbackEndpoints.map(ConnectionAddressFormatting.serverAddress)
-                fallbackAddresses = fallbacks.isEmpty ? [""] : fallbacks
+                restoreConnectionDraft()
             case let .rejected(failures):
                 if failures.isEmpty {
                     saveError = "Add at least one server endpoint."
@@ -2174,6 +2180,13 @@ struct AccountSettingsView: View {
                 }
             }
         }
+    }
+
+    private func restoreConnectionDraft() {
+        let primary = profile.primaryEndpoint ?? (profile.endpoints.isEmpty ? activeRoute?.endpoint ?? session.apiURL : nil)
+        primaryAddress = primary.map(ConnectionAddressFormatting.serverAddress) ?? ""
+        let fallbacks = profile.fallbackEndpoints.map(ConnectionAddressFormatting.serverAddress)
+        fallbackAddresses = fallbacks.isEmpty ? [""] : fallbacks
     }
 
     private var routeStatusLabel: String {
