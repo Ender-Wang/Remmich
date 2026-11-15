@@ -38,7 +38,7 @@ struct AccountSettingsView: View {
     private struct ProfileCardSummary {
         let percentage: Double?
         let status: String
-        var isIndexing = false
+        var isRunning = false
 
         var percentageText: String {
             percentage?.formatted(.number.precision(.fractionLength(0 ... 1))) ?? "—"
@@ -138,6 +138,7 @@ struct AccountSettingsView: View {
     @State private var libraryIndexClock = Date()
     @State private var profileCardSummaries: [SettingsPage: ProfileCardSummary] = [:]
     @State private var albumIndexCardSummary: ProfileCardSummary?
+    @State private var placeCacheCardSummary: ProfileCardSummary?
     @State private var selectedPage = SettingsPage.home
     @State private var selectedIndexSection = IndexSection.timeline
     @State private var indexSwipeOrigin: IndexSection?
@@ -372,6 +373,7 @@ struct AccountSettingsView: View {
                     .cache: syncCardSummary(for: .cache),
                 ]
                 albumIndexCardSummary = albumIndexSummary()
+                placeCacheCardSummary = placeCacheSummary()
                 do { try await Task.sleep(for: .seconds(1)) } catch { return }
             }
         }
@@ -477,7 +479,8 @@ struct AccountSettingsView: View {
                     indexCardStatus("Timeline", summary: profileCardSummaries[page] ?? syncCardSummary(for: page))
                     indexCardStatus("Albums", summary: albumIndexCardSummary ?? albumIndexSummary())
                 } else if page == .cache {
-                    syncCardLabel(profileCardSummaries[page] ?? syncCardSummary(for: page))
+                    indexCardStatus("Assets", summary: profileCardSummaries[page] ?? syncCardSummary(for: page))
+                    indexCardStatus("Places", summary: placeCacheCardSummary ?? placeCacheSummary())
                 } else if page == .connection {
                     animatedCardStatus(profileCardSummaries[page]?.status ?? presentation.detail)
                 } else {
@@ -500,8 +503,8 @@ struct AccountSettingsView: View {
     private func syncCardSummary(for page: SettingsPage) -> ProfileCardSummary {
         let completed: Int
         let total: Int
-        var isComplete: Bool
-        var status: String
+        let isComplete: Bool
+        let status: String
         if page == .index {
             completed = displayedIndexCompletedCount
             total = displayedIndexTotalCount
@@ -533,41 +536,43 @@ struct AccountSettingsView: View {
             case .failed: "Needs attention"
             }
         }
-        if page == .cache, libraryIndex.automaticPlacesAllowed {
-            if libraryIndex.placeProgress.failed > 0 || libraryIndex.placeStorageError != nil {
-                status = "Places need attention"
-                isComplete = false
-            } else if libraryIndex.placesAreRunning {
-                status = "Caching places…"
-                isComplete = false
-            } else if libraryIndex.placeProgress.pending > 0 {
-                status = "Places pending"
-                isComplete = false
-            }
-        }
         let percentage = total > 0
             ? (Self.progressFraction(completed: completed, total: total) * 1000).rounded(.down) / 10
             : (isComplete ? 100.0 : nil)
         return ProfileCardSummary(percentage: percentage, status: status,
-                                  isIndexing: page == .index && libraryIndex.status == .indexing)
+                                  isRunning: page == .index ? libraryIndex.status == .indexing : libraryIndex.thumbnailWarmingStatus == .warming)
     }
 
-    private func syncCardLabel(_ summary: ProfileCardSummary) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 0) {
-                Text(summary.percentageText)
-                    .contentTransition(reduceMotion ? .identity : .numericText(value: summary.percentage ?? 0))
-                    .animation(reduceMotion ? nil : .smooth(duration: 0.3), value: summary.percentage)
-                if summary.percentage != nil {
-                    Text("%")
-                }
-            }
-            .monospacedDigit()
-            animatedCardStatus(summary.status)
+    private func placeCacheSummary() -> ProfileCardSummary {
+        guard libraryIndex.automaticPlacesAllowed else {
+            return ProfileCardSummary(percentage: nil, status: "When viewed")
         }
-        .lineLimit(1)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(summary.percentageText)\(summary.percentage == nil ? "" : "%"), \(summary.status)")
+        let progress = libraryIndex.placeProgress
+        // Sync completion is separate from cached coverage: another language
+        // can finish for an asset that already has a usable fallback tag.
+        let percentage = progress.eligible > 0
+            ? (Self.progressFraction(completed: progress.resolved, total: progress.eligible) * 1000).rounded(.down) / 10
+            : nil
+        let hasFailure = progress.failed > 0 || libraryIndex.placeStorageError != nil
+        let status = if libraryIndex.thumbnailWarmingPaused {
+            "Paused"
+        } else if hasFailure {
+            "Needs attention"
+        } else if libraryIndex.placesAreRunning {
+            progress.eligible > 0 ? "Syncing…" : "Preparing…"
+        } else if progress.eligible > 0, progress.pending == 0, progress.demandOnly == 0 {
+            "Up to date"
+        } else if libraryIndex.thumbnailWarmingStatus == .waiting, libraryIndex.thumbnailWarmingWaitingReason != nil {
+            syncCardSummary(for: .cache).status
+        } else if !libraryIndex.thumbnailWarmingEnabled,
+                  !libraryIndex.hasManualCacheIntent(namespace: MediaAccountScope(session: session).cacheNamespace)
+        {
+            "Off"
+        } else {
+            progress.eligible > 0 ? "Pending" : "Waiting"
+        }
+        return ProfileCardSummary(percentage: percentage, status: status,
+                                  isRunning: libraryIndex.placesAreRunning && !libraryIndex.thumbnailWarmingPaused && !hasFailure)
     }
 
     private func albumIndexSummary() -> ProfileCardSummary {
@@ -581,11 +586,11 @@ struct AccountSettingsView: View {
         case .upToDate: "Up to date"
         case .failed: "Needs attention"
         }
-        return ProfileCardSummary(percentage: percentage, status: status, isIndexing: index.status == .indexing)
+        return ProfileCardSummary(percentage: percentage, status: status, isRunning: index.status == .indexing)
     }
 
     private func indexCardStatus(_ title: String, summary: ProfileCardSummary) -> some View {
-        let detail = summary.isIndexing && summary.percentage != nil ? summary.percentageText + "%" : summary.status
+        let detail = summary.isRunning && summary.percentage != nil ? summary.percentageText + "%" : summary.status
         return Text("\(title) · \(detail)")
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
