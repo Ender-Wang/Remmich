@@ -417,6 +417,7 @@ struct AlbumsView: View {
                             .accessibilityHidden(true)
                     }
                 }
+                .ignoresSafeArea(.container, edges: .horizontal)
             }
             .toolbar(.hidden, for: .navigationBar)
             .scrollDismissesKeyboard(.interactively)
