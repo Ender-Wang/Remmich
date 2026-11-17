@@ -250,6 +250,11 @@ final class LibraryIndexController {
 
     private func finishSyncWork(kind: LibraryBackgroundSyncKind, discoverIndex: Bool, resumeIndex: Bool) async -> Bool {
         let expectedScope = scope
+        if kind == .processing {
+            // Import delivered place responses alongside index/image work, even
+            // when the short background delivery window ends before they finish.
+            refreshPlaces()
+        }
         if !indexPaused, task == nil, (discoverIndex && status != .upToDate) || resumeIndex {
             run(fullReconciliation: false)
         }
@@ -1234,6 +1239,9 @@ final class LibraryIndexController {
         placeRunID = run
         placesAreRunning = locations.automaticCachingAllowed
         placeTask = Task { [weak self] in
+            guard let self, placeRunID == run, self.scope == scope, !Task.isCancelled else { return }
+            await transfers?.setEnabled(true, lane: "places", namespace: scope.cacheNamespace)
+            guard placeRunID == run, self.scope == scope, !Task.isCancelled, !thumbnailWarmingPaused else { return }
             var resetFailures = retryFailed
             while !Task.isCancelled {
                 let metadataRevision = locations.cachedMetadataRevision
@@ -1243,12 +1251,12 @@ final class LibraryIndexController {
                         && resourceConditions().waitReason == nil
                 }
                 resetFailures = false
-                guard let self, placeRunID == run, self.scope == scope else { return }
+                guard placeRunID == run, self.scope == scope else { return }
                 guard !thumbnailWarmingPaused, resourceConditions().waitReason == nil,
                       locations.automaticCachingAllowed, locations.lastStorageError == nil,
                       metadataRevision != locations.cachedMetadataRevision else { break }
             }
-            guard let self, placeRunID == run else { return }
+            guard placeRunID == run else { return }
             placeTask = nil
             placesAreRunning = false
             if warmingTask == nil, thumbnailWarmingStatus == .upToDate || thumbnailWarmingStatus == .off,

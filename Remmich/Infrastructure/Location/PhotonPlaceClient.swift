@@ -2,12 +2,15 @@ import Foundation
 
 actor PhotonPlaceClient: PlaceLookingUp {
     private let session: URLSession
+    private let transfers: LibraryTransferQueue?
 
     init(session: URLSession) {
         self.session = session
+        transfers = nil
     }
 
-    init() {
+    init(transfers: LibraryTransferQueue? = .shared) {
+        self.transfers = transfers
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpCookieStorage = nil
         configuration.urlCredentialStorage = nil
@@ -21,15 +24,38 @@ actor PhotonPlaceClient: PlaceLookingUp {
     }
 
     func lookup(_ coordinate: PlaceCoordinate, endpoint: URL, language: PlaceLanguage, automatic: Bool) async throws -> PlaceLocation? {
+        try await lookup(coordinate, endpoint: endpoint, language: language, automatic: automatic, cache: nil)
+    }
+
+    func lookup(_ key: PlaceCacheKey, scope: MediaAccountScope, automatic: Bool) async throws -> PlaceLocation? {
+        try await lookup(key.coordinate, endpoint: key.endpoint, language: key.language, automatic: automatic,
+                         cache: automatic ? (key, scope) : nil)
+    }
+
+    func configureCache(scope: MediaAccountScope, preferences: MapsPlacesPreferences, reset: Bool) async throws {
+        try await transfers?.configurePlaces(scope: scope, preferences: preferences, reset: reset)
+    }
+
+    func prefetchCache(_ keys: [PlaceCacheKey], scope: MediaAccountScope) async throws {
+        try await transfers?.prefetchPlaces(keys, scope: scope)
+    }
+
+    func finishCacheLookup(_ key: PlaceCacheKey, scope: MediaAccountScope) async {
+        try? await transfers?.finishPlaceLookup(key, scope: scope)
+    }
+
+    private func lookup(_ coordinate: PlaceCoordinate, endpoint: URL, language: PlaceLanguage, automatic: Bool,
+                        cache: (PlaceCacheKey, MediaAccountScope)?) async throws -> PlaceLocation?
+    {
         guard !automatic || !PlaceCacheKey.isPublicService(endpoint) else { throw PlaceLookupError.automaticPublicService }
-        let decoded = try await response(Self.request(coordinate, endpoint: endpoint, language: language), automatic: automatic)
+        let decoded = try await response(Self.request(coordinate, endpoint: endpoint, language: language), automatic: automatic, cache: cache)
         let fallback = decoded.location(language: language)
         guard decoded.needsParkContext else { return fallback }
         if let park = decoded.enclosingPark(in: decoded, coordinate: coordinate, language: language) {
             return park
         }
         do {
-            let parks = try await response(Self.request(coordinate, endpoint: endpoint, language: language, parksOnly: true), automatic: automatic)
+            let parks = try await response(Self.request(coordinate, endpoint: endpoint, language: language, parksOnly: true), automatic: automatic, cache: cache)
             return decoded.enclosingPark(in: parks, coordinate: coordinate, language: language) ?? fallback
         } catch {
             try Task.checkCancellation()
@@ -44,10 +70,23 @@ actor PhotonPlaceClient: PlaceLookingUp {
         }
     }
 
-    private func response(_ request: URLRequest, automatic: Bool) async throws -> PhotonResponse {
-        let (data, response) = try await session.data(for: request, delegate: PhotonRedirectPolicy(automatic: automatic))
+    private func response(_ request: URLRequest, automatic: Bool, cache: (PlaceCacheKey, MediaAccountScope)?) async throws -> PhotonResponse {
+        let data: Data
+        let response: URLResponse
+        if let transfers, let (key, scope) = cache {
+            let result = try await transfers.placeData(for: request, key: key, scope: scope)
+            data = result.data
+            response = result.response
+        } else {
+            (data, response) = try await session.data(for: request, delegate: PhotonRedirectPolicy(automatic: automatic))
+        }
         try Task.checkCancellation()
         guard let response = response as? HTTPURLResponse else { throw PlaceLookupError.invalidResponse }
+        // A background URLSession follows server redirects itself. Never accept
+        // a public-service result into the automatic queue or request its context.
+        if automatic, let url = response.url, PlaceCacheKey.isPublicService(url) {
+            throw PlaceLookupError.automaticPublicService
+        }
         if automatic, (300 ..< 400).contains(response.statusCode),
            let target = response.value(forHTTPHeaderField: "Location"),
            let url = URL(string: target, relativeTo: response.url), PlaceCacheKey.isPublicService(url)

@@ -2,13 +2,14 @@ import CryptoKit
 import Foundation
 
 nonisolated enum LibraryTransferKind: String, Codable, Sendable {
-    case index, albumIndex, metadata, thumbnail, export
+    case index, albumIndex, metadata, thumbnail, place, export
 
     var lane: String {
         switch self {
         case .index: "index"
         case .albumIndex: "albums"
         case .export: "export"
+        case .place: "places"
         case .metadata, .thumbnail: "cache"
         }
     }
@@ -108,6 +109,7 @@ nonisolated struct LibraryTransferJournal: Codable, Sendable {
         var statusCode: Int?
         var contentType: String?
         var contentDisposition: String?
+        var responseRetryAfter: String?
         var responseURL: URL?
         var receivedBytes: Int64?
         var errorCode: Int?
@@ -147,6 +149,7 @@ nonisolated struct LibraryTransferJournal: Codable, Sendable {
             case .index, .albumIndex: 64 * 1024 * 1024
             case .metadata: 4 * 1024 * 1024
             case .thumbnail: 16 * 1024 * 1024
+            case .place: 1_048_576
             case .export: Int64.max
             }
         }
@@ -156,6 +159,8 @@ nonisolated struct LibraryTransferJournal: Codable, Sendable {
     private(set) var passes: [String: UUID] = [:]
     private(set) var jobs: [Job] = []
     private(set) var disabledLanes: Set<String> = []
+    private(set) var placeEndpoint: URL?
+    private(set) var placeConfiguration: MapsPlacesPreferences?
 
     mutating func activate(_ next: LibraryTransferOwner) -> [Job] {
         guard owner != next else { return [] }
@@ -164,12 +169,25 @@ nonisolated struct LibraryTransferJournal: Codable, Sendable {
         passes = [:]
         jobs = []
         disabledLanes = []
+        placeEndpoint = nil
+        placeConfiguration = nil
+        return removed
+    }
+
+    mutating func configurePlaces(_ preferences: MapsPlacesPreferences, reset: Bool = false) throws -> [Job] {
+        let endpoint = try MapsPlacesPreferences.endpointURL(preferences.endpoint)
+        guard reset || placeConfiguration != preferences else { return [] }
+        let removed = remove(lane: "places")
+        placeConfiguration = preferences
+        placeEndpoint = PlaceCacheKey.isPublicService(endpoint) ? nil : endpoint
         return removed
     }
 
     mutating func job(url: URL, kind: LibraryTransferKind, owner expected: LibraryTransferOwner, sourceRevision: String? = nil) throws -> Job {
         guard owner == expected, !disabledLanes.contains(kind.lane) else { throw CancellationError() }
-        if let existing = jobs.first(where: { $0.owner == expected && $0.kind == kind && $0.url == url && (kind != .export || $0.sourceRevision == sourceRevision) }) {
+        if let existing = jobs.first(where: { $0.owner == expected && $0.kind == kind && $0.url == url
+                && ((kind != .export && kind != .place) || $0.sourceRevision == sourceRevision)
+        }) {
             return existing
         }
         let pass = passes[kind.lane] ?? UUID()
@@ -199,7 +217,8 @@ nonisolated struct LibraryTransferJournal: Codable, Sendable {
     }
 
     mutating func requeueFailures(at now: Date = Date()) {
-        for index in jobs.indices where jobs[index].state == .failed {
+        // Place retry timing belongs to the SQLite lookup state, including Retry-After.
+        for index in jobs.indices where jobs[index].state == .failed && jobs[index].kind != .place {
             guard jobs[index].kind != .export || Job.isRecoverable(jobs[index].errorCode),
                   let retryAfter = jobs[index].retryAfter, retryAfter <= now,
                   !disabledLanes.contains(jobs[index].kind.lane) else { continue }
@@ -248,6 +267,20 @@ nonisolated struct LibraryTransferJournal: Codable, Sendable {
 
     mutating func removeFinishedAlbums() -> [Job] {
         let removed = jobs.filter { $0.kind == .albumIndex && ($0.state == .completed || $0.state == .failed) }
+        let ids = Set(removed.map(\.id))
+        jobs.removeAll { ids.contains($0.id) }
+        return removed
+    }
+
+    mutating func removePlaceLookup(_ key: PlaceCacheKey) -> [Job] {
+        let removed = jobs.filter { $0.kind == .place && $0.sourceRevision == key.id }
+        let ids = Set(removed.map(\.id))
+        jobs.removeAll { ids.contains($0.id) }
+        return removed
+    }
+
+    mutating func retainPlaceLookups(_ keys: Set<String>) -> [Job] {
+        let removed = jobs.filter { $0.kind == .place && !keys.contains($0.sourceRevision ?? "") }
         let ids = Set(removed.map(\.id))
         jobs.removeAll { ids.contains($0.id) }
         return removed

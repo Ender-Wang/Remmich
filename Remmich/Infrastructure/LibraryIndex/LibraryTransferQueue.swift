@@ -15,6 +15,7 @@ actor LibraryTransferQueue {
     )
     private static let httpConnectionsPerHost = 6
     nonisolated static let cacheLookAheadAssets = 128
+    nonisolated static let placeLookAhead = 32
     private static let maximumNativeTasks = 256
     private static let logger = Logger(subsystem: "io.github.ender-wang.Remmich", category: "LibraryTransfers")
 
@@ -107,6 +108,7 @@ actor LibraryTransferQueue {
         configuration.waitsForConnectivity = true
         configuration.httpMaximumConnectionsPerHost = Self.httpConnectionsPerHost
         configuration.httpCookieStorage = nil
+        configuration.urlCredentialStorage = nil
         configuration.urlCache = nil
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         let timestamp = Date().ISO8601Format(.init(includingFractionalSeconds: true))
@@ -143,9 +145,10 @@ actor LibraryTransferQueue {
         let ready = journal.jobs.filter { $0.state == .completed }
         let connectionErrors = [URLError.cannotFindHost, .cannotConnectToHost, .networkConnectionLost,
                                 .notConnectedToInternet, .timedOut, .dnsLookupFailed].map(\.rawValue)
-        let recoveryRequired = ready.contains { $0.statusCode == 401 || $0.statusCode == 403 }
-            || journal.jobs.contains { $0.state == .failed && connectionErrors.contains($0.errorCode ?? 0) }
-        return .init(owner: owner, revision: deliveryRevision, importRevision: importRevision, hasReadyResponses: !ready.isEmpty,
+        let recoveryRequired = ready.contains { $0.kind != .place && ($0.statusCode == 401 || $0.statusCode == 403) }
+            || journal.jobs.contains { $0.kind != .place && $0.state == .failed && connectionErrors.contains($0.errorCode ?? 0) }
+        let hasPlaceFailures = journal.jobs.contains { $0.kind == .place && $0.state == .failed }
+        return .init(owner: owner, revision: deliveryRevision, importRevision: importRevision, hasReadyResponses: !ready.isEmpty || hasPlaceFailures,
                      hasIndexWork: journal.jobs.contains { $0.kind == .index || $0.kind == .albumIndex },
                      requiresRouteValidation: recoveryRequired)
     }
@@ -469,7 +472,7 @@ actor LibraryTransferQueue {
         for (id, task) in nativeTasks where task.state == .suspended {
             guard let job = journal.jobs.first(where: { $0.id == id }), job.owner == owner,
                   job.state == .running,
-                  !journal.disabledLanes.contains(job.kind.lane), job.kind.lane != "cache" || cacheAllowed else { continue }
+                  !journal.disabledLanes.contains(job.kind.lane), !Self.isCacheWork(job.kind) || cacheAllowed else { continue }
             task.resume()
         }
         pump()
@@ -478,6 +481,9 @@ actor LibraryTransferQueue {
     func setEnabled(_ enabled: Bool, lane: String, namespace: String? = nil) {
         guard let owner = journal.owner, namespace == nil || owner.namespace == namespace else { return }
         discard(journal.setEnabled(enabled, lane: lane))
+        if lane == "cache" {
+            discard(journal.setEnabled(enabled, lane: "places"))
+        }
         try? persist()
         pump()
     }
@@ -550,14 +556,78 @@ actor LibraryTransferQueue {
         do { try persist(); pump() } catch { Self.logger.error("Transfer look-ahead could not be persisted") }
     }
 
+    func configurePlaces(scope: MediaAccountScope, preferences: MapsPlacesPreferences, reset: Bool) throws {
+        guard journal.owner?.namespace == scope.cacheNamespace else { return }
+        let previous = journal
+        let removed = try journal.configurePlaces(preferences, reset: reset)
+        do { try persist() } catch { journal = previous; throw error }
+        discard(removed)
+    }
+
+    func prefetchPlaces(_ keys: [PlaceCacheKey], scope: MediaAccountScope) throws {
+        try Task.checkCancellation()
+        guard let owner = journal.owner, owner.namespace == scope.cacheNamespace,
+              !journal.disabledLanes.contains("places"), cacheResourcesAllowed else { throw CancellationError() }
+        let window = Array(keys.prefix(Self.placeLookAhead))
+        for key in window {
+            try validatePlace(key, scope: scope)
+        }
+        let previous = journal
+        let removed = journal.retainPlaceLookups(Set(window.map(\.id)))
+        do {
+            for key in window {
+                let request = PhotonPlaceClient.request(key.coordinate, endpoint: key.endpoint, language: key.language)
+                _ = try journal.job(url: request.url!, kind: .place, owner: owner, sourceRevision: key.id)
+            }
+            try persist()
+        } catch {
+            journal = previous
+            throw error
+        }
+        discard(removed)
+        pump()
+    }
+
+    func placeData(for request: URLRequest, key: PlaceCacheKey, scope: MediaAccountScope) async throws -> Response {
+        try Task.checkCancellation()
+        try validatePlace(key, scope: scope)
+        guard let owner = journal.owner, let url = request.url,
+              request.httpMethod == nil || request.httpMethod == "GET", request.httpBody == nil,
+              Self.sameOrigin(url, key.endpoint), url.path == key.endpoint.appending(path: "reverse").path
+        else { throw CancellationError() }
+        let job = try journal.job(url: url, kind: .place, owner: owner, sourceRevision: key.id)
+        try persist()
+        return try await waitForResponse(job)
+    }
+
+    func finishPlaceLookup(_ key: PlaceCacheKey, scope: MediaAccountScope) throws {
+        guard journal.owner?.namespace == scope.cacheNamespace else { return }
+        let previous = journal
+        let removed = journal.removePlaceLookup(key)
+        do { try persist() } catch { journal = previous; throw error }
+        discard(removed, committed: true)
+    }
+
+    private func validatePlace(_ key: PlaceCacheKey, scope: MediaAccountScope) throws {
+        guard journal.owner?.namespace == scope.cacheNamespace,
+              let endpoint = journal.placeEndpoint, !PlaceCacheKey.isPublicService(key.endpoint),
+              key.version == PlaceCacheKey.selectionVersion,
+              try PlaceCacheKey(endpoint: endpoint, coordinate: key.coordinate, language: key.language) == key
+        else { throw CancellationError() }
+    }
+
     func data(for request: URLRequest, kind: LibraryTransferKind, owner: LibraryTransferOwner) async throws -> Response {
         try Task.checkCancellation()
-        guard request.httpMethod == nil || request.httpMethod == "GET", request.httpBody == nil,
+        guard kind != .place, request.httpMethod == nil || request.httpMethod == "GET", request.httpBody == nil,
               let url = request.url, Self.sameOrigin(url, owner.endpoint), journal.owner == owner
         else { throw CancellationError() }
         journal.requeueFailures()
         let job = try journal.job(url: url, kind: kind, owner: owner)
         try persist()
+        return try await waitForResponse(job)
+    }
+
+    private func waitForResponse(_ job: LibraryTransferJournal.Job) async throws -> Response {
         if job.state == .completed {
             return try response(for: job)
         }
@@ -593,12 +663,14 @@ actor LibraryTransferQueue {
         let capacity = nativeCapacity
         for var job in journal.jobs where job.state == .queued && nativeTasks.count + created.count < capacity {
             guard !journal.disabledLanes.contains(job.kind.lane), journal.owner == job.owner else { continue }
-            if job.kind.lane == "cache", !cacheResourcesAllowed {
+            if Self.isCacheWork(job.kind), !cacheResourcesAllowed {
                 continue
             }
-            var request = URLRequest(url: job.url)
-            request.setValue("Bearer \(authorization)", forHTTPHeaderField: "Authorization")
-            request.setValue(job.kind == .export ? "*/*" : job.kind == .thumbnail ? "image/*" : "application/json", forHTTPHeaderField: "Accept")
+            if job.kind == .place {
+                guard let endpoint = journal.placeEndpoint, !PlaceCacheKey.isPublicService(endpoint),
+                      Self.sameOrigin(job.url, endpoint), job.url.path == endpoint.appending(path: "reverse").path else { continue }
+            }
+            let request = Self.request(for: job, authorization: authorization)
             let jobTransport: LibraryTransferTransport = job.kind == .export ? .background : transport
             let nativeSession = jobTransport == .foreground ? foregroundSession : session
             let task: URLSessionDownloadTask = if job.kind == .export, let data = job.resumeData {
@@ -644,7 +716,7 @@ actor LibraryTransferQueue {
     func resourceConditionsChanged(allowed: Bool) {
         cacheResourcesAllowed = allowed
         if !allowed {
-            for var job in journal.jobs where job.kind.lane == "cache" && job.state == .running {
+            for var job in journal.jobs where Self.isCacheWork(job.kind) && job.state == .running {
                 nativeTasks.removeValue(forKey: job.id)?.cancel()
                 job.state = .queued
                 job.nativeTaskID = nil
@@ -700,16 +772,20 @@ actor LibraryTransferQueue {
             return
         }
         do {
-            guard let response, let fileURL, errorCode == nil, Self.sameOrigin(response.url, job.owner.endpoint),
+            guard let response, let fileURL, errorCode == nil,
+                  job.kind == .place || Self.sameOrigin(response.url, job.owner.endpoint),
                   let size = try (FileManager.default.attributesOfItem(atPath: fileURL.path)[.size] as? NSNumber)?.int64Value,
                   size <= job.maximumBytes else { throw URLError(.badServerResponse) }
             job.statusCode = response.statusCode
             if (job.kind == .export && !(200 ..< 300).contains(response.statusCode))
-                || (job.kind != .export && (response.statusCode >= 500 || response.statusCode == 408 || response.statusCode == 429))
+                || (job.kind != .export && job.kind != .place && (response.statusCode >= 500 || response.statusCode == 408 || response.statusCode == 429))
             {
                 throw URLError(.badServerResponse)
             }
             job.contentType = response.value(forHTTPHeaderField: "Content-Type")
+            if job.kind == .place {
+                job.responseRetryAfter = response.value(forHTTPHeaderField: "Retry-After")
+            }
             if job.kind == .export {
                 job.contentDisposition = response.value(forHTTPHeaderField: "Content-Disposition")
             }
@@ -826,6 +902,7 @@ actor LibraryTransferQueue {
         guard job.owner == journal.owner, let status = job.statusCode,
               let response = HTTPURLResponse(url: job.responseURL ?? job.url, statusCode: status, httpVersion: nil,
                                              headerFields: ["Content-Type": job.contentType ?? "application/octet-stream",
+                                                            "Retry-After": job.responseRetryAfter ?? "",
                                                             "Content-Disposition": job.contentDisposition ?? ""])
         else { throw URLError(.badServerResponse) }
         let url = rootURL.appending(path: job.responseFilename)
@@ -873,6 +950,21 @@ actor LibraryTransferQueue {
         guard let url else { return false }
         return url.scheme?.lowercased() == endpoint.scheme?.lowercased()
             && url.host()?.lowercased() == endpoint.host()?.lowercased() && url.port == endpoint.port
+    }
+
+    private static func isCacheWork(_ kind: LibraryTransferKind) -> Bool {
+        kind.lane == "cache" || kind == .place
+    }
+
+    nonisolated static func request(for job: LibraryTransferJournal.Job, authorization: String) -> URLRequest {
+        var request = URLRequest(url: job.url)
+        if job.kind == .place {
+            request.setValue("Remmich (+https://github.com/Ender-Wang/Remmich)", forHTTPHeaderField: "User-Agent")
+        } else {
+            request.setValue("Bearer \(authorization)", forHTTPHeaderField: "Authorization")
+        }
+        request.setValue(job.kind == .export ? "*/*" : job.kind == .thumbnail ? "image/*" : "application/json", forHTTPHeaderField: "Accept")
+        return request
     }
 }
 

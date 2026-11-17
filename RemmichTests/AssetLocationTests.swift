@@ -283,7 +283,7 @@ struct AssetLocationTests {
         let account = scope("bulk")
         try await fixture.seed(scope: account)
         let client = LocationTestClient()
-        let locations = try AssetLocationStore(defaults: #require(UserDefaults(suiteName: UUID().uuidString)), client: client, store: fixture.store, requestInterval: .zero)
+        let locations = try AssetLocationStore(defaults: #require(UserDefaults(suiteName: UUID().uuidString)), client: client, store: fixture.store)
         locations.configure(scope: account)
         await locations.refreshCachedPlaces(retryFailed: true) { true }
         #expect(await client.calls.isEmpty)
@@ -317,7 +317,7 @@ struct AssetLocationTests {
                                                            digest: "fixture", isVerified: true, lastAccessedAt: .now, completedAt: .now)], scope: actualScope)
         let defaults = try #require(UserDefaults(suiteName: UUID().uuidString))
         let client = LocationTestClient()
-        let locations = AssetLocationStore(defaults: defaults, client: client, store: fixture.store, requestInterval: .zero)
+        let locations = AssetLocationStore(defaults: defaults, client: client, store: fixture.store)
         try await fixture.seed(scope: actualScope)
         locations.configure(scope: actualScope)
         var settings = locations.preferences
@@ -355,7 +355,7 @@ struct AssetLocationTests {
         try await fixture.seed(scope: account)
         let client = CacheLifecyclePlaceClient(failingLongitude: 121)
         let locations = try AssetLocationStore(defaults: #require(UserDefaults(suiteName: UUID().uuidString)),
-                                               client: client, store: fixture.store, requestInterval: .zero)
+                                               client: client, store: fixture.store)
         locations.configure(scope: account)
         try locations.save(.init(endpoint: "https://places.example"))
         let work = Task { await locations.refreshCachedPlaces(retryFailed: false) { true } }
@@ -412,7 +412,7 @@ struct AssetLocationTests {
         _ = try await fixture.store.acceptGeneration(generation, watermark: nil, historicalCursor: nil, expectedAssetCount: 2, scope: account)
         let defaults = try #require(UserDefaults(suiteName: UUID().uuidString))
         let client = CacheLifecyclePlaceClient(paused: true)
-        let locations = AssetLocationStore(defaults: defaults, client: client, store: fixture.store, requestInterval: .zero)
+        let locations = AssetLocationStore(defaults: defaults, client: client, store: fixture.store)
         locations.configure(scope: account)
         try locations.save(.init(endpoint: "https://places.example"))
         let details = CacheLifecycleAssetDetails()
@@ -475,7 +475,7 @@ struct AssetLocationTests {
         }
         let client = CacheLifecyclePlaceClient(paused: true)
         let locations = try AssetLocationStore(defaults: #require(UserDefaults(suiteName: UUID().uuidString)),
-                                               client: client, store: fixture.store, requestInterval: .zero)
+                                               client: client, store: fixture.store)
         locations.configure(scope: account)
         try locations.save(.init(endpoint: "https://places.example"))
         let work = Task { await locations.refreshCachedPlaces(retryFailed: false) { true } }

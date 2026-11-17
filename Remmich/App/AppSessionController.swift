@@ -93,7 +93,7 @@ final class AppSessionController {
         timeline: ImmichTimelineRepository = .init()
     ) {
         self.timeline = timeline
-        locations = AssetLocationStore(defaults: libraryIndexPreferences, store: libraryIndexStore)
+        locations = AssetLocationStore(defaults: libraryIndexPreferences, client: PhotonPlaceClient(transfers: transfers), store: libraryIndexStore)
         libraryTransfers = transfers
         self.libraryIndexStore = libraryIndexStore
         let syncSource = transfers == nil ? timeline : ImmichTimelineRepository(transfers: transfers)

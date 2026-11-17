@@ -23,19 +23,17 @@ import SwiftUI
     @ObservationIgnored private var sessionID = UUID().uuidString
     @ObservationIgnored private var configuration: Task<Void, Error>?
     @ObservationIgnored private var requests: [String: (id: UUID, task: Task<PlaceLocation?, Error>, consumers: Set<UUID>)] = [:]
-    @ObservationIgnored private let requestInterval: Duration
     @ObservationIgnored private var activeRequest: UUID?
     @ObservationIgnored private var waitingRequests: [(id: UUID, automatic: Bool, continuation: CheckedContinuation<Void, Error>)] = []
     @ObservationIgnored private(set) var cachedMetadataRevision: UInt64 = 0
     @ObservationIgnored private var retryWait: (id: UUID, task: Task<Void, Error>)?
 
     init(defaults: UserDefaults = .standard, client: any PlaceLookingUp = PhotonPlaceClient(),
-         store: any LibraryIndexStoring = SQLiteLibraryIndexStore(), requestInterval: Duration = .seconds(1))
+         store: any LibraryIndexStoring = SQLiteLibraryIndexStore())
     {
         self.defaults = defaults
         self.client = client
         self.store = store
-        self.requestInterval = requestInterval
     }
 
     var automaticCachingAllowed: Bool {
@@ -103,6 +101,8 @@ import SwiftUI
             do {
                 try await store.configurePlaces(scope: scope, preferences: settings, sessionID: token)
                 guard sessionID == token else { throw CancellationError() }
+                try await client.configureCache(scope: scope, preferences: settings, reset: false)
+                guard sessionID == token else { throw CancellationError() }
                 lastStorageError = nil
                 if preferences == settings {
                     await reloadProgress()
@@ -160,6 +160,8 @@ import SwiftUI
         do {
             try await configuration?.value
             guard let scope, token == sessionID, automaticCachingAllowed else { return }
+            try await client.configureCache(scope: scope, preferences: preferences, reset: true)
+            guard token == sessionID else { throw CancellationError() }
             try await store.rebuildPlaces(scope: scope, sessionID: token)
             guard token == sessionID else { return }
             await reloadProgress()
@@ -184,16 +186,20 @@ import SwiftUI
             }
             Self.logger.info("Place cache pass started retryFailed=\(retryFailed)")
             var resetFailures = retryFailed
+            var lastProgressReadAt = ContinuousClock.now
             while !Task.isCancelled, token == sessionID, shouldContinue() {
                 let settingsRevision = revision
                 try await configuration?.value
                 guard !Task.isCancelled, token == sessionID, shouldContinue() else { break }
                 guard settingsRevision == revision else { continue }
                 guard automaticCachingAllowed else { break }
+                try await client.configureCache(scope: scope, preferences: preferences, reset: false)
+                guard !Task.isCancelled, token == sessionID, settingsRevision == revision, shouldContinue() else { continue }
                 let metadataRevision = cachedMetadataRevision
                 let pending = try await store.pendingPlaces(scope: scope, retryFailed: resetFailures, now: .now)
                 resetFailures = false
                 if pending.isEmpty {
+                    try await client.prefetchCache([], scope: scope)
                     let retry = try await store.nextPlaceRetry(scope: scope)
                     await reloadProgress()
                     guard token == sessionID else { throw CancellationError() }
@@ -205,17 +211,26 @@ import SwiftUI
                     try await waitForPlaceRetry(until: retry)
                     continue
                 }
-                for record in pending {
+                for (index, record) in pending.enumerated() {
                     guard !Task.isCancelled, token == sessionID, settingsRevision == revision, shouldContinue() else { break }
+                    if index.isMultiple(of: 16) {
+                        try await client.prefetchCache(Array(pending.dropFirst(index).prefix(LibraryTransferQueue.placeLookAhead)).map(\.key), scope: scope)
+                        guard !Task.isCancelled, token == sessionID, settingsRevision == revision, shouldContinue() else { break }
+                    }
                     do { _ = try await fetch(record.key, scope: scope, token: token, automatic: true) }
                     catch is CancellationError { throw CancellationError() }
                     catch let error as LibraryIndexStoreError { throw error }
                     catch { /* Failure is durable; continue the next independent lookup. */ }
-                    await reloadProgress()
+                    // Match asset caching: coalesce statistics publication, not
+                    // requests. Avoid a full progress-table scan for every lookup.
+                    if lastProgressReadAt.duration(to: .now) >= .seconds(1) {
+                        await reloadProgress()
+                        lastProgressReadAt = .now
+                    }
                     guard settingsRevision == revision else { break }
-                    try await Task.sleep(for: requestInterval)
                 }
                 await reloadProgress()
+                lastProgressReadAt = .now
             }
         } catch {
             if !(error is CancellationError), token == sessionID {
@@ -279,11 +294,16 @@ import SwiftUI
                 return try await store.cachedPlace(key, scope: scope)?.location
             }
             do {
-                let result = try await client.lookup(key.coordinate, endpoint: key.endpoint, language: key.language, automatic: automatic)
+                try Task.checkCancellation()
+                guard token == sessionID else { throw CancellationError() }
+                let result = try await client.lookup(key, scope: scope, automatic: automatic)
                 try Task.checkCancellation()
                 guard token == sessionID else { throw CancellationError() }
                 let accepted = try await store.finishPlace(key, scope: scope, sessionID: token, lease: lease,
                                                            location: result, error: nil, onDemandOnly: false, retryDelay: nil, now: .now)
+                if accepted {
+                    await client.finishCacheLookup(key, scope: scope)
+                }
                 return accepted ? result : nil
             } catch {
                 if Task.isCancelled || error is CancellationError || token != sessionID {
@@ -296,9 +316,12 @@ import SwiftUI
                 } else {
                     nil
                 }
-                _ = try await store.finishPlace(key, scope: scope, sessionID: token, lease: lease,
-                                                location: partial, error: error.localizedDescription,
-                                                onDemandOnly: failure == .automaticPublicService, retryDelay: failure?.retryDelay, now: .now)
+                let accepted = try await store.finishPlace(key, scope: scope, sessionID: token, lease: lease,
+                                                           location: partial, error: error.localizedDescription,
+                                                           onDemandOnly: failure == .automaticPublicService, retryDelay: failure?.retryDelay, now: .now)
+                if accepted {
+                    await client.finishCacheLookup(key, scope: scope)
+                }
                 Self.logger.warning("Place request failed automatic=\(automatic) category=\(String(describing: type(of: error)), privacy: .public)")
                 await reloadProgress()
                 if let partial {
@@ -322,7 +345,8 @@ import SwiftUI
         }
     }
 
-    /// One network lookup at a time; queued viewer work precedes queued bulk work.
+    /// Serialize lookup/commit consumers; native prefetch downloads independently.
+    /// Queued viewer work precedes queued bulk work.
     private func acquireRequest(id: UUID, automatic: Bool) async throws {
         try Task.checkCancellation()
         if activeRequest == nil {

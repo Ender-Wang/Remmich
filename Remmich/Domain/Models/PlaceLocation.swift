@@ -89,9 +89,21 @@ nonisolated enum PlaceLookupError: LocalizedError, Equatable {
 nonisolated protocol PlaceLookingUp: Sendable {
     func lookup(_ coordinate: PlaceCoordinate, endpoint: URL, language: PlaceLanguage) async throws -> PlaceLocation?
     func lookup(_ coordinate: PlaceCoordinate, endpoint: URL, language: PlaceLanguage, automatic: Bool) async throws -> PlaceLocation?
+    func lookup(_ key: PlaceCacheKey, scope: MediaAccountScope, automatic: Bool) async throws -> PlaceLocation?
+    func configureCache(scope: MediaAccountScope, preferences: MapsPlacesPreferences, reset: Bool) async throws
+    func prefetchCache(_ keys: [PlaceCacheKey], scope: MediaAccountScope) async throws
+    func finishCacheLookup(_ key: PlaceCacheKey, scope: MediaAccountScope) async
 }
 
 extension PlaceLookingUp {
+    nonisolated func lookup(_ key: PlaceCacheKey, scope _: MediaAccountScope, automatic: Bool) async throws -> PlaceLocation? {
+        try await lookup(key.coordinate, endpoint: key.endpoint, language: key.language, automatic: automatic)
+    }
+
+    nonisolated func configureCache(scope _: MediaAccountScope, preferences _: MapsPlacesPreferences, reset _: Bool) async throws {}
+    nonisolated func prefetchCache(_: [PlaceCacheKey], scope _: MediaAccountScope) async throws {}
+    nonisolated func finishCacheLookup(_: PlaceCacheKey, scope _: MediaAccountScope) async {}
+
     nonisolated func lookup(_ coordinate: PlaceCoordinate, endpoint: URL, language: PlaceLanguage, automatic _: Bool) async throws -> PlaceLocation? {
         try await lookup(coordinate, endpoint: endpoint, language: language)
     }
