@@ -196,8 +196,8 @@ struct AlbumsView: View {
                     }
                 }
                 .padding(.vertical)
-                .onGeometryChange(for: AlbumScopeContentGeometry.self) {
-                    AlbumScopeContentGeometry(scope: contentScope.rawValue, height: $0.size.height)
+                .onGeometryChange(for: AlbumScopeContentGeometry.self) { [scopeName = contentScope.rawValue] geometry in
+                    AlbumScopeContentGeometry(scope: scopeName, height: geometry.size.height)
                 } action: { scopeSlide.contentChanged($0) }
                 .background { AlbumScopeSlideAnchor(slide: scopeSlide) }
                 // Explicit bottom requests include the trailing clearance.
