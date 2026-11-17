@@ -108,7 +108,8 @@ import SwiftUI
                     await reloadProgress()
                     let automatic = automaticCachingAllowed
                     let report = progress
-                    Self.logger.info("Place cache configured automatic=\(automatic) eligible=\(report.eligible) cached=\(report.cached) resolved=\(report.resolved) pending=\(report.pending) failed=\(report.failed)")
+                    Self.logger.info("Place cache configured automatic=\(automatic) eligible=\(report.eligible) resolved=\(report.resolved) pending=\(report.pending) failed=\(report.failed)")
+                    cachedMetadataDidChange()
                     preferencesDidChange?()
                 }
             } catch {
@@ -184,6 +185,11 @@ import SwiftUI
             Self.logger.info("Place cache pass started retryFailed=\(retryFailed)")
             var resetFailures = retryFailed
             while !Task.isCancelled, token == sessionID, shouldContinue() {
+                let settingsRevision = revision
+                try await configuration?.value
+                guard !Task.isCancelled, token == sessionID, shouldContinue() else { break }
+                guard settingsRevision == revision else { continue }
+                guard automaticCachingAllowed else { break }
                 let metadataRevision = cachedMetadataRevision
                 let pending = try await store.pendingPlaces(scope: scope, retryFailed: resetFailures, now: .now)
                 resetFailures = false
@@ -192,7 +198,7 @@ import SwiftUI
                     await reloadProgress()
                     guard token == sessionID else { throw CancellationError() }
                     // A metadata commit during the reads above must not be lost.
-                    if metadataRevision != cachedMetadataRevision {
+                    if metadataRevision != cachedMetadataRevision || settingsRevision != revision {
                         continue
                     }
                     guard let retry else { break }
@@ -200,12 +206,13 @@ import SwiftUI
                     continue
                 }
                 for record in pending {
-                    guard !Task.isCancelled, token == sessionID, shouldContinue() else { break }
+                    guard !Task.isCancelled, token == sessionID, settingsRevision == revision, shouldContinue() else { break }
                     do { _ = try await fetch(record.key, scope: scope, token: token, automatic: true) }
                     catch is CancellationError { throw CancellationError() }
                     catch let error as LibraryIndexStoreError { throw error }
                     catch { /* Failure is durable; continue the next independent lookup. */ }
                     await reloadProgress()
+                    guard settingsRevision == revision else { break }
                     try await Task.sleep(for: requestInterval)
                 }
                 await reloadProgress()
@@ -218,7 +225,7 @@ import SwiftUI
         if token == sessionID {
             await reloadProgress()
             let report = progress
-            Self.logger.info("Place cache pass finished cancelled=\(Task.isCancelled) eligible=\(report.eligible) cached=\(report.cached) resolved=\(report.resolved) pending=\(report.pending) failed=\(report.failed)")
+            Self.logger.info("Place cache pass finished cancelled=\(Task.isCancelled) eligible=\(report.eligible) resolved=\(report.resolved) pending=\(report.pending) failed=\(report.failed)")
         }
     }
 

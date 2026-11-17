@@ -120,6 +120,9 @@ struct PlaceMetadataCacheTests {
         let lease = try #require(try await f.store.beginPlace(key, scope: scope, sessionID: "one", automatic: true, now: .now))
         let other = MapsPlacesPreferences(endpoint: "https://other.example")
         try await f.store.configurePlaces(scope: scope, preferences: other, sessionID: "one")
+        let moved = try #require(try await f.store.desiredPlace(assetID: "asset", scope: scope))
+        #expect(moved.work == .pending)
+        #expect(moved.attempts == 0)
         #expect(try await !finish(f, key, lease: lease))
         try await f.store.configurePlaces(scope: scope, preferences: settings, sessionID: "one")
         let retry = try #require(try await f.store.beginPlace(key, scope: scope, sessionID: "one", automatic: true, now: .now))
@@ -181,7 +184,7 @@ struct PlaceMetadataCacheTests {
         #expect(try await reopened.cachedAssetMetadata(id: "asset", scope: scope)?.cachedPlace == location)
     }
 
-    @Test func cachedTagCoverageSurvivesURLChangesWithoutDoubleCountingOrKeepingChangedGPS() async throws {
+    @Test func assetCompletionSurvivesURLChangesAndAdvancesWhenExistingTagsAreUpdated() async throws {
         let f = try PlaceCacheFixture()
         defer { f.cleanup() }
         try await f.seed(scope: scope)
@@ -190,25 +193,124 @@ struct PlaceMetadataCacheTests {
         let original = try #require(try await f.store.desiredPlace(assetID: "asset", scope: scope)?.key)
         let originalLease = try #require(try await f.store.beginPlace(original, scope: scope, sessionID: "one", automatic: true, now: .now))
         #expect(try await finish(f, original, lease: originalLease))
-        #expect(try await f.store.placeProgress(scope: scope, now: .now).cached == 2)
+        let initial = try await f.store.placeProgress(scope: scope, now: .now)
+        #expect(initial.resolved == 2)
         try await f.store.configurePlaces(scope: scope, preferences: .init(endpoint: "https://other.example"), sessionID: "one")
         let switched = try await f.store.placeProgress(scope: scope, now: .now)
-        #expect(switched.cached == 2)
-        #expect(switched.resolved == 0)
-        #expect(switched.pending == 2)
+        #expect(switched.resolved == 2)
+        #expect(switched.pending == 0)
+        #expect(try await f.store.pendingPlaces(scope: scope, retryFailed: false, now: .now).isEmpty)
+        #expect(try await f.store.cachedAssetMetadata(id: "asset", scope: scope)?.cachedPlace == location)
+        try await f.store.configurePlaces(scope: scope, preferences: .init(endpoint: "https://other.example", localCountries: ["CN"]), sessionID: "one")
+        let updating = try await f.store.placeProgress(scope: scope, now: .now)
+        #expect(updating.resolved == 0)
+        #expect(updating.pending == 2)
+        // The older English tag remains visible, but both assets need Local work.
         #expect(try await f.store.cachedAssetMetadata(id: "asset", scope: scope)?.cachedPlace == location)
         let replacement = try #require(try await f.store.desiredPlace(assetID: "asset", scope: scope)?.key)
+        #expect(replacement.language == .local)
         let replacementLease = try #require(try await f.store.beginPlace(replacement, scope: scope, sessionID: "one", automatic: true, now: .now))
-        #expect(try await finish(f, replacement, lease: replacementLease))
-        #expect(try await f.store.placeProgress(scope: scope, now: .now).cached == 2)
+        let local = PlaceLocation(title: "公园", address: "公园 · 中国", countryCode: "CN", language: .local)
+        #expect(try await f.store.finishPlace(replacement, scope: scope, sessionID: "one", lease: replacementLease,
+                                              location: local, error: nil, onDemandOnly: false, retryDelay: nil, now: .now))
+        let updated = try await f.store.placeProgress(scope: scope, now: .now)
+        #expect(updated.resolved == 2)
+        #expect(updated.pending == 0)
         try await f.seed(scope: scope, id: "same", longitude: 122)
         let changed = try await f.store.placeProgress(scope: scope, now: .now)
         #expect(changed.eligible == 2)
-        #expect(changed.cached == 1)
+        #expect(changed.resolved == 1)
+        #expect(changed.pending == 1)
         let otherAccount = MediaAccountScope(session: SavedSessionRegistryTests.session("other-places"))
         try await f.seed(scope: otherAccount)
         try await f.store.configurePlaces(scope: otherAccount, preferences: settings, sessionID: "two")
-        #expect(try await f.store.placeProgress(scope: otherAccount, now: .now).cached == 0)
+        let separate = try await f.store.placeProgress(scope: otherAccount, now: .now)
+        #expect(separate.resolved == 0)
+        for progress in [initial, switched, updating, updated, changed, separate] {
+            #expect(progress.resolved + progress.pending + progress.failed + progress.demandOnly == progress.eligible)
+        }
+    }
+
+    @Test func newRouteRetriesFailuresWithoutOldRouteCooldownOrExhaustedAttempts() async throws {
+        let f = try PlaceCacheFixture()
+        defer { f.cleanup() }
+        try await f.seed(scope: scope)
+        try await f.seed(scope: scope, id: "same")
+        try await f.store.configurePlaces(scope: scope, preferences: settings, sessionID: "one")
+        let old = try #require(try await f.store.desiredPlace(assetID: "asset", scope: scope)?.key)
+        let lease = try #require(try await f.store.beginPlace(old, scope: scope, sessionID: "one", automatic: true, now: .now))
+        #expect(try await f.store.finishPlace(old, scope: scope, sessionID: "one", lease: lease, location: nil,
+                                              error: "Route timed out", onDemandOnly: false, retryDelay: 3600, now: .now))
+        try await f.sql("UPDATE place_lookups SET attempts=5", scope: scope)
+        #expect(try await f.store.placeProgress(scope: scope, now: .now).failed == 2)
+        try await f.store.configurePlaces(scope: scope, preferences: .init(endpoint: "https://other.example"), sessionID: "one")
+        let progress = try await f.store.placeProgress(scope: scope, now: .now)
+        #expect(progress.resolved == 0 && progress.pending == 2 && progress.failed == 0)
+        let pending = try await f.store.pendingPlaces(scope: scope, retryFailed: false, now: .now)
+        #expect(pending.count == 1)
+        let retry = try #require(pending.first)
+        #expect(retry.key.endpoint.absoluteString == "https://other.example")
+        #expect(retry.attempts == 0 && retry.retryAfter == nil)
+        let retryLease = try #require(try await f.store.beginPlace(retry.key, scope: scope, sessionID: "one", automatic: true, now: .now))
+        #expect(try await finish(f, retry.key, lease: retryLease))
+        #expect(try await f.store.placeProgress(scope: scope, now: .now).resolved == 2)
+    }
+
+    @Test func rebuildRemainsPendingWhenReturningToARouteWithAnOlderCompletedResult() async throws {
+        let f = try PlaceCacheFixture()
+        defer { f.cleanup() }
+        try await f.seed(scope: scope)
+        try await f.store.configurePlaces(scope: scope, preferences: settings, sessionID: "one")
+        let original = try #require(try await f.store.desiredPlace(assetID: "asset", scope: scope)?.key)
+        let lease = try #require(try await f.store.beginPlace(original, scope: scope, sessionID: "one", automatic: true, now: .now))
+        #expect(try await finish(f, original, lease: lease))
+        try await f.store.configurePlaces(scope: scope, preferences: .init(endpoint: "https://other.example"), sessionID: "one")
+        try await f.store.rebuildPlaces(scope: scope, sessionID: "one")
+        try await f.store.configurePlaces(scope: scope, preferences: settings, sessionID: "one")
+        let progress = try await f.store.placeProgress(scope: scope, now: .now)
+        #expect(progress.resolved == 0 && progress.pending == 1)
+        #expect(try await f.store.cachedAssetMetadata(id: "asset", scope: scope)?.cachedPlace == location)
+        let next = try #require(try await f.store.pendingPlaces(scope: scope, retryFailed: false, now: .now).first)
+        #expect(next.key == original)
+        let refresh = try #require(try await f.store.beginPlace(original, scope: scope, sessionID: "one", automatic: true, now: .now))
+        #expect(try await finish(f, original, lease: refresh))
+        #expect(try await f.store.placeProgress(scope: scope, now: .now).resolved == 1)
+    }
+
+    @Test func freshNoResultCompletionSurvivesRouteChangeAndKeepsItsExpiry() async throws {
+        let f = try PlaceCacheFixture()
+        defer { f.cleanup() }
+        try await f.seed(scope: scope)
+        try await f.store.configurePlaces(scope: scope, preferences: settings, sessionID: "one")
+        let original = try #require(try await f.store.desiredPlace(assetID: "asset", scope: scope)?.key)
+        let now = Date()
+        let lease = try #require(try await f.store.beginPlace(original, scope: scope, sessionID: "one", automatic: true, now: now))
+        #expect(try await f.store.finishPlace(original, scope: scope, sessionID: "one", lease: lease, location: nil,
+                                              error: nil, onDemandOnly: false, retryDelay: nil, now: now))
+        let expiry = try await f.store.cachedPlace(original, scope: scope)?.expiresAt
+        try await f.store.configurePlaces(scope: scope, preferences: .init(endpoint: "https://other.example"), sessionID: "one")
+        #expect(try await f.store.placeProgress(scope: scope, now: now).resolved == 1)
+        #expect(try await f.store.desiredPlace(assetID: "asset", scope: scope)?.expiresAt == expiry)
+        #expect(try await f.store.pendingPlaces(scope: scope, retryFailed: false, now: now).isEmpty)
+        #expect(try await f.store.placeProgress(scope: scope, now: now.addingTimeInterval(86401)).pending == 1)
+    }
+
+    @Test func routeRetryKeepsAnExistingDisplayFallbackWithoutCountingItAsCompletedWork() async throws {
+        let f = try PlaceCacheFixture()
+        defer { f.cleanup() }
+        try await f.seed(scope: scope)
+        try await f.store.configurePlaces(scope: scope, preferences: settings, sessionID: "one")
+        let original = try #require(try await f.store.desiredPlace(assetID: "asset", scope: scope)?.key)
+        let lease = try #require(try await f.store.beginPlace(original, scope: scope, sessionID: "one", automatic: true, now: .now))
+        #expect(try await finish(f, original, lease: lease))
+        try await f.store.configurePlaces(scope: scope, preferences: .init(endpoint: "https://other.example"), sessionID: "one")
+        // An older app could have failed here while the previous route's tag
+        // remained the only usable display fallback.
+        try await f.sql("UPDATE place_lookups SET location_json=NULL,outcome='unresolved',work_state='failed' WHERE endpoint='https://other.example'", scope: scope)
+        try await f.store.configurePlaces(scope: scope, preferences: settings, sessionID: "one")
+        let progress = try await f.store.placeProgress(scope: scope, now: .now)
+        #expect(progress.resolved == 0 && progress.pending == 1)
+        #expect(try await f.store.cachedAssetMetadata(id: "asset", scope: scope)?.cachedPlace == location)
     }
 
     @Test func publicServiceIsDemandOnlyAndDeletedAccountCannotBeRecreatedByLateCompletion() async throws {
@@ -275,8 +377,8 @@ struct PlaceMetadataCacheTests {
         try await f.store.configurePlaces(scope: scope, preferences: .init(endpoint: "https://other.example"), sessionID: "one")
         #expect(try await f.store.cachedAssetMetadata(id: "asset", scope: scope)?.cachedPlace == location)
         try await f.store.configurePlaces(scope: scope, preferences: settings, sessionID: "one")
-        #expect(try await f.store.cachedPlace(key, scope: scope)?.work == .failed)
-        #expect(try await f.store.pendingPlaces(scope: scope, retryFailed: false, now: Date().addingTimeInterval(61)).count == 1)
+        #expect(try await f.store.cachedPlace(key, scope: scope)?.work == .pending)
+        #expect(try await f.store.pendingPlaces(scope: scope, retryFailed: false, now: .now).count == 1)
     }
 
     @Test func interruptedFifthAttemptRemainsEligibleAfterRelaunch() async throws {

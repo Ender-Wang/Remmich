@@ -556,8 +556,7 @@ struct AccountSettingsView: View {
             return ProfileCardSummary(percentage: nil, status: "When viewed")
         }
         let progress = libraryIndex.placeProgress
-        // Sync completion is separate from cached coverage: another language
-        // can finish for an asset that already has a usable fallback tag.
+        // The card and details count the same completed asset work.
         let percentage = progress.eligible > 0
             ? (Self.progressFraction(completed: progress.resolved, total: progress.eligible) * 1000).rounded(.down) / 10
             : nil
@@ -1361,7 +1360,7 @@ struct AccountSettingsView: View {
                 VStack(spacing: 0) {
                     statistic("Cached thumbnails", cacheThumbnailCount.formatted())
                     statistic("Cached metadata records", (libraryIndex.thumbnailWarmingEligibleCount > 0 ? libraryIndex.thumbnailWarmingMetadataCount : 0).formatted())
-                    statistic("Cached place tags", "\(libraryIndex.placeProgress.cached.formatted()) / \(libraryIndex.placeProgress.eligible.formatted()) GPS assets")
+                    statistic("Place tags completed", "\(libraryIndex.placeProgress.resolved.formatted()) / \(libraryIndex.placeProgress.eligible.formatted()) GPS assets")
                     statistic("Place caching", libraryIndex.automaticPlacesAllowed ? "Custom instance" : "When viewed · Public Photon")
                     if libraryIndex.automaticPlacesAllowed {
                         statistic("Place tags pending", libraryIndex.placeProgress.pending.formatted())

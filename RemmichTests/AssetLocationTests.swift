@@ -465,6 +465,55 @@ struct AssetLocationTests {
         #expect(!controller.placesAreRunning)
     }
 
+    @Test(arguments: ["https://other-places.example", "https://photon.komoot.io"])
+    @MainActor func routeChangeDuringLookupUsesTheNewConfigurationAndKeepsPublicWorkOnDemand(endpoint: String) async throws {
+        let fixture = try PlaceCacheFixture()
+        defer { fixture.cleanup() }
+        let account = scope("switching-places")
+        for (id, longitude) in [("one", 121.0), ("two", 122.0), ("three", 123.0)] {
+            try await fixture.seed(scope: account, id: id, longitude: longitude)
+        }
+        let client = CacheLifecyclePlaceClient(paused: true)
+        let locations = try AssetLocationStore(defaults: #require(UserDefaults(suiteName: UUID().uuidString)),
+                                               client: client, store: fixture.store, requestInterval: .zero)
+        locations.configure(scope: account)
+        try locations.save(.init(endpoint: "https://places.example"))
+        let work = Task { await locations.refreshCachedPlaces(retryFailed: false) { true } }
+        defer {
+            work.cancel()
+            Task { await client.resume() }
+        }
+        for _ in 0 ..< 200 {
+            if await client.active == 1 {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(await client.active == 1)
+        let before = locations.cachedMetadataRevision
+        try locations.save(.init(endpoint: endpoint))
+        for _ in 0 ..< 200 {
+            if locations.cachedMetadataRevision != before {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(locations.cachedMetadataRevision != before)
+        await client.resume()
+        await work.value
+        let requests = await client.endpoints.map(\.absoluteString)
+        if locations.automaticCachingAllowed {
+            #expect(requests == ["https://places.example", endpoint, endpoint, endpoint])
+            #expect(locations.progress.resolved == 3)
+        } else {
+            #expect(requests == ["https://places.example"])
+            #expect(locations.progress.resolved == 0)
+            #expect(locations.progress.pending == 3)
+        }
+        #expect(locations.progress.failed == 0)
+        locations.reset()
+    }
+
     @MainActor private func scope(_ user: String) -> MediaAccountScope {
         .init(session: AccountSession(apiURL: URL(string: "https://immich.example/api")!, accessToken: "test",
                                       userID: user, userEmail: "test@example.com", name: "Test", isAdmin: false,
@@ -487,6 +536,7 @@ private actor EmptyRegionalPlaceClient: PlaceLookingUp {
 
 private actor CacheLifecyclePlaceClient: PlaceLookingUp {
     private(set) var longitudes: [Double] = []
+    private(set) var endpoints: [URL] = []
     private(set) var active = 0
     private var paused: Bool
     private let failingLongitude: Double?
@@ -496,8 +546,9 @@ private actor CacheLifecyclePlaceClient: PlaceLookingUp {
         self.failingLongitude = failingLongitude
     }
 
-    func lookup(_ coordinate: PlaceCoordinate, endpoint _: URL, language: PlaceLanguage) async throws -> PlaceLocation? {
+    func lookup(_ coordinate: PlaceCoordinate, endpoint: URL, language: PlaceLanguage) async throws -> PlaceLocation? {
         longitudes.append(coordinate.longitude)
+        endpoints.append(endpoint)
         active += 1
         defer { active -= 1 }
         while paused {

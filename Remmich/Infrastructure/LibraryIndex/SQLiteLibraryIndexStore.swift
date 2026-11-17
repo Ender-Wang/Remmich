@@ -759,6 +759,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
         let encoded = try Self.encode(preferences)
         try database.transaction {
             let prior = try database.scalarText("SELECT preferences FROM cache.place_accounts WHERE scope = ?", [.text(scope.cacheNamespace)])
+            let priorPreferences = try prior.map { try Self.decode(MapsPlacesPreferences.self, from: $0) }
             let priorSession = try database.scalarText("SELECT session_id FROM cache.place_accounts WHERE scope = ?", [.text(scope.cacheNamespace)])
             let priorVersion = try database.scalarInt64("SELECT selection_version FROM cache.place_accounts WHERE scope = ?", [.text(scope.cacheNamespace)])
             try database.execute("""
@@ -768,12 +769,14 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
             if priorSession != sessionID {
                 try database.execute("UPDATE cache.place_lookups SET work_state='pending', attempts=MAX(0,attempts-1), lease=NULL WHERE scope=? AND work_state='running'", [.text(scope.cacheNamespace)])
             }
-            if try prior.map({ try Self.decode(MapsPlacesPreferences.self, from: $0) }) != preferences || priorVersion != Int64(PlaceCacheKey.selectionVersion) {
+            if priorPreferences != preferences || priorVersion != Int64(PlaceCacheKey.selectionVersion) {
+                let preserveWork = priorPreferences != nil && priorPreferences?.endpoint != preferences.endpoint
+                    && priorVersion == Int64(PlaceCacheKey.selectionVersion)
                 let assets = try database.query("SELECT asset_id, latitude, longitude FROM cache.asset_details WHERE scope=?", [.text(scope.cacheNamespace)]) {
                     ($0.text(0), PlaceCoordinate(latitude: $0.optionalDouble(1), longitude: $0.optionalDouble(2)))
                 }
                 for (id, coordinate) in assets {
-                    try reconcilePlaceAsset(id, coordinate: coordinate, scope: scope, database: database)
+                    try reconcilePlaceAsset(id, coordinate: coordinate, scope: scope, database: database, preserveWork: preserveWork)
                 }
             }
             try pruneUnusedPlaces(scope: scope, database: database)
@@ -958,15 +961,6 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
             (row.text(0), row.text(1), row.optionalDate(2), row.text(3), row.text(4), row.int(5), row.optionalDate(6), row.optionalText(7), row.int(8), row.text(9))
         }
         var progress = PlaceCacheProgress()
-        // Coverage follows the same coordinate-matched fallback as metadata
-        // reads. Provider refresh work is counted separately below.
-        progress.cached = try Int(database.scalarInt64("""
-        SELECT COUNT(DISTINCT a.asset_id) FROM cache.asset_places a
-        JOIN cache.place_lookups p ON a.scope=p.scope AND a.lookup_id=p.lookup_id
-        JOIN cache.asset_details d ON a.scope=d.scope AND a.asset_id=d.asset_id
-        WHERE a.scope=? AND p.latitude=d.latitude AND p.longitude=d.longitude
-        AND p.location_json IS NOT NULL
-        """, [.text(scope.cacheNamespace)]) ?? 0)
         for (outcome, work, expiry, endpoint, keyJSON, attempts, retry, error, count, ids) in records {
             progress.eligible += count
             if work == "idle", outcome == "found" || (outcome == "noResult" && expiry.map { $0 > now } == true) {
@@ -1011,8 +1005,15 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
         """, [.text(scope.cacheNamespace), .text(key.id), .double(key.coordinate.latitude), .double(key.coordinate.longitude)]) ?? 0) > 0
     }
 
-    private func reconcilePlaceAsset(_ assetID: String, coordinate: PlaceCoordinate?, scope: MediaAccountScope, database: SQLiteConnection) throws {
+    private func reconcilePlaceAsset(_ assetID: String, coordinate: PlaceCoordinate?, scope: MediaAccountScope, database: SQLiteConnection,
+                                     preserveWork: Bool = false) throws
+    {
         let namespace = scope.cacheNamespace
+        let previous = preserveWork ? try database.queryOne("""
+        SELECT \(Self.placeColumns) FROM cache.place_lookups p
+        JOIN cache.asset_places a ON a.scope=p.scope AND a.lookup_id=p.lookup_id
+        WHERE a.scope=? AND a.asset_id=? AND a.desired=1
+        """, [.text(namespace), .text(assetID)], map: Self.readPlace) : nil
         let priorKeys = try database.query("SELECT lookup_id FROM cache.asset_places WHERE scope=? AND asset_id=?", [.text(namespace), .text(assetID)]) { $0.text(0) }
         // Variants remain reusable, but no association may survive a GPS change.
         if let coordinate {
@@ -1031,9 +1032,9 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
         let preferences = try Self.decode(MapsPlacesPreferences.self, from: json)
         let endpoint = try MapsPlacesPreferences.endpointURL(preferences.endpoint)
         let known = try database.queryOne("""
-        SELECT location_json FROM cache.place_lookups WHERE scope=? AND latitude=? AND longitude=? AND endpoint=? AND location_json IS NOT NULL
+        SELECT location_json FROM cache.place_lookups WHERE scope=? AND latitude=? AND longitude=? AND location_json IS NOT NULL
         ORDER BY fetched_at DESC LIMIT 1
-        """, [.text(namespace), .double(coordinate.latitude), .double(coordinate.longitude), .text(PlaceCacheKey(endpoint: endpoint, coordinate: coordinate, language: .english).endpoint.absoluteString)]) {
+        """, [.text(namespace), .double(coordinate.latitude), .double(coordinate.longitude)]) {
             try Self.decode(PlaceLocation.self, from: $0.text(0)).countryCode
         }
         let key = try PlaceCacheKey(endpoint: endpoint, coordinate: coordinate, language: preferences.language(countryCode: known ?? ""))
@@ -1042,6 +1043,26 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
         VALUES(?,?,?,?,?,?)
         """, [.text(namespace), .text(key.id), .text(Self.encode(key)), .double(coordinate.latitude),
               .double(coordinate.longitude), .text(key.endpoint.absoluteString)])
+        if let previous, previous.key.id != key.id,
+           previous.key.coordinate == coordinate, previous.key.language == key.language, previous.key.version == key.version
+        {
+            let complete = previous.isFresh(at: .now)
+            // A different URL changes transport, not completed asset work.
+            // Rebuild work stays pending; old-route cooldowns and leases do not
+            // prevent the newly selected route from being tried.
+            let locationJSON = try previous.location.map { try Self.encode($0) }
+            try database.execute("""
+            UPDATE cache.place_lookups SET
+                location_json=CASE WHEN ? THEN ? ELSE COALESCE(?,location_json) END,
+                outcome=CASE WHEN ? THEN ? WHEN COALESCE(?,location_json) IS NULL THEN 'unresolved' ELSE 'found' END,
+                work_state=?,
+                fetched_at=?, expires_at=?, attempts=0, retry_after=NULL, last_error=NULL, lease=NULL
+            WHERE scope=? AND lookup_id=?
+            """, [.bool(complete), .optionalText(locationJSON), .optionalText(locationJSON),
+                  .bool(complete), .text(previous.outcome.rawValue), .optionalText(locationJSON),
+                  .text(complete ? "idle" : "pending"), .optionalDate(previous.fetchedAt),
+                  .optionalDate(complete ? previous.expiresAt : nil), .text(namespace), .text(key.id)])
+        }
         try database.execute("UPDATE cache.asset_places SET desired=0 WHERE scope=? AND asset_id=?", [.text(namespace), .text(assetID)])
         try database.execute("""
         INSERT INTO cache.asset_places(scope,asset_id,lookup_id,desired) VALUES(?,?,?,1)
