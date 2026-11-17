@@ -394,6 +394,8 @@ struct AccountSettingsView: View {
                 libraryIndexClock = Date()
                 if selectedPage == .cache {
                     await libraryIndex.refreshCacheStorageStatistics()
+                } else if selectedPage == .index {
+                    await libraryIndex.refreshIndexStorageStatistics(force: false)
                 }
             }
         }
@@ -1419,9 +1421,7 @@ struct AccountSettingsView: View {
     }
 
     private var placeCacheSizeEstimate: String? {
-        let progress = libraryIndex.placeProgress
-        guard libraryIndex.placeCacheMetadataReady, progress.eligible > 0, progress.resolved == progress.eligible, progress.failed == 0,
-              let sample = libraryIndex.storageReport.featureStorage["places-sample"], sample.assetCount == progress.eligible else { return nil }
+        guard let sample = libraryIndex.storageReport.featureStorage["places"] else { return nil }
         return Self.sizePerTenThousandEstimate(bytes: sample.bytes, count: sample.assetCount)?.replacingOccurrences(of: " / 10K assets", with: "")
     }
 
@@ -2139,14 +2139,10 @@ struct AccountSettingsView: View {
     }
 
     private var thumbnailCacheSizeEstimate: String? {
-        let hasLiveInventory = libraryIndex.thumbnailWarmingEligibleCount > 0
-        let count = hasLiveInventory
-            ? libraryIndex.thumbnailWarmingThumbnailCount
-            : libraryIndex.storageReport.derivativeCount
-        let bytes = hasLiveInventory
-            ? libraryIndex.thumbnailWarmingCachedBytes
-            : libraryIndex.storageReport.derivativeBytes
-        return Self.sizePerTenThousandEstimate(bytes: bytes, count: count)
+        // Raw derivative totals can also contain Preview/Full images. Use the
+        // matching thumbnail inventory rather than mixing those populations.
+        Self.sizePerTenThousandEstimate(bytes: libraryIndex.thumbnailWarmingCachedBytes,
+                                        count: libraryIndex.thumbnailWarmingThumbnailCount)
     }
 
     private nonisolated static func sizePerTenThousandEstimate(

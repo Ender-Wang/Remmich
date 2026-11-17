@@ -1152,9 +1152,12 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
         }
     }
 
-    func indexStorageReport(scope: MediaAccountScope) async throws -> LibraryIndexStorageReport {
+    func indexStorageReport(scope: MediaAccountScope, refresh: Bool = false) async throws -> LibraryIndexStorageReport {
         guard try canRead(scope) else { return .empty }
         let database = try preparedDatabase(scope: scope)
+        if refresh {
+            try refreshStorageStatistics(features: ["timeline", "assets", "albums"], scope: scope, database: database)
+        }
         var report = LibraryIndexStorageReport.empty
         report.metadataBytes = metadataFileBytes()
         try addStorageStatistics(to: &report, scope: scope, database: database)
@@ -1176,6 +1179,9 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
         guard try canRead(scope) else { return .empty }
         let database = try preparedDatabase(scope: scope)
         if refresh {
+            // The live estimate uses the same bytes/count sample as storage.
+            // Discard the obsolete completion-only estimate checkpoint.
+            try database.execute("DELETE FROM storage_statistics WHERE feature='places-sample'")
             let features = ["assetMetadata": ["asset_details", "derivatives"],
                             "places": ["place_accounts", "place_lookups", "asset_places"]]
             for (feature, tables) in features {
@@ -1187,28 +1193,12 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
                 JOIN cache.sqlite_schema s ON d.name=s.name WHERE s.tbl_name IN (\(placeholders))
                 """, tables.map { .text($0) }) else {
                     try database.execute("DELETE FROM storage_statistics WHERE feature=?", [.text(feature)])
-                    if feature == "places" {
-                        try database.execute("DELETE FROM storage_statistics WHERE feature='places-sample'")
-                    }
                     continue
                 }
                 let count = try database.scalarInt64(feature == "places"
                     ? "SELECT COUNT(*) FROM cache.asset_places WHERE scope=? AND desired=1"
                     : "SELECT COUNT(*) FROM cache.asset_details WHERE scope=?", [.text(scope.cacheNamespace)]) ?? 0
                 try saveCacheStorageStatistic(feature, bytes: bytes, count: count, database: database)
-                if feature == "places" {
-                    let unfinished = try database.scalarInt64("""
-                    SELECT COUNT(*) FROM cache.asset_places a JOIN cache.place_lookups p
-                    ON p.scope=a.scope AND p.lookup_id=a.lookup_id
-                    WHERE a.scope=? AND a.desired=1 AND NOT (p.work_state='idle'
-                    AND (p.outcome='found' OR (p.outcome='noResult' AND COALESCE(p.expires_at,0)>?)))
-                    """, [.text(scope.cacheNamespace), .date(.now)]) ?? 0
-                    if count > 0, unfinished == 0 {
-                        try saveCacheStorageStatistic("places-sample", bytes: bytes, count: count, database: database)
-                    } else {
-                        try database.execute("DELETE FROM storage_statistics WHERE feature='places-sample'")
-                    }
-                }
             }
         }
         return try await indexStorageReport(scope: scope)
@@ -1222,7 +1212,8 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
     }
 
     private func refreshStorageStatistics(features: [String], scope: MediaAccountScope, database: SQLiteConnection) throws {
-        // Called after sync/maintenance, never from scrolling or UI rendering.
+        // Called after sync/maintenance or a throttled visible-page refresh,
+        // never directly from scrolling or UI rendering.
         let tables = ["assets": ["catalog_assets"], "timeline": ["assets", "grouped_catalogs", "generations", "sync_state"],
                       "albums": ["albums", "album_lists", "album_catalogs", "album_assets"]]
         for feature in features {
@@ -1235,10 +1226,10 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
             let count: Int64 = switch feature {
             case "albums": try database.scalarInt64("SELECT COUNT(*) FROM album_assets WHERE scope=?", [.text(scope.cacheNamespace)]) ?? 0
             case "assets": try database.scalarInt64("SELECT COUNT(*) FROM catalog_assets WHERE scope=?", [.text(scope.cacheNamespace)]) ?? 0
-            default: try database.scalarInt64("""
-                SELECT COUNT(*) FROM assets a JOIN sync_state s ON s.scope=a.scope AND s.accepted_generation=a.generation
-                WHERE a.scope=? AND a.tombstone=0
-                """, [.text(scope.cacheNamespace)]) ?? 0
+            // Allocation includes retained/staging generations. Count their
+            // distinct stored assets so cold sync can supply a sample too.
+            default: try database.scalarInt64("SELECT COUNT(DISTINCT asset_id) FROM assets WHERE scope=? AND tombstone=0",
+                                              [.text(scope.cacheNamespace)]) ?? 0
             }
             try database.execute("""
             INSERT INTO storage_statistics(feature,byte_count,asset_count,measured_at) VALUES(?,?,?,?)

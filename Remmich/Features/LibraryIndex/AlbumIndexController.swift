@@ -80,13 +80,21 @@ final class AlbumIndexController {
         status = isPaused ? .paused : .idle
     }
 
+    func applyStorageStatistics(_ statistics: FeatureIndexStorage?, scope expectedScope: MediaAccountScope) {
+        guard scope == expectedScope else { return }
+        if let statistics, let current = storageStatistics, statistics.measuredAt < current.measuredAt {
+            return
+        }
+        storageStatistics = statistics
+    }
+
     func restore() async {
         guard let scope, task == nil else { return }
         let request = generation
         do {
             let statistics = try? await store.albumStorageStatistics(scope: scope, refresh: false)
             guard self.scope == scope, generation == request, task == nil else { return }
-            storageStatistics = statistics
+            applyStorageStatistics(statistics, scope: scope)
             guard let albums = try await store.albumList(scope: scope) else {
                 lastUpdatedAt = nil
                 completedElapsed = nil
@@ -201,7 +209,7 @@ final class AlbumIndexController {
                 guard generation == request else { return }
                 let statistics = try? await store.albumStorageStatistics(scope: scope, refresh: true)
                 guard generation == request else { return }
-                storageStatistics = statistics
+                applyStorageStatistics(statistics, scope: scope)
                 completedElapsed = elapsed(at: .now)
                 startedAt = nil
                 if failures.isEmpty {

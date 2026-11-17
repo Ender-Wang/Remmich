@@ -146,6 +146,9 @@ final class LibraryIndexController {
     private var warmingProcessedOffset = 0
     private var lastLiveStorageReportAt = Date.distantPast
     private var cacheStorageMeasuredAt = Date.distantPast
+    private var indexStorageMeasuredAt = Date.distantPast
+    private var indexStorageRefreshID: UUID?
+    private var indexStorageRefreshPending = false
     private var preparedCacheGeneration: Int64?
     private var lastPublishedBootstrapGeneration: Int64?
     @ObservationIgnored private var timelinePublicationDeferred = false
@@ -801,24 +804,42 @@ final class LibraryIndexController {
         preferences.bool(forKey: "library-transfer-place-intent-\(namespace)")
     }
 
-    func refreshIndexStorageStatistics() async {
+    func refreshIndexStorageStatistics(force: Bool = true) async {
         guard let expectedScope = scope else { return }
+        if indexStorageRefreshID != nil {
+            indexStorageRefreshPending = indexStorageRefreshPending || force
+            return
+        }
+        guard force || Date().timeIntervalSince(indexStorageMeasuredAt) >= 15 else { return }
+        let request = UUID()
+        indexStorageRefreshID = request
+        indexStorageMeasuredAt = .now
+        defer {
+            if indexStorageRefreshID == request {
+                indexStorageRefreshID = nil
+                if indexStorageRefreshPending {
+                    indexStorageRefreshPending = false
+                    Task { await self.refreshIndexStorageStatistics() }
+                }
+            }
+        }
         let revision = sessionRevision
-        guard let report = try? await store.indexStorageReport(scope: expectedScope),
+        guard let report = try? await store.indexStorageReport(scope: expectedScope, refresh: true),
               !Task.isCancelled, scope == expectedScope, sessionRevision == revision else { return }
         storageReport.metadataBytes = report.metadataBytes
         storageReport.cacheMetadataBytes = report.cacheMetadataBytes
         storageReport.featureStorage = report.featureStorage
+        albumIndex.applyStorageStatistics(report.featureStorage["albums"], scope: expectedScope)
     }
 
     /// Refresh optional table attribution outside rendering, at most every 15 seconds.
     func refreshCacheStorageStatistics(force: Bool = false) async {
         guard let expectedScope = scope else { return }
         let refresh = force || Date().timeIntervalSince(cacheStorageMeasuredAt) >= 15
-        guard refresh,
-              let report = try? await store.cacheStorageReport(scope: expectedScope, refresh: true),
-              !Task.isCancelled, scope == expectedScope else { return }
+        guard refresh else { return }
         cacheStorageMeasuredAt = .now
+        guard let report = try? await store.cacheStorageReport(scope: expectedScope, refresh: true),
+              !Task.isCancelled, scope == expectedScope else { return }
         storageReport.cacheMetadataBytes = report.cacheMetadataBytes
         storageReport.featureStorage = report.featureStorage
     }
@@ -1025,6 +1046,9 @@ final class LibraryIndexController {
         placeCachingEnabled = false
         placeCachingPaused = false
         cacheStorageMeasuredAt = .distantPast
+        indexStorageMeasuredAt = .distantPast
+        indexStorageRefreshID = nil
+        indexStorageRefreshPending = false
         thumbnailWarmingThermalState = nil
         thumbnailWarmingStatus = .off
         lastPublishedBootstrapGeneration = nil
