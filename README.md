@@ -48,11 +48,11 @@ You can also follow [Build and run](CONTRIBUTING.md#build-and-run) to build from
 - **👆 Quick preview:** Long-press to preview, tap to open, and swipe down to dismiss with interruptible transitions.
 - **🗺️ Places and maps:** Photon landmarks, per-country language preferences and asset maps below Info.
 - **🎬 Video:** Native playback, Picture in Picture and iOS Now Playing with titles and artwork.
-- **💾 Offline browsing:** Cached timelines, thumbnails, asset information and place names, with background sync and cache controls.
+- **💾 Offline browsing:** Cached timelines, thumbnails, asset information and place names, with background sync. Asset Cache and Place Cache have separate progress, Sync/Pause/Resume and automatic-cache settings; Rebuild and Clear maintain both caches together.
 - **📥 Downloads:** Save a quality tier to Photos → Remmich, with background transfers, pause/resume, automatic recovery, cancel/retry and history.
 - **📤 Sharing:** Share the viewed quality from the viewer or preview, retaining supported metadata and cached image compression.
 - **🗂️ Albums:** Browse owned/shared albums with search and six sorting options. All/Shared uses the same sliding animation as the main pages, with the search and scope controls staying above the content. Pinch between Cards and List around the album under your fingers, reopen album timelines at their saved positions, and browse indexed album metadata offline using the common timeline and viewer. First opening and tab retaps preserve bottom clearance, including wrapped titles.
-- **📊 Index controls:** Scroll both Index sections from the status area as well as the statistics. Sync/Pause/Resume and **Rebuild index** sit directly below each section's statistics.
+- **📊 Index controls:** Switch between Timeline Index and Album Index by tapping or swiping, and scroll from the status area as well as the statistics. Sync/Pause/Resume and **Rebuild index** sit directly below each section's statistics. Cache & Storage uses the same section layout and swiping. Per-10K storage estimates use current data and update during sync.
 - **🔐 Accounts and connections:** Saved-account switching, separate account caches and Primary/Fallback server addresses.
 - **✨ Native appearance:** Adaptive iPhone/iPad layouts, Liquid Glass, swipe navigation and alternate app icons.
 
