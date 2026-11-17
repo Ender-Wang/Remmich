@@ -1093,6 +1093,14 @@ final class LibraryIndexController {
         let requested = thumbnailWarmingEnabled || pendingThumbnailRequest?.manual == true
         thumbnailWarmingStatus = !requested ? .off : thumbnailWarmingPaused ? .paused
             : progress.cachedCount == progress.eligibleCount ? .upToDate : .waiting
+        if !thumbnailWarmingPaused, pendingThumbnailRequest?.manual == true, pendingThumbnailRequest?.rebuild == false,
+           progress.cachedCount == progress.eligibleCount, let scope
+        {
+            // Restore can verify that ordinary asset work is already fulfilled
+            // without starting its worker. Places retains its separate intent.
+            preferences.removeObject(forKey: "library-transfer-cache-intent-\(scope.cacheNamespace)")
+            pendingThumbnailRequest = nil
+        }
     }
 
     private func completeGroupedCatalogs(

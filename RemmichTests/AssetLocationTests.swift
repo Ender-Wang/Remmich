@@ -296,7 +296,8 @@ struct AssetLocationTests {
         #expect(try await fixture.store.cachedAssetMetadata(id: "asset", scope: account)?.cachedPlace?.title == "Century Park")
     }
 
-    @Test @MainActor func restoredManualPlaceIntentResumesAfterResourceRecoveryWithAutoCacheOff() async throws {
+    @Test(arguments: ["sync", "rebuild"], [false, true])
+    @MainActor func restoredManualPlaceIntentResumesAfterResourceRecoveryWithAutoCacheOff(intent: String, assetsComplete: Bool) async throws {
         let fixture = try PlaceCacheFixture()
         defer { fixture.cleanup() }
         let session = SavedSessionRegistryTests.session("manual-places")
@@ -309,12 +310,14 @@ struct AssetLocationTests {
         let generation = try await fixture.store.beginGeneration(scope: actualScope)
         try await fixture.store.upsert(assets: [asset], generation: generation, scope: actualScope)
         _ = try await fixture.store.acceptGeneration(generation, watermark: nil, historicalCursor: nil, expectedAssetCount: 1, scope: actualScope)
-        let image = fixture.directory.appending(path: "images/\(actualScope.cacheNamespace)/thumbnail/asset.jpg")
-        try FileManager.default.createDirectory(at: image.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data([1]).write(to: image)
-        try await fixture.store.upsert(derivatives: [.init(assetID: "asset", derivative: .thumbnail, pixelSize: nil,
-                                                           sourceRevision: asset.updatedAt.ISO8601Format(), relativeFileKey: "thumbnail/asset.jpg", byteCount: 1,
-                                                           digest: "fixture", isVerified: true, lastAccessedAt: .now, completedAt: .now)], scope: actualScope)
+        if assetsComplete {
+            let image = fixture.directory.appending(path: "images/\(actualScope.cacheNamespace)/thumbnail/asset.jpg")
+            try FileManager.default.createDirectory(at: image.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data([1]).write(to: image)
+            try await fixture.store.upsert(derivatives: [.init(assetID: "asset", derivative: .thumbnail, pixelSize: nil,
+                                                               sourceRevision: asset.updatedAt.ISO8601Format(), relativeFileKey: "thumbnail/asset.jpg", byteCount: 1,
+                                                               digest: "fixture", isVerified: true, lastAccessedAt: .now, completedAt: .now)], scope: actualScope)
+        }
         let defaults = try #require(UserDefaults(suiteName: UUID().uuidString))
         let client = LocationTestClient()
         let locations = AssetLocationStore(defaults: defaults, client: client, store: fixture.store)
@@ -323,13 +326,20 @@ struct AssetLocationTests {
         var settings = locations.preferences
         settings.endpoint = "https://places.example"
         try locations.save(settings)
-        defaults.set("sync", forKey: "library-transfer-cache-intent-\(actualScope.cacheNamespace)")
+        defaults.set(intent, forKey: "library-transfer-cache-intent-\(actualScope.cacheNamespace)")
         var conditions = LibraryCacheResourceConditions(lowPowerMode: true, thermalState: .nominal)
         let controller = LibraryIndexController(source: EmptyPlaceTimeline(), store: fixture.store,
-                                                locations: locations, cacheRootURL: fixture.directory.appending(path: "images"),
+                                                assetDetails: CacheLifecycleAssetDetails(), locations: locations,
+                                                cacheRootURL: fixture.directory.appending(path: "images"),
                                                 resourceConditions: { conditions }, preferences: defaults)
+        defer { controller.suspend(); locations.reset() }
         try await controller.restoreBackgroundState(session: session)
-        #expect(controller.thumbnailWarmingStatus == .upToDate)
+        #expect(controller.thumbnailWarmingStatus == (assetsComplete ? .upToDate : .waiting))
+        // GPS metadata is present even when the thumbnail is missing.
+        try #require(controller.placeCacheMetadataReady)
+        let retainsAssetIntent = intent == "rebuild" || !assetsComplete
+        #expect(controller.hasManualCacheIntent(namespace: actualScope.cacheNamespace) == retainsAssetIntent)
+        #expect(controller.hasManualPlaceCacheIntent(namespace: actualScope.cacheNamespace))
         await controller.refreshStatistics()
         #expect(await client.calls.isEmpty)
         conditions.lowPowerMode = false
@@ -343,9 +353,8 @@ struct AssetLocationTests {
         #expect(await client.calls == [.english])
         #expect(locations.progress.resolved == 1)
         #expect(!controller.thumbnailWarmingEnabled)
-        #expect(!controller.hasManualCacheIntent(namespace: actualScope.cacheNamespace))
-        controller.suspend()
-        locations.reset()
+        #expect(controller.hasManualCacheIntent(namespace: actualScope.cacheNamespace) == retainsAssetIntent)
+        #expect(!controller.hasManualPlaceCacheIntent(namespace: actualScope.cacheNamespace))
     }
 
     @Test @MainActor func freshMetadataWakesRetryWaitWithoutRetryingFailedCoordinatesEarly() async throws {
