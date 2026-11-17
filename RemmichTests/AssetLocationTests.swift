@@ -514,6 +514,181 @@ struct AssetLocationTests {
         locations.reset()
     }
 
+    @Test @MainActor func localCompletionPublishesBeforeTheDiscoveryBacklogDrains() async throws {
+        let fixture = try PlaceCacheFixture()
+        defer { fixture.cleanup() }
+        let account = scope("local-completion-progress")
+        for index in 0 ..< 130 {
+            try await fixture.seed(scope: account, id: "asset-\(index)", longitude: 120 + Double(index) / 1000)
+        }
+        let client = LocalCompletionPlaceClient()
+        let locations = try AssetLocationStore(defaults: #require(UserDefaults(suiteName: UUID().uuidString)),
+                                               client: client, store: fixture.store)
+        locations.configure(scope: account)
+        try locations.save(.init(endpoint: "https://places.example", localCountries: ["CN"]))
+        let work = Task { await locations.refreshCachedPlaces(retryFailed: false) { true } }
+        defer { work.cancel() }
+        for _ in 0 ..< 400 {
+            if await client.calls.count >= 3 {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let calls = await client.calls
+        #expect(Array(calls.prefix(2)) == [.english, .local])
+        // The third request is held: a completed asset must already be published,
+        // not wait for the 128-key batch or the full English backlog to finish.
+        #expect(locations.progress.eligible == 130)
+        #expect(locations.progress.resolved == 1)
+        #expect(locations.progress.pending == 129)
+        #expect(locations.progress.failed == 0)
+        #expect(try await fixture.store.placeProgress(scope: account, now: .now).resolved == 1)
+        work.cancel()
+        await work.value
+        locations.reset()
+    }
+
+    @Test @MainActor func existingLocalWorkResumesWithoutRepeatingCountryDiscovery() async throws {
+        let fixture = try PlaceCacheFixture()
+        defer { fixture.cleanup() }
+        let account = scope("pending-local-resume")
+        let settings = MapsPlacesPreferences(endpoint: "https://places.example", localCountries: ["CN"])
+        try await fixture.seed(scope: account)
+        try await fixture.store.configurePlaces(scope: account, preferences: settings, sessionID: "discovery")
+        let english = try #require(try await fixture.store.desiredPlace(assetID: "asset", scope: account)?.key)
+        let lease = try #require(try await fixture.store.beginPlace(english, scope: account, sessionID: "discovery", automatic: true, now: .now))
+        #expect(try await fixture.store.finishPlace(english, scope: account, sessionID: "discovery", lease: lease,
+                                                    location: .init(title: "Park", address: "Park", countryCode: "CN", language: .english),
+                                                    error: nil, onDemandOnly: false, retryDelay: nil, now: .now))
+        #expect(try await fixture.store.desiredPlace(assetID: "asset", scope: account)?.key.language == .local)
+        let defaults = try #require(UserDefaults(suiteName: UUID().uuidString))
+        try defaults.set(JSONEncoder().encode(settings), forKey: "maps-places-preferences-\(account.cacheNamespace)")
+        let client = LocationTestClient()
+        let locations = AssetLocationStore(defaults: defaults, client: client, store: fixture.store)
+        locations.configure(scope: account)
+        await locations.refreshCachedPlaces(retryFailed: false) { true }
+        #expect(await client.calls == [.local])
+        #expect(locations.progress.resolved == 1)
+        #expect(locations.progress.pending == 0)
+        locations.reset()
+    }
+
+    @Test @MainActor func completedPlaceRunRestoresPerAccountAndIsRemovedWithItsPreferences() async throws {
+        let fixture = try PlaceCacheFixture()
+        defer { fixture.cleanup() }
+        let account = scope("place-timing")
+        let defaults = try #require(UserDefaults(suiteName: UUID().uuidString))
+        try await fixture.seed(scope: account)
+        let locations = AssetLocationStore(defaults: defaults, client: LocationTestClient(), store: fixture.store)
+        locations.configure(scope: account)
+        try locations.save(.init(endpoint: "https://places.example"))
+        await locations.refreshCachedPlaces(retryFailed: false) { true }
+        let lastSync = try #require(locations.cacheRun.lastSyncedAt)
+        let elapsed = try #require(locations.cacheRun.elapsed(at: .now))
+        let restored = AssetLocationStore(defaults: defaults, client: LocationTestClient(), store: fixture.store)
+        restored.configure(scope: account)
+        await restored.reloadProgress()
+        #expect(restored.cacheRun.lastSyncedAt == lastSync)
+        #expect(abs((restored.cacheRun.elapsed(at: Date().addingTimeInterval(1000)) ?? -1) - elapsed) < 0.001)
+        restored.configure(scope: scope("other-place-timing"))
+        #expect(restored.cacheRun.lastSyncedAt == nil)
+        AssetLocationStore.remove(defaults: defaults, namespace: account.cacheNamespace)
+        #expect(defaults.data(forKey: "maps-places-run-\(account.cacheNamespace)") == nil)
+    }
+
+    @Test @MainActor func lastSyncedWaitsForMetadataDiscoveryToFinish() async throws {
+        let fixture = try PlaceCacheFixture()
+        defer { fixture.cleanup() }
+        let account = scope("place-completion-boundary")
+        try await fixture.seed(scope: account)
+        let locations = try AssetLocationStore(defaults: #require(UserDefaults(suiteName: UUID().uuidString)),
+                                               client: LocationTestClient(), store: fixture.store)
+        locations.configure(scope: account)
+        try locations.save(.init(endpoint: "https://places.example"))
+        await locations.refreshCachedPlaces(retryFailed: false, completionAllowed: { false }) { true }
+        #expect(locations.progress.resolved == locations.progress.eligible)
+        #expect(locations.cacheRun.lastSyncedAt == nil)
+        await locations.refreshCachedPlaces(retryFailed: false, completionAllowed: { true }) { true }
+        #expect(locations.cacheRun.lastSyncedAt != nil)
+    }
+
+    @Test @MainActor func independentControlsDoNotResumeOrPauseTheOtherCache() async throws {
+        let fixture = try PlaceCacheFixture()
+        defer { fixture.cleanup() }
+        let session = SavedSessionRegistryTests.session("independent-cache-controls")
+        let account = MediaAccountScope(session: session)
+        let defaults = try #require(UserDefaults(suiteName: UUID().uuidString))
+        try await fixture.seed(scope: account)
+        let client = CacheLifecyclePlaceClient(paused: true)
+        let locations = AssetLocationStore(defaults: defaults, client: client, store: fixture.store)
+        locations.configure(scope: account)
+        try locations.save(.init(endpoint: "https://places.example"))
+        let controller = LibraryIndexController(source: EmptyPlaceTimeline(), store: fixture.store,
+                                                locations: locations, cacheRootURL: fixture.directory.appending(path: "images"),
+                                                resourceConditions: { .init(lowPowerMode: false, thermalState: .nominal) }, preferences: defaults)
+        defer { controller.clearSession() }
+        try await controller.restoreBackgroundState(session: session)
+        controller.syncPlaceCache()
+        for _ in 0 ..< 200 {
+            if await client.active == 1 {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(await client.active == 1)
+        controller.syncAssetCache()
+        controller.pauseAssetCache()
+        #expect(controller.thumbnailWarmingPaused)
+        #expect(!controller.placeCachingPaused)
+        #expect(controller.placesAreRunning)
+        controller.pausePlaceCache()
+        for _ in 0 ..< 200 {
+            if await client.active == 0 {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        controller.syncAssetCache()
+        #expect(!controller.thumbnailWarmingPaused)
+        #expect(controller.placeCachingPaused)
+        #expect(!controller.placesAreRunning)
+        #expect(await client.active == 0)
+    }
+
+    @Test @MainActor func aLateProgressSnapshotCannotUndoALanguageChange() async throws {
+        let fixture = try PlaceCacheFixture()
+        defer { fixture.cleanup() }
+        let account = scope("stale-place-progress")
+        try await fixture.seed(scope: account)
+        let client = DelayedPlaceActivityClient()
+        let locations = try AssetLocationStore(defaults: #require(UserDefaults(suiteName: UUID().uuidString)), client: client, store: fixture.store)
+        locations.configure(scope: account)
+        try locations.save(.init(endpoint: "https://places.example"))
+        await locations.refreshCachedPlaces(retryFailed: false) { true }
+        #expect(locations.progress.resolved == 1)
+        await client.suspendNextRead()
+        let lateRead = Task { await locations.reloadProgress() }
+        for _ in 0 ..< 200 {
+            if await client.isBlocked {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(await client.isBlocked)
+        try locations.save(.init(endpoint: "https://places.example", localCountries: ["CN"]))
+        for _ in 0 ..< 200 {
+            if locations.progress.resolved == 0 {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        await client.release()
+        await lateRead.value
+        #expect(locations.progress.resolved == 0)
+        #expect(locations.progress.pending == 1)
+        #expect(locations.cacheRun.startedAt == nil)
+    }
+
     @MainActor private func scope(_ user: String) -> MediaAccountScope {
         .init(session: AccountSession(apiURL: URL(string: "https://immich.example/api")!, accessToken: "test",
                                       userID: user, userEmail: "test@example.com", name: "Test", isAdmin: false,
@@ -525,6 +700,52 @@ struct AssetLocationTests {
             ? #"{"features":[{"properties":{"name":"Century Park","osm_key":"leisure","district":"Huamu","city":"Pudong","state":"Shanghai","country":"China","countrycode":"CN"}}]}"#
             : #"{"features":[{"properties":{"name":"世纪公园","osm_key":"leisure","district":"花木街道","city":"浦东新区","state":"上海市","country":"中国","countrycode":"CN"}}]}"#
         return try JSONDecoder().decode(PhotonResponse.self, from: Data(json.utf8))
+    }
+}
+
+private actor LocalCompletionPlaceClient: PlaceLookingUp {
+    private(set) var calls: [PlaceLanguage] = []
+
+    func lookup(_: PlaceCoordinate, endpoint _: URL, language: PlaceLanguage) async throws -> PlaceLocation? {
+        calls.append(language)
+        if calls.count >= 3 {
+            while true {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+        }
+        if language == .local {
+            // Exercise the production one-second publication interval.
+            try await Task.sleep(for: .milliseconds(1100))
+        }
+        return .init(title: "Park", address: "Park", countryCode: "CN", language: language)
+    }
+}
+
+private actor DelayedPlaceActivityClient: PlaceLookingUp, PlaceCacheActivityReading {
+    private var suspendRead = false
+    private var continuation: CheckedContinuation<Void, Never>?
+    var isBlocked: Bool {
+        continuation != nil
+    }
+
+    func lookup(_: PlaceCoordinate, endpoint _: URL, language: PlaceLanguage) async throws -> PlaceLocation? {
+        .init(title: "Park", address: "Park", countryCode: "CN", language: language)
+    }
+
+    func cacheActivity(scope _: MediaAccountScope, key _: PlaceCacheKey?) async -> PlaceCacheTransferActivity {
+        if suspendRead {
+            suspendRead = false
+            await withCheckedContinuation { continuation = $0 }
+        }
+        return .init()
+    }
+
+    func suspendNextRead() {
+        suspendRead = true
+    }
+
+    func release() {
+        continuation?.resume(); continuation = nil
     }
 }
 

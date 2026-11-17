@@ -2,11 +2,6 @@ import SwiftUI
 import UIKit
 
 struct AccountSettingsView: View {
-    private enum IndexSection: String, CaseIterable {
-        case timeline = "Timeline Index"
-        case albums = "Album Index"
-    }
-
     private enum SettingsPage: String {
         case home = "Profile"
         case account = "Account"
@@ -140,12 +135,8 @@ struct AccountSettingsView: View {
     @State private var albumIndexCardSummary: ProfileCardSummary?
     @State private var placeCacheCardSummary: ProfileCardSummary?
     @State private var selectedPage = SettingsPage.home
-    @State private var selectedIndexSection = IndexSection.timeline
-    @State private var indexSwipeOrigin: IndexSection?
-    @State private var indexSwipeOffset: CGFloat = 0
-    @State private var indexPageWidth: CGFloat = 1
-    @State private var timelineIndexHeight: CGFloat = 0
-    @State private var albumIndexHeight: CGFloat = 0
+    @State private var selectedIndexSection = 0
+    @State private var selectedCacheSection = 0
     @State private var pageHistory: [SettingsPage] = []
     @State private var cardFrames: [SettingsPage: CGRect] = [:]
     @State private var expandedCard: SettingsPage?
@@ -401,6 +392,9 @@ struct AccountSettingsView: View {
                 try? await Task.sleep(for: .seconds(1))
                 guard !Task.isCancelled else { return }
                 libraryIndexClock = Date()
+                if selectedPage == .cache {
+                    await libraryIndex.refreshCacheStorageStatistics()
+                }
             }
         }
     }
@@ -561,25 +555,33 @@ struct AccountSettingsView: View {
             ? (Self.progressFraction(completed: progress.resolved, total: progress.eligible) * 1000).rounded(.down) / 10
             : nil
         let hasFailure = progress.failed > 0 || libraryIndex.placeStorageError != nil
-        let status = if libraryIndex.thumbnailWarmingPaused {
+        let status = if libraryIndex.placeCachingPaused {
             "Paused"
         } else if hasFailure {
             "Needs attention"
         } else if libraryIndex.placesAreRunning {
             progress.eligible > 0 ? "Syncing…" : "Preparing…"
-        } else if progress.eligible > 0, progress.pending == 0, progress.demandOnly == 0 {
-            "Up to date"
-        } else if libraryIndex.thumbnailWarmingStatus == .waiting, libraryIndex.thumbnailWarmingWaitingReason != nil {
-            syncCardSummary(for: .cache).status
-        } else if !libraryIndex.thumbnailWarmingEnabled,
-                  !libraryIndex.hasManualCacheIntent(namespace: MediaAccountScope(session: session).cacheNamespace)
+        } else if !libraryIndex.placeCachingEnabled,
+                  !libraryIndex.hasManualPlaceCacheIntent(namespace: MediaAccountScope(session: session).cacheNamespace)
         {
             "Off"
+        } else if !libraryIndex.placeCacheMetadataReady,
+                  libraryIndex.placeCachingEnabled || libraryIndex.hasManualPlaceCacheIntent(namespace: MediaAccountScope(session: session).cacheNamespace)
+        {
+            "Waiting for asset metadata"
+        } else if progress.eligible > 0, progress.pending == 0, progress.demandOnly == 0 {
+            "Up to date"
+        } else if let reason = libraryIndex.placeCacheWaitingReason {
+            switch reason {
+            case .lowPowerMode: "Low Power Mode"
+            case .thermalSerious, .thermalCritical: "Cooling down"
+            default: "Waiting"
+            }
         } else {
             progress.eligible > 0 ? "Pending" : "Waiting"
         }
         return ProfileCardSummary(percentage: percentage, status: status,
-                                  isRunning: libraryIndex.placesAreRunning && !libraryIndex.thumbnailWarmingPaused && !hasFailure)
+                                  isRunning: libraryIndex.placesAreRunning && !libraryIndex.placeCachingPaused && !hasFailure)
     }
 
     private func albumIndexSummary() -> ProfileCardSummary {
@@ -1014,7 +1016,8 @@ struct AccountSettingsView: View {
     private var updatesLibraryIndexClock: Bool {
         scenePhase == .active && (
             (selectedPage == .index && (libraryIndex.status == .indexing || libraryIndex.albumIndex.status == .indexing))
-                || (selectedPage == .cache && libraryIndex.thumbnailWarmingStatus == .warming)
+                || (selectedPage == .cache && (libraryIndex.thumbnailWarmingStatus == .warming
+                        || libraryIndex.placesAreRunning || libraryIndex.placeCacheRun.isActive))
         )
     }
 
@@ -1134,83 +1137,19 @@ struct AccountSettingsView: View {
     }
 
     private var indexPage: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Picker("Index", selection: Binding(get: { selectedIndexSection }, set: selectIndexSection)) {
-                ForEach(IndexSection.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .padding(.bottom, 20)
+        SettingsSectionPager("Index", labels: ("Timeline Index", "Album Index"), selection: $selectedIndexSection,
+                             enabled: selectedPage == .index && !isPageTransitioning)
+        {
             VStack(spacing: 0) {
                 statistic("Account catalog", ByteCountFormatter.string(fromByteCount: libraryIndex.storageReport.metadataBytes, countStyle: .file))
                 statistic("Shared asset catalog", libraryIndex.storageReport.featureStorage["assets"].map { ByteCountFormatter.string(fromByteCount: $0.bytes, countStyle: .file) } ?? "—")
             }
-            .padding(.bottom, 16)
-            indexSectionPager
+        } first: {
+            timelineIndexPage
+        } second: {
+            albumIndexPage
         }
         .task(id: [libraryIndex.status, libraryIndex.albumIndex.status]) { await libraryIndex.refreshIndexStorageStatistics() }
-    }
-
-    private var indexSectionPager: some View {
-        let height = selectedIndexSection == .timeline ? timelineIndexHeight : albumIndexHeight
-        return ZStack(alignment: .topLeading) {
-            timelineIndexPage
-                .frame(maxWidth: .infinity)
-                .fixedSize(horizontal: false, vertical: true)
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { timelineIndexHeight = $0 }
-                .offset(x: (selectedIndexSection == .timeline ? 0 : -indexPageWidth) + indexSwipeOffset)
-                .allowsHitTesting(selectedIndexSection == .timeline && indexSwipeOrigin == nil)
-                .accessibilityHidden(selectedIndexSection != .timeline)
-            albumIndexPage
-                .frame(maxWidth: .infinity)
-                .fixedSize(horizontal: false, vertical: true)
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { albumIndexHeight = $0 }
-                .offset(x: (selectedIndexSection == .albums ? 0 : indexPageWidth) + indexSwipeOffset)
-                .allowsHitTesting(selectedIndexSection == .albums && indexSwipeOrigin == nil)
-                .accessibilityHidden(selectedIndexSection != .albums)
-        }
-        .frame(height: height > 0 ? height : nil, alignment: .top)
-        .frame(maxWidth: .infinity)
-        .clipped()
-        .contentShape(.rect)
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { indexPageWidth = max(1, $0) }
-        .gesture(indexSectionSwipe)
-    }
-
-    private func selectIndexSection(_ section: IndexSection) {
-        withAnimation(reduceMotion ? nil : .smooth(duration: 0.3)) {
-            selectedIndexSection = section
-            indexSwipeOrigin = nil
-            indexSwipeOffset = 0
-        }
-    }
-
-    private var indexSectionSwipe: IndexSectionPan {
-        IndexSectionPan(enabled: !reduceMotion && selectedPage == .index && !isPageTransitioning,
-                        direction: selectedIndexSection == .timeline ? -1 : 1,
-                        update: handleIndexSectionPan)
-    }
-
-    private func handleIndexSectionPan(_ state: UIGestureRecognizer.State, translation: CGPoint, velocity: CGPoint) {
-        switch state {
-        case .began:
-            indexSwipeOrigin = selectedIndexSection
-        case .changed:
-            guard let origin = indexSwipeOrigin else { return }
-            indexSwipeOffset = origin == .timeline
-                ? max(-indexPageWidth, min(0, translation.x))
-                : min(indexPageWidth, max(0, translation.x))
-        case .ended:
-            guard let origin = indexSwipeOrigin else { return }
-            let direction: CGFloat = origin == .timeline ? -1 : 1
-            let progress = HorizontalPageSwipePolicy.progress(distance: translation.x * direction, width: indexPageWidth)
-            let complete = HorizontalPageSwipePolicy.shouldFinish(progress: progress, forwardVelocity: velocity.x * direction)
-            selectIndexSection(complete ? (origin == .timeline ? .albums : .timeline) : origin)
-        case .cancelled, .failed:
-            guard indexSwipeOrigin != nil else { return }
-            selectIndexSection(selectedIndexSection)
-        default:
-            break
-        }
     }
 
     private var albumIndexPage: some View {
@@ -1345,10 +1284,39 @@ struct AccountSettingsView: View {
 
     private var cachePage: some View {
         VStack(alignment: .leading, spacing: 0) {
-            sectionCaption("OFFLINE THUMBNAILS, METADATA & PLACES")
+            SettingsSectionPager("Cache", labels: ("Asset Cache", "Place Cache"), selection: $selectedCacheSection,
+                                 enabled: selectedPage == .cache && !isPageTransitioning)
+            {
+                statistic("Cache database", ByteCountFormatter.string(fromByteCount: libraryIndex.storageReport.cacheMetadataBytes, countStyle: .file))
+            } first: {
+                assetCachePage
+            } second: {
+                placeCachePage
+            }
+            Divider()
+                .padding(.top, 18)
+            cacheMaintenanceActions
+        }
+        .task(id: selectedPage == .cache) {
+            guard selectedPage == .cache else { return }
+            await libraryIndex.refreshCacheStorageStatistics(force: true)
+        }
+        .onChange(of: libraryIndex.placeCacheRun.lastSyncedAt) {
+            guard selectedPage == .cache else { return }
+            Task { await libraryIndex.refreshCacheStorageStatistics(force: true) }
+        }
+        .onChange(of: libraryIndex.thumbnailWarmingStatus) {
+            guard selectedPage == .cache else { return }
+            Task { await libraryIndex.refreshCacheStorageStatistics(force: true) }
+        }
+    }
+
+    private var assetCachePage: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            sectionCaption("ASSET CACHE")
             VStack(alignment: .leading, spacing: 10) {
-                syncHeading(cacheHeadingPresentation, active: libraryIndex.thumbnailWarmingStatus == .warming || libraryIndex.placesAreRunning,
-                            diagnostics: libraryIndex.thumbnailFailureDiagnostics)
+                syncHeading(thumbnailCacheStatusPresentation, active: libraryIndex.thumbnailWarmingStatus == .warming,
+                            diagnostics: assetFailureDiagnostics)
                 if let reason = libraryIndex.thumbnailWarmingWaitingReason {
                     Text(reason.message).font(.footnote).foregroundStyle(.secondary)
                 }
@@ -1360,49 +1328,99 @@ struct AccountSettingsView: View {
                 VStack(spacing: 0) {
                     statistic("Cached thumbnails", cacheThumbnailCount.formatted())
                     statistic("Cached metadata records", (libraryIndex.thumbnailWarmingEligibleCount > 0 ? libraryIndex.thumbnailWarmingMetadataCount : 0).formatted())
-                    statistic("Place tags completed", "\(libraryIndex.placeProgress.resolved.formatted()) / \(libraryIndex.placeProgress.eligible.formatted()) GPS assets")
-                    statistic("Place caching", libraryIndex.automaticPlacesAllowed ? "Custom instance" : "When viewed · Public Photon")
-                    if libraryIndex.automaticPlacesAllowed {
-                        statistic("Place tags pending", libraryIndex.placeProgress.pending.formatted())
-                        statistic("Place tags failed", libraryIndex.placeProgress.failed.formatted())
-                        if libraryIndex.placeProgress.demandOnly > 0 {
-                            statistic("Places fetched when viewed", libraryIndex.placeProgress.demandOnly.formatted())
-                        }
-                    }
                     statistic("Cached storage", ByteCountFormatter.string(fromByteCount: cacheByteCount, countStyle: .file))
-                    statistic("Cache database", ByteCountFormatter.string(fromByteCount: libraryIndex.storageReport.cacheMetadataBytes, countStyle: .file))
-                    if let estimate = thumbnailCacheSizeEstimate {
-                        statistic("Estimated cache storage / 10K assets", estimate.replacingOccurrences(of: " / 10K assets", with: ""))
-                    }
-                    if let elapsed = libraryIndex.thumbnailWarmingElapsed(at: libraryIndexClock) {
-                        statistic("Elapsed time", Self.duration(elapsed))
-                    }
+                    statistic("Asset metadata storage", cacheStorageValue("assetMetadata"))
+                    statistic("Estimated cache storage / 10K assets", thumbnailCacheSizeEstimate?.replacingOccurrences(of: " / 10K assets", with: "") ?? "—")
+                    statistic("Elapsed time", libraryIndex.thumbnailWarmingElapsed(at: libraryIndexClock).map(Self.duration) ?? "—")
                     statistic("Estimated time remaining", libraryIndex.thumbnailWarmingStatus == .warming ? libraryIndex.thumbnailWarmingEstimatedRemaining(at: libraryIndexClock).map(Self.duration) ?? "—" : "—")
                     statistic("Last synced", Self.syncedDate(libraryIndex.thumbnailWarmingLastUpdatedAt))
                 }
                 if case let .failed(message) = libraryIndex.thumbnailWarmingStatus {
                     Text(message).font(.footnote).foregroundStyle(.red).textSelection(.enabled)
                 }
-                summaryActionButton(cachePhase.action.title) {
-                    if cachePhase.action == .pause {
-                        libraryIndex.pauseThumbnailCache()
+                summaryActionButton(assetCachePhase.action.title) {
+                    if assetCachePhase.action == .pause {
+                        libraryIndex.pauseAssetCache()
                     } else {
-                        libraryIndex.syncThumbnailCache()
+                        libraryIndex.syncAssetCache()
                     }
                 }
+                Divider()
+                Toggle("Auto-cache thumbnails & metadata", isOn: Binding(
+                    get: { libraryIndex.thumbnailWarmingEnabled }, set: { libraryIndex.setAssetCacheEnabled($0) }
+                ))
+                .font(.subheadline).frame(minHeight: 50)
             }
-            .padding(.bottom, 18)
-            Divider()
-            Toggle(isOn: Binding(
-                get: { libraryIndex.thumbnailWarmingEnabled }, set: { libraryIndex.setThumbnailWarmingEnabled($0) }
-            )) {
-                Label("Auto-cache thumbnails, metadata & places", systemImage: "externaldrive")
-                    .font(.subheadline)
-            }
-            .frame(minHeight: 50)
-            Divider()
-            cacheMaintenanceActions
         }
+    }
+
+    private var placeCachePage: some View {
+        let progress = libraryIndex.placeProgress
+        let summary = placeCacheSummary()
+        return VStack(alignment: .leading, spacing: 0) {
+            sectionCaption("PLACE CACHE")
+            VStack(alignment: .leading, spacing: 10) {
+                syncHeading(placeCacheHeadingPresentation, active: summary.isRunning,
+                            diagnostics: libraryIndex.placeFailureDiagnostics, title: summary.status)
+                if !libraryIndex.automaticPlacesAllowed {
+                    Text("Place names are fetched when you view assets with the default Photon service.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                } else if let reason = libraryIndex.placeCacheWaitingReason {
+                    Text(reason.message).font(.footnote).foregroundStyle(.secondary)
+                }
+                progressMeter(Self.progressFraction(completed: progress.resolved, total: progress.eligible), tint: Self.cacheColor,
+                              label: "Place caching progress", value: "\(progress.resolved) of \(progress.eligible) GPS assets completed")
+                progressCaption(percentage: Self.progressPercentage(completed: progress.resolved, total: progress.eligible),
+                                count: "\(progress.resolved.formatted()) / \(progress.eligible.formatted()) assets")
+                VStack(spacing: 0) {
+                    statistic("Cached place tags", progress.resolved.formatted())
+                    statistic("All place tags", progress.eligible.formatted())
+                    statistic("Photon instance", libraryIndex.automaticPlacesAllowed ? "Custom" : "Default")
+                    statistic("Place tags pending", progress.pending.formatted())
+                    statistic("Place tags failed", progress.failed.formatted())
+                    if progress.demandOnly > 0 {
+                        statistic("Places fetched when viewed", progress.demandOnly.formatted())
+                    }
+                    statistic("Place cache storage", cacheStorageValue("places"))
+                    statistic("Estimated cache storage / 10K assets", placeCacheSizeEstimate ?? "—")
+                    statistic("Elapsed time", libraryIndex.automaticPlacesAllowed ? libraryIndex.placeCacheRun.elapsed(at: libraryIndexClock).map(Self.duration) ?? "—" : "—")
+                    statistic("Estimated time remaining", summary.isRunning ? libraryIndex.placeCacheRun.estimatedRemaining(at: libraryIndexClock).map(Self.duration) ?? "—" : "—")
+                    statistic("Last synced", Self.syncedDate(libraryIndex.automaticPlacesAllowed ? libraryIndex.placeCacheRun.lastSyncedAt : nil))
+                }
+                if let error = libraryIndex.placeStorageError {
+                    Text(error).font(.footnote).foregroundStyle(.red).textSelection(.enabled)
+                }
+                summaryActionButton(placeCachePhase.action.title) {
+                    if placeCachePhase.action == .pause {
+                        libraryIndex.pausePlaceCache()
+                    } else {
+                        libraryIndex.syncPlaceCache()
+                    }
+                }
+                .disabled(!libraryIndex.automaticPlacesAllowed)
+                Divider()
+                Toggle("Auto-cache places", isOn: Binding(
+                    get: { libraryIndex.placeCachingEnabled }, set: { libraryIndex.setPlaceCacheEnabled($0) }
+                ))
+                .font(.subheadline).frame(minHeight: 50)
+                .disabled(!libraryIndex.automaticPlacesAllowed)
+                Text("Places use GPS metadata already cached by Asset Cache. New assets become available as their metadata is cached.")
+                    .font(.caption2).foregroundStyle(.secondary)
+                Text("Elapsed time includes waiting for background transfers. Storage estimates vary with shared locations and cached variants.")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func cacheStorageValue(_ feature: String) -> String {
+        libraryIndex.storageReport.featureStorage[feature].map { ByteCountFormatter.string(fromByteCount: $0.bytes, countStyle: .file) } ?? "—"
+    }
+
+    private var placeCacheSizeEstimate: String? {
+        let progress = libraryIndex.placeProgress
+        guard libraryIndex.placeCacheMetadataReady, progress.eligible > 0, progress.resolved == progress.eligible, progress.failed == 0,
+              let sample = libraryIndex.storageReport.featureStorage["places-sample"], sample.assetCount == progress.eligible else { return nil }
+        return Self.sizePerTenThousandEstimate(bytes: sample.bytes, count: sample.assetCount)?.replacingOccurrences(of: " / 10K assets", with: "")
     }
 
     private func progressMeter(_ fraction: Double, tint: Color, label: String, value: String) -> some View {
@@ -1478,6 +1496,8 @@ struct AccountSettingsView: View {
     private var cacheMaintenanceActions: some View {
         VStack(alignment: .leading, spacing: 0) {
             sectionCaption("CACHE MAINTENANCE").padding(.top, 24)
+            Text("Rebuild and Clear cache affect both Asset Cache and Place Cache.")
+                .font(.caption2).foregroundStyle(.secondary).padding(.bottom, 8)
             Button {
                 showsThumbnailRebuildConfirmation = true
             } label: {
@@ -1547,14 +1567,8 @@ struct AccountSettingsView: View {
         }
     }
 
-    private var cachePhase: SyncWorkPhase {
-        if libraryIndex.thumbnailWarmingStatus == .warming || libraryIndex.placesAreRunning {
-            return .running
-        }
-        if libraryIndex.placeProgress.failed > 0 || libraryIndex.placeStorageError != nil {
-            return .failed
-        }
-        return switch libraryIndex.thumbnailWarmingStatus {
+    private var assetCachePhase: SyncWorkPhase {
+        switch libraryIndex.thumbnailWarmingStatus {
         case .off: .off
         case .waiting: .waiting
         case .warming: .running
@@ -1564,14 +1578,44 @@ struct AccountSettingsView: View {
         }
     }
 
-    private var cacheHeadingPresentation: StatusPresentation {
+    private var assetFailureDiagnostics: String? {
+        guard case .failed = libraryIndex.thumbnailWarmingStatus else { return nil }
+        return libraryIndex.thumbnailFailureDiagnostics
+    }
+
+    private var placeCachePhase: SyncWorkPhase {
+        if libraryIndex.placeCachingPaused {
+            return .paused
+        }
+        if libraryIndex.placesAreRunning {
+            return .running
+        }
+        if libraryIndex.placeProgress.failed > 0 || libraryIndex.placeStorageError != nil {
+            return .failed
+        }
+        return switch placeCacheSummary().status {
+        case "Off", "When viewed": .off
+        case "Up to date": .upToDate
+        default: .waiting
+        }
+    }
+
+    private var placeCacheHeadingPresentation: StatusPresentation {
+        if libraryIndex.placeCachingPaused {
+            return .init(systemImage: "pause.circle.fill", tint: .primary, accessibilityValue: "Paused")
+        }
         if libraryIndex.placeProgress.failed > 0 || libraryIndex.placeStorageError != nil {
             return .init(systemImage: "exclamationmark.triangle.fill", tint: .orange, accessibilityValue: "Places need attention")
         }
-        if libraryIndex.placesAreRunning, libraryIndex.thumbnailWarmingStatus != .warming {
+        if libraryIndex.placesAreRunning {
             return .init(systemImage: "arrow.triangle.2.circlepath", tint: Self.cacheColor, accessibilityValue: "Caching places")
         }
-        return thumbnailCacheStatusPresentation
+        let summary = placeCacheSummary()
+        if summary.status == "Up to date" {
+            return .init(systemImage: "checkmark.circle.fill", tint: .green, accessibilityValue: summary.status)
+        }
+        let image = summary.status == "Off" ? "power" : libraryIndex.automaticPlacesAllowed ? "clock" : "location"
+        return .init(systemImage: image, tint: .primary, accessibilityValue: summary.status)
     }
 
     private var retainedAccounts: [StoredLibraryAccount] {

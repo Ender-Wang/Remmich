@@ -1172,6 +1172,55 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
         }
     }
 
+    func cacheStorageReport(scope: MediaAccountScope, refresh: Bool) async throws -> LibraryIndexStorageReport {
+        guard try canRead(scope) else { return .empty }
+        let database = try preparedDatabase(scope: scope)
+        if refresh {
+            let features = ["assetMetadata": ["asset_details", "derivatives"],
+                            "places": ["place_accounts", "place_lookups", "asset_places"]]
+            for (feature, tables) in features {
+                let placeholders = Array(repeating: "?", count: tables.count).joined(separator: ",")
+                // DBSTAT is optional and defaults to main. Explicitly inspect
+                // the attached cache database and include each table's indexes.
+                guard let bytes = try? database.scalarInt64("""
+                SELECT COALESCE(SUM(d.pgsize),0) FROM dbstat('cache') d
+                JOIN cache.sqlite_schema s ON d.name=s.name WHERE s.tbl_name IN (\(placeholders))
+                """, tables.map { .text($0) }) else {
+                    try database.execute("DELETE FROM storage_statistics WHERE feature=?", [.text(feature)])
+                    if feature == "places" {
+                        try database.execute("DELETE FROM storage_statistics WHERE feature='places-sample'")
+                    }
+                    continue
+                }
+                let count = try database.scalarInt64(feature == "places"
+                    ? "SELECT COUNT(*) FROM cache.asset_places WHERE scope=? AND desired=1"
+                    : "SELECT COUNT(*) FROM cache.asset_details WHERE scope=?", [.text(scope.cacheNamespace)]) ?? 0
+                try saveCacheStorageStatistic(feature, bytes: bytes, count: count, database: database)
+                if feature == "places" {
+                    let unfinished = try database.scalarInt64("""
+                    SELECT COUNT(*) FROM cache.asset_places a JOIN cache.place_lookups p
+                    ON p.scope=a.scope AND p.lookup_id=a.lookup_id
+                    WHERE a.scope=? AND a.desired=1 AND NOT (p.work_state='idle'
+                    AND (p.outcome='found' OR (p.outcome='noResult' AND COALESCE(p.expires_at,0)>?)))
+                    """, [.text(scope.cacheNamespace), .date(.now)]) ?? 0
+                    if count > 0, unfinished == 0 {
+                        try saveCacheStorageStatistic("places-sample", bytes: bytes, count: count, database: database)
+                    } else {
+                        try database.execute("DELETE FROM storage_statistics WHERE feature='places-sample'")
+                    }
+                }
+            }
+        }
+        return try await indexStorageReport(scope: scope)
+    }
+
+    private func saveCacheStorageStatistic(_ feature: String, bytes: Int64, count: Int64, database: SQLiteConnection) throws {
+        try database.execute("""
+        INSERT INTO storage_statistics(feature,byte_count,asset_count,measured_at) VALUES(?,?,?,?)
+        ON CONFLICT(feature) DO UPDATE SET byte_count=excluded.byte_count,asset_count=excluded.asset_count,measured_at=excluded.measured_at
+        """, [.text(feature), .int64(bytes), .int64(count), .date(.now)])
+    }
+
     private func refreshStorageStatistics(features: [String], scope: MediaAccountScope, database: SQLiteConnection) throws {
         // Called after sync/maintenance, never from scrolling or UI rendering.
         let tables = ["assets": ["catalog_assets"], "timeline": ["assets", "grouped_catalogs", "generations", "sync_state"],

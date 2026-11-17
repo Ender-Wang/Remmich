@@ -40,6 +40,13 @@ struct IndexSectionPan: UIGestureRecognizerRepresentable {
         }
 
         func gestureRecognizer(_: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            var target = touch.view
+            while let view = target {
+                if view is UISwitch || view is UISlider {
+                    return false
+                }
+                target = view.superview
+            }
             startLocation = touch.location(in: touch.window)
             return true
         }

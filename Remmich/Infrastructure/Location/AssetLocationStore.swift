@@ -12,6 +12,7 @@ import SwiftUI
     private(set) var mapStyles: AssetMapStyles?
     private(set) var mapEndpoint: URL?
     private(set) var progress = PlaceCacheProgress()
+    private(set) var cacheRun = PlaceCacheRun()
     private(set) var lastStorageError: String?
     @ObservationIgnored var preferencesDidChange: (() -> Void)?
     @ObservationIgnored private var mapSession: AccountSession?
@@ -27,6 +28,10 @@ import SwiftUI
     @ObservationIgnored private var waitingRequests: [(id: UUID, automatic: Bool, continuation: CheckedContinuation<Void, Error>)] = []
     @ObservationIgnored private(set) var cachedMetadataRevision: UInt64 = 0
     @ObservationIgnored private var retryWait: (id: UUID, task: Task<Void, Error>)?
+    @ObservationIgnored private var cacheTimingOwner: UUID?
+    @ObservationIgnored private var completedTransferIntervals: [DateInterval] = []
+    @ObservationIgnored private var metricsPersistedAt = Date.distantPast
+    @ObservationIgnored private var metricsGeneration: UInt64 = 0
 
     init(defaults: UserDefaults = .standard, client: any PlaceLookingUp = PhotonPlaceClient(),
          store: any LibraryIndexStoring = SQLiteLibraryIndexStore())
@@ -47,6 +52,7 @@ import SwiftUI
         self.scope = scope
         namespace = scope.cacheNamespace
         preferences = Self.read(MapsPlacesPreferences.self, defaults: defaults, key: "maps-places-preferences-\(scope.cacheNamespace)") ?? .init()
+        cacheRun = Self.read(PlaceCacheRun.self, defaults: defaults, key: "maps-places-run-\(scope.cacheNamespace)") ?? .init()
         mapStyles = Self.read(AssetMapStyles.self, defaults: defaults, key: "maps-places-styles-\(scope.cacheNamespace)")
         defaults.removeObject(forKey: "maps-places-cache-\(scope.cacheNamespace)")
         revision &+= 1
@@ -54,6 +60,8 @@ import SwiftUI
     }
 
     func reset() {
+        metricsGeneration &+= 1
+        stopCacheWorkTiming(preservingTransfers: false)
         retryWait?.task.cancel()
         cachedMetadataRevision &+= 1
         let previous = configuration
@@ -72,6 +80,9 @@ import SwiftUI
         sessionID = UUID().uuidString
         preferences = .init()
         progress = .init()
+        cacheRun = .init()
+        completedTransferIntervals = []
+        metricsPersistedAt = .distantPast
         lastStorageError = nil
         mapStyles = nil
         mapEndpoint = nil
@@ -84,6 +95,13 @@ import SwiftUI
         var normalized = value
         normalized.endpoint = try MapsPlacesPreferences.endpointURL(value.endpoint).absoluteString
         guard let namespace, preferences != normalized else { return }
+        if preferences.localCountries != normalized.localCountries {
+            metricsGeneration &+= 1
+            stopCacheWorkTiming(preservingTransfers: false)
+            cacheRun.resetWork()
+            completedTransferIntervals = []
+            persistCacheRun(force: true)
+        }
         preferences = normalized
         revision &+= 1
         try defaults.set(JSONEncoder().encode(normalized), forKey: "maps-places-preferences-\(namespace)")
@@ -160,6 +178,10 @@ import SwiftUI
         do {
             try await configuration?.value
             guard let scope, token == sessionID, automaticCachingAllowed else { return }
+            metricsGeneration &+= 1
+            cacheRun.resetWork()
+            completedTransferIntervals = []
+            persistCacheRun(force: true)
             try await client.configureCache(scope: scope, preferences: preferences, reset: true)
             guard token == sessionID else { throw CancellationError() }
             try await store.rebuildPlaces(scope: scope, sessionID: token)
@@ -172,8 +194,11 @@ import SwiftUI
         }
     }
 
-    func refreshCachedPlaces(retryFailed: Bool, shouldContinue: @escaping @MainActor () -> Bool) async {
+    func refreshCachedPlaces(retryFailed: Bool, completionAllowed: @escaping @MainActor () -> Bool = { true },
+                             shouldContinue: @escaping @MainActor () -> Bool) async
+    {
         let token = sessionID
+        let timingOwner = UUID()
         do {
             try await configuration?.value
             guard let scope, automaticCachingAllowed else {
@@ -184,6 +209,7 @@ import SwiftUI
                 await reloadProgress()
                 return
             }
+            cacheTimingOwner = timingOwner
             Self.logger.info("Place cache pass started retryFailed=\(retryFailed)")
             var resetFailures = retryFailed
             var lastProgressReadAt = ContinuousClock.now
@@ -195,6 +221,9 @@ import SwiftUI
                 guard automaticCachingAllowed else { break }
                 try await client.configureCache(scope: scope, preferences: preferences, reset: false)
                 guard !Task.isCancelled, token == sessionID, settingsRevision == revision, shouldContinue() else { continue }
+                if cacheTimingOwner == nil {
+                    cacheTimingOwner = timingOwner
+                }
                 let metadataRevision = cachedMetadataRevision
                 let pending = try await store.pendingPlaces(scope: scope, retryFailed: resetFailures, now: .now)
                 resetFailures = false
@@ -207,9 +236,28 @@ import SwiftUI
                     if metadataRevision != cachedMetadataRevision || settingsRevision != revision {
                         continue
                     }
-                    guard let retry else { break }
+                    guard let retry else {
+                        if cacheTimingOwner == timingOwner, !Task.isCancelled, shouldContinue(), completionAllowed() {
+                            // An explicit Sync may successfully verify an already
+                            // complete cache; automatic restored statistics do not.
+                            if retryFailed, progress.eligible > 0, progress.resolved == progress.eligible {
+                                cacheRun.begin(completed: progress.resolved, total: progress.eligible, at: .now)
+                            }
+                            cacheRun.observe(completed: progress.resolved, total: progress.eligible, failed: progress.failed,
+                                             canComplete: lastStorageError == nil, at: .now)
+                            persistCacheRun(force: true)
+                        }
+                        break
+                    }
+                    cacheRun.stop(at: .now, preservingTransfers: true)
+                    persistCacheRun(force: true)
                     try await waitForPlaceRetry(until: retry)
                     continue
+                }
+                if cacheTimingOwner == timingOwner {
+                    let isStarting = cacheRun.startedAt == nil || cacheRun.isFinished
+                    cacheRun.begin(completed: progress.resolved, total: progress.eligible, at: .now)
+                    persistCacheRun(force: isStarting)
                 }
                 for (index, record) in pending.enumerated() {
                     guard !Task.isCancelled, token == sessionID, settingsRevision == revision, shouldContinue() else { break }
@@ -217,8 +265,20 @@ import SwiftUI
                         try await client.prefetchCache(Array(pending.dropFirst(index).prefix(LibraryTransferQueue.placeLookAhead)).map(\.key), scope: scope)
                         guard !Task.isCancelled, token == sessionID, settingsRevision == revision, shouldContinue() else { break }
                     }
-                    do { _ = try await fetch(record.key, scope: scope, token: token, automatic: true) }
-                    catch is CancellationError { throw CancellationError() }
+                    do {
+                        let location = try await fetch(record.key, scope: scope, token: token, automatic: true)
+                        guard !Task.isCancelled, token == sessionID, settingsRevision == revision, shouldContinue() else { break }
+                        // Finish the required language before advancing discovery.
+                        // Otherwise new Local rows wait behind the entire unresolved
+                        // English backlog and asset-completion statistics stay flat.
+                        if record.key.language == .english, let location,
+                           preferences.language(countryCode: location.countryCode) == .local
+                        {
+                            let local = try PlaceCacheKey(endpoint: record.key.endpoint, coordinate: record.key.coordinate,
+                                                          language: .local, version: record.key.version)
+                            _ = try await fetch(local, scope: scope, token: token, automatic: true)
+                        }
+                    } catch is CancellationError { throw CancellationError() }
                     catch let error as LibraryIndexStoreError { throw error }
                     catch { /* Failure is durable; continue the next independent lookup. */ }
                     // Match asset caching: coalesce statistics publication, not
@@ -239,6 +299,9 @@ import SwiftUI
         }
         if token == sessionID {
             await reloadProgress()
+            if cacheTimingOwner == timingOwner {
+                stopCacheWorkTiming(preservingTransfers: Task.isCancelled)
+            }
             let report = progress
             Self.logger.info("Place cache pass finished cancelled=\(Task.isCancelled) eligible=\(report.eligible) resolved=\(report.resolved) pending=\(report.pending) failed=\(report.failed)")
         }
@@ -272,6 +335,8 @@ import SwiftUI
     }
 
     private func fetch(_ key: PlaceCacheKey, scope: MediaAccountScope, token: String, automatic: Bool) async throws -> PlaceLocation? {
+        let lookupRevision = revision
+        let generation = metricsGeneration
         let requestID = "\(scope.cacheNamespace)|\(key.id)"
         let consumer = UUID()
         if let shared = requests[requestID] {
@@ -302,7 +367,7 @@ import SwiftUI
                 let accepted = try await store.finishPlace(key, scope: scope, sessionID: token, lease: lease,
                                                            location: result, error: nil, onDemandOnly: false, retryDelay: nil, now: .now)
                 if accepted {
-                    await client.finishCacheLookup(key, scope: scope)
+                    await finishCacheLookup(key, scope: scope, token: token, revision: lookupRevision, generation: generation)
                 }
                 return accepted ? result : nil
             } catch {
@@ -320,7 +385,7 @@ import SwiftUI
                                                            location: partial, error: error.localizedDescription,
                                                            onDemandOnly: failure == .automaticPublicService, retryDelay: failure?.retryDelay, now: .now)
                 if accepted {
-                    await client.finishCacheLookup(key, scope: scope)
+                    await finishCacheLookup(key, scope: scope, token: token, revision: lookupRevision, generation: generation)
                 }
                 Self.logger.warning("Place request failed automatic=\(automatic) category=\(String(describing: type(of: error)), privacy: .public)")
                 await reloadProgress()
@@ -388,13 +453,53 @@ import SwiftUI
     func reloadProgress() async {
         guard let scope else { return }
         let token = sessionID
+        let settingsRevision = revision
+        let generation = metricsGeneration
         do {
             let value = try await store.placeProgress(scope: scope, now: .now)
-            guard token == sessionID else { return }
+            let activity = await (client as? any PlaceCacheActivityReading)?.cacheActivity(scope: scope, key: nil) ?? .init()
+            guard token == sessionID, settingsRevision == revision, generation == metricsGeneration else { return }
             progress = value
+            let cleared = value.eligible == 0 && cacheRun.startedAt != nil && cacheTimingOwner == nil
+            if cleared {
+                metricsGeneration &+= 1
+                cacheRun = .init()
+                completedTransferIntervals = []
+            }
+            cacheRun.recordCompleted(completedTransferIntervals)
+            completedTransferIntervals = []
+            cacheRun.record(activity)
+            cacheRun.observe(completed: value.resolved, total: value.eligible, failed: value.failed,
+                             canComplete: false, at: .now)
+            persistCacheRun(force: cleared)
         } catch {
-            guard token == sessionID else { return }
+            guard token == sessionID, settingsRevision == revision, generation == metricsGeneration else { return }
             lastStorageError = error.localizedDescription
+        }
+    }
+
+    private func finishCacheLookup(_ key: PlaceCacheKey, scope: MediaAccountScope, token: String,
+                                   revision expectedRevision: Int, generation: UInt64) async
+    {
+        let activity = await (client as? any PlaceCacheActivityReading)?.cacheActivity(scope: scope, key: key) ?? .init()
+        guard sessionID == token, revision == expectedRevision, metricsGeneration == generation else { return }
+        completedTransferIntervals.append(contentsOf: activity.completed)
+        await client.finishCacheLookup(key, scope: scope)
+    }
+
+    func stopCacheWorkTiming(preservingTransfers: Bool) {
+        cacheTimingOwner = nil
+        cacheRun.recordCompleted(completedTransferIntervals)
+        completedTransferIntervals = []
+        cacheRun.stop(at: .now, preservingTransfers: preservingTransfers)
+        persistCacheRun(force: true)
+    }
+
+    private func persistCacheRun(force: Bool = false) {
+        guard let namespace, force || Date().timeIntervalSince(metricsPersistedAt) >= 5 else { return }
+        if let data = try? JSONEncoder().encode(cacheRun.checkpoint(at: .now)) {
+            defaults.set(data, forKey: "maps-places-run-\(namespace)")
+            metricsPersistedAt = .now
         }
     }
 
@@ -428,7 +533,7 @@ import SwiftUI
     }
 
     static func remove(defaults: UserDefaults, namespace: String) {
-        for kind in ["preferences", "cache", "styles"] {
+        for kind in ["preferences", "cache", "styles", "run"] {
             defaults.removeObject(forKey: "maps-places-\(kind)-\(namespace)")
         }
     }

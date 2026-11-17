@@ -65,6 +65,22 @@ struct PlaceTransferTests {
         #expect(journal.jobs.first?.id != fixture.job.id)
     }
 
+    @Test func independentAssetPauseAndResumeLeavePlaceStateUntouched() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let queue = LibraryTransferQueue(rootURL: fixture.root)
+        await queue.setAssetCacheEnabled(false, namespace: fixture.scope.cacheNamespace)
+        var journal = try LibraryTransferJournal.load(from: fixture.root.appending(path: "journal.json"))
+        #expect(journal.jobs.contains { $0.id == fixture.job.id })
+        #expect(journal.disabledLanes.contains("cache"))
+        #expect(!journal.disabledLanes.contains("places"))
+        await queue.setEnabled(false, lane: "places", namespace: fixture.scope.cacheNamespace)
+        await queue.setAssetCacheEnabled(true, namespace: fixture.scope.cacheNamespace)
+        journal = try LibraryTransferJournal.load(from: fixture.root.appending(path: "journal.json"))
+        #expect(!journal.disabledLanes.contains("cache"))
+        #expect(journal.disabledLanes.contains("places"))
+    }
+
     @Test func lookAheadIsBoundedAndRouteChangesDoNotInvalidateAssetWork() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }

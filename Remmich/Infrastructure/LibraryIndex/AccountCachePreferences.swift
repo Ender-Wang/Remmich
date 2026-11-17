@@ -3,6 +3,22 @@ import Foundation
 nonisolated struct AccountCachePreferences: Codable, Equatable, Sendable {
     var enabled = false
     var paused = false
+    var placesEnabled: Bool?
+    var placesPaused: Bool?
+
+    var effectivePlacesEnabled: Bool {
+        placesEnabled ?? enabled
+    }
+
+    var effectivePlacesPaused: Bool {
+        placesPaused ?? paused
+    }
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.enabled == rhs.enabled && lhs.paused == rhs.paused
+            && lhs.effectivePlacesEnabled == rhs.effectivePlacesEnabled
+            && lhs.effectivePlacesPaused == rhs.effectivePlacesPaused
+    }
 
     static func load(from defaults: UserDefaults, scope: MediaAccountScope) -> Self {
         load(from: defaults, namespace: scope.cacheNamespace)

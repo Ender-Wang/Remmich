@@ -1,6 +1,6 @@
 import Foundation
 
-actor PhotonPlaceClient: PlaceLookingUp {
+actor PhotonPlaceClient: PlaceLookingUp, PlaceCacheActivityReading {
     private let session: URLSession
     private let transfers: LibraryTransferQueue?
 
@@ -42,6 +42,10 @@ actor PhotonPlaceClient: PlaceLookingUp {
 
     func finishCacheLookup(_ key: PlaceCacheKey, scope: MediaAccountScope) async {
         try? await transfers?.finishPlaceLookup(key, scope: scope)
+    }
+
+    func cacheActivity(scope: MediaAccountScope, key: PlaceCacheKey?) async -> PlaceCacheTransferActivity {
+        await transfers?.placeCacheActivity(scope: scope, key: key) ?? .init()
     }
 
     private func lookup(_ coordinate: PlaceCoordinate, endpoint: URL, language: PlaceLanguage, automatic: Bool,

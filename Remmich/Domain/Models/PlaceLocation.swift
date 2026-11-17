@@ -86,6 +86,10 @@ nonisolated enum PlaceLookupError: LocalizedError, Equatable {
     }
 }
 
+nonisolated protocol PlaceCacheActivityReading: Sendable {
+    func cacheActivity(scope: MediaAccountScope, key: PlaceCacheKey?) async -> PlaceCacheTransferActivity
+}
+
 nonisolated protocol PlaceLookingUp: Sendable {
     func lookup(_ coordinate: PlaceCoordinate, endpoint: URL, language: PlaceLanguage) async throws -> PlaceLocation?
     func lookup(_ coordinate: PlaceCoordinate, endpoint: URL, language: PlaceLanguage, automatic: Bool) async throws -> PlaceLocation?

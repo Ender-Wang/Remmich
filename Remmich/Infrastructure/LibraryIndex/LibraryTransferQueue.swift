@@ -488,6 +488,14 @@ actor LibraryTransferQueue {
         pump()
     }
 
+    /// Independent asset controls leave queued place downloads and receipts intact.
+    func setAssetCacheEnabled(_ enabled: Bool, namespace: String) {
+        guard journal.owner?.namespace == namespace else { return }
+        discard(journal.setEnabled(enabled, lane: "cache"))
+        try? persist()
+        pump()
+    }
+
     func invalidate(namespace: String? = nil, lane: String? = nil) {
         if lane == nil, namespace == nil || configuringOwner?.namespace == namespace {
             configurationRevision &+= 1
@@ -606,6 +614,22 @@ actor LibraryTransferQueue {
         let removed = journal.removePlaceLookup(key)
         do { try persist() } catch { journal = previous; throw error }
         discard(removed, committed: true)
+    }
+
+    func placeCacheActivity(scope: MediaAccountScope, key: PlaceCacheKey?) -> PlaceCacheTransferActivity {
+        // These intervals include OS scheduling/delivery wait until app receipt;
+        // they measure outstanding cache work, not wire latency or CPU time.
+        guard journal.owner?.namespace == scope.cacheNamespace else { return .init() }
+        var activity = PlaceCacheTransferActivity()
+        for job in journal.jobs where job.kind == .place && (key == nil || job.sourceRevision == key?.id) {
+            guard let start = job.submittedAt else { continue }
+            if job.state == .running {
+                activity.runningSince.append(start)
+            } else if let end = job.completedAt {
+                activity.completed.append(DateInterval(start: start, end: max(start, end)))
+            }
+        }
+        return activity
     }
 
     private func validatePlace(_ key: PlaceCacheKey, scope: MediaAccountScope) throws {
@@ -824,6 +848,9 @@ actor LibraryTransferQueue {
                 try? FileManager.default.removeItem(at: fileURL)
             }
             job.state = .failed
+            if job.kind == .place {
+                job.completedAt = Date()
+            }
             job.errorCode = errorCode ?? (error as? URLError)?.errorCode ?? URLError.badServerResponse.rawValue
             // URLSession usually restarts an unusable resume token itself. If
             // its temporary file/token is rejected, try one fresh GET instead.
