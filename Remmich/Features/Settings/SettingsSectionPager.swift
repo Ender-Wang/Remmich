@@ -54,6 +54,9 @@ struct SettingsSectionPager<Context: View, First: View, Second: View>: View {
                 .frame(maxWidth: .infinity)
                 .fixedSize(horizontal: false, vertical: true)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { firstHeight = $0 }
+                // Keep glass control edges and shadows inside their own page
+                // before sliding it beside the neighboring page.
+                .clipped()
                 .offset(x: (selection == 0 ? 0 : -width) + offset)
                 .allowsHitTesting(selection == 0 && origin == nil)
                 .accessibilityHidden(selection != 0)
@@ -61,6 +64,7 @@ struct SettingsSectionPager<Context: View, First: View, Second: View>: View {
                 .frame(maxWidth: .infinity)
                 .fixedSize(horizontal: false, vertical: true)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { secondHeight = $0 }
+                .clipped()
                 .offset(x: (selection == 1 ? 0 : width) + offset)
                 .allowsHitTesting(selection == 1 && origin == nil)
                 .accessibilityHidden(selection != 1)

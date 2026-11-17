@@ -1350,6 +1350,7 @@ struct AccountSettingsView: View {
                     get: { libraryIndex.thumbnailWarmingEnabled }, set: { libraryIndex.setAssetCacheEnabled($0) }
                 ))
                 .font(.subheadline).frame(minHeight: 50)
+                .padding(.horizontal, 16)
             }
         }
     }
@@ -1403,6 +1404,7 @@ struct AccountSettingsView: View {
                     get: { libraryIndex.placeCachingEnabled }, set: { libraryIndex.setPlaceCacheEnabled($0) }
                 ))
                 .font(.subheadline).frame(minHeight: 50)
+                .padding(.horizontal, 16)
                 .disabled(!libraryIndex.automaticPlacesAllowed)
                 Text("Places use GPS metadata already cached by Asset Cache. New assets become available as their metadata is cached.")
                     .font(.caption2).foregroundStyle(.secondary)
@@ -1451,6 +1453,7 @@ struct AccountSettingsView: View {
             .buttonStyle(.glass)
             .buttonBorderShape(.capsule)
             .frame(minHeight: 44)
+            .padding(.horizontal, 16)
     }
 
     private func actionRow(_ title: String, symbol: String, showsChevron: Bool = false) -> some View {
