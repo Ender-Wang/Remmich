@@ -7,12 +7,13 @@ struct RootPageSwipePolicyTests {
         state.prepare(.videos)
         state.prepare(.albums)
         state.prepare(.library)
+        state.prepare(.search)
 
         #expect(state.activeDestination == .photos)
         #expect(state.isHydrated(.videos))
         #expect(state.isHydrated(.albums))
         #expect(state.isHydrated(.library))
-        #expect(!state.isHydrated(.search))
+        #expect(state.isHydrated(.search))
     }
 
     @Test func expandedProfileBlocksDraggingButRetainsAnimatedTabTaps() {

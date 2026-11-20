@@ -399,6 +399,9 @@ struct AppShellView: View {
         }
         .task(id: media.hasShownStartupPhoto || photos.loadState == .empty) {
             guard let sessionController, media.hasShownStartupPhoto || photos.loadState == .empty else { return }
+            if !tabContentActivationState.isHydrated(.search) {
+                tabContentActivationState.prepare(.search)
+            }
             async let videoOpening: Void = prepareVideosOpening(using: sessionController)
             async let libraryOpening: Void = prepareLibraryOpening()
             await prepareAlbumsOpening(in: overviewState, preloading: true)
