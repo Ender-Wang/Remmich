@@ -728,6 +728,7 @@ struct PhotosRangeAssetsView: View {
     let store: PhotosTimelineStore
     let media: MediaLibraryController
     var tabBarTop: CGFloat = 0
+    var libraryTimelineClearance: EdgeInsets?
     var assetLayout: PhotosAssetLayout = .square
     var onPinch: ((PhotosPinchGesture) -> Void)?
     var visibilityChanged: (String, MediaRequestDescriptor?) -> Void = { _, _ in }
@@ -795,16 +796,20 @@ struct PhotosRangeAssetsView: View {
             let isPhone = UIDevice.current.userInterfaceIdiom == .phone
             let edgeInset = TimelineRangeGridLayout.edgeInset(isPhone: isPhone)
             let globalFrame = geometry.frame(in: .global)
-            let bottomContentInset = TimelineRangeGridLayout.bottomContentInset(
-                frameBottom: globalFrame.maxY,
-                tabBarTop: tabBarTop,
-                minimumBarHeight: TimelineRangeGridLayout.minimumBottomNavigationHeight(
-                    isPhone: isPhone,
-                    viewportSize: geometry.size
-                ),
-                spacing: edgeInset,
-                hasBottomNavigation: isPhone
-            )
+            let bottomContentInset = if let libraryTimelineClearance {
+                max(libraryTimelineClearance.bottom, tabBarTop > 0 && isPhone ? globalFrame.maxY - tabBarTop : 0) + edgeInset
+            } else {
+                TimelineRangeGridLayout.bottomContentInset(
+                    frameBottom: globalFrame.maxY,
+                    tabBarTop: tabBarTop,
+                    minimumBarHeight: TimelineRangeGridLayout.minimumBottomNavigationHeight(
+                        isPhone: isPhone,
+                        viewportSize: geometry.size
+                    ),
+                    spacing: edgeInset,
+                    hasBottomNavigation: isPhone
+                )
+            }
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(spacing: 0) {
@@ -815,6 +820,7 @@ struct PhotosRangeAssetsView: View {
                             .accessibilityHidden(true)
                     }
                     .scrollTargetLayout()
+                    .padding(.top, libraryTimelineClearance?.top ?? 0)
                 }
                 .defaultScrollAnchor(.bottom)
                 .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { old, new in
@@ -832,7 +838,7 @@ struct PhotosRangeAssetsView: View {
                     guard let gesture = PhotosPinchGesture(magnification: magnification) else { return }
                     handlePinch(gesture)
                 }
-                .ignoresSafeArea(.container, edges: [.horizontal, .bottom])
+                .ignoresSafeArea(.container, edges: libraryTimelineClearance == nil ? [.horizontal, .bottom] : [])
                 .onChange(of: assetLayout) {
                     guard let layoutAnchorID else { return }
                     layoutRestoreTask?.cancel()

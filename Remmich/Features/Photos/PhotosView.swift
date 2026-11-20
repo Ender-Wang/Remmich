@@ -370,6 +370,7 @@ struct PhotosView: View {
     var tabSelectionState: NativeTabSelectionState?
     var tabDestination: NativeTabDestination = .photos
     var isCollectionPageActive = true
+    var libraryTimelineClearance: EdgeInsets?
     var viewerPresentations: AssetViewerPresentationStore?
     var refreshSource: (() async -> Void)?
     var loadTimeline: (() async -> Void)?
@@ -435,6 +436,7 @@ struct PhotosView: View {
         tabSelectionState: NativeTabSelectionState? = nil,
         tabDestination: NativeTabDestination = .photos,
         isCollectionPageActive: Bool = true,
+        libraryTimelineClearance: EdgeInsets? = nil,
         viewerPresentations: AssetViewerPresentationStore? = nil,
         refreshSource: (() async -> Void)? = nil,
         loadTimeline: (() async -> Void)? = nil,
@@ -469,6 +471,7 @@ struct PhotosView: View {
         self.tabSelectionState = tabSelectionState
         self.tabDestination = tabDestination
         self.isCollectionPageActive = isCollectionPageActive
+        self.libraryTimelineClearance = libraryTimelineClearance
         self.showAccount = showAccount
     }
 
@@ -502,8 +505,6 @@ struct PhotosView: View {
         .onChange(of: isTimelineContentLoading, initial: true) { _, loading in
             loadingVisibilityChanged?(loading)
         }
-        .navigationTitle(navigationTitle)
-        .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(hasInteractivePreview || collectionTitle != nil || !navigationPath.isEmpty || libraryRange != .all)
         .nativeEdgeBackAction(active: isCollectionPageActive && viewerRoute == nil
             && (hasInteractivePreview || !navigationPath.isEmpty || libraryRange != .all),
@@ -556,6 +557,9 @@ struct PhotosView: View {
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 8)
+                    .padding(.leading, libraryTimelineClearance?.leading ?? 0)
+                    .padding(.trailing, libraryTimelineClearance?.trailing ?? 0)
+                    .padding(.top, libraryTimelineClearance?.top ?? 0)
                     .offset(x: showsBack || reduceMotion ? 0 : -max(0, geometry.frame(in: .global).minX) - 76)
                     .opacity(reduceMotion && !showsBack ? 0 : 1)
                     .allowsHitTesting(showsBack)
@@ -565,7 +569,7 @@ struct PhotosView: View {
                     // navigation reverses, independently of collection updates.
                     .transaction { $0.disablesAnimations = false }
                 }
-                .frame(height: 60)
+                .frame(height: 60 + (libraryTimelineClearance?.top ?? 0))
             }
             if navigationPath.isEmpty, let collectionTitle {
                 HStack(alignment: .top, spacing: 12) {
@@ -632,8 +636,6 @@ struct PhotosView: View {
                 .accessibilityHidden(hasInteractivePreview)
             }
         }
-        .toolbar(UIDevice.current.userInterfaceIdiom == .phone || (collectionTitle != nil && navigationPath.isEmpty) ? .hidden : .visible, for: .navigationBar)
-        .toolbarBackground(UIDevice.current.userInterfaceIdiom == .phone || navigationPath.isEmpty ? .hidden : .visible, for: .navigationBar)
         .toolbar {
             // Album roots already own Back in their multiline header overlay.
             if UIDevice.current.userInterfaceIdiom == .pad, !hasInteractivePreview,
@@ -661,8 +663,23 @@ struct PhotosView: View {
         }
     }
 
+    @ViewBuilder private var timelineWithNavigationBar: some View {
+        if tabDestination == .library {
+            // The Library destination owns the title and bar appearance even when
+            // the timeline is one of two independently hosted media lanes.
+            timelineContent
+        } else {
+            let isPhone = UIDevice.current.userInterfaceIdiom == .phone
+            timelineContent
+                .navigationTitle(navigationPath.last?.navigationTitle ?? "")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar(isPhone || (collectionTitle != nil && navigationPath.isEmpty) ? .hidden : .visible, for: .navigationBar)
+                .toolbarBackgroundVisibility(isPhone || navigationPath.isEmpty ? .hidden : .visible, for: .navigationBar)
+        }
+    }
+
     var body: some View {
-        timelineContent
+        timelineWithNavigationBar
             .onAppear {
                 viewportRuntime.isTimelineActive = isTimelineActive
                 rotationState?.setVisualHandoffEligible(
@@ -947,15 +964,19 @@ struct PhotosView: View {
         GeometryReader { geometry in
             let frame = geometry.frame(in: .global)
             let isPhone = UIDevice.current.userInterfaceIdiom == .phone
-            let barHeight = tabBarTop > 0
-                ? max(0, frame.maxY - tabBarTop)
-                : TimelineRangeGridLayout.minimumBottomNavigationHeight(isPhone: isPhone, viewportSize: geometry.size)
-            let topInset = media.canDownloadAssets
+            let barHeight: CGFloat = if tabBarTop > 0 {
+                max(0, frame.maxY - tabBarTop)
+            } else if tabDestination == .library {
+                0
+            } else {
+                TimelineRangeGridLayout.minimumBottomNavigationHeight(isPhone: isPhone, viewportSize: geometry.size)
+            }
+            let topInset = libraryTimelineClearance?.top ?? (media.canDownloadAssets
                 ? TimelineMemoryLaneSafeArea.topInset(proposed: geometry.safeAreaInsets.top, window: windowTopInset)
-                : geometry.safeAreaInsets.top
+                : geometry.safeAreaInsets.top)
             // Keep the row's scroll clearance while compact chrome hides it,
             // so showing the row does not move the timeline underneath it.
-            let bottomClearance = isPhone ? barHeight : 0
+            let bottomClearance = max(libraryTimelineClearance?.bottom ?? 0, isPhone ? barHeight : 0)
             let reservesMemoryLane = semanticScale.isAssets
                 && navigationPath.isEmpty
                 && store.memoryLaneState == .loaded
@@ -1052,7 +1073,7 @@ struct PhotosView: View {
                 windowTopInset = inset
             }
         }
-        .ignoresSafeArea(.container, edges: [.top, .horizontal, .bottom])
+        .ignoresSafeArea(.container, edges: libraryTimelineClearance == nil ? .all : [])
         .safeAreaInset(edge: .top, spacing: 0) {
             if case let .failed(message) = store.refreshState {
                 TimelineRefreshError(message: message) {
@@ -1198,12 +1219,14 @@ struct PhotosView: View {
         isCollectionPageActive && (tabSelectionState.map { $0.selection == tabDestination } ?? true)
     }
 
+    @ViewBuilder
     private func rangeDestination(_ route: PhotosRangeRoute) -> some View {
-        PhotosRangeAssetsView(
+        let content = PhotosRangeAssetsView(
             route: route,
             store: store,
             media: media,
             tabBarTop: tabBarTop,
+            libraryTimelineClearance: libraryTimelineClearance,
             assetLayout: presentation.preferences.assetLayout,
             onPinch: pinchLibraryRange,
             visibilityChanged: updateVisibility,
@@ -1226,20 +1249,23 @@ struct PhotosView: View {
             }
         )
         .navigationTitle(route.navigationTitle)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbarBackground(.visible, for: .navigationBar)
         .environment(\.scopedAssetTransitionContext, ScopedAssetTransitionContext(runtime: scopedAssetTransitions, scope: route))
-    }
 
-    private var navigationTitle: String {
-        navigationPath.last?.navigationTitle ?? ""
+        if tabDestination == .library {
+            content.libraryNavigationChrome()
+        } else {
+            content
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbarBackground(.visible, for: .navigationBar)
+        }
     }
 
     private var previewOverlay: some View {
         GeometryReader { geometry in
             let globalFrame = geometry.frame(in: .global)
-            let bottom = tabBarTop > 0 ? min(geometry.size.height, tabBarTop - globalFrame.minY) : geometry.size.height - geometry.safeAreaInsets.bottom
-            let top = geometry.safeAreaInsets.top
+            let tabBarBoundary = tabBarTop > 0 ? min(geometry.size.height, tabBarTop - globalFrame.minY) : geometry.size.height - geometry.safeAreaInsets.bottom
+            let bottom = libraryTimelineClearance.map { min(tabBarBoundary, geometry.size.height - $0.bottom) } ?? tabBarBoundary
+            let top = libraryTimelineClearance?.top ?? geometry.safeAreaInsets.top
             let available = CGSize(width: geometry.size.width, height: max(0, bottom - top))
             ZStack(alignment: .topLeading) {
                 if let assetPreview {

@@ -29,6 +29,51 @@ struct SavedPhotosView: View {
     @State private var timelines: [SavedPhotosMedia: SavedPhotosTimelineState] = [:]
 
     var body: some View {
+        Group {
+            if library.state == .ready {
+                LibraryTimelineViewport { clearance in
+                    MediaTimelinePageHost(selection: media.index, reduceMotion: reduceMotion,
+                                          photos: timeline(.photos, clearance: clearance),
+                                          videos: timeline(.videos, clearance: clearance))
+                } header: {
+                    downloadsHeader
+                }
+            } else {
+                VStack(spacing: 0) {
+                    downloadsHeader
+                    ScrollView {
+                        status.padding(16)
+                    }
+                }
+            }
+        }
+        .navigationTitle("Downloads")
+        .libraryNavigationChrome()
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { Task { await library.refresh() } } label: { Image(systemName: "arrow.clockwise") }
+                    .accessibilityLabel("Refresh Downloads")
+            }
+        }
+        .onAppear { library.observe(owner: observer) }
+        .onDisappear { library.stopObserving(owner: observer) }
+        .task {
+            if timelines.isEmpty {
+                timelines = Dictionary(uniqueKeysWithValues: SavedPhotosMedia.allCases.map {
+                    ($0, SavedPhotosTimelineState(library: library, scope: scope, kind: $0))
+                })
+            }
+            await library.refresh(reuseInFlight: true)
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                Task { await library.refresh() }
+            }
+        }
+        .accessibilityIdentifier("saved-photos-list")
+    }
+
+    private var downloadsHeader: some View {
         VStack(spacing: 0) {
             VStack(spacing: 8) {
                 Picker("Saved media", selection: $media) {
@@ -55,46 +100,14 @@ struct SavedPhotosView: View {
                 }
                 .padding(.horizontal, 16).padding(.bottom, 8)
             }
-            if library.state == .ready {
-                SavedPhotosPageHost(selection: media.index, reduceMotion: reduceMotion,
-                                    photos: timeline(.photos), videos: timeline(.videos))
-            } else {
-                ScrollView {
-                    status.padding(16)
-                }
-            }
         }
-        .navigationTitle("Downloads")
-        .toolbar(.visible, for: .navigationBar)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button { Task { await library.refresh() } } label: { Image(systemName: "arrow.clockwise") }
-                    .accessibilityLabel("Refresh Downloads")
-            }
-        }
-        .onAppear { library.observe(owner: observer) }
-        .onDisappear { library.stopObserving(owner: observer) }
-        .task {
-            if timelines.isEmpty {
-                timelines = Dictionary(uniqueKeysWithValues: SavedPhotosMedia.allCases.map {
-                    ($0, SavedPhotosTimelineState(library: library, scope: scope, kind: $0))
-                })
-            }
-            await library.refresh(reuseInFlight: true)
-        }
-        .onChange(of: scenePhase) { _, phase in
-            if phase == .active {
-                Task { await library.refresh() }
-            }
-        }
-        .accessibilityIdentifier("saved-photos-list")
     }
 
-    private func timeline(_ kind: SavedPhotosMedia) -> AnyView {
+    private func timeline(_ kind: SavedPhotosMedia, clearance: EdgeInsets) -> AnyView {
         guard let state = timelines[kind] else { return AnyView(Color.clear) }
         return AnyView(SavedPhotosTimeline(library: library, kind: kind, state: state, selected: media == kind,
                                            tabBarTop: $tabBarTop, tabSelectionState: tabSelectionState,
-                                           viewerPresentations: viewerPresentations))
+                                           viewerPresentations: viewerPresentations, clearance: clearance))
     }
 
     @ViewBuilder private var status: some View {
@@ -162,6 +175,7 @@ private struct SavedPhotosTimeline: View {
     @Binding var tabBarTop: CGFloat
     let tabSelectionState: NativeTabSelectionState?
     let viewerPresentations: AssetViewerPresentationStore?
+    let clearance: EdgeInsets
     @State private var path: [PhotosRangeRoute] = []
 
     var body: some View {
@@ -170,7 +184,7 @@ private struct SavedPhotosTimeline: View {
                    rootAccessibilityID: "downloads-timeline-\(kind.rawValue.lowercased())",
                    compactChromeChanged: { _ in },
                    tabSelectionState: tabSelectionState, tabDestination: .library,
-                   isCollectionPageActive: selected, viewerPresentations: viewerPresentations,
+                   isCollectionPageActive: selected, libraryTimelineClearance: clearance, viewerPresentations: viewerPresentations,
                    refreshSource: { await library.refresh() })
             .task(id: selected ? library.catalogRevision : nil) {
                 guard selected else { return }
@@ -185,26 +199,26 @@ private struct SavedPhotosTimeline: View {
 
 /// Hosting preserves each tab's ScrollView while the existing native animator
 /// moves the two pages. The selector and navigation header stay outside it.
-private struct SavedPhotosPageHost: UIViewControllerRepresentable {
+struct MediaTimelinePageHost: UIViewControllerRepresentable {
     let selection: Int
     let reduceMotion: Bool
     let photos: AnyView
     let videos: AnyView
 
-    func makeUIViewController(context _: Context) -> SavedPhotosPageController {
-        SavedPhotosPageController()
+    func makeUIViewController(context _: Context) -> MediaTimelinePageController {
+        MediaTimelinePageController()
     }
 
-    func updateUIViewController(_ controller: SavedPhotosPageController, context _: Context) {
+    func updateUIViewController(_ controller: MediaTimelinePageController, context _: Context) {
         controller.update(photos: photos, videos: videos, selection: selection, reduceMotion: reduceMotion)
     }
 
-    static func dismantleUIViewController(_ controller: SavedPhotosPageController, coordinator _: ()) {
+    static func dismantleUIViewController(_ controller: MediaTimelinePageController, coordinator _: ()) {
         controller.stop()
     }
 }
 
-private final class SavedPhotosPageController: UIViewController {
+final class MediaTimelinePageController: UIViewController {
     private let pages = [UIHostingController(rootView: AnyView(EmptyView())), UIHostingController(rootView: AnyView(EmptyView()))]
     private var selected = 0
     private var requested = 0
