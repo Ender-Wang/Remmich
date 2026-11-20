@@ -197,19 +197,25 @@ public struct ImmichTimelineQuery: Codable, Hashable, Sendable {
     public let albumID: String?
     public let order: ImmichTimelineOrder
     public let orderBy: ImmichTimelineOrderBy
-    public let visibility: ImmichAssetVisibility
+    public let visibility: ImmichAssetVisibility?
     public let includesTrashed: Bool
     public let includesStacks: Bool
     public let includesPartners: Bool
+    public let isFavorite: Bool?
+    public let personID: String?
+    public let userID: String?
 
     public init(
         order: ImmichTimelineOrder = .descending,
         orderBy: ImmichTimelineOrderBy = .takenAt,
-        visibility: ImmichAssetVisibility = .timeline,
+        visibility: ImmichAssetVisibility? = .timeline,
         includesTrashed: Bool = false,
         includesStacks: Bool = true,
         includesPartners: Bool = true,
-        albumID: String? = nil
+        albumID: String? = nil,
+        isFavorite: Bool? = nil,
+        personID: String? = nil,
+        userID: String? = nil
     ) {
         self.order = order
         self.orderBy = orderBy
@@ -218,6 +224,9 @@ public struct ImmichTimelineQuery: Codable, Hashable, Sendable {
         self.includesStacks = includesStacks
         self.includesPartners = includesPartners
         self.albumID = albumID
+        self.isFavorite = isFavorite
+        self.personID = personID
+        self.userID = userID
     }
 }
 
@@ -346,6 +355,35 @@ public enum ImmichMemoryKind: Codable, Hashable, Sendable {
     }
 }
 
+public struct ImmichPerson: Codable, Hashable, Identifiable, Sendable {
+    public let id: String
+    public let name: String
+    public let updatedAt: Date?
+}
+
+public struct ImmichPeoplePage: Sendable {
+    public let people: [ImmichPerson]
+    public let hasNextPage: Bool
+}
+
+public struct ImmichPartner: Identifiable, Sendable {
+    public let id: String
+    public let name: String
+    public let hasProfileImage: Bool
+    public let profileChangedAt: Date
+}
+
+public struct ImmichSharedLink: Identifiable, Sendable {
+    public let id: String
+    public let description: String?
+    public let createdAt: Date
+    public let expiresAt: Date?
+    public let isPasswordProtected: Bool
+    public let publicURL: URL?
+    public let album: ImmichAlbum?
+    public let assets: [ImmichTimelineAsset]
+}
+
 public struct ImmichMemoryQuery: Codable, Hashable, Sendable {
     public let date: String?
     public let page: Int
@@ -364,7 +402,9 @@ public struct ImmichMemory: Codable, Hashable, Identifiable, Sendable {
     public let memoryAt: Date
     public let year: Int
     public let kind: ImmichMemoryKind
+    public let showAt: Date?
     public let assets: [ImmichMemoryAsset]
+    public let timelineAssets: [ImmichTimelineAsset]?
 
     public init(
         id: String,
@@ -372,14 +412,18 @@ public struct ImmichMemory: Codable, Hashable, Identifiable, Sendable {
         memoryAt: Date,
         year: Int,
         kind: ImmichMemoryKind,
-        assets: [ImmichMemoryAsset]
+        showAt: Date? = nil,
+        assets: [ImmichMemoryAsset],
+        timelineAssets: [ImmichTimelineAsset]? = nil
     ) {
         self.id = id
         self.ownerID = ownerID
         self.memoryAt = memoryAt
         self.year = year
         self.kind = kind
+        self.showAt = showAt
         self.assets = assets
+        self.timelineAssets = timelineAssets
     }
 
     public var assetIDs: [String] {

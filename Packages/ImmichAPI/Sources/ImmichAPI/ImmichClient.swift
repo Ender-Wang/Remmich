@@ -60,17 +60,20 @@ public actor ImmichClient {
 
     public func mapStyles() async throws -> ImmichMapStyles {
         do {
-            let config: Components.Schemas.UserConfigDto
-            switch try await makeClient().getUserConfig(.init()) {
-            case let .ok(response): config = try response.body.json
-            case let .undocumented(statusCode, _): throw Self.map(status: statusCode)
-            }
+            let config = try await readUserConfig()
             guard let light = URL(string: config.map.lightStyle),
                   let dark = URL(string: config.map.darkStyle),
                   [light, dark].allSatisfy({ ["https", "http"].contains($0.scheme?.lowercased() ?? "") && $0.host != nil })
             else { throw ImmichAPIError.invalidResponse }
             return .init(light: light, dark: dark, enabled: config.map.enabled)
         } catch { throw Self.map(error) }
+    }
+
+    private func readUserConfig() async throws -> Components.Schemas.UserConfigDto {
+        switch try await makeClient().getUserConfig(.init()) {
+        case let .ok(response): try response.body.json
+        case let .undocumented(statusCode, _): throw Self.map(status: statusCode)
+        }
     }
 
     public func validateServer() async throws -> ImmichServerInfo {
@@ -386,7 +389,116 @@ public actor ImmichClient {
         }
     }
 
-    public func memories(query: ImmichMemoryQuery = .init()) async throws -> [ImmichMemory] {
+    public func people(page: Int, size: Int) async throws -> ImmichPeoplePage {
+        guard credential != nil else { throw ImmichAPIError.unauthorized }
+        do {
+            switch try await makeClient().getAllPeople(.init(query: .init(page: page, size: size, withHidden: false))) {
+            case let .ok(response):
+                let result = try response.body.json
+                return ImmichPeoplePage(people: result.people.filter { !$0.isHidden }.map {
+                    ImmichPerson(id: $0.id, name: $0.name, updatedAt: $0.updatedAt)
+                }, hasNextPage: result.hasNextPage ?? (page * size < result.total))
+            case let .undocumented(statusCode, _): throw Self.map(status: statusCode)
+            }
+        } catch { throw Self.map(error) }
+    }
+
+    public func sharedLinks(serverURL: URL) async throws -> [ImmichSharedLink] {
+        guard credential != nil else { throw ImmichAPIError.unauthorized }
+        do {
+            async let config = try? readUserConfig()
+            switch try await makeClient().getAllSharedLinks(.init()) {
+            case let .ok(response):
+                let links = try response.body.json
+                guard !links.isEmpty else { return [] }
+                let webBase = await Self.shareWebBase(externalDomain: config?.server.externalDomain, serverURL: serverURL)
+                return try links.map { link in
+                    let album = try link.album.map(Self.album(from:))
+                    return ImmichSharedLink(id: link.id, description: link.description, createdAt: link.createdAt,
+                                            expiresAt: link.expiresAt, isPasswordProtected: link.password?.isEmpty == false,
+                                            publicURL: Self.sharedLinkURL(webBase: webBase, slug: link.slug, key: link.key),
+                                            album: album, assets: album == nil ? Self.browsableAssets(link.assets) : [])
+                }
+            case let .undocumented(statusCode, _): throw Self.map(status: statusCode)
+            }
+        } catch { throw Self.map(error) }
+    }
+
+    public func incomingPartners() async throws -> [ImmichPartner] {
+        guard credential != nil else { throw ImmichAPIError.unauthorized }
+        do {
+            switch try await makeClient().getPartners(.init(query: .init(direction: .shared_hyphen_with))) {
+            case let .ok(response):
+                return try response.body.json.map {
+                    ImmichPartner(id: $0.id, name: $0.name, hasProfileImage: !$0.profileImagePath.isEmpty,
+                                  profileChangedAt: $0.profileChangedAt)
+                }
+            case let .undocumented(statusCode, _): throw Self.map(status: statusCode)
+            }
+        } catch { throw Self.map(error) }
+    }
+
+    public func foldersEnabled() async throws -> Bool {
+        guard credential != nil else { throw ImmichAPIError.unauthorized }
+        do {
+            switch try await makeClient().getMyPreferences(.init()) {
+            case let .ok(response): return try response.body.json.folders.enabled
+            case let .undocumented(statusCode, _): throw Self.map(status: statusCode)
+            }
+        } catch { throw Self.map(error) }
+    }
+
+    public func folderPaths() async throws -> [String] {
+        guard credential != nil else { throw ImmichAPIError.unauthorized }
+        do {
+            switch try await makeClient().getUniqueOriginalPaths(.init()) {
+            case let .ok(response): return try response.body.json
+            case let .undocumented(statusCode, _): throw Self.map(status: statusCode)
+            }
+        } catch { throw Self.map(error) }
+    }
+
+    public func folderAssets(path: String) async throws -> [ImmichTimelineAsset] {
+        guard credential != nil else { throw ImmichAPIError.unauthorized }
+        guard !path.isEmpty else { throw ImmichAPIError.invalidResponse }
+        do {
+            switch try await makeClient().getAssetsByOriginalPath(.init(query: .init(path: path))) {
+            case let .ok(response):
+                return try Self.browsableAssets(response.body.json.filter {
+                    ($0.originalPath as NSString).deletingLastPathComponent == path
+                })
+            case let .undocumented(statusCode, _): throw Self.map(status: statusCode)
+            }
+        } catch { throw Self.map(error) }
+    }
+
+    private static func shareWebBase(externalDomain: String?, serverURL: URL) -> URL? {
+        if let externalDomain, var components = URLComponents(string: externalDomain),
+           let scheme = components.scheme?.lowercased(), ["https", "http"].contains(scheme),
+           components.host?.isEmpty == false, components.user == nil, components.password == nil
+        {
+            components.path = ""
+            components.query = nil
+            components.fragment = nil
+            return components.url
+        }
+        return serverURL.lastPathComponent == "api" ? serverURL.deletingLastPathComponent() : nil
+    }
+
+    private static func sharedLinkURL(webBase: URL?, slug: String?, key: String) -> URL? {
+        if let slug, !slug.isEmpty, slug != ".", slug != ".." {
+            return webBase?.appending(path: "s").appending(component: slug)
+        }
+        guard !key.isEmpty, key != ".", key != "..", !key.contains("/") else { return nil }
+        return webBase?.appending(path: "share").appending(component: key)
+    }
+
+    private static func browsableAssets(_ assets: [Components.Schemas.AssetResponseDto]) -> [ImmichTimelineAsset] {
+        assets.filter { !$0.isTrashed && $0.visibility != .locked && ($0._type == .IMAGE || $0._type == .VIDEO) }
+            .map(timelineAsset)
+    }
+
+    public func memories(query: ImmichMemoryQuery = .init(), includeTimelineAssets: Bool = false) async throws -> [ImmichMemory] {
         guard credential != nil else { throw ImmichAPIError.unauthorized }
         guard query.page > 0, query.size > 0 else { throw ImmichAPIError.invalidResponse }
         do {
@@ -401,7 +513,7 @@ public actor ImmichClient {
             )
             switch output {
             case let .ok(response):
-                return try response.body.json.map(Self.memory(from:))
+                return try response.body.json.map { try Self.memory(from: $0, includeTimelineAssets: includeTimelineAssets) }
             case let .undocumented(statusCode, _):
                 throw Self.map(status: statusCode)
             }
@@ -525,10 +637,13 @@ public actor ImmichClient {
     ) throws -> Operations.getTimeBuckets.Input.Query {
         try .init(
             albumId: query.albumID,
+            isFavorite: query.isFavorite,
             isTrashed: query.includesTrashed,
             order: timelineOrder(from: query.order),
             orderBy: timelineOrderBy(from: query.orderBy),
-            visibility: query.albumID == nil ? timelineVisibility(from: query.visibility) : nil,
+            personId: query.personID,
+            userId: query.userID,
+            visibility: query.albumID == nil ? query.visibility.map { try timelineVisibility(from: $0) } : nil,
             withCoordinates: true,
             withPartners: query.includesPartners,
             withStacked: query.includesStacks
@@ -541,11 +656,14 @@ public actor ImmichClient {
     ) throws -> Operations.getTimeBucket.Input.Query {
         try .init(
             albumId: query.albumID,
+            isFavorite: query.isFavorite,
             isTrashed: query.includesTrashed,
             order: timelineOrder(from: query.order),
             orderBy: timelineOrderBy(from: query.orderBy),
+            personId: query.personID,
             timeBucket: bucketID,
-            visibility: query.albumID == nil ? timelineVisibility(from: query.visibility) : nil,
+            userId: query.userID,
+            visibility: query.albumID == nil ? query.visibility.map { try timelineVisibility(from: $0) } : nil,
             withCoordinates: true,
             withPartners: query.includesPartners,
             withStacked: query.includesStacks
@@ -582,7 +700,7 @@ public actor ImmichClient {
         }
     }
 
-    private static func memory(from response: Components.Schemas.MemoryResponseDto) throws -> ImmichMemory {
+    private static func memory(from response: Components.Schemas.MemoryResponseDto, includeTimelineAssets: Bool) throws -> ImmichMemory {
         guard !response.id.isEmpty, !response.ownerId.isEmpty else {
             throw ImmichAPIError.invalidResponse
         }
@@ -596,6 +714,7 @@ public actor ImmichClient {
             memoryAt: response.memoryAt,
             year: response.data.year,
             kind: kind,
+            showAt: response.showAt,
             assets: response.assets.map { asset in
                 let mediaKind: ImmichTimelineMediaKind = switch asset._type {
                 case .IMAGE: .image
@@ -608,8 +727,29 @@ public actor ImmichClient {
                     updatedAt: asset.updatedAt,
                     mediaKind: mediaKind
                 )
-            }
+            },
+            timelineAssets: includeTimelineAssets ? response.assets.map(Self.timelineAsset) : nil
         )
+    }
+
+    private static func timelineAsset(_ asset: Components.Schemas.AssetResponseDto) -> ImmichTimelineAsset {
+        let kind: ImmichTimelineMediaKind = switch asset._type {
+        case .IMAGE: .image
+        case .VIDEO: .video
+        case .AUDIO: .audio
+        case .OTHER: .other
+        }
+        return ImmichTimelineAsset(id: asset.id, ownerID: asset.ownerId, createdAt: asset.createdAt,
+                                   fileCreatedAt: asset.fileCreatedAt,
+                                   localOffsetHours: asset.localDateTime.timeIntervalSince(asset.fileCreatedAt) / 3600,
+                                   mediaKind: kind, durationMilliseconds: asset.duration,
+                                   aspectRatio: Double(max(1, asset.width ?? 1)) / Double(max(1, asset.height ?? 1)),
+                                   isFavorite: asset.isFavorite, isTrashed: asset.isTrashed,
+                                   visibility: .init(serverValue: asset.visibility.rawValue), livePhotoVideoID: asset.livePhotoVideoId,
+                                   stack: nil, projectionType: nil, thumbhash: asset.thumbhash,
+                                   city: asset.exifInfo?.city, country: asset.exifInfo?.country,
+                                   latitude: asset.exifInfo?.latitude, longitude: asset.exifInfo?.longitude,
+                                   thumbnailRevision: thumbnailRevision(createdAt: asset.createdAt, fileCreatedAt: asset.fileCreatedAt))
     }
 
     private static func parseTimelineDate(_ value: String) -> Date? {

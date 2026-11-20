@@ -12,6 +12,7 @@ filter:
     - login
     - logout
     - getMyUser
+    - getMyPreferences
     - getTimeBuckets
     - getTimeBucket
     - searchAssets
@@ -19,4 +20,9 @@ filter:
     - searchMemories
     - getAllAlbums
     - getAlbumInfo
+    - getAllPeople
+    - getAllSharedLinks
+    - getPartners
+    - getUniqueOriginalPaths
+    - getAssetsByOriginalPath
 

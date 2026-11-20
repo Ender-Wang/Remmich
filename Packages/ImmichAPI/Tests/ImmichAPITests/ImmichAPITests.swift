@@ -379,22 +379,25 @@ private struct MapConfigurationTransport: ClientTransport {
         #expect(operationID == "getUserConfig")
         #expect(request.method == .get)
         #expect(request.headerFields[.authorization] == "Bearer secret")
-        let json = #"""
-        {
-          "ffmpeg":{"realtime":{"enabled":false,"resolutions":[],"videoCodecs":[]}},
-          "image":{"fullsize":{"enabled":true},"preview":{"size":1440},"thumbnail":{"size":250}},
-          "machineLearning":{"enabled":true,"clip":{"enabled":true},"duplicateDetection":{"enabled":true},"facialRecognition":{"enabled":true,"minFaces":3},"ocr":{"enabled":true}},
-          "map":{"enabled":\#(enabled),"lightStyle":"https://maps.example.com/light.json","darkStyle":"https://maps.example.com/dark.json"},
-          "oauth":{"enabled":false,"autoLaunch":false,"buttonText":"OAuth"},
-          "passwordLogin":{"enabled":true},"reverseGeocoding":{"enabled":true},
-          "server":{"externalDomain":"","loginPageMessage":"","publicUsers":false},
-          "theme":{"customCss":""},"trash":{"enabled":true,"days":30},"user":{"deleteDelay":7}
-        }
-        """#
         var response = HTTPResponse(status: .ok)
         response.headerFields[.contentType] = "application/json"
-        return (response, HTTPBody(json))
+        return (response, HTTPBody(userConfigFixture(mapEnabled: enabled)))
     }
+}
+
+func userConfigFixture(mapEnabled: Bool = true, externalDomain: String = "") -> String {
+    #"""
+    {
+      "ffmpeg":{"realtime":{"enabled":false,"resolutions":[],"videoCodecs":[]}},
+      "image":{"fullsize":{"enabled":true},"preview":{"size":1440},"thumbnail":{"size":250}},
+      "machineLearning":{"enabled":true,"clip":{"enabled":true},"duplicateDetection":{"enabled":true},"facialRecognition":{"enabled":true,"minFaces":3},"ocr":{"enabled":true}},
+      "map":{"enabled":\#(mapEnabled),"lightStyle":"https://maps.example.com/light.json","darkStyle":"https://maps.example.com/dark.json"},
+      "oauth":{"enabled":false,"autoLaunch":false,"buttonText":"OAuth"},
+      "passwordLogin":{"enabled":true},"reverseGeocoding":{"enabled":true},
+      "server":{"externalDomain":"\#(externalDomain)","loginPageMessage":"","publicUsers":false},
+      "theme":{"customCss":""},"trash":{"enabled":true,"days":30},"user":{"deleteDelay":7}
+    }
+    """#
 }
 
 @Suite("Onboarding operation audit")
