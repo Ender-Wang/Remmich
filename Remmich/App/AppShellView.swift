@@ -231,7 +231,10 @@ struct AppShellView: View {
                             signOut: signOut,
                             dismissAccountRequest: $libraryDismissAccountRequest,
                             accountPresentationChanged: { libraryAccountPresented = $0 },
-                            sessionController: sessionController
+                            sessionController: sessionController,
+                            tabSelectionState: tabSelectionState,
+                            viewerPresentations: viewerPresentations,
+                            tabBarTop: $tabBarTop
                         )
                     }
                 }

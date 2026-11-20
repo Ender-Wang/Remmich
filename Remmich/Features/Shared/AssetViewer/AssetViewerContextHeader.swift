@@ -5,9 +5,9 @@ nonisolated struct AssetViewerContextPresentation: Equatable, Sendable {
     let capturedAt: Date
     let location: String?
 
-    init(asset: TimelineAssetSummary, detail: AssetDetail?, place: PlaceLocation? = nil) {
+    init(asset: TimelineAssetSummary, detail: AssetDetail?, place: PlaceLocation? = nil, captureLocalDate: Date? = nil) {
         assetID = asset.id
-        capturedAt = detail?.capturedAt ?? asset.captureLocalDate
+        capturedAt = detail?.capturedAt ?? captureLocalDate ?? asset.captureLocalDate
         location = place?.title ?? Self.normalizedLocation(from: detail)
     }
 

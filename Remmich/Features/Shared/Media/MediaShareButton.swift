@@ -74,7 +74,7 @@ struct MediaShareButton<Content: View>: View {
         percent = nil
         task = Task { @MainActor in
             do {
-                let payload = try await media.exports.prepareShare(snapshot) { received, total in
+                let payload = try await media.prepareShare(snapshot) { received, total in
                     guard operation == owner, preparing else { return }
                     let next = total > 0 ? Int(min(100, max(0, Double(received) / Double(total) * 100))) : nil
                     if percent != next {

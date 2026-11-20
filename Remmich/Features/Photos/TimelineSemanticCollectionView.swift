@@ -1111,7 +1111,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             let displayedY = layout.layoutAttributesForItem(at: path)?.frame.minY ?? item.frame.minY
             let initiallyPinned = displayedY > item.frame.minY + 0.5
             cell.setHeaderContent(
-                title: TimelineCaptureDateFormatting.string(from: date, dateStyle: .long, timeStyle: .none),
+                title: dayHeaderTitle(date),
                 count: "\(item.assetRange.count.formatted()) items",
                 naturalY: item.frame.minY,
                 pinned: initiallyPinned
@@ -1775,16 +1775,20 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         let cell = TimelineSemanticCollectionCell(frame: CGRect(origin: .zero, size: item.frame.size))
         cell.nodeID = item.id
         cell.setHeaderContent(
-            title: TimelineCaptureDateFormatting.string(
-                from: catalog.assets[item.assetRange.lowerBound].captureLocalDate,
-                dateStyle: .long, timeStyle: .none
-            ),
+            title: dayHeaderTitle(catalog.assets[item.assetRange.lowerBound].captureLocalDate),
             count: "\(item.assetRange.count.formatted()) items",
             naturalY: item.frame.minY, pinned: false
         )
         cell.setHeaderOpacity(appearance.opacity)
         cell.setHeaderBackgroundOpacity(appearance.backgroundOpacity)
         return cell
+    }
+
+    private func dayHeaderTitle(_ date: Date) -> String {
+        if input?.media.savedPhotosLibrary != nil, date == .distantPast {
+            return "Unknown Save Date"
+        }
+        return TimelineCaptureDateFormatting.string(from: date, dateStyle: .long, timeStyle: .none)
     }
 
     private func transitionChromePlan(

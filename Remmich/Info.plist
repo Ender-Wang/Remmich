@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Remmich needs access to create and reuse the Remmich album, save selected media, and verify which items you saved.</string>
+	<string>Remmich needs access to create and reuse the Remmich album, save selected media, and browse and verify your saved photos and videos.</string>
 	<key>MLNIdeographicFontFamilyName</key>
 	<array>
 		<string>PingFang SC</string>

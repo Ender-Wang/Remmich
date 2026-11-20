@@ -369,9 +369,11 @@ struct PhotosView: View {
     var loadingVisibilityChanged: ((Bool) -> Void)?
     var tabSelectionState: NativeTabSelectionState?
     var tabDestination: NativeTabDestination = .photos
+    var isCollectionPageActive = true
     var viewerPresentations: AssetViewerPresentationStore?
+    var refreshSource: (() async -> Void)?
     var loadTimeline: (() async -> Void)?
-    let showAccount: () -> Void
+    let showAccount: (() -> Void)?
 
     @Namespace private var viewerNamespace
     @State private var viewportRuntime = TimelineViewportRuntime()
@@ -432,9 +434,11 @@ struct PhotosView: View {
         loadingVisibilityChanged: ((Bool) -> Void)? = nil,
         tabSelectionState: NativeTabSelectionState? = nil,
         tabDestination: NativeTabDestination = .photos,
+        isCollectionPageActive: Bool = true,
         viewerPresentations: AssetViewerPresentationStore? = nil,
+        refreshSource: (() async -> Void)? = nil,
         loadTimeline: (() async -> Void)? = nil,
-        showAccount: @escaping () -> Void
+        showAccount: (() -> Void)? = nil
     ) {
         self.store = store
         self.presentation = presentation
@@ -459,10 +463,12 @@ struct PhotosView: View {
         self.compactChromeChanged = compactChromeChanged
         self.viewerVisibilityChanged = viewerVisibilityChanged
         self.viewerPresentations = viewerPresentations
+        self.refreshSource = refreshSource
         self.loadTimeline = loadTimeline
         self.loadingVisibilityChanged = loadingVisibilityChanged
         self.tabSelectionState = tabSelectionState
         self.tabDestination = tabDestination
+        self.isCollectionPageActive = isCollectionPageActive
         self.showAccount = showAccount
     }
 
@@ -474,7 +480,9 @@ struct PhotosView: View {
             case .empty:
                 EmptyStateView(
                     title: "No \(contentName)",
-                    message: "\(contentName) from your Immich library will appear here.",
+                    message: media.canDownloadAssets
+                        ? "\(contentName) from your Immich library will appear here."
+                        : "Saved \(contentName.lowercased()) in the Remmich album will appear here.",
                     systemImage: contentName == "Videos" ? "video" : "photo.on.rectangle"
                 )
             case let .failed(message):
@@ -497,8 +505,9 @@ struct PhotosView: View {
         .navigationTitle(navigationTitle)
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(hasInteractivePreview || collectionTitle != nil || !navigationPath.isEmpty || libraryRange != .all)
-        .nativeEdgeBackAction(active: viewerRoute == nil && (hasInteractivePreview || !navigationPath.isEmpty || libraryRange != .all),
-                              animatesContent: assetPreview == nil, action: navigateBack)
+        .nativeEdgeBackAction(active: isCollectionPageActive && viewerRoute == nil
+            && (hasInteractivePreview || !navigationPath.isEmpty || libraryRange != .all),
+            animatesContent: assetPreview == nil, action: navigateBack)
         .environment(\.timelineAssetPreviewAction, previewAction)
         .environment(\.timelineHiddenSourceAssetID, hiddenReturningThumbnailAssetID ?? assetPreview?.hiddenSourceAssetID)
         .environment(\.timelineHiddenSourceAssetIDs, viewerPresentations?.hiddenSourceIDs(ownerID: viewerPresentationOwnerID) ?? [])
@@ -643,9 +652,11 @@ struct PhotosView: View {
                     TimelineRangeNavigationTitle(title: title)
                 }
             }
-            AccountToolbarButton {
-                dismissPreview()
-                showAccount()
+            if let showAccount {
+                AccountToolbarButton {
+                    dismissPreview()
+                    showAccount()
+                }
             }
         }
     }
@@ -939,7 +950,9 @@ struct PhotosView: View {
             let barHeight = tabBarTop > 0
                 ? max(0, frame.maxY - tabBarTop)
                 : TimelineRangeGridLayout.minimumBottomNavigationHeight(isPhone: isPhone, viewportSize: geometry.size)
-            let topInset = TimelineMemoryLaneSafeArea.topInset(proposed: geometry.safeAreaInsets.top, window: windowTopInset)
+            let topInset = media.canDownloadAssets
+                ? TimelineMemoryLaneSafeArea.topInset(proposed: geometry.safeAreaInsets.top, window: windowTopInset)
+                : geometry.safeAreaInsets.top
             // Keep the row's scroll clearance while compact chrome hides it,
             // so showing the row does not move the timeline underneath it.
             let bottomClearance = isPhone ? barHeight : 0
@@ -998,7 +1011,10 @@ struct PhotosView: View {
                             viewportRuntime.lastResidencyTarget = target
                             media.updateTimelineResidency(plan, targetPixels: target)
                         },
-                        refresh: { await store.refresh() },
+                        refresh: {
+                            await refreshSource?()
+                            await store.refresh()
+                        },
                         loadOlder: {
                             if semanticCatalogIsOpeningWindow {
                                 store.resumeOpeningHistory()
@@ -1179,7 +1195,7 @@ struct PhotosView: View {
     }
 
     private var isTabContentActivated: Bool {
-        tabSelectionState.map { $0.selection == tabDestination } ?? true
+        isCollectionPageActive && (tabSelectionState.map { $0.selection == tabDestination } ?? true)
     }
 
     private func rangeDestination(_ route: PhotosRangeRoute) -> some View {

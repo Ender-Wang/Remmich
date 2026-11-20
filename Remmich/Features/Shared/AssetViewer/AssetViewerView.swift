@@ -567,7 +567,7 @@ struct AssetViewerView: View {
                 selectedPlace = nil
                 selectedPlaceAssetID = nil
             }
-            guard !isDismissing, let coordinate = selectedPlaceCoordinate, let locations else { return }
+            guard media.savedPhotosLibrary == nil, !isDismissing, let coordinate = selectedPlaceCoordinate, let locations else { return }
             let assetID = session.selectedAssetID
             let revision = locations.revision
             do {
@@ -1645,7 +1645,8 @@ struct AssetViewerView: View {
 
     private var selectedAssetContextPresentation: AssetViewerContextPresentation? {
         session.selectedAsset.map {
-            AssetViewerContextPresentation(asset: $0, detail: selectedAssetDetail, place: currentPlace)
+            AssetViewerContextPresentation(asset: $0, detail: selectedAssetDetail, place: currentPlace,
+                                           captureLocalDate: media.savedPhotosLibrary?.item(timelineID: $0.id)?.captureLocalDate)
         }
     }
 
@@ -1695,7 +1696,7 @@ struct AssetViewerView: View {
                     .accessibilityValue(showsInfo ? "Shown" : "Hidden")
                     .accessibilityIdentifier("asset-viewer-info")
 
-                    if let asset = session.selectedAsset {
+                    if media.canDownloadAssets, let asset = session.selectedAsset {
                         MediaDownloadButton(asset: asset, media: media) { saved in
                             Image(systemName: saved ? "checkmark" : AssetViewerExportAction.download.systemImage)
                                 // Balance the arrow's lower visual weight against Info.
@@ -1707,7 +1708,7 @@ struct AssetViewerView: View {
                 }
                 .font(.title2.weight(.semibold))
                 .buttonStyle(.plain)
-                .frame(width: controlHitSize * 2, height: controlVisualSize)
+                .frame(width: controlHitSize * (media.canDownloadAssets ? 2 : 1), height: controlVisualSize)
                 .glassEffect(.regular, in: Capsule())
 
                 Spacer(minLength: 12)

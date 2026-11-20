@@ -3,6 +3,7 @@ import Foundation
 import Nuke
 import Observation
 import OSLog
+import Photos
 
 @MainActor
 @Observable
@@ -22,6 +23,15 @@ final class MediaLibraryController {
     private(set) var pipeline: ImagePipeline?
     private(set) var downloadService: MediaDownloadService?
     private let imageDataLoader: (any DataLoading)?
+    let savedPhotosLibrary: SavedPhotosLibrary?
+    private static let savedPhotosFiles = MediaExportFiles(
+        root: FileManager.default.temporaryDirectory.appending(path: "RemmichSavedPhotos", directoryHint: .isDirectory)
+    )
+    @ObservationIgnored private var savedLivePhotoFiles: [String: MediaShareFile] = [:]
+
+    var canDownloadAssets: Bool {
+        savedPhotosLibrary == nil
+    }
 
     let timelineResidency = TimelineThumbnailResidency()
 
@@ -64,6 +74,21 @@ final class MediaLibraryController {
     init(imageDataLoader: (any DataLoading)? = nil, exports: MediaExportController? = nil) {
         self.imageDataLoader = imageDataLoader
         self.exports = exports ?? MediaExportController()
+        savedPhotosLibrary = nil
+    }
+
+    init(savedPhotosLibrary: SavedPhotosLibrary, scope: MediaAccountScope) {
+        self.savedPhotosLibrary = savedPhotosLibrary
+        self.scope = scope
+        imageDataLoader = nil
+        exports = MediaExportController()
+        var configuration = ImagePipeline.Configuration()
+        configuration.imageCache = ImageCache(costLimit: 24 * 1024 * 1024, countLimit: 240)
+        configuration.dataCache = nil
+        let pipeline = ImagePipeline(configuration: configuration)
+        self.pipeline = pipeline
+        prefetcher = ImagePrefetcher(pipeline: pipeline, destination: .memoryCache, maxConcurrentRequestCount: 3)
+        viewerPrefetcher = ImagePrefetcher(pipeline: pipeline, destination: .memoryCache, maxConcurrentRequestCount: 2)
     }
 
     func configure(session: AccountSession, activeEndpoint: URL?) {
@@ -182,6 +207,22 @@ final class MediaLibraryController {
         priority: ImageRequest.Priority = .normal,
         useSavedPhotos: Bool = true
     ) -> ImageRequest? {
+        if let savedPhotosLibrary {
+            guard let item = savedPhotosLibrary.item(timelineID: descriptor.assetID), let scope else { return nil }
+            let id = descriptor.cacheKey(in: scope)
+            if descriptor.derivative == .original {
+                return ImageRequest(id: id, data: { try await SavedPhotosLibrary.originalImageData(item) },
+                                    priority: priority, options: [.disableDiskCache])
+            }
+            let limit = descriptor.derivative == .fullSize ? 4096 : descriptor.derivative == .thumbnail ? 1024 : 2048
+            let pixels = descriptor.targetPixels.map { CGSize(width: min($0.width, limit), height: min($0.height, limit)) }
+                ?? CGSize(width: limit, height: limit)
+            return ImageRequest(id: id, image: {
+                guard let image = try await SavedPhotosLibrary.image(item, pixels: pixels, fit: true, network: true)
+                else { throw SavedPhotosMediaError.unavailable }
+                return ImageContainer(image: image)
+            }, priority: priority, options: [.disableDiskCache])
+        }
         #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("-ui-testing-signed-in") {
                 let data = PreviewMediaFixtures.data(
@@ -440,6 +481,7 @@ final class MediaLibraryController {
     }
 
     private func scheduleViewerMotionCleanup() {
+        savedLivePhotoFiles.removeAll()
         guard let downloadService else { return }
         let previous = viewerMotionCleanup
         viewerMotionCleanup = Task {
@@ -496,6 +538,9 @@ final class MediaLibraryController {
         for asset: TimelineAssetSummary,
         targetPixels: MediaPixelSize
     ) -> ImageRequest? {
+        if savedPhotosLibrary != nil {
+            return imageRequest(for: Self.thumbnailDescriptor(for: asset, targetPixels: targetPixels), priority: .high)
+        }
         #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("-ui-testing-signed-in") {
                 let data = PreviewMediaFixtures.data(for: asset.id)
@@ -812,6 +857,18 @@ final class MediaLibraryController {
     }
 
     func livePhotoPlayerItem(assetID: String) async throws -> AVPlayerItem {
+        if let savedPhotosLibrary {
+            if let file = savedLivePhotoFiles[assetID] {
+                return AVPlayerItem(url: file.url)
+            }
+            guard let item = savedPhotosLibrary.item(timelineID: assetID), let scope,
+                  let resource = PHAssetResource.assetResources(for: item.asset).first(where: { $0.type == .pairedVideo })
+            else { throw SavedPhotosMediaError.unavailable }
+            let copy = try await SavedPhotosLibrary.copyResource(resource, namespace: scope.cacheNamespace, files: Self.savedPhotosFiles)
+            let file = savedLivePhotoFiles[assetID] ?? copy
+            savedLivePhotoFiles[assetID] = file
+            return AVPlayerItem(url: file.url)
+        }
         #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("-ui-testing-signed-in") {
                 return try AVPlayerItem(url: PreviewMediaFixtures.videoFileURL())
@@ -835,6 +892,7 @@ final class MediaLibraryController {
     }
 
     func discardViewerLivePhotoMotion(assetID: String) async {
+        savedLivePhotoFiles.removeValue(forKey: assetID)
         guard let downloadService else { return }
         await downloadService.removeViewerSessionDownload(
             cacheKey: "live-photo-\(assetID)"
@@ -842,6 +900,7 @@ final class MediaLibraryController {
     }
 
     func removeViewerLivePhotoMotionCache() async {
+        savedLivePhotoFiles.removeAll()
         guard let downloadService else { return }
         await downloadService.removeViewerSessionDownloads()
     }
@@ -853,6 +912,38 @@ final class MediaLibraryController {
               byteCount > 0
         else { return nil }
         return byteCount
+    }
+
+    func prepareShare(_ selection: MediaShareSelection,
+                      progress: @escaping @MainActor @Sendable (Int64, Int64) -> Void) async throws -> MediaShareFile
+    {
+        guard let savedPhotosLibrary else { return try await exports.prepareShare(selection, progress: progress) }
+        guard let scope, selection.namespace == scope.cacheNamespace,
+              let item = savedPhotosLibrary.item(timelineID: selection.asset.id)
+        else { throw SavedPhotosMediaError.unavailable }
+        if selection.isVideo || selection.tier == .original {
+            guard let resource = SavedPhotosLibrary.primaryResource(for: item) else { throw SavedPhotosMediaError.unavailable }
+            return try await SavedPhotosLibrary.copyResource(resource, namespace: scope.cacheNamespace, files: Self.savedPhotosFiles)
+        }
+        guard let bitmap = selection.image?.cgImage else { throw SavedPhotosMediaError.unavailable }
+        let operation = UUID()
+        let files = Self.savedPhotosFiles
+        let asset = selection.asset
+        let captureDate = item.asset.creationDate
+        let job = MediaExportJob(id: operation, assetID: asset.id, revision: asset.thumbnailRevision,
+                                 capturedAt: captureDate ?? .distantPast, localOffsetHours: SavedPhotosDate.offsetHours(for: captureDate),
+                                 video: false, motionID: nil, tier: selection.tier,
+                                 metadata: .init(assetID: asset.id, detail: selection.detail))
+        let directory = try await files.directory(namespace: scope.cacheNamespace, job: operation)
+        do {
+            let url = try await files.prepareSharedImage(data: nil, image: bitmap, orientation: selection.imageOrientation,
+                                                         directory: directory, job: job)
+            try Task.checkCancellation()
+            return MediaShareFile(url: url, directory: directory, files: files)
+        } catch {
+            await files.remove(directory)
+            throw error
+        }
     }
 
     func releasePlayerItem(_ item: AVPlayerItem) {

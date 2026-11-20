@@ -5,7 +5,15 @@ import UniformTypeIdentifiers
 
 /// Owns files independently of the viewer's short-lived media downloads.
 actor MediaExportFiles {
+    private let root: URL
     private var ownedDirectories: Set<URL> = []
+
+    init(root: URL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+        .appending(path: "RemmichExports", directoryHint: .isDirectory))
+    {
+        self.root = root
+    }
+
     nonisolated static func isFullSize(_ data: Data, width: Int?, height: Int?) -> Bool {
         guard let width, let height, let source = CGImageSourceCreateWithData(data as CFData, nil),
               let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [String: Any],
@@ -21,8 +29,7 @@ actor MediaExportFiles {
     }
 
     func prune(namespace: String, keeping ids: Set<UUID>) -> (removed: Int, failed: Int) {
-        let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-            .appending(path: "RemmichExports/\(namespace)", directoryHint: .isDirectory)
+        let base = root.appending(path: namespace, directoryHint: .isDirectory)
         let keys: Set<URLResourceKey> = [.isDirectoryKey, .isSymbolicLinkKey]
         let entries = (try? FileManager.default.contentsOfDirectory(at: base, includingPropertiesForKeys: Array(keys))) ?? []
         var removed = 0
@@ -43,8 +50,7 @@ actor MediaExportFiles {
     }
 
     func directory(namespace: String, job: UUID) throws -> URL {
-        let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-            .appending(path: "RemmichExports/\(namespace)/\(job.uuidString)", directoryHint: .isDirectory)
+        let base = root.appending(path: "\(namespace)/\(job.uuidString)", directoryHint: .isDirectory)
         // A retry starts only after the old worker has released its files.
         if FileManager.default.fileExists(atPath: base.path) {
             try FileManager.default.removeItem(at: base)

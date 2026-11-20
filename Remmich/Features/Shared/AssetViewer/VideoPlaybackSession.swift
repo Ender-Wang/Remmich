@@ -170,15 +170,18 @@ final class VideoPlaybackSession {
         resumesPreparationAfterSuspension = false
 
         do {
-            let local: AVURLAsset? = if let revision {
+            let local: AVPlayerItem? = if let library = media.savedPhotosLibrary {
+                try await savedVideoItem(in: library)
+            } else if let revision {
                 try await media.exports.localVideoAsset(assetID: assetID, revision: revision, tier: .playback)
+                    .map { AVPlayerItem(asset: $0) }
             } else {
                 nil
             }
             guard accepts(generation: preparationGeneration) else { return }
             let item: AVPlayerItem
             if let local {
-                item = AVPlayerItem(asset: local)
+                item = local
             } else {
                 let configuration = try media.videoStreamConfiguration(assetID: assetID)
                 let source = try AuthenticatedVideoStreamSource(
@@ -218,6 +221,13 @@ final class VideoPlaybackSession {
         } catch {
             fail(error, generation: preparationGeneration)
         }
+    }
+
+    private func savedVideoItem(in library: SavedPhotosLibrary) async throws -> AVPlayerItem {
+        guard let asset = library.item(timelineID: assetID),
+              let item = try await SavedPhotosLibrary.video(asset, network: true)
+        else { throw SavedPhotosMediaError.unavailable }
+        return item
     }
 
     func play() async {

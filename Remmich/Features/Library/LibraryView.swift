@@ -2,6 +2,7 @@ import SwiftUI
 
 struct LibraryView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
 
     let collections: [FixtureCollection]
     var exports: MediaExportController?
@@ -15,10 +16,15 @@ struct LibraryView: View {
     @Binding var dismissAccountRequest: Int
     let accountPresentationChanged: (Bool) -> Void
     var sessionController: AppSessionController?
+    var tabSelectionState: NativeTabSelectionState?
+    var viewerPresentations: AssetViewerPresentationStore?
+    var tabBarTop: Binding<CGFloat> = .constant(0)
 
     @State private var accountPresented = false
     @State private var accountContentMounted = false
     @State private var accountExpansion: CGFloat = 0
+    @State private var savedPhotos = SavedPhotosLibrary()
+    @State private var photosObserver = UUID()
 
     private let columns = [GridItem(.adaptive(minimum: LibraryCollectionCardMetrics.minimumWidth,
                                               maximum: LibraryCollectionCardMetrics.maximumWidth), spacing: LibraryCollectionCardMetrics.spacing)]
@@ -34,25 +40,33 @@ struct LibraryView: View {
             ZStack(alignment: .topTrailing) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
-                        if let exports {
-                            Text("On This Device").font(.headline)
-                            NavigationLink {
-                                DownloadsView(exports: exports)
-                            } label: {
-                                HStack(spacing: 12) {
-                                    Image(systemName: "arrow.down.circle").font(.title2)
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Text("Downloads History").font(.headline)
-                                        Text(exports.activeCount > 0 ? "\(exports.activeCount) active · Photos · Remmich" : "Save history · Photos · Remmich")
-                                            .font(.caption).foregroundStyle(.secondary)
-                                    }
-                                    Spacer()
-                                    Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
-                                }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
-                                    .glassEffect(.regular, in: .rect(cornerRadius: 22))
-                            }.buttonStyle(.plain)
-                        }
                         LazyVGrid(columns: columns, spacing: LibraryCollectionCardMetrics.spacing) {
+                            if let exports {
+                                NavigationLink {
+                                    DownloadsView(exports: exports)
+                                } label: {
+                                    LibraryCollectionCard(title: "Downloads History",
+                                                          detail: exports.activeCount > 0 ? "\(exports.activeCount) active" : "Save activity",
+                                                          symbol: "clock.arrow.circlepath", appearance: .glass) { EmptyView() }
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityIdentifier("library-download-history")
+                            }
+                            NavigationLink {
+                                SavedPhotosView(library: savedPhotos, scope: MediaAccountScope(session: session),
+                                                tabSelectionState: tabSelectionState, viewerPresentations: viewerPresentations,
+                                                tabBarTop: tabBarTop)
+                            } label: {
+                                LibraryCollectionCard(title: "Downloads", detail: savedPhotos.summary,
+                                                      symbol: "arrow.down.circle", appearance: savedPhotos.items.isEmpty ? .glass : .photographic)
+                                {
+                                    if let photo = savedPhotos.items.first {
+                                        SavedPhotoThumbnail(item: photo)
+                                    }
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("library-downloads")
                             ForEach(collections) { collection in
                                 NavigationLink(value: collection) {
                                     LibraryCollectionCard(title: collection.title, detail: collection.subtitle,
@@ -71,6 +85,18 @@ struct LibraryView: View {
                     .padding(.bottom, 16)
                 }
                 .accessibilityIdentifier("library-root")
+
+                HStack {
+                    Text("Library").font(.largeTitle.bold())
+                    Spacer(minLength: avatarSize + 16)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, horizontalPadding)
+                .padding(.top, avatarTopPadding)
+                .padding(.bottom, 8)
+                .background(.background)
+                .frame(maxHeight: .infinity, alignment: .top)
+                .allowsHitTesting(false)
 
                 if accountContentMounted {
                     Color.clear
@@ -110,6 +136,7 @@ struct LibraryView: View {
                 }
             }
         }
+        .navigationTitle("Library")
         .toolbar(.hidden, for: .navigationBar)
         .navigationDestination(for: FixtureCollection.self) { collection in
             CollectionDetailView(collection: collection)
@@ -121,6 +148,21 @@ struct LibraryView: View {
             guard accountPresented || accountContentMounted else { return }
             setAccountPresented(false)
         }
+        .task(id: photosContext) {
+            savedPhotos.configure(photosContext)
+            await savedPhotos.refresh()
+        }
+        .onAppear { savedPhotos.observe(owner: photosObserver) }
+        .onDisappear { savedPhotos.stopObserving(owner: photosObserver) }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                Task { await savedPhotos.refresh() }
+            }
+        }
+    }
+
+    private var photosContext: SavedPhotosContext {
+        SavedPhotosContext(scope: MediaAccountScope(session: session), journal: exports?.journal)
     }
 
     private var accountButton: some View {

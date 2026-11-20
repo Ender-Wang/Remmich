@@ -223,7 +223,7 @@ struct TimelineAssetPreview: View {
         let dragTransform = TimelineAssetPreviewGeometry.dragTransform(reduceMotion ? .zero : drag.translation,
                                                                        viewportHeight: viewport.height, progress: progress)
         let pixels = MediaPixelSize(width: max(1, Int(size.width * displayScale)), height: max(1, Int(size.height * displayScale)))
-        let derivative: MediaDerivative = media.activeAPIURL == nil ? .thumbnail : .preview
+        let derivative: MediaDerivative = media.activeAPIURL == nil && media.savedPhotosLibrary == nil ? .thumbnail : .preview
         ZStack(alignment: .topLeading) {
             previewContent(pixels: pixels, derivative: derivative)
                 .frame(width: size.width, height: size.height)
@@ -336,7 +336,9 @@ struct TimelineAssetPreview: View {
 
     private func actionPanel(horizontal: Bool, rowHeight: CGFloat) -> some View {
         Group {
-            if horizontal {
+            if !media.canDownloadAssets {
+                actionButton(.share, rowHeight: rowHeight)
+            } else if horizontal {
                 HStack(spacing: 0) {
                     actionButton(.share, rowHeight: rowHeight)
                     Divider().frame(height: rowHeight * 0.5)
