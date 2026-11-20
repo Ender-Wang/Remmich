@@ -45,6 +45,7 @@ struct AppShellView: View {
     @State private var videosScrollRequest = 0
     @State private var albumsScrollRequest = 0
     @State private var albumsOverview = AlbumsOverviewState()
+    @State private var savedPhotos = SavedPhotosLibrary()
     @State private var libraryDismissAccountRequest = 0
     @State private var libraryAccountPresented = false
     @State private var videoPresentation = PhotosPresentationState(
@@ -222,6 +223,7 @@ struct AppShellView: View {
                         LibraryView(
                             collections: PreviewFixtures.collections,
                             exports: media.exports,
+                            savedPhotos: savedPhotos,
                             session: session,
                             profile: profile,
                             activeRoute: activeRoute,
@@ -398,8 +400,9 @@ struct AppShellView: View {
         .task(id: media.hasShownStartupPhoto || photos.loadState == .empty) {
             guard let sessionController, media.hasShownStartupPhoto || photos.loadState == .empty else { return }
             async let videoOpening: Void = prepareVideosOpening(using: sessionController)
+            async let libraryOpening: Void = prepareLibraryOpening()
             await prepareAlbumsOpening(in: overviewState, preloading: true)
-            await videoOpening
+            _ = await (videoOpening, libraryOpening)
         }
         .task(id: tabSelectionState.selection) {
             guard tabSelectionState.selection == .albums else { return }
@@ -476,6 +479,18 @@ struct AppShellView: View {
 
     private var openingWindow: UIWindow? {
         UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first
+    }
+
+    private func prepareLibraryOpening() async {
+        guard !tabContentActivationState.isHydrated(.library) else { return }
+        let scope = MediaAccountScope(session: session)
+        savedPhotos.configure(SavedPhotosContext(scope: scope, journal: media.exports.journal))
+        await savedPhotos.refresh(reuseInFlight: true, priority: .utility)
+        guard !Task.isCancelled, media.scope == scope, !tabContentActivationState.isHydrated(.library) else { return }
+        tabContentActivationState.prepare(.library)
+        if let item = savedPhotos.items.first, let scale = openingWindow?.traitCollection.displayScale {
+            await savedPhotos.prepareCardCover(.init(item: item, pixels: LibraryCollectionCardMetrics.coverPixels(scale: scale)))
+        }
     }
 
     private func showAccount() {

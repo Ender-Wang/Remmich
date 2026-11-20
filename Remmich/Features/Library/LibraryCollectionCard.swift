@@ -4,6 +4,12 @@ nonisolated enum LibraryCollectionCardMetrics {
     static let minimumWidth: CGFloat = 150
     static let maximumWidth: CGFloat = 260
     static let spacing: CGFloat = 14
+    static let aspectRatio: CGFloat = 4 / 3
+
+    static func coverPixels(scale: CGFloat) -> CGSize {
+        let width = min(1024, max(1, (maximumWidth * scale).rounded(.up)))
+        return CGSize(width: width, height: (width / aspectRatio).rounded(.up))
+    }
 }
 
 /// One geometry and footer contract for every Library destination. Data loading
@@ -41,7 +47,7 @@ struct LibraryCollectionCard<Cover: View>: View {
             .foregroundStyle(appearance == .glass ? AnyShapeStyle(.primary) : AnyShapeStyle(.white))
             .padding(12)
         }
-        .aspectRatio(4 / 3, contentMode: .fit)
+        .aspectRatio(LibraryCollectionCardMetrics.aspectRatio, contentMode: .fit)
         .clipShape(.rect(cornerRadius: DesignMetrics.defaultCornerRadius))
         .contentShape(.rect)
         .accessibilityElement(children: .ignore)

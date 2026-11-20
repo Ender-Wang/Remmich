@@ -84,6 +84,24 @@ final class SavedPhotosLibrary: NSObject {
         case failed(String)
     }
 
+    nonisolated struct CardCoverRequest: Equatable {
+        let assetID: String
+        let revision: Date?
+        let pixels: CGSize
+
+        init(item: SavedPhoto, pixels: CGSize) {
+            assetID = item.id
+            revision = item.revision
+            self.pixels = pixels
+        }
+    }
+
+    private struct CardCoverLoad {
+        let request: CardCoverRequest
+        let id = UUID()
+        let task: Task<UIImage?, Never>
+    }
+
     private(set) var state: State = .loading
     private(set) var items: [SavedPhoto] = []
     private(set) var limited = false
@@ -96,6 +114,8 @@ final class SavedPhotosLibrary: NSObject {
     @ObservationIgnored private var observers: Set<UUID> = []
     @ObservationIgnored private var pending: Task<Snapshot, Error>?
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
+    private var cardCover: (request: CardCoverRequest, image: UIImage)?
+    @ObservationIgnored private var cardCoverLoad: CardCoverLoad?
 
     var summary: String {
         switch state {
@@ -114,10 +134,41 @@ final class SavedPhotosLibrary: NSObject {
         itemsByTimelineID[timelineID]
     }
 
+    func cardCover(for request: CardCoverRequest) -> UIImage? {
+        cardCover?.request == request ? cardCover?.image : nil
+    }
+
+    func prepareCardCover(_ request: CardCoverRequest) async {
+        guard !Task.isCancelled, let cover = items.first,
+              cover.id == request.assetID, cover.revision == request.revision,
+              cardCover(for: request) == nil else { return }
+        let load: CardCoverLoad
+        if let pending = cardCoverLoad, pending.request == request {
+            load = pending
+        } else {
+            cardCoverLoad?.task.cancel()
+            load = CardCoverLoad(request: request, task: Task {
+                try? await Self.image(cover, pixels: request.pixels)
+            })
+            cardCoverLoad = load
+        }
+        let image = await load.task.value
+        guard cardCoverLoad?.id == load.id else { return }
+        cardCoverLoad = nil
+        if let image {
+            cardCover = (request, image)
+        }
+    }
+
     private func publishItems(_ next: [SavedPhoto]) {
         guard next.count != items.count || !zip(next, items).allSatisfy({
             $0.id == $1.id && $0.revision == $1.revision && $0.addedAt == $1.addedAt && $0.asset.isFavorite == $1.asset.isFavorite
         }) else { return }
+        if next.first?.id != items.first?.id || next.first?.revision != items.first?.revision {
+            cardCoverLoad?.task.cancel()
+            cardCoverLoad = nil
+            cardCover = nil
+        }
         itemsByTimelineID = Dictionary(uniqueKeysWithValues: next.map { ($0.timelineID, $0) })
         items = next
         catalogRevision &+= 1
@@ -162,7 +213,7 @@ final class SavedPhotosLibrary: NSObject {
         await refresh()
     }
 
-    func refresh(reuseInFlight: Bool = false) async {
+    func refresh(reuseInFlight: Bool = false, priority: TaskPriority = .userInitiated) async {
         guard let context else { return }
         if reuseInFlight, let pending {
             _ = try? await pending.value
@@ -181,7 +232,7 @@ final class SavedPhotosLibrary: NSObject {
         }
         let preferredAlbumID = context.albumID ?? resolvedAlbumID
         let startedAt = ContinuousClock.now
-        let operation = Task.detached(priority: .userInitiated) { try Self.read(context, preferredAlbumID: preferredAlbumID) }
+        let operation = Task.detached(priority: priority) { try Self.read(context, preferredAlbumID: preferredAlbumID) }
         pending = operation
         do {
             let snapshot = try await withTaskCancellationHandler {

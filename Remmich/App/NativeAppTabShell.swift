@@ -526,7 +526,8 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
         private func layoutPreparedTabs(in controller: UITabBarController) {
             let bounds = controller.view.bounds
             guard bounds.width > 0, bounds.height > 0, controller.transitionCoordinator == nil else { return }
-            for destination in [NativeTabDestination.videos, .albums]
+            let tabs: [(NativeTabDestination, AnyView)] = [(.videos, parent.videos), (.albums, parent.albums), (.library, parent.library)]
+            for (destination, root) in tabs
                 where parent.preparedDestinations.contains(destination)
                 && !laidOutPreparedDestinations.contains(destination)
                 && installedTabs?.contains(destination) == true
@@ -534,7 +535,7 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
                 let destinationTab = tab(for: destination)
                 guard controller.selectedTab !== destinationTab,
                       let hosting = destinationTab.viewController as? TabContentHostingController else { continue }
-                hosting.rootView = hostedRoot(destination == .videos ? parent.videos : parent.albums)
+                hosting.rootView = hostedRoot(root)
                 hosting.loadViewIfNeeded()
                 hosting.view.frame = bounds
                 hosting.view.setNeedsLayout()

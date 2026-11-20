@@ -6,6 +6,7 @@ struct LibraryView: View {
 
     let collections: [FixtureCollection]
     var exports: MediaExportController?
+    let savedPhotos: SavedPhotosLibrary
     let session: AccountSession
     let profile: ConnectionProfile
     let activeRoute: ActiveConnectionRoute?
@@ -23,7 +24,6 @@ struct LibraryView: View {
     @State private var accountPresented = false
     @State private var accountContentMounted = false
     @State private var accountExpansion: CGFloat = 0
-    @State private var savedPhotos = SavedPhotosLibrary()
     @State private var photosObserver = UUID()
 
     private let columns = [GridItem(.adaptive(minimum: LibraryCollectionCardMetrics.minimumWidth,
@@ -61,7 +61,7 @@ struct LibraryView: View {
                                                       symbol: "arrow.down.circle", appearance: savedPhotos.items.isEmpty ? .glass : .photographic)
                                 {
                                     if let photo = savedPhotos.items.first {
-                                        SavedPhotoThumbnail(item: photo)
+                                        SavedPhotoThumbnail(library: savedPhotos, item: photo)
                                     }
                                 }
                             }
@@ -150,7 +150,7 @@ struct LibraryView: View {
         }
         .task(id: photosContext) {
             savedPhotos.configure(photosContext)
-            await savedPhotos.refresh()
+            await savedPhotos.refresh(reuseInFlight: true)
         }
         .onAppear { savedPhotos.observe(owner: photosObserver) }
         .onDisappear { savedPhotos.stopObserving(owner: photosObserver) }
@@ -328,6 +328,7 @@ private struct CollectionDetailView: View {
     NavigationStack {
         LibraryView(
             collections: PreviewFixtures.collections,
+            savedPhotos: SavedPhotosLibrary(),
             session: .fixture,
             profile: .init(),
             activeRoute: .init(kind: .fallback, endpoint: URL(string: "https://immich.example/api")!),

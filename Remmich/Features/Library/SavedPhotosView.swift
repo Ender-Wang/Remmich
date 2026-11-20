@@ -307,17 +307,16 @@ private final class SavedPhotosPageController: UIViewController {
 
 struct SavedPhotoThumbnail: View {
     @Environment(\.displayScale) private var scale
+    let library: SavedPhotosLibrary
     let item: SavedPhoto
-    @State private var image: UIImage?
     @State private var finished = false
 
     var body: some View {
+        let request = SavedPhotosLibrary.CardCoverRequest(item: item, pixels: LibraryCollectionCardMetrics.coverPixels(scale: scale))
         GeometryReader { geometry in
-            let width = min(1024, max(1, Int(geometry.size.width * scale)))
-            let height = min(1024, max(1, Int(geometry.size.height * scale)))
             ZStack {
                 Rectangle().fill(.quaternary)
-                if let image {
+                if let image = library.cardCover(for: request) {
                     Image(uiImage: image).resizable().scaledToFill()
                 } else if finished {
                     Image(systemName: "icloud").foregroundStyle(.secondary)
@@ -327,16 +326,13 @@ struct SavedPhotoThumbnail: View {
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
             .clipped()
-            .task(id: "\(item.id)|\(String(describing: item.revision))|\(width)x\(height)") {
-                image = nil
+            .task(id: request) {
                 finished = false
-                let result = try? await SavedPhotosLibrary.image(item, pixels: CGSize(width: width, height: height))
+                await library.prepareCardCover(request)
                 guard !Task.isCancelled else { return }
-                image = result
                 finished = true
             }
         }
-        .onDisappear { image = nil }
         .accessibilityHidden(true)
     }
 }
