@@ -21,6 +21,62 @@ struct TimelineCaptureDateFormattingTests {
             #expect(catalog.groups[.month]?.map(\.id) == ["month:2026-10-01", "month:2026-11-01"])
             #expect(catalog.groups[.day]?.map(\.assets.count) == [1, 2])
         }
+
+        @Test func recentlyAddedGroupsAnOldCaptureByUploadDateAndKeepsViewerDate() throws {
+            var asset = try Self.asset(instant: "2012-03-04T03:30:00Z", offset: -5, uploaded: "2026-11-20T00:30:00Z")
+            asset.usesUploadDate = true
+            let catalog = TimelineSemanticCatalog(assets: [asset])
+            #expect(catalog.groups[.day]?.map(\.id) == ["day:2026-11-20"])
+            #expect(AssetViewerContextPresentation(asset: asset, detail: nil).capturedAt == asset.captureLocalDate)
+        }
+
+        @Test func libraryRowsKeepTheNewestItemAtBottomLeadingWithAPartialTopRow() {
+            let layout = LibraryCardRows(width: 400, preferredColumns: 4)
+            #expect(layout.rows([6, 5, 4, 3, 2, 1]).map(Array.init) == [[2, 1], [6, 5, 4, 3]])
+        }
+
+        @Test func libraryRowTargetsStayStableWhenOlderCardsArrive() {
+            let layout = LibraryCardRows(width: 400, preferredColumns: 2)
+            let cards = (1 ... 5).map { TimelineMemoryAssetSummary(id: String($0), revision: .distantPast, mediaKind: .image) }
+            let firstRows = layout.identifiedRows(Array(cards.prefix(3)))
+            let expandedRows = layout.identifiedRows(cards)
+            #expect(firstRows.map(\.id) == ["3", "1"])
+            #expect(expandedRows.map(\.id) == ["5", "3", "1"])
+            #expect(expandedRows.last?.items.map(\.id) == ["1", "2"])
+        }
+
+        @Test(arguments: [
+            (1772.0, 874.0, 0.0, 0.0, 898.0),
+            (1788.0, 874.0, 116.0, 83.0, 997.0),
+            (14799.0, 874.0, 116.0, 83.0, 14008.0),
+            (1362.0, 874.0, 116.0, 83.0, 571.0),
+            (675.0, 874.0, 116.0, 83.0, -116.0),
+            (313.0, 874.0, 116.0, 83.0, -116.0),
+        ])
+        func libraryOpeningOffsetUsesTheBottomInsetOnce(content: Double, bounds: Double, top: Double, bottom: Double, expected: Double) {
+            let offset = LibraryCardScrollOffset.latest(contentHeight: content, boundsHeight: bounds, topInset: top, bottomInset: bottom)
+            #expect(offset == expected)
+        }
+
+        @Test func folderTreeSeparatesDirectAssetsFromChildFolders() throws {
+            let tree = LibraryFolderTree(paths: ["/archive/Trip", "/archive/Trip/Day 2", "upload/2026", "/archive/Trip"])
+            let archive = try #require(tree.children(of: nil).first { $0.name == "archive" })
+            let trip = try #require(tree.children(of: archive).first)
+            #expect(tree.children(of: trip).map(\.path) == ["/archive/Trip/Day 2"])
+            #expect(tree.assetPaths == ["/archive/Trip", "/archive/Trip/Day 2", "upload/2026"])
+            #expect(!tree.assetPaths.contains(archive.path))
+        }
+
+        @Test func sharedSelectionBucketsUseLocalMonthAndDeduplicateAssets() async throws {
+            let previous = try Self.asset(instant: "2026-11-01T00:30:00Z", offset: -5, id: "previous")
+            let current = try Self.asset(instant: "2026-11-01T01:30:00Z", offset: 8, id: "current")
+            let reader = LibrarySelectionTimelineReader(assets: [previous, current, current])
+            let buckets = try await reader.bucketSummaries(query: .init())
+            #expect(buckets.map(\.id.rawValue) == ["2026-11-01", "2026-10-01"])
+            #expect(buckets.map(\.assetCount) == [1, 1])
+            let first = try #require(buckets.first)
+            #expect(try await reader.assets(in: first.id, query: .init()).map(\.id) == ["current"])
+        }
     #endif
 
     @Test(arguments: [
@@ -103,10 +159,10 @@ struct TimelineCaptureDateFormattingTests {
         #expect(!rendered.contains("1:28"))
     }
 
-    private static func asset(instant: String, offset: Double, id: String = "asset") throws -> TimelineAssetSummary {
+    private static func asset(instant: String, offset: Double, id: String = "asset", uploaded: String? = nil) throws -> TimelineAssetSummary {
         let date = try Date(instant, strategy: .iso8601)
-        return .init(
-            id: id, ownerID: "owner", capturedAt: date, uploadedAt: date,
+        return try .init(
+            id: id, ownerID: "owner", capturedAt: date, uploadedAt: uploaded.map { try Date($0, strategy: .iso8601) } ?? date,
             localOffsetHours: offset, mediaKind: .image, durationMilliseconds: nil,
             aspectRatio: 1, isFavorite: false, visibility: .timeline,
             livePhotoVideoID: nil, stack: nil, projectionType: nil,

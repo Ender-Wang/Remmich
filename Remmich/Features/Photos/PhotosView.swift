@@ -374,6 +374,8 @@ struct PhotosView: View {
     var viewerPresentations: AssetViewerPresentationStore?
     var refreshSource: (() async -> Void)?
     var loadTimeline: (() async -> Void)?
+    var libraryMemories: [TimelineMemorySummary]?
+    var loadOlderMemories: (() async -> Void)?
     let showAccount: (() -> Void)?
 
     @Namespace private var viewerNamespace
@@ -440,6 +442,8 @@ struct PhotosView: View {
         viewerPresentations: AssetViewerPresentationStore? = nil,
         refreshSource: (() async -> Void)? = nil,
         loadTimeline: (() async -> Void)? = nil,
+        libraryMemories: [TimelineMemorySummary]? = nil,
+        loadOlderMemories: (() async -> Void)? = nil,
         showAccount: (() -> Void)? = nil
     ) {
         self.store = store
@@ -467,6 +471,8 @@ struct PhotosView: View {
         self.viewerPresentations = viewerPresentations
         self.refreshSource = refreshSource
         self.loadTimeline = loadTimeline
+        self.libraryMemories = libraryMemories
+        self.loadOlderMemories = loadOlderMemories
         self.loadingVisibilityChanged = loadingVisibilityChanged
         self.tabSelectionState = tabSelectionState
         self.tabDestination = tabDestination
@@ -477,28 +483,32 @@ struct PhotosView: View {
 
     private var timelineContent: some View {
         ZStack {
-            switch store.loadState {
-            case .idle, .loading:
-                Color.clear
-            case .empty:
-                EmptyStateView(
-                    title: "No \(contentName)",
-                    message: media.canDownloadAssets
-                        ? "\(contentName) from your Immich library will appear here."
-                        : "Saved \(contentName.lowercased()) in the Remmich album will appear here.",
-                    systemImage: contentName == "Videos" ? "video" : "photo.on.rectangle"
-                )
-            case let .failed(message):
-                ErrorStateView(title: "Couldn’t Load \(contentName)") {
-                    Task { await store.retryInitialLoad() }
+            if let libraryMemories {
+                libraryMemoryCards(libraryMemories)
+            } else {
+                switch store.loadState {
+                case .idle, .loading:
+                    Color.clear
+                case .empty:
+                    EmptyStateView(
+                        title: "No \(contentName)",
+                        message: media.canDownloadAssets
+                            ? "\(contentName) from your Immich library will appear here."
+                            : "Saved \(contentName.lowercased()) in the Remmich album will appear here.",
+                        systemImage: contentName == "Videos" ? "video" : "photo.on.rectangle"
+                    )
+                case let .failed(message):
+                    ErrorStateView(title: "Couldn’t Load \(contentName)") {
+                        Task { await store.retryInitialLoad() }
+                    }
+                    .accessibilityHint(message)
+                case .loaded:
+                    rangePresentation
                 }
-                .accessibilityHint(message)
-            case .loaded:
-                rangePresentation
             }
         }
         .overlay {
-            if loadingVisibilityChanged == nil {
+            if loadingVisibilityChanged == nil, libraryMemories == nil {
                 LoadingStateView(isLoading: isTimelineContentLoading)
             }
         }
@@ -1143,6 +1153,42 @@ struct PhotosView: View {
         .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: memoryLaneVisible)
     }
 
+    private func libraryMemoryCards(_ memories: [TimelineMemorySummary]) -> some View {
+        GeometryReader { geometry in
+            let layout = LibraryCardRows(width: geometry.size.width, preferredColumns: nil)
+            let rows = layout.identifiedRows(memories)
+            LibraryCardScroll(initialRowID: memories.first?.id ?? "", viewportHeight: geometry.size.height, oldestRowID: rows.first?.id,
+                              oldestItemID: memories.last?.id, loadOlder: loadOlderMemories)
+            {
+                LazyVStack(spacing: LibraryCollectionCardMetrics.spacing) {
+                    ForEach(rows) { row in
+                        HStack(spacing: LibraryCollectionCardMetrics.spacing) {
+                            ForEach(Array(row.items.enumerated()), id: \.element.id) { index, memory in
+                                TimelineMemoryCard(memory: memory, media: media, width: layout.itemWidth,
+                                                   height: layout.itemWidth / LibraryCollectionCardMetrics.aspectRatio,
+                                                   initialDelay: TimelineCoverAnimation.cycleDuration * Double(index) / Double(layout.columns),
+                                                   preferredAssetID: memoryCoverAssetIDs[memory.id],
+                                                   isFrozen: presentedMemoryID == memory.id || loadingMemoryID == memory.id,
+                                                   isHidden: hiddenMemoryCardID == memory.id, isLoading: loadingMemoryID == memory.id,
+                                                   select: { presentMemory(memory, coverAssetID: $0) },
+                                                   frameChanged: { updateMemoryCardFrame($0, for: memory.id) })
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.bottom, row.id == memories.first?.id ? 16 : 0)
+                    }
+                }
+                .scrollTargetLayout()
+                .padding(.horizontal, 16)
+                .padding(.top, 16)
+                .background {
+                    Color.clear.onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { updateMemoryLaneFrame($0) }
+                }
+            }
+        }
+        .accessibilityIdentifier("library-memories-grid")
+    }
+
     private func semanticScaleChanged(_ scale: TimelineSemanticScale) {
         if libraryRange == .all, !scale.isAssets {
             semanticRuntime.lastVisitedAssetID = nil
@@ -1175,7 +1221,7 @@ struct PhotosView: View {
     }
 
     private func semanticBucketID(for asset: TimelineAssetSummary) -> TimelineBucketID {
-        let day = TimelineCaptureDay(capturedAt: asset.captureLocalDate)
+        let day = TimelineCaptureDay(capturedAt: asset.timelineLocalDate)
         return semanticBucketID(for: day.displayDate!)
     }
 
@@ -1666,15 +1712,16 @@ struct PhotosView: View {
     }
 
     private func movePresentedMemory(by offset: Int) -> Bool {
+        let memories = libraryMemories ?? store.memories
         guard offset != 0,
               let presentedMemoryID,
               !memoryViewerIsSwitching,
               loadingMemoryID == nil,
-              let selectedIndex = store.memories.firstIndex(where: { $0.id == presentedMemoryID })
+              let selectedIndex = memories.firstIndex(where: { $0.id == presentedMemoryID })
         else { return false }
         let targetIndex = selectedIndex + offset.signum()
-        guard store.memories.indices.contains(targetIndex) else { return false }
-        let memory = store.memories[targetIndex]
+        guard memories.indices.contains(targetIndex) else { return false }
+        let memory = memories[targetIndex]
         guard let coverAssetID = memoryCoverAssetIDs[memory.id] ?? memory.assets.first?.id else { return false }
         presentMemory(memory, coverAssetID: coverAssetID)
         return true
@@ -1946,7 +1993,7 @@ struct PhotosView: View {
     private func updateViewport(_ asset: TimelineAssetSummary, visible: Bool) {
         guard isTimelineActive else { return }
         if visible {
-            viewportRuntime.visibleAssets[asset.id] = asset.captureLocalDate
+            viewportRuntime.visibleAssets[asset.id] = asset.timelineLocalDate
         } else {
             viewportRuntime.visibleAssets.removeValue(forKey: asset.id)
         }
@@ -2081,6 +2128,7 @@ private struct TimelineMemoryCard: View {
     let memory: TimelineMemorySummary
     let media: MediaLibraryController
     let width: CGFloat
+    var height: CGFloat = 120
     let initialDelay: Double
     let preferredAssetID: String?
     let isFrozen: Bool
@@ -2148,7 +2196,7 @@ private struct TimelineMemoryCard: View {
                                 coverImages[asset.id] = response.image
                             }
                         )
-                        .frame(width: width, height: 120)
+                        .frame(width: width, height: height)
                         .opacity(opacity(for: asset))
                         .scaleEffect(scale(for: asset), anchor: .center)
                         .clipped()
@@ -2184,7 +2232,7 @@ private struct TimelineMemoryCard: View {
                         .accessibilityLabel("Opening memory")
                 }
             }
-            .frame(width: width, height: 120)
+            .frame(width: width, height: height)
             .clipShape(.rect(cornerRadius: DesignMetrics.defaultCornerRadius))
             .contentShape(.rect(cornerRadius: DesignMetrics.defaultCornerRadius))
         }
@@ -2229,7 +2277,7 @@ private struct TimelineMemoryCard: View {
 
     private func coverDescriptor(for asset: TimelineMemoryAssetSummary) -> MediaRequestDescriptor {
         .init(assetID: asset.id, updatedAt: asset.revision, derivative: .thumbnail,
-              targetPixels: .init(width: Int(width * displayScale), height: Int(120 * displayScale)))
+              targetPixels: .init(width: Int(width * displayScale), height: Int(height * displayScale)))
     }
 
     private func runSlideshow() async {

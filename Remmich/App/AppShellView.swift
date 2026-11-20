@@ -224,6 +224,9 @@ struct AppShellView: View {
                             collections: PreviewFixtures.collections,
                             exports: media.exports,
                             savedPhotos: savedPhotos,
+                            media: media,
+                            collectionSource: sessionController?.timeline,
+                            assetDetails: assetDetails,
                             session: session,
                             profile: profile,
                             activeRoute: activeRoute,
@@ -236,7 +239,8 @@ struct AppShellView: View {
                             sessionController: sessionController,
                             tabSelectionState: tabSelectionState,
                             viewerPresentations: viewerPresentations,
-                            tabBarTop: $tabBarTop
+                            tabBarTop: $tabBarTop,
+                            viewerVisibilityChanged: setViewerPresented
                         )
                     }
                 }

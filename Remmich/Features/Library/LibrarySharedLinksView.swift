@@ -1,0 +1,181 @@
+import Observation
+import SwiftUI
+
+nonisolated struct LibrarySharedLink: Identifiable, Sendable {
+    let id: String
+    let name: String?
+    let createdAt: Date
+    let expiresAt: Date?
+    let isPasswordProtected: Bool
+    let publicURL: URL?
+    let album: AlbumSummary?
+    let assets: [TimelineAssetSummary]
+
+    var title: String {
+        if let name = name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+            return name
+        }
+        return album?.title ?? "Shared selection"
+    }
+
+    var cover: LibraryCoverAsset? {
+        if let album, let assetID = album.thumbnailAssetID {
+            return .init(id: assetID, revision: album.lastModifiedAssetTimestamp ?? album.updatedAt)
+        }
+        return assets.max { $0.isCaptured(before: $1) }.map(LibraryCoverAsset.init)
+    }
+
+    var isExpired: Bool {
+        expiresAt.map { $0 <= .now } ?? false
+    }
+
+    var symbol: String {
+        if isExpired {
+            return "clock.badge.exclamationmark"
+        }
+        return isPasswordProtected ? "lock" : "link"
+    }
+
+    var detail: String {
+        if isExpired {
+            return "Expired"
+        }
+        if let expiresAt {
+            return "Expires \(expiresAt.formatted(date: .abbreviated, time: .omitted))"
+        }
+        return album != nil ? "Album" : "\(assets.count.formatted()) \(assets.count == 1 ? "item" : "items")"
+    }
+}
+
+@MainActor @Observable
+private final class LibrarySharedLinksStore {
+    private(set) var links: [LibrarySharedLink]?
+    private(set) var didFail = false
+
+    func load(source: ImmichTimelineRepository) async {
+        do {
+            let result = try await source.librarySharedLinks()
+            try Task.checkCancellation()
+            links = result
+            didFail = false
+        } catch {
+            guard !Task.isCancelled, !(error is CancellationError), (error as? TimelineReadError) != .staleGeneration else { return }
+            didFail = true
+        }
+    }
+}
+
+struct LibrarySharedLinksCard: View {
+    let source: ImmichTimelineRepository
+    let media: MediaLibraryController
+    let assetDetails: any AssetDetailReading
+    let context: LibraryCollectionNavigation
+    @State private var store = LibrarySharedLinksStore()
+
+    var body: some View {
+        let cover = store.links?.lazy.filter { !$0.isExpired }.compactMap(\.cover).first
+        LibraryHubLink {
+            LibrarySharedLinksView(store: store, source: source, media: media, assetDetails: assetDetails, context: context)
+        } label: {
+            LibraryCollectionCard(title: "Shared Links", detail: detail, symbol: "link",
+                                  appearance: cover == nil ? .glass : .photographic)
+            {
+                if let cover {
+                    LibraryAssetCover(assetID: cover.id, revision: cover.revision, media: media)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("library-shared-links")
+        .task(id: context.activeEndpoint) {
+            guard context.activeEndpoint != nil, store.links == nil else { return }
+            await store.load(source: source)
+        }
+    }
+
+    private var detail: String {
+        guard let count = store.links?.count else { return "" }
+        return "\(count.formatted()) \(count == 1 ? "link" : "links")"
+    }
+}
+
+private struct LibrarySharedLinksView: View {
+    let store: LibrarySharedLinksStore
+    let source: ImmichTimelineRepository
+    let media: MediaLibraryController
+    let assetDetails: any AssetDetailReading
+    let context: LibraryCollectionNavigation
+
+    var body: some View {
+        Group {
+            if let links = store.links, !links.isEmpty {
+                GeometryReader { geometry in
+                    let layout = LibraryCardRows(width: geometry.size.width, preferredColumns: nil)
+                    LibraryCardScroll(initialRowID: links.first?.id ?? "", viewportHeight: geometry.size.height) {
+                        LazyVStack(spacing: LibraryCollectionCardMetrics.spacing) {
+                            ForEach(layout.identifiedRows(links)) { row in
+                                HStack(spacing: LibraryCollectionCardMetrics.spacing) {
+                                    ForEach(row.items) { link in
+                                        NavigationLink {
+                                            timeline(for: link)
+                                        } label: {
+                                            card(for: link).frame(width: layout.itemWidth)
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.bottom, row.id == links.first?.id ? 16 : 0)
+                            }
+                        }
+                        .scrollTargetLayout()
+                        .padding(.horizontal, 16)
+                        .padding(.top, 16)
+                    }
+                    .refreshable { await store.load(source: source) }
+                }
+            } else if media.activeAPIURL == nil {
+                ContentUnavailableView("Immich Is Unavailable", systemImage: "wifi.slash")
+            } else if store.didFail {
+                ErrorStateView(title: "Couldn’t Load Shared Links") { Task { await store.load(source: source) } }
+            } else if store.links != nil {
+                ContentUnavailableView("No Shared Links", systemImage: "link",
+                                       description: Text("Links you create in Immich appear here."))
+            } else {
+                LoadingStateView(label: "Loading Shared Links")
+            }
+        }
+        .navigationTitle("Shared Links")
+        .libraryNavigationChrome()
+        .task(id: media.activeAPIURL) {
+            guard media.activeAPIURL != nil else { return }
+            await store.load(source: source)
+        }
+    }
+
+    private func card(for link: LibrarySharedLink) -> some View {
+        let cover = link.cover
+        return LibraryCollectionCard(title: link.title, detail: link.detail, symbol: link.symbol,
+                                     appearance: cover == nil ? .glass : .photographic)
+        {
+            if let cover {
+                LibraryAssetCover(assetID: cover.id, revision: cover.revision, media: media)
+            }
+        }
+    }
+
+    private func timeline(for link: LibrarySharedLink) -> some View {
+        let reader: any TimelineReading = link.album == nil ? LibrarySelectionTimelineReader(assets: link.assets) : source
+        let query = TimelineQuery(albumID: link.album?.id, includesStacks: true, includesPartners: false)
+        return LibraryCollectionTimeline(title: link.title, source: reader, query: query, media: media, assetDetails: assetDetails,
+                                         tabSelectionState: context.tabSelectionState, viewerPresentations: context.viewerPresentations,
+                                         tabBarTop: context.tabBarTop)
+            .toolbar {
+                if !link.isExpired, let url = link.publicURL {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        ShareLink(item: url) { Label("Share Link", systemImage: "square.and.arrow.up") }
+                    }
+                }
+            }
+    }
+}

@@ -7,6 +7,9 @@ struct LibraryView: View {
     let collections: [FixtureCollection]
     var exports: MediaExportController?
     let savedPhotos: SavedPhotosLibrary
+    var media: MediaLibraryController?
+    var collectionSource: ImmichTimelineRepository?
+    var assetDetails: (any AssetDetailReading)?
     let session: AccountSession
     let profile: ConnectionProfile
     let activeRoute: ActiveConnectionRoute?
@@ -20,11 +23,13 @@ struct LibraryView: View {
     var tabSelectionState: NativeTabSelectionState?
     var viewerPresentations: AssetViewerPresentationStore?
     var tabBarTop: Binding<CGFloat> = .constant(0)
+    var viewerVisibilityChanged: (Bool) -> Void = { _ in }
 
     @State private var accountPresented = false
     @State private var accountContentMounted = false
     @State private var accountExpansion: CGFloat = 0
     @State private var photosObserver = UUID()
+    @State private var foldersEnabled = false
     @State private var cardDestination: LibraryHubDestination?
 
     private let avatarSize: CGFloat = 44
@@ -67,7 +72,28 @@ struct LibraryView: View {
                             }
                             .buttonStyle(.plain)
                             .accessibilityIdentifier("library-downloads")
-                            ForEach(collections) { collection in
+                            if let collectionSource, let media, let assetDetails {
+                                collectionCard(.recentlyTaken, source: collectionSource, media: media, assetDetails: assetDetails)
+                                collectionCard(.recentlyAdded, source: collectionSource, media: media, assetDetails: assetDetails)
+                                collectionCard(.favorites, source: collectionSource, media: media, assetDetails: assetDetails)
+                                LibraryMemoriesCard(source: collectionSource, media: media, assetDetails: assetDetails,
+                                                    context: collectionNavigation)
+                                LibraryDirectoryCard(directory: .people, source: collectionSource, media: media,
+                                                     assetDetails: assetDetails, context: collectionNavigation)
+                                LibraryDirectoryCard(directory: .places, source: collectionSource, media: media,
+                                                     assetDetails: assetDetails, context: collectionNavigation)
+                                LibrarySharedLinksCard(source: collectionSource, media: media, assetDetails: assetDetails,
+                                                       context: collectionNavigation)
+                                LibraryDirectoryCard(directory: .partners, source: collectionSource, media: media,
+                                                     assetDetails: assetDetails, context: collectionNavigation)
+                                if foldersEnabled {
+                                    LibraryFoldersCard(source: collectionSource, media: media, assetDetails: assetDetails,
+                                                       context: collectionNavigation)
+                                }
+                                collectionCard(.archive, source: collectionSource, media: media, assetDetails: assetDetails)
+                                collectionCard(.trash, source: collectionSource, media: media, assetDetails: assetDetails)
+                            }
+                            ForEach(visibleFixtureCollections) { collection in
                                 LibraryHubLink {
                                     CollectionDetailView(collection: collection)
                                         .libraryNavigationChrome()
@@ -160,6 +186,12 @@ struct LibraryView: View {
             savedPhotos.configure(photosContext)
             await savedPhotos.refresh(reuseInFlight: true)
         }
+        .task(id: folderPreferenceEndpoint) {
+            guard folderPreferenceEndpoint != nil, let collectionSource else { return }
+            let enabled = await (try? collectionSource.libraryFoldersEnabled()) == true
+            guard !Task.isCancelled else { return }
+            foldersEnabled = enabled
+        }
         .onAppear { savedPhotos.observe(owner: photosObserver) }
         .onDisappear { savedPhotos.stopObserving(owner: photosObserver) }
         .onChange(of: scenePhase) { _, phase in
@@ -171,6 +203,34 @@ struct LibraryView: View {
 
     private var photosContext: SavedPhotosContext {
         SavedPhotosContext(scope: MediaAccountScope(session: session), journal: exports?.journal)
+    }
+
+    private var folderPreferenceEndpoint: URL? {
+        scenePhase == .active ? collectionNavigation.activeEndpoint : nil
+    }
+
+    private var visibleFixtureCollections: [FixtureCollection] {
+        collectionSource == nil ? collections : []
+    }
+
+    private var collectionNavigation: LibraryCollectionNavigation {
+        .init(activeEndpoint: tabSelectionState?.selection == .library ? activeRoute?.endpoint : nil,
+              tabBarTop: tabBarTop, tabSelectionState: tabSelectionState, viewerPresentations: viewerPresentations,
+              viewerVisibilityChanged: viewerVisibilityChanged)
+    }
+
+    private func collectionCard(_ collection: LibraryAssetCollection, source: ImmichTimelineRepository,
+                                media: MediaLibraryController, assetDetails: any AssetDetailReading) -> some View
+    {
+        LibraryHubLink {
+            LibraryCollectionTimeline(title: collection.rawValue, source: source, query: collection.query,
+                                      separatesMedia: collection.separatesMedia, media: media, assetDetails: assetDetails,
+                                      tabSelectionState: tabSelectionState, viewerPresentations: viewerPresentations, tabBarTop: tabBarTop)
+        } label: {
+            LibraryAssetCollectionCard(collection: collection, source: source, media: media,
+                                       activeEndpoint: activeRoute?.endpoint, isActive: tabSelectionState?.selection == .library)
+        }
+        .buttonStyle(.plain)
     }
 
     private var accountButton: some View {

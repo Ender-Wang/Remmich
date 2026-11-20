@@ -135,6 +135,82 @@ actor ImmichTimelineRepository: TimelineReading, VideoReading, AssetDetailReadin
         try await loadMemories(matching: kind)
     }
 
+    func libraryPeople() async throws -> [LibraryPerson] {
+        let (client, requestGeneration) = try requestContext()
+        var people: [String: LibraryPerson] = [:]
+        var page = 1
+        while true {
+            try Task.checkCancellation()
+            let result = try await client.people(page: page, size: 250)
+            try requireCurrent(requestGeneration)
+            let before = people.count
+            for person in result.people {
+                people[person.id] = LibraryPerson(id: person.id, name: person.name, updatedAt: person.updatedAt ?? .distantPast)
+            }
+            guard result.hasNextPage else { break }
+            guard people.count > before else { throw TimelineReadError.invalidResponse }
+            page += 1
+        }
+        return people.values.sorted {
+            $0.updatedAt == $1.updatedAt ? $0.id < $1.id : $0.updatedAt > $1.updatedAt
+        }
+    }
+
+    func libraryMemories(page: Int, size: Int) async throws -> [TimelineMemorySummary] {
+        let (client, requestGeneration) = try requestContext()
+        let values = try await client.memories(query: .init(page: page, size: size), includeTimelineAssets: true)
+        try requireCurrent(requestGeneration)
+        return values.map { memory in
+            TimelineMemorySummary(id: memory.id, memoryAt: memory.memoryAt, sourceYear: memory.year,
+                                  assets: memory.assets.map { .init(id: $0.id, revision: $0.updatedAt, mediaKind: Self.map($0.mediaKind)) },
+                                  availableOn: memory.showAt, timelineAssets: memory.timelineAssets?.map(Self.map))
+        }
+    }
+
+    func librarySharedLinks() async throws -> [LibrarySharedLink] {
+        let (client, requestGeneration) = try requestContext()
+        guard let serverURL = session?.apiURL else { throw TimelineReadError.routeUnavailable }
+        let links = try await client.sharedLinks(serverURL: serverURL)
+        try requireCurrent(requestGeneration)
+        return links.map {
+            LibrarySharedLink(id: $0.id, name: $0.description, createdAt: $0.createdAt, expiresAt: $0.expiresAt,
+                              isPasswordProtected: $0.isPasswordProtected, publicURL: $0.publicURL,
+                              album: $0.album.map(Self.map), assets: $0.assets.map(Self.map))
+        }
+        .sorted { $0.createdAt == $1.createdAt ? $0.id < $1.id : $0.createdAt > $1.createdAt }
+    }
+
+    func libraryPartners() async throws -> [ImmichPartner] {
+        let (client, requestGeneration) = try requestContext()
+        let partners = try await client.incomingPartners()
+        try requireCurrent(requestGeneration)
+        return partners.sorted {
+            let order = $0.name.localizedStandardCompare($1.name)
+            return order == .orderedSame ? $0.id < $1.id : order == .orderedAscending
+        }
+    }
+
+    func libraryFoldersEnabled() async throws -> Bool {
+        let (client, requestGeneration) = try requestContext()
+        let enabled = try await client.foldersEnabled()
+        try requireCurrent(requestGeneration)
+        return enabled
+    }
+
+    func libraryFolderTree() async throws -> LibraryFolderTree {
+        let (client, requestGeneration) = try requestContext()
+        let paths = try await client.folderPaths()
+        try requireCurrent(requestGeneration)
+        return LibraryFolderTree(paths: paths)
+    }
+
+    func libraryFolderAssets(path: String) async throws -> [TimelineAssetSummary] {
+        let (client, requestGeneration) = try requestContext()
+        let assets = try await client.folderAssets(path: path)
+        try requireCurrent(requestGeneration)
+        return assets.map(Self.map)
+    }
+
     private func loadMemories(matching kind: TimelineMediaKind?) async throws -> [TimelineMemorySummary] {
         let (client, requestGeneration) = try requestContext()
         let startedAt = Date()
@@ -294,11 +370,14 @@ actor ImmichTimelineRepository: TimelineReading, VideoReading, AssetDetailReadin
         ImmichTimelineQuery(
             order: query.order == .ascending ? .ascending : .descending,
             orderBy: query.orderBy == .takenAt ? .takenAt : .createdAt,
-            visibility: map(query.visibility),
+            visibility: query.visibility.map(map),
             includesTrashed: query.includesTrashed,
             includesStacks: query.includesStacks,
             includesPartners: query.includesPartners,
-            albumID: query.albumID
+            albumID: query.albumID,
+            isFavorite: query.isFavorite,
+            personID: query.personID,
+            userID: query.userID
         )
     }
 
@@ -347,7 +426,8 @@ actor ImmichTimelineRepository: TimelineReading, VideoReading, AssetDetailReadin
             stack: asset.stack.map { .init(id: $0.id, assetCount: $0.assetCount) },
             projectionType: asset.projectionType,
             thumbhash: asset.thumbhash,
-            thumbnailRevision: asset.thumbnailRevision
+            thumbnailRevision: asset.thumbnailRevision,
+            place: TimelinePlace(city: asset.city, country: asset.country)
         )
     }
 

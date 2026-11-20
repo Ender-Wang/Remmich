@@ -140,6 +140,7 @@ final class PhotosTimelineStore {
     private let reader: any TimelineReading
     private let openingSource: TimelineOpeningSource?
     private let persistentRefreshPolicy: PersistentTimelineRefreshPolicy
+    private let hasUnfilteredBucketCounts: Bool
     private let now: () -> Date
     private var query: TimelineQuery
     private var generation: UInt64 = 0
@@ -168,13 +169,21 @@ final class PhotosTimelineStore {
         persistentRefreshPolicy: PersistentTimelineRefreshPolicy = .reader,
         query: TimelineQuery = .init(),
         openingSource: TimelineOpeningSource? = nil,
+        hasUnfilteredBucketCounts: Bool = false,
         now: @escaping () -> Date = { .now }
     ) {
         self.reader = reader
         self.persistentRefreshPolicy = persistentRefreshPolicy
         self.query = query
         self.openingSource = openingSource
+        self.hasUnfilteredBucketCounts = hasUnfilteredBucketCounts
         self.now = now
+    }
+
+    func rangeAssetCount(_ count: Int, bucketIDs: [TimelineBucketID]) -> Int? {
+        guard hasUnfilteredBucketCounts else { return count }
+        guard bucketIDs.allSatisfy({ semanticAssetsByBucket[$0] != nil }) else { return nil }
+        return bucketIDs.reduce(0) { $0 + (semanticAssetsByBucket[$1]?.count ?? 0) }
     }
 
     func bootstrap(_ snapshot: TimelineBootstrapSnapshot, openingWindow: Bool = false) {
@@ -272,12 +281,12 @@ final class PhotosTimelineStore {
         }
     }
 
-    func load() async {
+    func load(resumingDeferred: Bool = false) async {
         if let initialTask {
             await initialTask.value
             return
         }
-        guard loadState == .idle else { return }
+        guard loadState == .idle || (resumingDeferred && loadState == .loading) else { return }
 
         generation &+= 1
         let requestGeneration = generation
@@ -373,6 +382,9 @@ final class PhotosTimelineStore {
     }
 
     func memoryAssets(for memory: TimelineMemorySummary) async -> [TimelineAssetSummary] {
+        if let timelineAssets = memory.timelineAssets {
+            return timelineAssets
+        }
         let requestedIDs = memory.assets.map(\.id)
         var candidatesByID = residencyAssetsByID
         var resolved = Self.orderedMemoryAssets(
@@ -420,7 +432,7 @@ final class PhotosTimelineStore {
     }
 
     func cachedMemoryAssets(for memory: TimelineMemorySummary) -> [TimelineAssetSummary] {
-        Self.orderedMemoryAssets(
+        memory.timelineAssets ?? Self.orderedMemoryAssets(
             assetIDs: memory.assets.map(\.id),
             assetsByID: residencyAssetsByID
         )
@@ -730,7 +742,7 @@ final class PhotosTimelineStore {
             startMemoryLoad(generation: generation)
             return
         }
-        if bucketSummaries.isEmpty {
+        if bucketSummaries.isEmpty || loadState == .loading {
             guard loadState != .idle else { return }
             loadState = .idle
             Task { [weak self] in await self?.load() }

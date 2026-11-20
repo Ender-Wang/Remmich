@@ -67,10 +67,13 @@ nonisolated struct TimelineQuery: Hashable, Sendable {
     var albumID: String?
     var order: TimelineOrder = .descending
     var orderBy: TimelineOrderBy = .takenAt
-    var visibility: TimelineVisibility = .timeline
+    var visibility: TimelineVisibility? = .timeline
     var includesTrashed = false
     var includesStacks = false
     var includesPartners = true
+    var isFavorite: Bool?
+    var personID: String?
+    var userID: String?
 }
 
 nonisolated struct TimelineBucketID: Codable, Hashable, Identifiable, RawRepresentable, Sendable {
@@ -118,6 +121,37 @@ nonisolated struct TimelineStackSummary: Codable, Hashable, Sendable {
     let assetCount: Int
 }
 
+nonisolated struct TimelinePlace: Codable, Hashable, Identifiable, Sendable {
+    let city: String?
+    let country: String?
+
+    init?(city: String?, country: String?) {
+        let city = city?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let country = country?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.city = city?.isEmpty == false ? city : nil
+        self.country = country?.isEmpty == false ? country : nil
+        guard self.city != nil || self.country != nil else { return nil }
+    }
+
+    var id: Self {
+        self
+    }
+
+    var name: String {
+        city ?? country ?? ""
+    }
+}
+
+nonisolated struct LibraryPerson: Identifiable, Hashable, Sendable {
+    let id: String
+    let name: String
+    let updatedAt: Date
+
+    var displayName: String {
+        name.isEmpty ? "Unnamed person" : name
+    }
+}
+
 nonisolated struct TimelineAssetSummary: Codable, Hashable, Identifiable, Sendable {
     let id: String
     let ownerID: String
@@ -135,6 +169,8 @@ nonisolated struct TimelineAssetSummary: Codable, Hashable, Identifiable, Sendab
     let projectionType: String?
     let thumbhash: String?
     let thumbnailRevision: Date
+    var usesUploadDate: Bool? = nil
+    var place: TimelinePlace? = nil
 
     /// Immich's capture-local wall clock encoded on a UTC calendar. The
     /// supplied offset belongs to this capture, including its DST state.
@@ -142,6 +178,17 @@ nonisolated struct TimelineAssetSummary: Codable, Hashable, Identifiable, Sendab
         // The timeline API sends float-backed hours. Timezone offsets are
         // whole seconds; discard representation noise at midnight boundaries.
         capturedAt.addingTimeInterval((localOffsetHours * 3600).rounded())
+    }
+
+    var timelineLocalDate: Date {
+        usesUploadDate == true ? uploadedAt : captureLocalDate
+    }
+
+    func isOrdered(before other: Self) -> Bool {
+        if usesUploadDate == true, other.usesUploadDate == true {
+            return uploadedAt == other.uploadedAt ? id < other.id : uploadedAt < other.uploadedAt
+        }
+        return isCaptured(before: other)
     }
 
     /// Match Immich: group by capture-local day, then order by the actual
@@ -238,13 +285,17 @@ nonisolated struct TimelineMemorySummary: Hashable, Identifiable, Sendable {
     let sourceYear: Int
     let assets: [TimelineMemoryAssetSummary]
     let availableOn: Date?
+    let timelineAssets: [TimelineAssetSummary]?
 
-    init(id: String, memoryAt: Date, sourceYear: Int, assets: [TimelineMemoryAssetSummary], availableOn: Date? = nil) {
+    init(id: String, memoryAt: Date, sourceYear: Int, assets: [TimelineMemoryAssetSummary], availableOn: Date? = nil,
+         timelineAssets: [TimelineAssetSummary]? = nil)
+    {
         self.id = id
         self.memoryAt = memoryAt
         self.sourceYear = sourceYear
         self.assets = assets
         self.availableOn = availableOn
+        self.timelineAssets = timelineAssets
     }
 
     func upcomingDayLabel(relativeTo date: Date, calendar: Calendar = .autoupdatingCurrent) -> String? {
@@ -390,7 +441,7 @@ nonisolated struct TimelineSection: Identifiable, Sendable {
         var currentAssets: [TimelineAssetSummary] = []
 
         for asset in assets {
-            let day = TimelineCaptureDay(capturedAt: asset.captureLocalDate)
+            let day = TimelineCaptureDay(capturedAt: asset.timelineLocalDate)
             if currentDay == day {
                 currentAssets.append(asset)
                 continue

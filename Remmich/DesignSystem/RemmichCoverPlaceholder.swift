@@ -7,7 +7,7 @@ import UIKit
 enum RemmichCoverPlaceholder {
     struct Caption {
         let title: String
-        let count: Int
+        let count: Int?
         let isFeatured: Bool
     }
 
@@ -34,10 +34,12 @@ enum RemmichCoverPlaceholder {
                 with: CGSize(width: width, height: .greatestFiniteMagnitude), options: .usesLineFragmentOrigin,
                 attributes: [.font: titleFont], context: nil
             ).height)
-            let countHeight = ("\(caption.count.formatted()) items" as NSString).boundingRect(
-                with: CGSize(width: width, height: .greatestFiniteMagnitude), options: .usesLineFragmentOrigin,
-                attributes: [.font: countFont], context: nil
-            ).height
+            let countHeight = caption.count.map { count in
+                ("\(count.formatted()) items" as NSString).boundingRect(
+                    with: CGSize(width: width, height: .greatestFiniteMagnitude), options: .usesLineFragmentOrigin,
+                    attributes: [.font: countFont], context: nil
+                ).height
+            } ?? 0
             available.height = max(0, size.height - ceil(titleHeight) - ceil(countHeight) - 2 - padding * 2)
         }
         let side = side(in: available)

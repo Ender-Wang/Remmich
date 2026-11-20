@@ -1107,7 +1107,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         let asset = catalog.assets[assetIndex]
         let coversVisible = input.isActive && gesture == nil && transitionSurface == nil
         if item.isHeader {
-            let date = catalog.assets[item.assetRange.lowerBound].captureLocalDate
+            let date = catalog.assets[item.assetRange.lowerBound].timelineLocalDate
             let displayedY = layout.layoutAttributesForItem(at: path)?.frame.minY ?? item.frame.minY
             let initiallyPinned = displayedY > item.frame.minY + 0.5
             cell.setHeaderContent(
@@ -1775,7 +1775,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         let cell = TimelineSemanticCollectionCell(frame: CGRect(origin: .zero, size: item.frame.size))
         cell.nodeID = item.id
         cell.setHeaderContent(
-            title: dayHeaderTitle(catalog.assets[item.assetRange.lowerBound].captureLocalDate),
+            title: dayHeaderTitle(catalog.assets[item.assetRange.lowerBound].timelineLocalDate),
             count: "\(item.assetRange.count.formatted()) items",
             naturalY: item.frame.minY, pinned: false
         )

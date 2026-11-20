@@ -54,3 +54,32 @@ struct LibraryCollectionCard<Cover: View>: View {
         .accessibilityLabel("\(title), \(detail)")
     }
 }
+
+nonisolated struct LibraryCoverAsset: Identifiable, Sendable {
+    let id: String
+    let revision: Date
+
+    init(id: String, revision: Date) {
+        self.id = id
+        self.revision = revision
+    }
+
+    init(_ asset: TimelineAssetSummary) {
+        self.init(id: asset.id, revision: asset.thumbnailRevision)
+    }
+}
+
+struct LibraryAssetCover: View {
+    @Environment(\.displayScale) private var scale
+    let assetID: String
+    let revision: Date
+    let media: MediaLibraryController
+    var body: some View {
+        let pixels = LibraryCollectionCardMetrics.coverPixels(scale: scale)
+        ImmichThumbnail(descriptor: .init(assetID: assetID, updatedAt: revision, derivative: .thumbnail,
+                                          targetPixels: .init(width: Int(pixels.width), height: Int(pixels.height))),
+                        media: media)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+}

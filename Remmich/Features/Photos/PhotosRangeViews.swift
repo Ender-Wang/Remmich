@@ -697,22 +697,22 @@ nonisolated enum PhotosRangeAssetCatalog {
             case .year, .month:
                 true
             case let .week(_, weekID, _):
-                TimelineWeekID(day: TimelineCaptureDay(capturedAt: asset.captureLocalDate)) == weekID
+                TimelineWeekID(day: TimelineCaptureDay(capturedAt: asset.timelineLocalDate)) == weekID
             case let .day(_, dayID):
-                TimelineCaptureDay(capturedAt: asset.captureLocalDate) == dayID
+                TimelineCaptureDay(capturedAt: asset.timelineLocalDate) == dayID
             }
         }
         return Dictionary(grouping: filtered, by: \.id)
             .compactMap(\.value.first)
             .sorted {
-                $1.isCaptured(before: $0)
+                $1.isOrdered(before: $0)
             }
     }
 
     static func dayGroups(from assets: [TimelineAssetSummary]) -> [TimelineDayGroup] {
         var groups: [TimelineDayGroup] = []
         for asset in assets {
-            let day = TimelineCaptureDay(capturedAt: asset.captureLocalDate)
+            let day = TimelineCaptureDay(capturedAt: asset.timelineLocalDate)
             if groups.last?.id == day {
                 groups[groups.count - 1].assets.append(asset)
             } else {
@@ -911,7 +911,7 @@ struct PhotosRangeAssetsView: View {
 
     private func updateViewport(_ asset: TimelineAssetSummary, visible: Bool) {
         if visible {
-            visibleAssets[asset.id] = asset.captureLocalDate
+            visibleAssets[asset.id] = asset.timelineLocalDate
         } else {
             visibleAssets.removeValue(forKey: asset.id)
         }
@@ -1016,6 +1016,7 @@ private struct PhotosBucketCoverButton: View {
     @State private var currentCoverID = "loading"
 
     var body: some View {
+        let count = store.rangeAssetCount(count, bucketIDs: bucketIDs)
         PhotosRangeCard(
             title: title,
             count: count,
@@ -1033,7 +1034,7 @@ private struct PhotosBucketCoverButton: View {
             onPinch: onPinch
         )
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(title), \(count.formatted()) items")
+        .accessibilityLabel(count.map { "\(title), \($0.formatted()) items" } ?? title)
         .accessibilityIdentifier(accessibilityID)
         .accessibilityAddTraits(.isButton)
         .accessibilityValue(coverAccessibilityValue)
@@ -1798,7 +1799,7 @@ private final class PhotosRangeCardSlideshowLifetime {
 
 struct PhotosRangeCardChrome: View {
     let title: String
-    let count: Int
+    let count: Int?
     let isFeatured: Bool
 
     var body: some View {
@@ -1819,8 +1820,10 @@ struct PhotosRangeCardChrome: View {
                     Text(title)
                         .font(isFeatured ? .title3.weight(.semibold) : .caption.weight(.semibold))
                         .lineLimit(2)
-                    Text("\(count.formatted()) items")
-                        .font(isFeatured ? .subheadline : .caption2)
+                    if let count {
+                        Text("\(count.formatted()) items")
+                            .font(isFeatured ? .subheadline : .caption2)
+                    }
                 }
                 .foregroundStyle(.white)
                 .shadow(color: .black.opacity(0.45), radius: 2, y: 1)
@@ -1835,7 +1838,7 @@ struct PhotosRangeCard: View {
     @Environment(\.scenePhase) private var scenePhase
 
     let title: String
-    let count: Int
+    let count: Int?
     let systemImage: String
     var assets: [TimelineAssetSummary] = []
     let media: MediaLibraryController

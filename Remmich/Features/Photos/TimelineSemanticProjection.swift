@@ -32,7 +32,7 @@ final nonisolated class TimelineSemanticCatalog: Sendable {
     init(assets source: [TimelineAssetSummary]) {
         var seen = Set<String>()
         assets = source.filter { seen.insert($0.id).inserted }.sorted {
-            $0.isCaptured(before: $1)
+            $0.isOrdered(before: $1)
         }
         assetIndexes = Dictionary(uniqueKeysWithValues: assets.enumerated().map { ($0.element.id, $0.offset) })
         var projections: [TimelineSemanticScale: [Group]] = [:]
@@ -48,7 +48,7 @@ final nonisolated class TimelineSemanticCatalog: Sendable {
                 if Task.isCancelled {
                     break
                 }
-                let date = assets[lower].captureLocalDate
+                let date = assets[lower].timelineLocalDate
                 let interval = calendar.dateInterval(of: scale == .day ? .day : scale == .week ? .weekOfYear : scale == .month ? .month : .year, for: date)!
                 // ISO week identity is authoritative, independently of locale.
                 let day = TimelineCaptureDay(capturedAt: date)
@@ -56,7 +56,7 @@ final nonisolated class TimelineSemanticCatalog: Sendable {
                 let start = scale == .week ? week.startDate : interval.start
                 let end = scale == .week ? start.addingTimeInterval(7 * 86400) : interval.end
                 var upper = lower + 1
-                while upper < assets.count, assets[upper].captureLocalDate < end {
+                while upper < assets.count, assets[upper].timelineLocalDate < end {
                     upper += 1
                 }
                 let month = calendar.dateComponents([.year, .month], from: date)

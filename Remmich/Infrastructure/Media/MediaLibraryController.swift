@@ -1,5 +1,6 @@
 import AVKit
 import Foundation
+import ImmichAPI
 import Nuke
 import Observation
 import OSLog
@@ -602,6 +603,32 @@ final class MediaLibraryController {
             unit: .pixels,
             contentMode: .aspectFill
         )
+        return request
+    }
+
+    func personThumbnailRequest(_ person: LibraryPerson, pixels: Int) -> ImageRequest? {
+        directoryPortraitRequest(components: ["people", person.id, "thumbnail"],
+                                 id: "person:\(person.id)", revision: person.updatedAt, pixels: pixels)
+    }
+
+    func partnerProfileRequest(_ partner: ImmichPartner, pixels: Int) -> ImageRequest? {
+        guard partner.hasProfileImage else { return nil }
+        return directoryPortraitRequest(components: ["users", partner.id, "profile-image"],
+                                        id: "partner:\(partner.id)", revision: partner.profileChangedAt, pixels: pixels)
+    }
+
+    private func directoryPortraitRequest(components: [String], id: String, revision: Date, pixels: Int) -> ImageRequest? {
+        guard let scope, let session else { return nil }
+        let endpoint = activeAPIURL ?? session.apiURL
+        let url = components.reduce(endpoint) { $0.appending(component: $1) }
+        var urlRequest = URLRequest(url: url)
+        urlRequest.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+        var request = ImageRequest(urlRequest: urlRequest)
+        request.imageID = "\(scope.cacheNamespace):\(id):\(revision.timeIntervalSinceReferenceDate)"
+        if activeAPIURL == nil {
+            request.options.insert(.returnCacheDataDontLoad)
+        }
+        request.thumbnail = .init(size: .init(width: pixels, height: pixels), unit: .pixels, contentMode: .aspectFill)
         return request
     }
 
