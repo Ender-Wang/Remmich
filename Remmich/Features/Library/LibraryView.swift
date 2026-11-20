@@ -20,7 +20,8 @@ struct LibraryView: View {
     @State private var accountContentMounted = false
     @State private var accountExpansion: CGFloat = 0
 
-    private let columns = [GridItem(.adaptive(minimum: 150, maximum: 260), spacing: 14)]
+    private let columns = [GridItem(.adaptive(minimum: LibraryCollectionCardMetrics.minimumWidth,
+                                              maximum: LibraryCollectionCardMetrics.maximumWidth), spacing: LibraryCollectionCardMetrics.spacing)]
     private let avatarSize: CGFloat = 44
     private let avatarImageSize: CGFloat = 32
     private let horizontalPadding: CGFloat = 16
@@ -51,10 +52,15 @@ struct LibraryView: View {
                                     .glassEffect(.regular, in: .rect(cornerRadius: 22))
                             }.buttonStyle(.plain)
                         }
-                        LazyVGrid(columns: columns, spacing: 14) {
+                        LazyVGrid(columns: columns, spacing: LibraryCollectionCardMetrics.spacing) {
                             ForEach(collections) { collection in
                                 NavigationLink(value: collection) {
-                                    CollectionCard(collection: collection)
+                                    LibraryCollectionCard(title: collection.title, detail: collection.subtitle,
+                                                          symbol: collection.kind.systemImage, appearance: .photographic)
+                                    {
+                                        FixtureArtwork(palette: collection.palette)
+                                    }
+                                    .accessibilityIdentifier("collection-\(collection.id)")
                                 }
                                 .buttonStyle(.plain)
                             }
@@ -262,27 +268,6 @@ private struct AccountPanelReveal: AnimatableModifier {
                     .frame(width: width, height: height)
                     .offset(x: -remainingHorizontalInset, y: remainingVerticalInset)
             }
-    }
-}
-
-private struct CollectionCard: View {
-    let collection: FixtureCollection
-
-    var body: some View {
-        ZStack(alignment: .bottomLeading) {
-            FixtureArtwork(palette: collection.palette, systemImage: collection.kind.systemImage)
-            LinearGradient(colors: [.clear, .black.opacity(0.62)], startPoint: .center, endPoint: .bottom)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(collection.title).font(.headline)
-                Text(collection.subtitle).font(.caption)
-            }
-            .foregroundStyle(.white)
-            .padding(12)
-        }
-        .aspectRatio(4 / 3, contentMode: .fit)
-        .clipShape(.rect(cornerRadius: DesignMetrics.defaultCornerRadius))
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("collection-\(collection.id)")
     }
 }
 
