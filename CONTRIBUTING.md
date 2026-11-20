@@ -138,7 +138,7 @@ New index writes persist capture-local day/week/month/year keys, including the I
 
 ### Cached timeline startup
 
-On launch, the accepted local index supplies about two screenfuls of Photos and their cached thumbnails. Older Photos load after the opening tiles appear. Videos and Albums prepare their opening views alongside that work. If the cached opening data is unavailable, the loading logo stays visible until content or an empty or error state is ready.
+On launch, the accepted local index supplies about two screenfuls of Photos and their cached thumbnails. After the opening tiles appear, older Photos load and the native tab shell prepares Videos, Albums, Library, and Search. Library also warms the Downloads count and cover from Apple Photos. Search prepares its demo grid and search field through the same tab path. If the cached Photos data is unavailable, the loading logo stays visible until content or an empty or error state is ready.
 
 Videos and individual album timelines also use a small opening window. The timeline keeps the currently visible asset in place when the full history arrives and waits for active scrolling to settle before replacing the opening window. The Albums overview starts at the bottom with its header clearance measured from the window safe area, so attaching the prepared tab does not rebase the scroll offset. Re-tapping Albums returns to the same bottom position.
 

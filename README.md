@@ -43,13 +43,13 @@ You can also follow [Build and run](CONTRIBUTING.md#build-and-run) to build from
 
 ## Features
 
-- **🔍 Timelines:** Separate Photos and Videos timelines with pinch-to-zoom, date cards and saved browsing positions. Cached timelines show about two screenfuls first, then load older items without moving the viewport. Videos and Albums prepare their first views while Photos loads its history.
+- **🔍 Timelines:** Separate Photos and Videos timelines with pinch-to-zoom, date cards and saved browsing positions. Cached timelines show about two screenfuls first, then load older items without moving the viewport. Videos, Albums, Library, and Search prepare their first views while Photos loads its history.
 - **📸 Photos and memories:** Zoomable photos, Live Photo playback, filmstrip navigation and rotating memories.
 - **👆 Quick preview:** Long-press to preview, tap to open, and swipe down to dismiss with interruptible transitions.
 - **🗺️ Places and maps:** Photon landmarks, per-country language preferences and asset maps below Info.
 - **🎬 Video:** Native playback, Picture in Picture and iOS Now Playing with titles and artwork.
 - **💾 Offline browsing:** Cached timelines, thumbnails, asset information and place names, with background sync. Asset Cache and Place Cache have separate progress, Sync/Pause/Resume and automatic-cache settings; Rebuild and Clear maintain both caches together.
-- **📥 Downloads:** Save a quality tier to Photos → Remmich, with background transfers, pause/resume, automatic recovery, cancel/retry and history.
+- **📥 Downloads:** Save a quality tier to Photos → Remmich, with background transfers, pause/resume, automatic recovery, and cancel/retry. Browse saved photos and videos or check transfer history from Library.
 - **📤 Sharing:** Share the viewed quality from the viewer or preview, retaining supported metadata and cached image compression.
 - **🗂️ Albums:** Browse owned/shared albums with search and six sorting options. All/Shared uses the same sliding animation as the main pages, with the search and scope controls staying above the content. Pinch between Cards and List around the album under your fingers, reopen album timelines at their saved positions, and browse indexed album metadata offline using the common timeline and viewer. First opening and tab retaps preserve bottom clearance, including wrapped titles.
 - **📊 Index controls:** Switch between Timeline Index and Album Index by tapping or swiping, and scroll from the status area as well as the statistics. Sync/Pause/Resume and **Rebuild index** sit directly below each section's statistics. Cache & Storage uses the same section layout and swiping. Per-10K storage estimates use current data and update during sync.
@@ -61,7 +61,7 @@ You can also follow [Build and run](CONTRIBUTING.md#build-and-run) to build from
 - **Live Photo sharing:** shares the still image. Native motion sharing is limited by the investigated Apple public APIs; automatic export is unavailable in this implementation, and the system picker requires another selection step. Save to Photos preserves Live Photos.
 - **Sharing:** single-asset sharing only. Shared files currently retain available GPS metadata.
 - **Offline originals:** thumbnail caching does not retain originals or playable videos; explicitly saved Photos resources can be reused when the requested quality matches.
-- **Library collections and Search:** M7 Library collections is in progress; server-backed Search is planned for M8. Both destinations currently show demo data.
+- **Library collections and Search:** Server collections in Library still use demo data while M7 is in progress. Search uses demo data until M8 adds server-backed search.
 - **Offline video:** saved Playback videos can load locally while the Photos resource remains accessible. Otherwise, streaming requires a reachable server.
 - **Asset locations and maps:** maps require valid asset GPS and an enabled, compatible Immich map source. Place names and translated map labels depend on the provider's available data.
 
