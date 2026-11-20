@@ -25,9 +25,8 @@ struct LibraryView: View {
     @State private var accountContentMounted = false
     @State private var accountExpansion: CGFloat = 0
     @State private var photosObserver = UUID()
+    @State private var cardDestination: LibraryHubDestination?
 
-    private let columns = [GridItem(.adaptive(minimum: LibraryCollectionCardMetrics.minimumWidth,
-                                              maximum: LibraryCollectionCardMetrics.maximumWidth), spacing: LibraryCollectionCardMetrics.spacing)]
     private let avatarSize: CGFloat = 44
     private let avatarImageSize: CGFloat = 32
     private let horizontalPadding: CGFloat = 16
@@ -38,12 +37,13 @@ struct LibraryView: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack(alignment: .topTrailing) {
-                ScrollView {
+                LibraryHubScrollView {
                     VStack(alignment: .leading, spacing: 16) {
-                        LazyVGrid(columns: columns, spacing: LibraryCollectionCardMetrics.spacing) {
+                        LibraryHubCardLayout {
                             if let exports {
-                                NavigationLink {
+                                LibraryHubLink {
                                     DownloadsView(exports: exports)
+                                        .libraryNavigationChrome()
                                 } label: {
                                     LibraryCollectionCard(title: "Downloads History",
                                                           detail: exports.activeCount > 0 ? "\(exports.activeCount) active" : "Save activity",
@@ -52,7 +52,7 @@ struct LibraryView: View {
                                 .buttonStyle(.plain)
                                 .accessibilityIdentifier("library-download-history")
                             }
-                            NavigationLink {
+                            LibraryHubLink {
                                 SavedPhotosView(library: savedPhotos, scope: MediaAccountScope(session: session),
                                                 tabSelectionState: tabSelectionState, viewerPresentations: viewerPresentations,
                                                 tabBarTop: tabBarTop)
@@ -68,7 +68,10 @@ struct LibraryView: View {
                             .buttonStyle(.plain)
                             .accessibilityIdentifier("library-downloads")
                             ForEach(collections) { collection in
-                                NavigationLink(value: collection) {
+                                LibraryHubLink {
+                                    CollectionDetailView(collection: collection)
+                                        .libraryNavigationChrome()
+                                } label: {
                                     LibraryCollectionCard(title: collection.title, detail: collection.subtitle,
                                                           symbol: collection.kind.systemImage, appearance: .photographic)
                                     {
@@ -81,10 +84,12 @@ struct LibraryView: View {
                         }
                     }
                     .padding(.horizontal, 16)
-                    .padding(.top, avatarTopPadding + avatarSize + 8)
-                    .padding(.bottom, 16)
+                    .padding(.top, geometry.safeAreaInsets.top + avatarTopPadding + avatarSize + 8)
+                    .padding(.bottom, geometry.safeAreaInsets.bottom + 16)
+                    .frame(width: geometry.size.width)
+                    .environment(\.libraryHubDestination, $cardDestination)
                 }
-                .accessibilityIdentifier("library-root")
+                .ignoresSafeArea(.container, edges: [.top, .bottom])
 
                 HStack {
                     Text("Library").font(.largeTitle.bold())
@@ -94,7 +99,10 @@ struct LibraryView: View {
                 .padding(.horizontal, horizontalPadding)
                 .padding(.top, avatarTopPadding)
                 .padding(.bottom, 8)
-                .background(.background)
+                .background {
+                    LibraryTitleBackdrop()
+                        .ignoresSafeArea(.container, edges: [.top, .horizontal])
+                }
                 .frame(maxHeight: .infinity, alignment: .top)
                 .allowsHitTesting(false)
 
@@ -138,8 +146,8 @@ struct LibraryView: View {
         }
         .navigationTitle("Library")
         .toolbar(.hidden, for: .navigationBar)
-        .navigationDestination(for: FixtureCollection.self) { collection in
-            CollectionDetailView(collection: collection)
+        .navigationDestination(item: $cardDestination) { destination in
+            destination.view
         }
         .navigationDestination(for: FixtureAsset.self) { asset in
             FixtureAssetDetailView(asset: asset)
@@ -279,6 +287,37 @@ struct LibraryView: View {
                 }
             }
         }
+    }
+}
+
+struct LibraryTitleBackdrop: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        TimelineMemoryGradientBackdrop(visible: true, extended: true, reduceMotion: reduceMotion)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+}
+
+extension View {
+    func libraryNavigationChrome() -> some View {
+        navigationBarTitleDisplayMode(.inline)
+            .toolbar(.visible, for: .navigationBar)
+            .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
+            .overlay(alignment: .top) {
+                GeometryReader { safe in
+                    let safeTop = safe.frame(in: .global).minY
+                    GeometryReader { full in
+                        let topInset = max(0, safeTop - full.frame(in: .global).minY)
+                        LibraryTitleBackdrop()
+                            .frame(height: topInset + 32)
+                    }
+                    .ignoresSafeArea(.container, edges: [.top, .horizontal])
+                }
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
     }
 }
 
