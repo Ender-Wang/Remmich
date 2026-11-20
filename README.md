@@ -17,7 +17,7 @@
 
 Remmich is a SwiftUI, UIKit, and AVKit client for your self-hosted Immich library. Browse photos, watch videos, revisit memories, and keep thumbnails and asset information available offline without changing your server library.
 
-Browse Photos, Videos and Albums from your Immich account, with offline indexing, interactive album layouts, Sharing and Save to Photos. Search and Library collections still show demo data.
+Browse Photos, Videos, Albums, and Library collections from your Immich account, with offline indexing, interactive album layouts, Sharing and Save to Photos. Search still shows demo data.
 
 See the **[Roadmap](#roadmap)** for current and planned work.
 
@@ -49,7 +49,8 @@ You can also follow [Build and run](CONTRIBUTING.md#build-and-run) to build from
 - **🗺️ Places and maps:** Photon landmarks, per-country language preferences and asset maps below Info.
 - **🎬 Video:** Native playback, Picture in Picture and iOS Now Playing with titles and artwork.
 - **💾 Offline browsing:** Cached timelines, thumbnails, asset information and place names, with background sync. Asset Cache and Place Cache have separate progress, Sync/Pause/Resume and automatic-cache settings; Rebuild and Clear maintain both caches together.
-- **📥 Downloads:** Save a quality tier to Photos → Remmich, with background transfers, pause/resume, automatic recovery, and cancel/retry. Browse saved photos and videos or check transfer history from Library.
+- **📥 Downloads:** Save a quality tier to Photos → Remmich, with background transfers, pause/resume, automatic recovery, and cancel/retry. Browse saved photos and videos from Library. The Downloads History card shows the latest completed download when its cover is available.
+- **📚 Library collections** — Browse Recently taken, Recently added, Favorites, Memories, People, Places, Shared Links, Partners, Folders, Archive, and Trash. Recently taken and Recently added show seven-day summaries on their cards and open full timelines ordered by capture or upload date. Folders appears when folder browsing is enabled for the Immich account.
 - **📤 Sharing:** Share the viewed quality from the viewer or preview, retaining supported metadata and cached image compression.
 - **🗂️ Albums:** Browse owned/shared albums with search and six sorting options. All/Shared uses the same sliding animation as the main pages, with the search and scope controls staying above the content. Pinch between Cards and List around the album under your fingers, reopen album timelines at their saved positions, and browse indexed album metadata offline using the common timeline and viewer. First opening and tab retaps preserve bottom clearance, including wrapped titles.
 - **📊 Index controls:** Switch between Timeline Index and Album Index by tapping or swiping, and scroll from the status area as well as the statistics. Sync/Pause/Resume and **Rebuild index** sit directly below each section's statistics. Cache & Storage uses the same section layout and swiping. Per-10K storage estimates use current data and update during sync.
@@ -61,13 +62,13 @@ You can also follow [Build and run](CONTRIBUTING.md#build-and-run) to build from
 - **Live Photo sharing:** shares the still image. Native motion sharing is limited by the investigated Apple public APIs; automatic export is unavailable in this implementation, and the system picker requires another selection step. Save to Photos preserves Live Photos.
 - **Sharing:** single-asset sharing only. Shared files currently retain available GPS metadata.
 - **Offline originals:** thumbnail caching does not retain originals or playable videos; explicitly saved Photos resources can be reused when the requested quality matches.
-- **Library collections and Search:** Server collections in Library still use demo data while M7 is in progress. Search uses demo data until M8 adds server-backed search.
+- **Search:** Search uses demo data until M8 adds server-backed search.
 - **Offline video:** saved Playback videos can load locally while the Photos resource remains accessible. Otherwise, streaming requires a reachable server.
 - **Asset locations and maps:** maps require valid asset GPS and an enabled, compatible Immich map source. Place names and translated map labels depend on the provider's available data.
 
 ## Milestones
 
-**M6 — Albums — is complete; M7 — Library collections — is in progress.** The [Roadmap](#roadmap) shows planned work and dated achievements.
+**M6 Albums is complete. M7 Library collections is in device verification.** The [Roadmap](#roadmap) shows planned work and dated achievements.
 
 | Milestone | Status | Scope and expectations |
 | --- | --- | --- |
@@ -78,7 +79,7 @@ You can also follow [Build and run](CONTRIBUTING.md#build-and-run) to build from
 | M4 | ✅ Done | Real server-backed Photos timeline |
 | M5 | ✅ Done | Timelines, viewers, preview, places/maps, Sharing and Download/Save to Photos with Pause/Resume |
 | M6 | ✅ Done | Albums, automatic Album Index, interactive Card/List transitions and navigation refinements |
-| M7 | In progress | Library collections; current UI still uses demo data |
+| M7 | In verification | Read-only Library collections and Downloads History covers |
 | M8 | Planned | Server-backed Search with native filters |
 | M9 | Planned | Further improvements and verification for iPad, accessibility, resilience, and performance |
 | M10 | Planned | Broader real-device release verification and additional distribution options |
@@ -93,7 +94,7 @@ The timeline places upcoming milestones above **Now** and completed work below i
 
 | Priority | Feature | Status | Intended outcome |
 | --- | --- | --- | --- |
-| M7 | Library collections | In progress | Read-only Favorites, Archive, People, Places, Memories and Folders according to server capabilities; current collections still use demo data. |
+| M7 | Library collections | In verification | Browse read-only Immich collections and local Downloads. Available destinations reflect the active account and server settings. |
 | M8 | Search and filters | Planned | Server-backed search with supported people, place, date, media and camera filters. Search currently uses demo data. |
 | M9 | Wider native polish and resilience | Planned | Broader iPad, accessibility, interruption, offline and performance coverage across the completed workflows. |
 | M10 | Release verification and distribution | Planned | Broader real-device verification and sideloading distribution; AltStore remains under consideration. |

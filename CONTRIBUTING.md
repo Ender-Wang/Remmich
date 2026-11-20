@@ -148,6 +148,14 @@ Videos and individual album timelines also use a small opening window. The timel
 
 [ScopedAssetTransitionRuntime](Remmich/Features/Shared/AssetViewer/ScopedAssetTransitionRuntime.swift) keeps weak UIKit probes for visible thumbnail geometry and revision-checked source images. Opening captures the tapped rectangle and reuses the displayed thumbnail before presentation; returning resolves the selected asset's current rectangle and aspect ratio. Unavailable cells retain the existing fallback. [ScopedDayTransitionTests](RemmichTests/ScopedDayTransitionTests.swift) checks newest-asset entry and stable opening/return positions across Day, Week, Month, and Year layouts. [ScopedAssetTransitionTests](RemmichTests/ScopedAssetTransitionTests.swift) covers geometry, clipping, cell reuse, weak image ownership, and immediate image handoff.
 
+### Library browsing
+
+[LibraryHubScrollView](Remmich/Features/Library/LibraryHubScrollView.swift) hosts the Library cards in a UIKit scroll view with automatic inset adjustment disabled. The hub pads its content for the title and tab bar. Card taps push onto the outer Library navigation stack, keeping the hub's native bounce independent of the detail page's navigation bar.
+
+[LibraryTimelineViewport](Remmich/Features/Library/LibraryTimelineViewport.swift) measures safe-area and header clearance for Downloads and server collections. Paired Photos and Videos collections reuse the native media page host. [LibraryCardRows](Remmich/Features/Library/LibraryCardRows.swift) keeps newest-first card lists anchored to the bottom at entry and older items above them during paging. Recently Added uses the server's upload time for timeline grouping and order. The viewer continues to show capture metadata.
+
+[ImmichTimelineRepository](Remmich/Infrastructure/Timeline/ImmichTimelineRepository.swift) uses the typed Immich client for account-scoped collection reads. Folder browsing follows the account's `folders.enabled` preference, Shared Links reads the owner's links, and Partners scopes each timeline to the selected incoming partner. [LibraryReadTests](Packages/ImmichAPI/Tests/ImmichAPITests/LibraryReadTests.swift) covers request filters, share URLs, incoming partners, and folder preferences and path filtering.
+
 ### Memory selection and card rotation
 
 [MemoryDaySearch](Remmich/Domain/Timeline/MemoryDaySearch.swift) requests today first, then up to three following calendar days only while no usable memories are found. Each date keeps the server's first twenty records. Photos and Videos select independently: video eligibility is evaluated before stopping the search. Cancellation and account/route generation checks apply at each request boundary. [MemoryDaySearchTests](RemmichTests/MemoryDaySearchTests.swift) covers the date bound, stopping order, empty results, media eligibility, calendar changes, errors, and cancellation.
