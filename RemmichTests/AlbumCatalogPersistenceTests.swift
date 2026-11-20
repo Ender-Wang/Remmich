@@ -67,6 +67,8 @@ struct AlbumCatalogPersistenceTests {
         #expect(controller.estimatedRemaining(at: .now) == nil)
         #expect(controller.lastUpdatedAt != nil)
         let albums = try await source.albums()
+        let overview = try #require(await db.cachedAlbumOverview(scope: scope))
+        #expect(overview.albums == albums)
         #expect(controller.indexedAlbumCount == albums.count)
         #expect(controller.membershipCount == PreviewFixtures.albums.reduce(0) { $0 + $1.assets.count })
         #expect(controller.totalItemCount == albums.reduce(0) { $0 + $1.assetCount })
@@ -78,6 +80,7 @@ struct AlbumCatalogPersistenceTests {
                let asset = catalog.assetsByBucket.values.flatMap(\.self).first(where: { $0.id == id })
             {
                 #expect(try await db.albumCoverRevision(scope: scope, albumID: album.id, assetID: id) == asset.thumbnailRevision)
+                #expect(overview.coverRevisions[album.id] == asset.thumbnailRevision)
             }
         }
         let queries = await source.bucketRequests
@@ -181,7 +184,19 @@ struct AlbumCatalogPersistenceTests {
 
         let reopened = SQLiteLibraryIndexStore(databaseURL: url)
         #expect(try await reopened.albumList(scope: scope) == albums)
+        let summary = try #require(await reopened.albumIndexSummary(scope: scope))
+        #expect(summary.albumCount == albums.count)
+        #expect(summary.indexedAlbumCount == 1)
+        #expect(summary.membershipCount == assets.values.reduce(0) { $0 + $1.count })
+        #expect(summary.totalItemCount == albums.reduce(0) { $0 + $1.assetCount })
+        #expect(!summary.groupsPrepared)
+        #expect(try await reopened.albumIndexSummary(scope: other) == nil)
         #expect(try await reopened.albumCatalog(scope: scope, albumID: album.id)?.assetsByBucket == assets)
+        let firstBucket = try #require(assets.keys.sorted { $0.rawValue > $1.rawValue }.first { assets[$0]?.isEmpty == false })
+        let expectedFirst = try #require(assets[firstBucket, default: []].first)
+        let opening = try #require(await reopened.albumOpeningWindow(scope: scope, albumID: album.id, limit: 1))
+        #expect(opening.snapshot.assetsByBucket.values.flatMap(\.self).map(\.id) == [expectedFirst.id])
+        #expect(try await reopened.albumOpeningWindow(scope: other, albumID: album.id, limit: 1) == nil)
         #expect(try await reopened.albumCatalog(scope: other, albumID: album.id) == nil)
         let network = FailingAlbumCatalogSource()
         let reader = AlbumTimelineReader(source: network, albumID: album.id, revision: album.catalogRevision,
@@ -190,6 +205,7 @@ struct AlbumCatalogPersistenceTests {
         #expect(await network.requests == 0)
         let preparedGroups = try #require(await reader.preparedGroupedCatalogs())
         let persistedGroups = try #require(await reopened.albumCatalog(scope: scope, albumID: album.id)?.groupedCatalogs)
+        #expect(try await reopened.albumIndexSummary(scope: scope)?.groupsPrepared == true)
         #expect(preparedGroups.catalog(for: .day).entries.map(\.stableKey) == persistedGroups.catalog(for: .day).entries.map(\.stableKey))
         #expect(preparedGroups.catalog(for: .week).entries.map(\.assetCount) == persistedGroups.catalog(for: .week).entries.map(\.assetCount))
         #expect(await !(reader.needsRefresh(for: album.catalogRevision)))

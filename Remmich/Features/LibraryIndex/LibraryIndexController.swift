@@ -431,7 +431,40 @@ final class LibraryIndexController {
             / Double(thumbnailWarmingProcessedCount)
     }
 
-    func bootstrap(session: AccountSession) async -> LibraryTimelineBootstrap? {
+    func prepareOpeningTimeline(session: AccountSession, limit: Int,
+                                mediaScope: LibraryIndexMediaScope = .photos) async -> TimelineBootstrapSnapshot?
+    {
+        let nextScope = MediaAccountScope(session: session)
+        adoptScope(nextScope)
+        let revision = sessionRevision
+        let window: TimelineIndexOpeningWindow
+        do {
+            guard let cached = try await store.openingTimelineWindow(scope: nextScope, limit: limit, mediaScope: mediaScope) else {
+                return nil
+            }
+            window = cached
+        } catch {
+            return nil
+        }
+        let revisions = Dictionary(uniqueKeysWithValues: window.assets.map { ($0.id, $0.updatedAt.ISO8601Format()) })
+        let records = window.thumbnails.filter { revisions[$0.assetID] == $0.sourceRevision }
+        guard mediaScope == .videos || !records.isEmpty else {
+            return nil
+        }
+        let thumbnails = await thumbnailCache.indexedThumbnails(records: records, scope: nextScope)
+        guard !Task.isCancelled, scope == nextScope, sessionRevision == revision,
+              lastPublishedBootstrapGeneration == nil
+        else {
+            return nil
+        }
+        let snapshot = LibraryTimelineBootstrapBuilder.buildOpeningTimeline(from: window)
+        if !thumbnails.isEmpty {
+            media?.registerWarmedThumbnails(thumbnails, replacing: mediaScope == .photos)
+        }
+        return snapshot
+    }
+
+    func bootstrap(session: AccountSession, completesOpeningWindow: Bool = false) async -> LibraryTimelineBootstrap? {
         let nextScope = MediaAccountScope(session: session)
         adoptScope(nextScope)
         let revision = sessionRevision
@@ -471,7 +504,7 @@ final class LibraryIndexController {
                 from: snapshot,
                 scope: nextScope
             )
-            async let bootstrapTask = Task.detached(priority: .userInitiated) {
+            async let bootstrapTask = Task.detached(priority: completesOpeningWindow ? .utility : .userInitiated) {
                 LibraryTimelineBootstrapBuilder.buildInitial(from: snapshot)
             }.value
             let (restoredStorageReport, thumbnails, bootstrap) = try await (
@@ -509,7 +542,11 @@ final class LibraryIndexController {
                 "Library bootstrap derivatives and projection ready thumbnails=\(thumbnails.count) cachedBytes=\(cachedProgress.cachedBytes) metadataBytes=\(restoredStorageReport.metadataBytes) stageMs=\(Self.elapsedMilliseconds(since: snapshotLoadedAt)) totalMs=\(Self.elapsedMilliseconds(since: bootstrapStartedAt))"
             )
             media?.registerWarmedThumbnails(thumbnails)
-            lastPublishedBootstrapGeneration = snapshot.generation
+            if completesOpeningWindow {
+                stageAcceptedBootstrap(bootstrap, scope: nextScope)
+            } else {
+                lastPublishedBootstrapGeneration = snapshot.generation
+            }
             scheduleLocalStorageMaintenance(scope: nextScope)
             Self.logger.info(
                 "Library bootstrap loaded generation=\(snapshot.generation) assets=\(snapshot.assets.count) thumbnails=\(thumbnails.count) complete=\(bootstrap.photos.isComplete) elapsedMs=\(Self.elapsedMilliseconds(since: bootstrapStartedAt))"
@@ -1316,13 +1353,22 @@ final class LibraryIndexController {
               snapshot.generation != lastPublishedBootstrapGeneration
         else { return }
 
+        stageAcceptedBootstrap(bootstrap, scope: expectedScope)
+    }
+
+    private func stageAcceptedBootstrap(_ bootstrap: LibraryTimelineBootstrap, scope expectedScope: MediaAccountScope) {
         if timelinePublicationDeferred {
+            if let deferredBootstrapPublication, deferredBootstrapPublication.scope == expectedScope,
+               deferredBootstrapPublication.bootstrap.photos.generation > bootstrap.photos.generation
+            {
+                return
+            }
             deferredBootstrapPublication = .init(
                 bootstrap: bootstrap,
                 scope: expectedScope
             )
             Self.logger.info(
-                "Accepted library bootstrap deferred generation=\(snapshot.generation) reason=viewer-presented"
+                "Accepted library bootstrap deferred generation=\(bootstrap.photos.generation) reason=viewer-presented"
             )
             return
         }

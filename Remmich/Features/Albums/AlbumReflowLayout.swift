@@ -8,6 +8,17 @@ nonisolated struct AlbumReflowMetrics: Equatable {
     let coverWidth: CGFloat
     let labelHeight: CGFloat
 
+    static func overview(availableWidth: CGFloat, labelHeight: CGFloat = 58) -> Self {
+        let columns = max(1, Int((availableWidth - 32 + 16) / (155 + 16)))
+        let coverWidth = min(260, max(1, (availableWidth - 32 - CGFloat(columns - 1) * 16) / CGFloat(columns)))
+        return .init(width: max(1, availableWidth - 32), columns: columns, coverWidth: coverWidth, labelHeight: labelHeight)
+    }
+
+    static func coverDescriptor(assetID: String, revision: Date, width: CGFloat, scale: CGFloat) -> MediaRequestDescriptor {
+        .init(assetID: assetID, updatedAt: revision, derivative: .thumbnail,
+              targetPixels: .init(width: Int(max(1, width) * scale), height: Int(max(1, width * 0.75) * scale)))
+    }
+
     var cardHeight: CGFloat {
         coverWidth * 0.75 + 8 + labelHeight
     }
@@ -104,16 +115,19 @@ nonisolated struct AlbumReflowAnchor: Equatable {
     let viewportFrame: CGRect
     var focus: AlbumReflowFocus?
 
-    func alignment(for height: CGFloat) -> CGFloat {
-        guard let focus, height.isFinite, height > 0 else { return unitY }
-        let space = viewportFrame.height - height
-        guard space > 0.5 else { return 0.5 }
+    func alignment(for height: CGFloat, topClearance: CGFloat = 0) -> CGFloat {
+        guard height.isFinite, height > 0 else { return unitY }
+        let visibleSpace = viewportFrame.height - height
+        let space = visibleSpace + topClearance
+        guard space > 0.5 else { return focus == nil ? unitY : 0.5 }
         // A native ID scroll aligns the same fraction of the item and viewport.
+        // Its viewport starts above the header clearance reserved in the content.
+        guard let focus else { return (topClearance + unitY * visibleSpace) / space }
         // Vary that fraction to hold the original point inside the pinched album
         // under its viewport location as the album's height changes.
         // UnitPoint supports positions outside 0...1. Keep those fractions for
         // partially visible albums; the scroll view owns actual range clamping.
-        return (focus.viewportUnitY * viewportFrame.height - focus.itemUnitY * height) / space
+        return (topClearance + focus.viewportUnitY * viewportFrame.height - focus.itemUnitY * height) / space
     }
 }
 
@@ -141,8 +155,7 @@ final class AlbumReflowViewport {
 
     var usableFrame: CGRect {
         guard frame.height > 0, visibleHeight > 0 else { return .zero }
-        // Albums reserves only a top scroll-content margin. The remaining
-        // container is bottom-aligned within the ScrollView's measured frame.
+        // The usable viewport excludes the reserved header above the cards.
         let height = min(frame.height, visibleHeight)
         return CGRect(x: frame.minX, y: frame.maxY - height, width: frame.width, height: height)
     }

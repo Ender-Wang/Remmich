@@ -43,7 +43,7 @@ struct RootView: View {
             LoadingStateView(isLoading: loadingLabel != nil, label: loadingLabel ?? "Loading library")
         }
         .task {
-            guard scenePhase == .active else { return }
+            guard scenePhase != .background else { return }
             await controller.start()
             LibraryBackgroundSyncCoordinator.shared.scheduleNextSync()
         }

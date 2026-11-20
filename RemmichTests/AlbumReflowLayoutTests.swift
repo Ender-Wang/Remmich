@@ -118,8 +118,12 @@ struct AlbumReflowLayoutTests {
         #expect(anchor.albumID == "z-right")
         let focus = try #require(anchor.focus)
         #expect(abs(anchor.alignment(for: 198) - anchor.unitY) < 0.001)
+        let topClearance: CGFloat = 62 + 101
+        let scrollTop = anchor.viewportFrame.minY - topClearance
+        let scrollHeight = anchor.viewportFrame.height + topClearance
         for height: CGFloat in [198, 150, 72] {
-            let top = anchor.viewportFrame.minY + anchor.alignment(for: height) * (anchor.viewportFrame.height - height)
+            let alignment = anchor.alignment(for: height, topClearance: topClearance)
+            let top = scrollTop + alignment * (scrollHeight - height)
             #expect(abs(top + focus.itemUnitY * height - point.y) < 0.001)
         }
     }

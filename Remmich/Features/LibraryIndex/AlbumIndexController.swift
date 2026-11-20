@@ -95,31 +95,22 @@ final class AlbumIndexController {
             let statistics = try? await store.albumStorageStatistics(scope: scope, refresh: false)
             guard self.scope == scope, generation == request, task == nil else { return }
             applyStorageStatistics(statistics, scope: scope)
-            guard let albums = try await store.albumList(scope: scope) else {
+            let summary = try await store.albumIndexSummary(scope: scope)
+            guard !Task.isCancelled, self.scope == scope, generation == request, task == nil else { return }
+            guard let summary else {
                 lastUpdatedAt = nil
                 completedElapsed = nil
                 preferences.removeObject(forKey: successKey(scope))
                 preferences.removeObject(forKey: elapsedKey(scope))
                 return
             }
-            var indexed = 0
-            var memberships = 0
-            var groupsPrepared = true
-            for album in albums {
-                try Task.checkCancellation()
-                if let catalog = try await store.albumCatalog(scope: scope, albumID: album.id) {
-                    indexed += 1
-                    memberships += catalog.assetsByBucket.values.reduce(0) { $0 + $1.count }
-                    groupsPrepared = groupsPrepared && catalog.groupedCatalogs != nil
-                }
-            }
-            guard self.scope == scope, generation == request, task == nil else { return }
-            albumCount = albums.count
-            indexedAlbumCount = indexed
-            membershipCount = memberships
-            totalItemCount = albums.reduce(0) { $0 + $1.assetCount }
-            processedItemCount = memberships
-            status = isPaused ? .paused : lastUpdatedAt != nil && indexed == albums.count && groupsPrepared ? .upToDate : .idle
+            albumCount = summary.albumCount
+            indexedAlbumCount = summary.indexedAlbumCount
+            membershipCount = summary.membershipCount
+            totalItemCount = summary.totalItemCount
+            processedItemCount = summary.membershipCount
+            let complete = lastUpdatedAt != nil && indexedAlbumCount == albumCount && summary.groupsPrepared
+            status = isPaused ? .paused : complete ? .upToDate : .idle
         } catch {
             guard self.scope == scope, generation == request else { return }
             failures = [error.localizedDescription]

@@ -623,6 +623,49 @@ struct TimelineSemanticZoomTests {
         #expect(runtime.lastVisitedAssetID == nil)
     }
 
+    @Test(arguments: [false, true])
+    @MainActor func completingOpeningPhotosKeepsVisibleTilesInPlace(atOpeningTop: Bool) throws {
+        let assets = (0 ..< 300).map {
+            asset(String(format: "%03d", $0), String(format: "2027-01-%02dT12:00:00Z", $0 / 10 + 1))
+        }
+        let controller = TimelineSemanticCollectionController()
+        defer { controller.stop() }
+        let media = MediaLibraryController()
+        let runtime = TimelineSemanticRuntime()
+        func input(opening: Bool) -> TimelineSemanticCollectionView {
+            .init(catalog: TimelineSemanticCatalog(assets: opening ? Array(assets.suffix(103)) : assets),
+                  revision: 1, scale: .square, media: media, namespace: nil,
+                  bottomClearance: 96, topClearance: 64, runtime: runtime, latestRequest: 0,
+                  isActive: true, isOpeningWindow: opening, hiddenThumbnailID: nil, hiddenLivePhotoID: nil,
+                  selectAsset: { _, _ in }, selectGroup: { _, _ in }, scaleChanged: { _ in },
+                  scrolled: { _, _, _ in }, visibleAssetsChanged: { _, _, _ in }, refresh: {})
+        }
+        controller.update(input(opening: true))
+        controller.view.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        controller.view.setNeedsLayout()
+        controller.view.layoutIfNeeded()
+        let collection = try #require(controller.view.subviews.compactMap { $0 as? UICollectionView }.first)
+        let dataSource = try #require(collection.dataSource as? UICollectionViewDiffableDataSource<Int, String>)
+        if atOpeningTop {
+            collection.contentOffset.y = -64
+            collection.layoutIfNeeded()
+        }
+        let before = collection.indexPathsForVisibleItems.compactMap { path -> (String, CGRect)? in
+            guard let id = dataSource.itemIdentifier(for: path), !id.hasPrefix("header:"),
+                  let cell = collection.cellForItem(at: path) else { return nil }
+            return (id, cell.frame.offsetBy(dx: 0, dy: -collection.contentOffset.y))
+        }
+        #expect(!before.isEmpty)
+        controller.update(input(opening: false))
+        collection.layoutIfNeeded()
+        for (id, oldFrame) in before {
+            let path = try #require(dataSource.indexPath(for: id))
+            let frame = try #require(collection.collectionViewLayout.layoutAttributesForItem(at: path)).frame
+            #expect(abs(frame.minY - collection.contentOffset.y - oldFrame.minY) < 1)
+            #expect(frame.minX == oldFrame.minX)
+        }
+    }
+
     @Test @MainActor func browsingPositionSurvivesControllerReplacementWithoutCrossingRuntimes() throws {
         let catalog = TimelineSemanticCatalog(assets: (0 ..< 300).map {
             asset(String(format: "%03d", $0), "2027-01-01T12:00:00Z")

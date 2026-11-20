@@ -19,6 +19,11 @@ final class NativeTabSelectionState {
 final class NativeTabContentActivationState {
     private(set) var activeDestination: NativeTabDestination = .photos
     private(set) var hydratedDestinations: Set<NativeTabDestination> = [.photos]
+    private(set) var preparedDestinations: Set<NativeTabDestination> = []
+
+    func prepare(_ destination: NativeTabDestination) {
+        preparedDestinations.insert(destination)
+    }
 
     func activate(_ destination: NativeTabDestination) {
         activeDestination = destination
@@ -26,7 +31,7 @@ final class NativeTabContentActivationState {
     }
 
     func isHydrated(_ destination: NativeTabDestination) -> Bool {
-        hydratedDestinations.contains(destination)
+        hydratedDestinations.contains(destination) || preparedDestinations.contains(destination)
     }
 }
 
@@ -230,6 +235,7 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
     @Binding var tabBarTop: CGFloat
     let rotationState: TimelineRotationState
     let contentActivationState: NativeTabContentActivationState
+    var preparedDestinations: Set<NativeTabDestination> = []
     let compactOwner: NativeTabDestination?
     let isViewerPresented: Bool
     let pageSwipeEnabled: Bool
@@ -294,6 +300,7 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
         private var didResolveAlbums = false
         private var tabBarInteractionBlockedByViewer = false
         private var didResolveVideos = false
+        private var laidOutPreparedDestinations: Set<NativeTabDestination> = []
         private var contentActivationGeneration = 0
         private var contentActivationTask: Task<Void, Never>?
         private var lastDestinationChange: (
@@ -513,6 +520,27 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
                 controller.selectedTab = intendedTab
             }
             resolveVideoTab(in: controller)
+            layoutPreparedTabs(in: controller)
+        }
+
+        private func layoutPreparedTabs(in controller: UITabBarController) {
+            let bounds = controller.view.bounds
+            guard bounds.width > 0, bounds.height > 0, controller.transitionCoordinator == nil else { return }
+            for destination in [NativeTabDestination.videos, .albums]
+                where parent.preparedDestinations.contains(destination)
+                && !laidOutPreparedDestinations.contains(destination)
+                && installedTabs?.contains(destination) == true
+            {
+                let destinationTab = tab(for: destination)
+                guard controller.selectedTab !== destinationTab,
+                      let hosting = destinationTab.viewController as? TabContentHostingController else { continue }
+                hosting.rootView = hostedRoot(destination == .videos ? parent.videos : parent.albums)
+                hosting.loadViewIfNeeded()
+                hosting.view.frame = bounds
+                hosting.view.setNeedsLayout()
+                hosting.view.layoutIfNeeded()
+                laidOutPreparedDestinations.insert(destination)
+            }
         }
 
         private func resolveVideoTab(in controller: UITabBarController) {

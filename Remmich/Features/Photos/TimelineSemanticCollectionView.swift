@@ -9,6 +9,7 @@ import UIKit
 @MainActor
 final class TimelineSemanticRuntime {
     weak var controller: TimelineSemanticCollectionController?
+    var preparedOpeningCatalog: TimelineSemanticCatalog?
     var lastVisitedAssetID: String?
     fileprivate var browsingAnchor: TimelineRootReturnAnchor?
 
@@ -54,6 +55,10 @@ struct TimelineSemanticCollectionView: UIViewControllerRepresentable {
     let runtime: TimelineSemanticRuntime
     let latestRequest: Int
     let isActive: Bool
+    var isOpeningWindow = false
+    var tracksStartupPhotos = false
+    var openingStore: PhotosTimelineStore?
+    var openingTileDisplayed: (() -> Void)?
     let hiddenThumbnailID: String?
     let hiddenLivePhotoID: String?
     var additionalHiddenThumbnailIDs: Set<String> = []
@@ -578,6 +583,8 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
     private var lastLatestRequest = 0
     private var latestScrollSpring: TimelineLatestScrollSpring?
     private var latestScrollDisplayLink: CADisplayLink?
+    private var startupPhotoDisplayLink: CADisplayLink?
+    private var startupPhotoDisplayTicks = 0
     private var latestScrollTimestamp: CFTimeInterval?
     private var scrollSampleTimestamp: CFTimeInterval?
     private var scrollVelocity: CGFloat = 0
@@ -693,6 +700,11 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         NotificationCenter.default.addObserver(self, selector: #selector(receivedMemoryWarning), name: UIApplication.didReceiveMemoryWarningNotification, object: nil)
     }
 
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        scheduleStartupPhotoDisplayCheck()
+    }
+
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         guard view.bounds.width > 0, view.bounds.height > 0 else { return }
@@ -756,11 +768,20 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             return
         }
         let previous = input
+        let completesOpeningWindow = previous?.isOpeningWindow == true && !value.isOpeningWindow
+        if completesOpeningWindow, value.isActive, collection.isDragging || collection.isDecelerating {
+            deferredInput = value
+            return
+        }
+        if completesOpeningWindow {
+            deferredInput = nil
+        }
         input = value
         if previous == nil, pendingRootReturn == nil {
             pendingRootReturn = value.runtime.browsingAnchor
         }
         if pendingRootReturn == nil, let previous, revision == value.revision, scale == value.scale,
+           previous.isOpeningWindow == value.isOpeningWindow,
            previous.isActive == value.isActive, previous.latestRequest == value.latestRequest,
            previous.hiddenThumbnailID == value.hiddenThumbnailID, previous.hiddenLivePhotoID == value.hiddenLivePhotoID,
            previous.additionalHiddenThumbnailIDs == value.additionalHiddenThumbnailIDs,
@@ -780,7 +801,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         let focusY = oldFocus.map { $0.frame.midY - collection.contentOffset.y }
         let latest = projection == nil || isAtLatest
         let wasAtTop = collection.contentOffset.y <= -collection.contentInset.top + 1
-        let needsCatalog = revision != value.revision
+        let needsCatalog = revision != value.revision || completesOpeningWindow
         if needsCatalog {
             completeProjections.removeAll()
         }
@@ -840,7 +861,8 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         {
             install(makeProjection(scale: scale, focus: focus), focusing: focus,
                     viewportY: anchor.viewportFraction * collection.bounds.height,
-                    latest: anchor.atLatest, refreshContents: needsCatalog, alignTop: anchor.atTop && !anchor.atLatest)
+                    latest: anchor.atLatest, refreshContents: needsCatalog,
+                    alignTop: anchor.atTop && !anchor.atLatest && !completesOpeningWindow)
             pendingRootReturn = nil
         } else if jumpToLatest {
             pendingRootReturn = nil
@@ -863,7 +885,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             if lastSize.width > 0 {
                 install(makeProjection(scale: scale, focus: focus, range: needsCatalog || needsScale || projectionMissing ? nil : projection?.nodeRange),
                         focusing: focus, viewportY: focusY, latest: latest && !needsScale,
-                        refreshContents: needsCatalog, alignTop: wasAtTop && !latest && !needsScale)
+                        refreshContents: needsCatalog, alignTop: wasAtTop && !latest && !needsScale && !completesOpeningWindow)
             }
         }
         if hiddenThumbnailID != value.hiddenThumbnailID || hiddenLivePhotoID != value.hiddenLivePhotoID
@@ -882,6 +904,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             }
             if value.isActive {
                 publishViewport()
+                scheduleStartupPhotoDisplayCheck()
             }
         }
         if topInsetChanged, !bottomInsetChanged {
@@ -1108,10 +1131,11 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
                                            input.selectAsset(selected, Array(catalog.assets[max(0, assetIndex - 80) ..< min(catalog.assets.count, assetIndex + 81)].reversed()))
                                        },
                                        placeholderImage: handoffImages[item.id],
-                                       imageLoaded: { [weak cell] image in
+                                       imageLoaded: { [weak self, weak cell] image in
                                            guard cell?.nodeID == item.id, cell?.coverAssetID == asset.id else { return }
                                            cell?.coverImage = image
                                            cell?.coverImageAssetID = asset.id
+                                           self?.scheduleStartupPhotoDisplayCheck()
                                        },
                                        hiddenLivePhotoBadgeAssetID: input.hiddenLivePhotoID,
                                        hiddenReturningThumbnailAssetID: input.hiddenThumbnailID)
@@ -1199,6 +1223,58 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         if (cell as? TimelineSemanticCollectionCell)?.hasContent == false {
             configure(indexPath, cell: cell as? TimelineSemanticCollectionCell)
         }
+        scheduleStartupPhotoDisplayCheck()
+    }
+
+    private func scheduleStartupPhotoDisplayCheck() {
+        guard startupPhotoDisplayLink == nil, let input, input.isActive,
+              awaitsOpeningDisplay(input),
+              scale.isAssets, view.window != nil else { return }
+        startupPhotoDisplayTicks = 0
+        let link = CADisplayLink(target: self, selector: #selector(checkStartupPhotoDisplay(_:)))
+        startupPhotoDisplayLink = link
+        link.add(to: .main, forMode: .common)
+    }
+
+    @objc private func checkStartupPhotoDisplay(_: CADisplayLink) {
+        guard let input, input.isActive, view.window != nil,
+              UIApplication.shared.applicationState != .background,
+              awaitsOpeningDisplay(input), scale.isAssets
+        else {
+            stopStartupPhotoDisplayCheck()
+            return
+        }
+        guard !isInstalling else { return }
+        let viewport = collection.bounds.inset(by: collection.contentInset)
+        let hasPhoto = collection.visibleCells.contains { cell in
+            guard let cell = cell as? TimelineSemanticCollectionCell,
+                  cell.coverImage != nil, let id = cell.coverImageAssetID,
+                  id != input.hiddenThumbnailID, !input.additionalHiddenThumbnailIDs.contains(id) else { return false }
+            return cell.frame.intersects(viewport)
+        }
+        guard hasPhoto else {
+            stopStartupPhotoDisplayCheck()
+            return
+        }
+        startupPhotoDisplayTicks += 1
+        guard startupPhotoDisplayTicks >= 2 else { return }
+        stopStartupPhotoDisplayCheck()
+        if input.tracksStartupPhotos {
+            input.media.noteVisibleStartupPhoto()
+        }
+        input.openingStore?.resumeOpeningHistory()
+        input.openingTileDisplayed?()
+    }
+
+    private func awaitsOpeningDisplay(_ input: TimelineSemanticCollectionView) -> Bool {
+        (input.tracksStartupPhotos && input.media.awaitsFirstVisibleStartupPhoto)
+            || input.openingStore?.awaitsOpeningDisplay == true
+            || input.openingTileDisplayed != nil
+    }
+
+    private func stopStartupPhotoDisplayCheck() {
+        startupPhotoDisplayLink?.invalidate()
+        startupPhotoDisplayLink = nil
     }
 
     func collectionView(_: UICollectionView, didSelectItemAt indexPath: IndexPath) {
@@ -1951,6 +2027,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
     }
 
     func stop() {
+        stopStartupPhotoDisplayCheck()
         if let runtime = input?.runtime {
             runtime.browsingAnchor = currentBrowsingAnchor() ?? preGroupingAnchor ?? runtime.browsingAnchor
         }
@@ -2102,6 +2179,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
     }
 
     func scrollViewDidEndDecelerating(_: UIScrollView) {
+        applyOpeningHistoryAfterScroll()
         publishScrollGestureBoundary()
         viewportTask?.cancel()
         viewportTask = nil
@@ -2111,11 +2189,18 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
 
     func scrollViewDidEndDragging(_: UIScrollView, willDecelerate decelerate: Bool) {
         if !decelerate {
+            applyOpeningHistoryAfterScroll()
             publishScrollGestureBoundary()
             viewportTask?.cancel()
             viewportTask = nil
             publishViewport(); loadOlderIfNeeded()
         }
+    }
+
+    private func applyOpeningHistoryAfterScroll() {
+        guard gesture == nil, animator == nil, input?.isOpeningWindow == true,
+              let deferredInput, !deferredInput.isOpeningWindow else { return }
+        update(deferredInput)
     }
 
     private func loadOlderIfNeeded() {

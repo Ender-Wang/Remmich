@@ -22,6 +22,35 @@ nonisolated enum PersistentTimelineRefreshPolicy: Equatable, Sendable {
     case acceptedIndexPublication
 }
 
+nonisolated enum TimelineOpeningWindow {
+    static func snapshot(generation: Int64, assetsByBucket: [TimelineBucketID: [TimelineAssetSummary]]) -> TimelineBootstrapSnapshot? {
+        guard !assetsByBucket.isEmpty else { return nil }
+        let summaries = assetsByBucket.map { TimelineBucketSummary(id: $0.key, assetCount: $0.value.count) }
+            .sorted { $0.id.rawValue > $1.id.rawValue }
+        var grouped = TimelineGroupedCatalogCache()
+        grouped.replaceSummaryCatalogs(with: summaries)
+        return .init(generation: generation, summaries: summaries, assetsByBucket: assetsByBucket,
+                     groupedCatalogs: grouped, isComplete: false)
+    }
+
+    static func waitForDisplay(_ events: AsyncStream<Void>) async {
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask {
+                var iterator = events.makeAsyncIterator()
+                _ = await iterator.next()
+            }
+            group.addTask { try? await Task.sleep(for: .milliseconds(1200)) }
+            _ = await group.next()
+            group.cancelAll()
+        }
+    }
+}
+
+@MainActor struct TimelineOpeningSource {
+    let label: String
+    let read: (Int) async throws -> TimelineBootstrapSnapshot?
+}
+
 @MainActor
 @Observable
 final class PhotosTimelineStore {
@@ -39,6 +68,9 @@ final class PhotosTimelineStore {
     private(set) var groupedCatalogs = TimelineGroupedCatalogCache()
     private(set) var rangeCoverRevision: UInt64 = 0
     private(set) var semanticContentRevision: UInt64 = 0
+    private(set) var isOpeningWindow = false
+    @ObservationIgnored var openingHistoryRequested: (() async -> Void)?
+    @ObservationIgnored private var openingDisplaySignal: AsyncStream<Void>.Continuation?
     private(set) var semanticHistoryState: PhotosTimelineLoadState = .idle
     private(set) var memories: [TimelineMemorySummary] = []
     private(set) var visibleAnchor: TimelineVisibleAnchor?
@@ -57,6 +89,18 @@ final class PhotosTimelineStore {
         bucketSummaries.flatMap { semanticAssetsByBucket[$0.id, default: []] }
     }
 
+    func newestSemanticAssets(limit: Int) -> [TimelineAssetSummary] {
+        var assets: [TimelineAssetSummary] = []
+        assets.reserveCapacity(limit)
+        for bucket in bucketSummaries {
+            assets.append(contentsOf: semanticAssetsByBucket[bucket.id, default: []].prefix(limit - assets.count))
+            if assets.count == limit {
+                break
+            }
+        }
+        return assets
+    }
+
     var hasUnloadedSemanticBuckets: Bool {
         guard !retainsPersistentBootstrap else { return false }
         return bucketSummaries.contains { summary in
@@ -67,6 +111,10 @@ final class PhotosTimelineStore {
     /// Fill the first gap in newest-to-oldest order, including empty periods.
     /// An isolated older load must not move the continuation past missing data.
     func loadOlderSemanticPage() async {
+        if isOpeningWindow {
+            await refresh()
+            return
+        }
         guard !retainsPersistentBootstrap else { return }
         let requestGeneration = generation
         semanticHistoryState = .loading
@@ -90,6 +138,7 @@ final class PhotosTimelineStore {
     }
 
     private let reader: any TimelineReading
+    private let openingSource: TimelineOpeningSource?
     private let persistentRefreshPolicy: PersistentTimelineRefreshPolicy
     private let now: () -> Date
     private var query: TimelineQuery
@@ -118,21 +167,29 @@ final class PhotosTimelineStore {
         reader: any TimelineReading,
         persistentRefreshPolicy: PersistentTimelineRefreshPolicy = .reader,
         query: TimelineQuery = .init(),
+        openingSource: TimelineOpeningSource? = nil,
         now: @escaping () -> Date = { .now }
     ) {
         self.reader = reader
         self.persistentRefreshPolicy = persistentRefreshPolicy
         self.query = query
+        self.openingSource = openingSource
         self.now = now
     }
 
-    func bootstrap(_ snapshot: TimelineBootstrapSnapshot) {
+    func bootstrap(_ snapshot: TimelineBootstrapSnapshot, openingWindow: Bool = false) {
         generation &+= 1
         cancelInFlightWork()
-        installCompleteCatalog(snapshot)
+        installCompleteCatalog(snapshot, openingWindow: openingWindow)
     }
 
-    private func installCompleteCatalog(_ snapshot: TimelineBootstrapSnapshot) {
+    func openingHistoryLoadFailed() {
+        guard isOpeningWindow else { return }
+        refreshState = .failed(message: "Older photos could not be loaded.")
+    }
+
+    private func installCompleteCatalog(_ snapshot: TimelineBootstrapSnapshot, openingWindow: Bool = false) {
+        isOpeningWindow = openingWindow
         semanticHistoryState = .idle
         rangeCoverRevision &+= 1
         rangeCardCoverCache.removeAll()
@@ -229,6 +286,8 @@ final class PhotosTimelineStore {
         startMemoryLoad(generation: requestGeneration)
         let task = Task { [weak self] in
             guard let self else { return }
+            await prepareScopedOpeningWindow(generation: requestGeneration)
+            guard !Task.isCancelled, requestGeneration == generation else { return }
             await performInitialLoad(generation: requestGeneration)
         }
         initialTask = task
@@ -236,6 +295,42 @@ final class PhotosTimelineStore {
         if requestGeneration == generation {
             initialTask = nil
         }
+    }
+
+    var awaitsOpeningDisplay: Bool {
+        openingDisplaySignal != nil
+    }
+
+    func resumeOpeningHistory() {
+        openingDisplaySignal?.yield(())
+        openingDisplaySignal?.finish()
+        openingDisplaySignal = nil
+    }
+
+    func openingDisplayEvents() -> AsyncStream<Void> {
+        let (events, signal) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        openingDisplaySignal = signal
+        return events
+    }
+
+    private func prepareScopedOpeningWindow(generation request: UInt64) async {
+        guard let openingSource else { return }
+        let limit = TimelineGridOrder.openingWindowLimit()
+        let preview: TimelineBootstrapSnapshot?
+        do {
+            preview = try await openingSource.read(limit)
+        } catch {
+            if !Task.isCancelled, !(error is CancellationError) {
+                Self.logger.error("Could not read the cached \(openingSource.label, privacy: .public) timeline: \(error.localizedDescription, privacy: .private)")
+            }
+            return
+        }
+        guard let preview, !Task.isCancelled, request == generation else { return }
+        let events = openingDisplayEvents()
+        installCompleteCatalog(preview, openingWindow: true)
+        await TimelineOpeningWindow.waitForDisplay(events)
+        guard request == generation else { return }
+        resumeOpeningHistory()
     }
 
     func retryInitialLoad() async {
@@ -357,6 +452,17 @@ final class PhotosTimelineStore {
     }
 
     func refresh() async {
+        if isOpeningWindow {
+            if let openingHistoryRequested {
+                await openingHistoryRequested()
+                return
+            }
+            resumeOpeningHistory()
+            if let initialTask {
+                await initialTask.value
+                return
+            }
+        }
         if let refreshTask {
             await refreshTask.value
             return
@@ -607,6 +713,9 @@ final class PhotosTimelineStore {
     }
 
     func routeDidChange(isReachable: Bool) {
+        if openingSource != nil, initialTask != nil, isOpeningWindow {
+            return
+        }
         generation &+= 1
         cancelInFlightWork()
         guard isReachable else { return }
@@ -666,6 +775,7 @@ final class PhotosTimelineStore {
             self.query = query
         }
         loadState = .idle
+        isOpeningWindow = false
         refreshState = .idle
         memoryLaneState = .idle
         bucketSummaries = []
@@ -767,6 +877,10 @@ final class PhotosTimelineStore {
             }
         } catch {
             guard requestGeneration == generation else { return }
+            if isOpeningWindow {
+                openingHistoryLoadFailed()
+                return
+            }
             if Self.isRouteUnavailable(error) {
                 loadState = .loading
                 Self.logger.info(
@@ -1158,6 +1272,7 @@ final class PhotosTimelineStore {
     }
 
     private func cancelInFlightWork() {
+        resumeOpeningHistory()
         initialTask?.cancel()
         refreshTask?.cancel()
         memoryTask?.cancel()

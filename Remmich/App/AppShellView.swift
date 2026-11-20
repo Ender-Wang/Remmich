@@ -1,7 +1,16 @@
 import Nuke
 import NukeUI
+import Observation
 import SwiftUI
 import UIKit
+
+@MainActor
+@Observable
+private final class AlbumsOverviewState {
+    var store: AlbumsStore?
+    var windowTopInset: CGFloat?
+    var hasMeasuredOpeningLayout = false
+}
 
 struct AppShellView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -35,6 +44,7 @@ struct AppShellView: View {
     @State private var photosScrollRequest = 0
     @State private var videosScrollRequest = 0
     @State private var albumsScrollRequest = 0
+    @State private var albumsOverview = AlbumsOverviewState()
     @State private var libraryDismissAccountRequest = 0
     @State private var libraryAccountPresented = false
     @State private var videoPresentation = PhotosPresentationState(
@@ -54,15 +64,17 @@ struct AppShellView: View {
     @State private var viewerPresentations = AssetViewerPresentationStore()
     @State private var photosContentLoading = true
     @State private var videosContentLoading = true
-    @State private var albumsContentLoading = true
 
     var body: some View {
         @Bindable var navigation = tabSelectionState
+        // The native tab retains its hosting root across selections.
+        let overviewState = albumsOverview
         NativeAppTabShell(
             selection: $navigation.selection,
             tabBarTop: $tabBarTop,
             rotationState: timelineRotationState,
             contentActivationState: tabContentActivationState,
+            preparedDestinations: tabContentActivationState.preparedDestinations,
             compactOwner: compactTabOwner,
             isViewerPresented: viewerPresented,
             pageSwipeEnabled: pageSwipeEnabled,
@@ -160,6 +172,13 @@ struct AppShellView: View {
                             tabSelectionState: tabSelectionState,
                             tabDestination: .videos,
                             viewerPresentations: viewerPresentations,
+                            loadTimeline: {
+                                if let sessionController {
+                                    await sessionController.openVideosTimeline()
+                                } else {
+                                    await videos.load()
+                                }
+                            },
                             showAccount: showAccount
                         )
                     }
@@ -171,21 +190,25 @@ struct AppShellView: View {
                     title: "Albums",
                     activationState: tabContentActivationState
                 ) {
-                    NavigationStack(path: $albumsPath) {
-                        AlbumsView(source: albumSource, media: media, assetDetails: assetDetails,
-                                   activeEndpoint: activeRoute?.endpoint,
-                                   scrollToLatestRequest: albumsScrollRequest,
-                                   persistence: sessionController?.libraryIndexStore, scope: MediaAccountScope(session: session),
-                                   viewerPresentations: viewerPresentations,
-                                   tabSelectionState: tabSelectionState, tabBarTop: $tabBarTop,
-                                   loadingVisibilityChanged: primaryContentLoadingChanged == nil ? nil : { albumsContentLoading = $0 },
-                                   openAlbum: { album in
-                                       guard albumsPath.isEmpty, tabSelectionState.canActivateContent(in: .albums) else {
-                                           return
-                                       }
-                                       withAnimation { albumsPath.append(album) }
-                                   },
-                                   showAccount: showAccount)
+                    if let store = overviewState.store, let windowTopInset = overviewState.windowTopInset {
+                        NavigationStack(path: $albumsPath) {
+                            AlbumsView(store: store, source: albumSource, media: media, assetDetails: assetDetails,
+                                       activeEndpoint: activeRoute?.endpoint,
+                                       scrollToLatestRequest: albumsScrollRequest,
+                                       persistence: sessionController?.libraryIndexStore, scope: MediaAccountScope(session: session),
+                                       viewerPresentations: viewerPresentations,
+                                       tabSelectionState: tabSelectionState, tabBarTop: $tabBarTop,
+                                       windowTopInset: windowTopInset,
+                                       showsLoadingOverlay: primaryContentLoadingChanged == nil,
+                                       openingLayoutMeasured: { overviewState.hasMeasuredOpeningLayout = true },
+                                       openAlbum: { album in
+                                           guard albumsPath.isEmpty, tabSelectionState.canActivateContent(in: .albums) else {
+                                               return
+                                           }
+                                           withAnimation { albumsPath.append(album) }
+                                       },
+                                       showAccount: showAccount)
+                        }
                     }
                 }
             ),
@@ -303,6 +326,12 @@ struct AppShellView: View {
         )
         .nativeEdgeBackRoot()
         .ignoresSafeArea(.container, edges: .all)
+        .background {
+            TimelineWindowSafeAreaReader { inset in
+                guard overviewState.windowTopInset != inset else { return }
+                overviewState.windowTopInset = inset
+            }
+        }
         .environment(\.accountAvatarMedia, media)
         .onAppear { media.logShellPresented() }
         .onChange(of: media.scope, initial: true) { _, _ in media.exports.detailReader = assetDetails }
@@ -363,7 +392,23 @@ struct AppShellView: View {
         .onChange(of: viewerPresented || !viewerPresentations.entries.isEmpty) { _, presented in
             libraryIndex.setTimelinePublicationDeferred(presented)
         }
+        .task(id: media.hasShownStartupPhoto || photos.loadState == .empty) {
+            guard let sessionController, media.hasShownStartupPhoto || photos.loadState == .empty else { return }
+            async let videoOpening: Void = prepareVideosOpening(using: sessionController)
+            await prepareAlbumsOpening(in: overviewState, preloading: true)
+            await videoOpening
+        }
+        .task(id: tabSelectionState.selection) {
+            guard tabSelectionState.selection == .albums else { return }
+            await prepareAlbumsOpening(in: overviewState, preloading: false)
+        }
         .onChange(of: tabSelectionState.selection) { previous, current in
+            if previous == .albums, current != .albums {
+                media.cancelPrefetching()
+            }
+            if current != .photos, current != .videos {
+                media.resumeOpeningPhotosHydration()
+            }
             guard current == .years || current == .months || current == .weeks else { return }
             if previous == .photos {
                 photosTimelineRuntime.beginGrouping()
@@ -376,6 +421,58 @@ struct AppShellView: View {
             viewerPresentations.removeAll()
         }
         .environment(\.assetLocations, sessionController?.locations)
+    }
+
+    private func prepareVideosOpening(using sessionController: AppSessionController) async {
+        await sessionController.prepareVideosOpening()
+        guard !Task.isCancelled, !tabContentActivationState.isHydrated(.videos) else { return }
+        let limit = TimelineGridOrder.openingWindowLimit()
+        let assets = videos.newestSemanticAssets(limit: limit)
+        guard !assets.isEmpty else { return }
+        let revision = videos.semanticContentRevision
+        let window = openingWindow
+        let viewport = window?.bounds.size ?? .zero
+        let traits = window?.traitCollection
+        let displayScale = traits?.displayScale ?? 1
+        let isPhone = traits?.userInterfaceIdiom == .phone
+        let dark = traits?.userInterfaceStyle == .dark
+        let scale: TimelineSemanticScale = videoPresentation.preferences.assetLayout == .square ? .square : .natural
+        let build = Task.detached(priority: .utility) {
+            let catalog = TimelineSemanticCatalog(assets: assets)
+            guard !Task.isCancelled else { return (catalog, [MediaRequestDescriptor]()) }
+            let layout = TimelineSemanticProjection.complete(catalog: catalog, scale: scale, size: viewport, isPhone: isPhone, dark: dark)
+            let requests = layout.items.reversed().filter { !$0.isHeader }.map { item in
+                TimelineAssetThumbnail.thumbnailDescriptor(for: catalog.assets[item.nodeIndex],
+                                                           points: max(item.frame.width, item.frame.height), scale: displayScale)
+            }
+            return (catalog, requests)
+        }
+        let (catalog, requests) = await withTaskCancellationHandler { await build.value } onCancel: { build.cancel() }
+        guard !Task.isCancelled, media.scope == MediaAccountScope(session: session),
+              !tabContentActivationState.isHydrated(.videos),
+              revision == videos.semanticContentRevision || assets == videos.newestSemanticAssets(limit: limit) else { return }
+        videosTimelineRuntime.preparedOpeningCatalog = catalog
+        tabContentActivationState.prepare(.videos)
+        await media.prefetchManagedThumbnails(requests)
+    }
+
+    private func prepareAlbumsOpening(in overviewState: AlbumsOverviewState, preloading: Bool) async {
+        let overview = overviewState.store ?? AlbumsStore(reader: albumSource, persistence: sessionController?.libraryIndexStore,
+                                                          scope: MediaAccountScope(session: session))
+        if overviewState.store == nil {
+            overviewState.store = overview
+        }
+        await overview.prepareOpening()
+        if preloading, overview.hasLoaded, !Task.isCancelled, !tabContentActivationState.isHydrated(.albums) {
+            tabContentActivationState.prepare(.albums)
+        }
+        guard !Task.isCancelled, preloading || tabSelectionState.selection == .albums,
+              let window = openingWindow else { return }
+        await overview.warmOpeningCovers(media: media, viewport: window.bounds.size, scale: window.traitCollection.displayScale)
+    }
+
+    private var openingWindow: UIWindow? {
+        UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first
     }
 
     private func showAccount() {
@@ -466,7 +563,10 @@ struct AppShellView: View {
         switch tabSelectionState.selection {
         case .photos: return photosPath.isEmpty && photosContentLoading
         case .videos: return videosPath.isEmpty && videosContentLoading
-        case .albums: return albumsPath.isEmpty && albumsContentLoading
+        case .albums:
+            return albumsPath.isEmpty && (!tabContentActivationState.isHydrated(.albums)
+                || !albumsOverview.hasMeasuredOpeningLayout
+                || (albumsOverview.store?.isWaitingForInitialContent ?? true))
         default: return false
         }
     }

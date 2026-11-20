@@ -100,6 +100,43 @@ struct LibraryIndexStoreTests {
         #expect(other.thumbnailCount == 0 && other.metadataCount == 0 && other.thumbnailBytes == 0)
     }
 
+    @Test func openingPhotosUseOnlyNewestAcceptedVisibleRowsAndTheirVerifiedThumbnails() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        let scope = Self.scope(userID: "opening-photos")
+        let generation = try await store.beginGeneration(scope: scope)
+        let assets = [
+            Self.asset(id: "old", captureTime: 90),
+            Self.asset(id: "new", captureTime: 100, kind: .video),
+            Self.asset(id: "newest", captureTime: 110),
+            Self.asset(id: "hidden", captureTime: 120, visibility: "hidden"),
+            Self.asset(id: "trashed", captureTime: 130, trashed: true),
+        ]
+        try await store.upsert(assets: assets, generation: generation, scope: scope)
+        #expect(try await store.openingTimelineWindow(scope: scope, limit: 2) == nil)
+        _ = try await store.acceptGeneration(generation, watermark: nil, historicalCursor: nil,
+                                             expectedAssetCount: assets.count, scope: scope)
+        try await store.upsert(derivatives: assets.map {
+            .init(assetID: $0.id, derivative: .thumbnail, pixelSize: nil, sourceRevision: $0.updatedAt.ISO8601Format(),
+                  relativeFileKey: "\($0.id).jpg", byteCount: 100, digest: "fixture", isVerified: $0.id != "new",
+                  lastAccessedAt: .now, completedAt: .now)
+        }, scope: scope)
+        let staging = try await store.beginGeneration(scope: scope)
+        try await store.upsert(assets: [Self.asset(id: "staging", captureTime: 140)], generation: staging, scope: scope)
+        let window = try #require(await store.openingTimelineWindow(scope: scope, limit: 2))
+        #expect(window.generation == generation)
+        #expect(window.assets.map(\.id) == ["newest", "new"])
+        #expect(window.thumbnails.map(\.assetID) == ["newest"])
+        let videoWindow = try #require(await store.openingTimelineWindow(scope: scope, limit: 2, mediaScope: .videos))
+        #expect(videoWindow.assets.map(\.id) == ["new"])
+        #expect(videoWindow.thumbnails.isEmpty)
+        let covers = try await store.albumCoverThumbnails(scope: scope, assetIDs: ["newest", "new"])
+        #expect(covers.map(\.assetID) == ["newest"])
+        let otherScope = Self.scope(userID: "other-opening-covers")
+        #expect(try await store.albumCoverThumbnails(scope: otherScope, assetIDs: ["newest"]).isEmpty)
+    }
+
     @Test func syncTimestampsPreservePersistedUnixSeconds() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
@@ -418,13 +455,16 @@ struct LibraryIndexStoreTests {
         ))
     }
 
-    private static func asset(id: String, checksum: String = "checksum") -> LibraryIndexAssetRecord {
+    private static func asset(id: String, checksum: String = "checksum", captureTime: TimeInterval = 100,
+                              visibility: String = "timeline", trashed: Bool = false,
+                              kind: LibraryIndexAssetKind = .image) -> LibraryIndexAssetRecord
+    {
         .init(
             id: id,
             ownerID: "owner",
-            kind: .image,
+            kind: kind,
             livePhotoVideoID: nil,
-            capturedAt: Date(timeIntervalSince1970: 100),
+            capturedAt: Date(timeIntervalSince1970: captureTime),
             uploadedAt: Date(timeIntervalSince1970: 101),
             updatedAt: Date(timeIntervalSince1970: 102),
             checksum: checksum,
@@ -433,8 +473,8 @@ struct LibraryIndexStoreTests {
             aspectRatio: 4.0 / 3.0,
             durationMilliseconds: nil,
             isFavorite: false,
-            visibility: "timeline",
-            isTrashed: false,
+            visibility: visibility,
+            isTrashed: trashed,
             isOffline: false,
             bucketKey: "2026-10-01",
             dayKey: "2026-10-18",

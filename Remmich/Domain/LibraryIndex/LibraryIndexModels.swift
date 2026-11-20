@@ -132,6 +132,12 @@ nonisolated struct LibraryTimelineBootstrap: Sendable {
     let videos: TimelineBootstrapSnapshot
 }
 
+nonisolated struct TimelineIndexOpeningWindow: Sendable {
+    let generation: Int64
+    let assets: [LibraryIndexAssetRecord]
+    let thumbnails: [LibraryIndexDerivativeRecord]
+}
+
 nonisolated struct LibraryIndexGroupRecord: Codable, Hashable, Identifiable, Sendable {
     let mediaScope: LibraryIndexMediaScope
     let level: String

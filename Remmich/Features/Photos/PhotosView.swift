@@ -370,6 +370,7 @@ struct PhotosView: View {
     var tabSelectionState: NativeTabSelectionState?
     var tabDestination: NativeTabDestination = .photos
     var viewerPresentations: AssetViewerPresentationStore?
+    var loadTimeline: (() async -> Void)?
     let showAccount: () -> Void
 
     @Namespace private var viewerNamespace
@@ -402,6 +403,8 @@ struct PhotosView: View {
     @State private var memoryViewerDismissalRequest = 0
     @State private var semanticCatalog: TimelineSemanticCatalog?
     @State private var semanticCatalogRevision: UInt64 = 0
+    @State private var semanticCatalogIsOpeningWindow = false
+    @State private var openingLoaderReleased = false
     @State private var semanticRuntime = TimelineSemanticRuntime()
     @State private var scopedAssetTransitions = ScopedAssetTransitionRuntime()
     @State private var semanticLatestRequest = 0
@@ -430,6 +433,7 @@ struct PhotosView: View {
         tabSelectionState: NativeTabSelectionState? = nil,
         tabDestination: NativeTabDestination = .photos,
         viewerPresentations: AssetViewerPresentationStore? = nil,
+        loadTimeline: (() async -> Void)? = nil,
         showAccount: @escaping () -> Void
     ) {
         self.store = store
@@ -440,6 +444,10 @@ struct PhotosView: View {
         _tabBarTop = tabBarTop
         self.rotationState = rotationState
         _semanticRuntime = State(initialValue: timelineRuntime ?? TimelineSemanticRuntime())
+        let preparedOpening = timelineRuntime?.preparedOpeningCatalog
+        _semanticCatalog = State(initialValue: preparedOpening)
+        _semanticCatalogRevision = State(initialValue: preparedOpening == nil ? 0 : store.semanticContentRevision)
+        _semanticCatalogIsOpeningWindow = State(initialValue: preparedOpening != nil)
         self.scrollToLatestRequest = scrollToLatestRequest
         self.requestedLibraryRange = requestedLibraryRange
         self.requestedLibraryRangeHandled = requestedLibraryRangeHandled
@@ -451,6 +459,7 @@ struct PhotosView: View {
         self.compactChromeChanged = compactChromeChanged
         self.viewerVisibilityChanged = viewerVisibilityChanged
         self.viewerPresentations = viewerPresentations
+        self.loadTimeline = loadTimeline
         self.loadingVisibilityChanged = loadingVisibilityChanged
         self.tabSelectionState = tabSelectionState
         self.tabDestination = tabDestination
@@ -654,9 +663,24 @@ struct PhotosView: View {
                     media.beginTimelineContentPresentation(contentName)
                 }
             }
-            .task { await store.load() }
-            .task(id: store.semanticContentRevision) {
-                let revision = store.semanticContentRevision
+            .task(id: isTabContentActivated) {
+                guard isTabContentActivated else { return }
+                if let loadTimeline {
+                    await loadTimeline()
+                } else {
+                    await store.load()
+                }
+            }
+            .task(id: semanticCatalogBuildRevision) {
+                guard let revision = semanticCatalogBuildRevision else { return }
+                let openingWindow = store.isOpeningWindow
+                if openingWindow, semanticCatalogIsOpeningWindow, semanticCatalogRevision == revision {
+                    return
+                }
+                if tabDestination == .videos, loadTimeline != nil, semanticCatalog == nil, !openingWindow {
+                    await presentPreloadedVideoWindow(revision: revision)
+                    guard !Task.isCancelled, revision == store.semanticContentRevision else { return }
+                }
                 let assets = store.semanticAssetsSnapshot()
                 let build = Task.detached(priority: .userInitiated) {
                     TimelineSemanticCatalog(assets: assets)
@@ -669,6 +693,15 @@ struct PhotosView: View {
                 guard !Task.isCancelled, revision == store.semanticContentRevision else { return }
                 semanticCatalog = catalog
                 semanticCatalogRevision = revision
+                semanticCatalogIsOpeningWindow = openingWindow
+            }
+            .task(id: waitsForOpeningTile && isTabContentActivated) {
+                guard waitsForOpeningTile, isTabContentActivated else { return }
+                // The history deadline can expire before UIKit mounts this grid.
+                // Give the logo its own bounded handoff from the visible window.
+                try? await Task.sleep(for: .milliseconds(1500))
+                guard !Task.isCancelled else { return }
+                openingLoaderReleased = true
             }
             .onChange(of: isTimelineActive) { _, isVisible in
                 viewportRuntime.isTimelineActive = isVisible
@@ -698,6 +731,7 @@ struct PhotosView: View {
                         await store.loadOlderSemanticPage()
                     }
                     let revision = store.semanticContentRevision
+                    let openingWindow = store.isOpeningWindow
                     let assets = store.semanticAssetsSnapshot()
                     let build = Task.detached(priority: .userInitiated) { TimelineSemanticCatalog(assets: assets) }
                     let catalog = await withTaskCancellationHandler { await build.value } onCancel: { build.cancel() }
@@ -708,6 +742,7 @@ struct PhotosView: View {
                         if revision >= semanticCatalogRevision {
                             semanticCatalog = catalog
                             semanticCatalogRevision = revision
+                            semanticCatalogIsOpeningWindow = openingWindow
                         }
                         navigationPath = []
                         libraryRange = .all
@@ -727,6 +762,7 @@ struct PhotosView: View {
             }
             .onChange(of: isTabContentActivated) { _, active in
                 if !active {
+                    store.resumeOpeningHistory()
                     dismissPreview()
                 }
             }
@@ -879,6 +915,23 @@ struct PhotosView: View {
         }
     }
 
+    private func presentPreloadedVideoWindow(revision: UInt64) async {
+        let limit = TimelineGridOrder.openingWindowLimit()
+        let newest = store.newestSemanticAssets(limit: limit + 1)
+        guard newest.count > limit else { return }
+        let assets = Array(newest.prefix(limit))
+        let build = Task.detached(priority: .userInitiated) { TimelineSemanticCatalog(assets: assets) }
+        let window = await withTaskCancellationHandler { await build.value } onCancel: { build.cancel() }
+        guard !Task.isCancelled, revision == store.semanticContentRevision else { return }
+        let events = store.openingDisplayEvents()
+        semanticCatalog = window
+        semanticCatalogRevision = revision
+        semanticCatalogIsOpeningWindow = true
+        await TimelineOpeningWindow.waitForDisplay(events)
+        guard revision == store.semanticContentRevision else { return }
+        store.resumeOpeningHistory()
+    }
+
     private var semanticTimeline: some View {
         GeometryReader { geometry in
             let frame = geometry.frame(in: .global)
@@ -907,6 +960,10 @@ struct PhotosView: View {
                         runtime: semanticRuntime,
                         latestRequest: semanticLatestRequest,
                         isActive: isTabContentActivated && navigationPath.isEmpty && viewerRoute == nil,
+                        isOpeningWindow: semanticCatalogIsOpeningWindow,
+                        tracksStartupPhotos: tabDestination == .photos,
+                        openingStore: store,
+                        openingTileDisplayed: waitsForOpeningTile ? { openingLoaderReleased = true } : nil,
                         hiddenThumbnailID: hiddenReturningThumbnailAssetID ?? assetPreview?.hiddenSourceAssetID,
                         hiddenLivePhotoID: hiddenLivePhotoBadgeAssetID,
                         additionalHiddenThumbnailIDs: viewerPresentations?.hiddenSourceIDs(ownerID: viewerPresentationOwnerID) ?? [],
@@ -942,7 +999,12 @@ struct PhotosView: View {
                             media.updateTimelineResidency(plan, targetPixels: target)
                         },
                         refresh: { await store.refresh() },
-                        loadOlder: { await store.loadOlderSemanticPage() },
+                        loadOlder: {
+                            if semanticCatalogIsOpeningWindow {
+                                store.resumeOpeningHistory()
+                            }
+                            await store.loadOlderSemanticPage()
+                        },
                         focusChanged: { asset in
                             store.updateVisibleAnchor(.init(bucketID: semanticBucketID(for: asset), assetID: asset.id))
                         }
@@ -986,6 +1048,17 @@ struct PhotosView: View {
         }
     }
 
+    private var waitsForOpeningTile: Bool {
+        semanticCatalogIsOpeningWindow && !openingLoaderReleased
+    }
+
+    private var semanticCatalogBuildRevision: UInt64? {
+        if semanticRuntime.preparedOpeningCatalog != nil, waitsForOpeningTile {
+            return nil
+        }
+        return store.semanticContentRevision
+    }
+
     private var isTimelineContentLoading: Bool {
         switch store.loadState {
         case .idle, .loading: return true
@@ -994,7 +1067,9 @@ struct PhotosView: View {
         }
         guard navigationPath.isEmpty else { return false }
         guard let semanticCatalog else { return true }
-        guard semanticCatalog.assets.isEmpty else { return false }
+        guard semanticCatalog.assets.isEmpty else {
+            return waitsForOpeningTile && semanticRuntime.preparedOpeningCatalog == nil
+        }
         switch store.semanticHistoryState {
         case .idle, .loading, .loaded: return true
         case .empty, .failed: return false

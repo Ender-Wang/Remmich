@@ -11,6 +11,10 @@ nonisolated enum LibraryTimelineBootstrapBuilder {
         complete(buildInitial(from: snapshot))
     }
 
+    static func buildOpeningTimeline(from window: TimelineIndexOpeningWindow) -> TimelineBootstrapSnapshot {
+        buildTimeline(from: window.assets, groups: [], generation: window.generation, isComplete: false, scope: nil)
+    }
+
     static func buildInitial(from snapshot: LibraryIndexSnapshot) -> LibraryTimelineBootstrap {
         let startedAt = ContinuousClock.now
         let visible = snapshot.assets.filter {
@@ -20,14 +24,16 @@ nonisolated enum LibraryTimelineBootstrapBuilder {
         let photos = buildTimeline(
             from: visible,
             groups: snapshot.groups,
-            snapshot: snapshot,
+            generation: snapshot.generation,
+            isComplete: snapshot.syncState.historicalCursor == nil,
             scope: nil
         )
         let photosBuiltAt = ContinuousClock.now
         let videos = buildTimeline(
             from: visible.filter { $0.kind == .video },
             groups: snapshot.groups,
-            snapshot: snapshot,
+            generation: snapshot.generation,
+            isComplete: snapshot.syncState.historicalCursor == nil,
             scope: .videos
         )
         let videosBuiltAt = ContinuousClock.now
@@ -66,7 +72,8 @@ nonisolated enum LibraryTimelineBootstrapBuilder {
     private static func buildTimeline(
         from records: [LibraryIndexAssetRecord],
         groups: [LibraryIndexGroupRecord],
-        snapshot: LibraryIndexSnapshot,
+        generation: Int64,
+        isComplete: Bool,
         scope: LibraryIndexMediaScope?
     ) -> TimelineBootstrapSnapshot {
         let grouped: [TimelineBucketID: [LibraryIndexAssetRecord]] = Dictionary(
@@ -96,11 +103,11 @@ nonisolated enum LibraryTimelineBootstrapBuilder {
             catalogs: &groupedCatalogs
         )
         return TimelineBootstrapSnapshot(
-            generation: snapshot.generation,
+            generation: generation,
             summaries: summaries,
             assetsByBucket: assetsByBucket,
             groupedCatalogs: groupedCatalogs,
-            isComplete: snapshot.syncState.historicalCursor == nil
+            isComplete: isComplete
         )
     }
 

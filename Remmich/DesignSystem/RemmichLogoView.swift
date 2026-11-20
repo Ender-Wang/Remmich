@@ -91,28 +91,31 @@ struct RemmichLoadingView: View {
 /// delaying content, creating another logo, or scheduling a delayed dismissal task.
 struct RemmichLoadingOverlay: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var isMounted = false
+    @State private var isPresented = false
     let isLoading: Bool
     var label = "Loading library"
     var detail: String?
 
-    private var isVisible: Bool {
-        isMounted && isLoading
-    }
-
     var body: some View {
         VStack(spacing: 12) {
-            RemmichLoadingView(label: label, isAnimating: isVisible)
+            RemmichLoadingView(label: label, isAnimating: isLoading && isPresented)
             if let detail {
                 Text(detail).font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
             }
         }
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2)) { content in
-            content.opacity(isVisible ? 1 : 0)
-        }
+        .opacity(isPresented ? 1 : 0)
         .allowsHitTesting(false)
-        .accessibilityHidden(!isVisible)
-        .onAppear { isMounted = true }
-        .onDisappear { isMounted = false }
+        .accessibilityHidden(!isLoading || !isPresented)
+        .onChange(of: isLoading, initial: true) { _, loading in setPresented(loading) }
+        .onDisappear { isPresented = false }
+    }
+
+    private func setPresented(_ presented: Bool) {
+        guard presented != isPresented else { return }
+        let curve: Animation = presented ? .easeInOut(duration: 0.2) : .easeOut(duration: 0.28)
+        let animation = reduceMotion ? nil : curve
+        withAnimation(animation) {
+            isPresented = presented
+        }
     }
 }

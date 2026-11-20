@@ -50,6 +50,10 @@ private struct AlbumScopeCaptureKey: Equatable {
 }
 
 struct AlbumsView: View {
+    private struct LoadRequest: Equatable {
+        let endpoint: URL?
+    }
+
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
     @Environment(\.scenePhase) private var scenePhase
@@ -63,10 +67,12 @@ struct AlbumsView: View {
     let viewerPresentations: AssetViewerPresentationStore
     let tabSelectionState: NativeTabSelectionState
     @Binding var tabBarTop: CGFloat
-    let loadingVisibilityChanged: ((Bool) -> Void)?
+    let windowTopInset: CGFloat
+    let showsLoadingOverlay: Bool
+    let openingLayoutMeasured: () -> Void
     let openAlbum: (AlbumSummary) -> Void
     let showAccount: () -> Void
-    @State private var store: AlbumsStore
+    private let store: AlbumsStore
     @State private var scope: AlbumScope = .all
     @State private var contentScope: AlbumScope = .all
     @State private var query = ""
@@ -82,23 +88,24 @@ struct AlbumsView: View {
     @State private var searchRowHeight: CGFloat = 44
     @State private var scopePickerHeight: CGFloat = 32
     @State private var userScrolling = false
-    @State private var initialAlbumsPositioned = false
-    @State private var albumLabelHeight: CGFloat = 58
+    @State private var albumLabelHeight: CGFloat?
     @State private var reflowCompletion = AlbumReflowCompletion()
     @State private var reflowViewport = AlbumReflowViewport()
     @State private var pinchInteraction = AlbumPinchInteraction()
     @State private var listVisible = false
+    @State private var transitionAlbumID: String?
     @Namespace private var albumTransition
     @State private var timelineSessions = AlbumTimelineSessions()
     @State private var scopeSlide = AlbumScopeSlide()
     @FocusState private var searchFocused: Bool
 
-    init(source: any AlbumReading & TimelineReading, media: MediaLibraryController,
+    init(store: AlbumsStore, source: any AlbumReading & TimelineReading, media: MediaLibraryController,
          assetDetails: any AssetDetailReading, activeEndpoint: URL?,
          scrollToLatestRequest: Int = 0,
          persistence: (any AlbumCatalogStoring)? = nil, scope: MediaAccountScope? = nil,
          viewerPresentations: AssetViewerPresentationStore, tabSelectionState: NativeTabSelectionState,
-         tabBarTop: Binding<CGFloat>, loadingVisibilityChanged: ((Bool) -> Void)? = nil,
+         tabBarTop: Binding<CGFloat>, windowTopInset: CGFloat, showsLoadingOverlay: Bool = true,
+         openingLayoutMeasured: @escaping () -> Void,
          openAlbum: @escaping (AlbumSummary) -> Void,
          showAccount: @escaping () -> Void)
     {
@@ -112,10 +119,12 @@ struct AlbumsView: View {
         self.viewerPresentations = viewerPresentations
         self.tabSelectionState = tabSelectionState
         _tabBarTop = tabBarTop
-        self.loadingVisibilityChanged = loadingVisibilityChanged
+        self.windowTopInset = windowTopInset
+        self.showsLoadingOverlay = showsLoadingOverlay
+        self.openingLayoutMeasured = openingLayoutMeasured
         self.openAlbum = openAlbum
         self.showAccount = showAccount
-        _store = State(initialValue: AlbumsStore(reader: source, persistence: persistence, scope: scope))
+        self.store = store
     }
 
     private var filtered: [AlbumSummary] {
@@ -128,26 +137,76 @@ struct AlbumsView: View {
         searchRowHeight + 10 + scopePickerHeight + 16
     }
 
-    var body: some View {
-        GeometryReader { geometry in
-            albumContent(availableWidth: geometry.size.width + geometry.safeAreaInsets.leading + geometry.safeAreaInsets.trailing)
-        }
-        .overlay {
-            if loadingVisibilityChanged == nil {
-                LoadingStateView(isLoading: !store.hasLoaded && store.errorMessage == nil, label: "Loading albums")
-            }
-        }
-        .onChange(of: !store.hasLoaded && store.errorMessage == nil, initial: true) { _, loading in
-            loadingVisibilityChanged?(loading)
-        }
+    private var topClearance: CGFloat {
+        windowTopInset + expandedHeaderHeight
     }
 
-    private func albumContent(availableWidth: CGFloat) -> some View {
-        let columnCount = max(1, Int((availableWidth - 32 + 16) / (155 + 16)))
-        let coverWidth = min(260, max(1, (availableWidth - 32 - CGFloat(columnCount - 1) * 16) / CGFloat(columnCount)))
-        let metrics = AlbumReflowMetrics(width: max(1, availableWidth - 32), columns: columnCount,
-                                         coverWidth: coverWidth, labelHeight: albumLabelHeight)
+    var body: some View {
+        GeometryReader { geometry in
+            let viewportWidth = geometry.size.width
+            let width = viewportWidth + geometry.safeAreaInsets.leading + geometry.safeAreaInsets.trailing
+            let viewportHeight = geometry.size.height
+            Group {
+                // The initial bottom anchor needs the complete padded extent,
+                // including the measured label height, at the first layout.
+                if let albumLabelHeight, !store.isWaitingForInitialContent {
+                    albumContent(availableWidth: width, viewportHeight: viewportHeight, labelHeight: albumLabelHeight)
+                } else {
+                    Color.clear
+                }
+            }
+            .overlay(alignment: .topLeading) {
+                AlbumLabelMeasurement()
+                    .frame(width: AlbumReflowMetrics.overview(availableWidth: width).coverWidth)
+                    .hidden()
+                    .onGeometryChange(for: CGFloat.self) {
+                        viewportWidth > 0 && viewportHeight > 0 ? $0.size.height : 0
+                    } action: { height in
+                        guard height > 0 else { return }
+                        if let albumLabelHeight, abs(albumLabelHeight - height) <= 0.01 {
+                            return
+                        }
+                        let isFirstMeasurement = albumLabelHeight == nil
+                        albumLabelHeight = height
+                        if isFirstMeasurement {
+                            openingLayoutMeasured()
+                        }
+                    }
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
+        // The navigation container can change its top safe area as a prepared
+        // tab attaches. Use the window inset for this overview's layout.
+        .ignoresSafeArea(.container, edges: .top)
+        .overlay {
+            if showsLoadingOverlay {
+                LoadingStateView(isLoading: store.isWaitingForInitialContent || albumLabelHeight == nil, label: "Loading albums")
+            }
+        }
+        .toolbar(.hidden, for: .navigationBar)
+        .task(id: tabSelectionState.selection == .albums ? LoadRequest(endpoint: activeEndpoint) : nil) {
+            guard tabSelectionState.selection == .albums else { return }
+            await store.load()
+        }
+        .navigationDestination(for: AlbumSummary.self) { album in
+            AlbumDetailView(album: album, source: source, media: media, assetDetails: assetDetails,
+                            activeEndpoint: activeEndpoint, scrollToLatestRequest: scrollToLatestRequest,
+                            persistence: persistence, scope: accountScope,
+                            timelineRuntime: timelineSessions.runtime(albumID: album.id, namespace: accountScope?.cacheNamespace ?? "unscoped"),
+                            viewerPresentations: viewerPresentations,
+                            tabSelectionState: tabSelectionState, tabBarTop: $tabBarTop, showAccount: showAccount)
+                .navigationTransition(.zoom(sourceID: album.id, in: albumTransition))
+        }
+        .accessibilityIdentifier("albums-root")
+    }
+
+    private func albumContent(availableWidth: CGFloat, viewportHeight: CGFloat, labelHeight: CGFloat) -> some View {
+        let metrics = AlbumReflowMetrics.overview(availableWidth: availableWidth, labelHeight: labelHeight)
         let request = reorderGeneration
+        let albums = filtered
+        let openingHeight = metrics.height(count: albums.count, list: showsList)
+        let openingStart = openingHeight - max(0, viewportHeight) * CGFloat(TimelineGridOrder.openingScreenCount)
         return ScrollViewReader { proxy in
             ScrollView {
                 VStack(spacing: 16) {
@@ -156,11 +215,9 @@ struct AlbumsView: View {
                             Label(error, systemImage: "arrow.clockwise").font(.callout)
                         }.padding(.horizontal)
                     }
-                    if !store.hasLoaded, store.errorMessage == nil {
-                        Color.clear
-                    } else if store.errorMessage != nil, !store.hasLoaded {
+                    if store.errorMessage != nil, !store.hasLoaded {
                         ErrorStateView(title: "Couldn’t Load Albums") { Task { await store.load() } }
-                    } else if filtered.isEmpty {
+                    } else if albums.isEmpty {
                         ContentUnavailableView(
                             query.isEmpty ? (contentScope == .shared ? "No Shared Albums" : "No Albums") : "No Results",
                             systemImage: "rectangle.stack",
@@ -168,9 +225,11 @@ struct AlbumsView: View {
                         )
                     } else {
                         AlbumReflowLayout(progress: albumLayoutProgress, metrics: metrics) {
-                            ForEach(filtered) { album in
+                            ForEach(Array(albums.enumerated()), id: \.element.id) { index, album in
+                                let frame = metrics.frame(at: index, count: albums.count, list: showsList)
                                 albumLink(album, compact: showsList, progress: albumLayoutProgress,
-                                          metrics: metrics, proxy: proxy, generation: request)
+                                          metrics: metrics, proxy: proxy, generation: request,
+                                          initiallyMounted: frame.maxY > openingStart)
                             }
                         }
                         .gesture(AlbumPinchGesture(enabled: listVisible && !voiceOverEnabled,
@@ -196,6 +255,9 @@ struct AlbumsView: View {
                     }
                 }
                 .padding(.vertical)
+                // Count header clearance in the scroll extent from the first
+                // layout, so attachment cannot rebase the bottom offset.
+                .padding(.top, topClearance)
                 .onGeometryChange(for: AlbumScopeContentGeometry.self) { [scopeName = contentScope.rawValue] geometry in
                     AlbumScopeContentGeometry(scope: scopeName, height: geometry.size.height)
                 } action: { scopeSlide.contentChanged($0) }
@@ -206,10 +268,8 @@ struct AlbumsView: View {
             }
             .ignoresSafeArea(.container, edges: .horizontal)
             .scrollDisabled(pinchInteraction.isActive)
-            // Like timeline Memories, compact chrome must not resize the viewport
-            // or change the scroll clearance while the user is dragging.
-            .contentMargins(.top, expandedHeaderHeight, for: .scrollContent)
-            .contentMargins(.top, expandedHeaderHeight, for: .scrollIndicators)
+            .contentMargins(.top, topClearance, for: .scrollIndicators)
+            .defaultScrollAnchor(.bottom, for: .initialOffset)
             .defaultScrollAnchor(.bottom, for: .alignment)
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
                 reflowViewport.frame = frame
@@ -229,7 +289,7 @@ struct AlbumsView: View {
                 // Keep its measured geometry; visibility gates input while hidden.
             }
             .onChange(of: scrollToLatestRequest) {
-                guard listVisible, !filtered.isEmpty else { return }
+                guard listVisible, !albums.isEmpty else { return }
                 cancelAlbumReflow()
                 scopeSlide.cancel(clearCache: true)
                 withAnimation(reduceMotion ? nil : .smooth(duration: 0.35)) { proxy.scrollTo(AlbumDiscoveryScrollTarget.content, anchor: .bottom) }
@@ -248,19 +308,14 @@ struct AlbumsView: View {
                                     topInset: $0.contentInsets.top, viewportHeight: $0.containerSize.height,
                                     contentHeight: $0.contentSize.height, bottomInset: $0.contentInsets.bottom)
             } action: { old, new in
+                guard new.viewportHeight > 0 else { return }
                 scopeSlide.scrollChanged(scope: contentScope.rawValue, geometry: new)
                 if old.viewportHeight != new.viewportHeight || old.topInset != new.topInset || old.bottomInset != new.bottomInset {
                     cancelAlbumReflow()
                 }
-                reflowViewport.visibleHeight = new.viewportHeight
-                if !initialAlbumsPositioned, store.hasLoaded, !filtered.isEmpty,
-                   new.contentHeight >= metrics.height(count: filtered.count, list: showsList)
-                {
-                    // Consume before requesting so the resulting geometry cannot
-                    // re-arm initial placement during a later mode change.
-                    initialAlbumsPositioned = true
-                    withTransaction(Transaction(animation: nil)) { proxy.scrollTo(AlbumDiscoveryScrollTarget.content, anchor: .bottom) }
-                }
+                // Reflow gestures still use the viewport below the expanded
+                // header, even though the reserved space is now in the content.
+                reflowViewport.visibleHeight = max(0, new.viewportHeight - topClearance)
                 guard !searchFocused else { return }
                 // Inset animations and lazy content measurement can rebase the
                 // offset without a finger changing direction. They are layout,
@@ -286,7 +341,7 @@ struct AlbumsView: View {
                 }
                 scopeSlide.start()
             }
-            .onChange(of: Set(filtered.map(\.id))) { _, _ in cancelAlbumReflow() }
+            .onChange(of: Set(albums.map(\.id))) { _, _ in cancelAlbumReflow() }
             .onChange(of: metrics) { _, _ in
                 cancelAlbumReflow()
                 scopeSlide.cancel(clearCache: true)
@@ -327,17 +382,6 @@ struct AlbumsView: View {
                 AlbumScopeSlideHost(slide: scopeSlide)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .ignoresSafeArea(.container, edges: [.top, .horizontal])
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
-            }
-            .overlay(alignment: .topLeading) {
-                AlbumLabelMeasurement()
-                    .frame(width: coverWidth)
-                    .hidden()
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
-                        guard height > 0, abs(albumLabelHeight - height) > 0.01 else { return }
-                        albumLabelHeight = height
-                    }
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
             }
@@ -405,6 +449,7 @@ struct AlbumsView: View {
                 }
                 .padding(.horizontal)
                 .padding(.vertical, 8)
+                .padding(.top, windowTopInset)
                 .background {
                     ZStack {
                         TimelineMemoryGradientBackdrop(visible: true, extended: true, reduceMotion: reduceMotion)
@@ -419,33 +464,27 @@ struct AlbumsView: View {
                 }
                 .ignoresSafeArea(.container, edges: .horizontal)
             }
-            .toolbar(.hidden, for: .navigationBar)
             .scrollDismissesKeyboard(.interactively)
-            .task(id: activeEndpoint) { await store.load() }
-            .navigationDestination(for: AlbumSummary.self) { album in
-                AlbumDetailView(album: album, source: source, media: media, assetDetails: assetDetails,
-                                activeEndpoint: activeEndpoint, scrollToLatestRequest: scrollToLatestRequest,
-                                persistence: persistence, scope: accountScope,
-                                timelineRuntime: timelineSessions.runtime(albumID: album.id, namespace: accountScope?.cacheNamespace ?? "unscoped"),
-                                viewerPresentations: viewerPresentations,
-                                tabSelectionState: tabSelectionState, tabBarTop: $tabBarTop, showAccount: showAccount)
-                    .navigationTransition(.zoom(sourceID: album.id, in: albumTransition))
-            }
-            .accessibilityIdentifier("albums-root")
         }
     }
 
     private func albumLink(_ album: AlbumSummary, compact: Bool, progress: CGFloat, metrics: AlbumReflowMetrics,
-                           proxy: ScrollViewProxy, generation: Int) -> some View
+                           proxy: ScrollViewProxy, generation: Int, initiallyMounted: Bool) -> some View
     {
         Button { activateAlbum(album) } label: {
             AlbumCard(album: album, media: media, compact: compact, progress: progress, sort: sort, persistence: persistence,
                       scope: accountScope, transitionNamespace: albumTransition, coverWidth: metrics.coverWidth,
-                      listWidth: metrics.width, isReordering: isReordering)
-                // Retain the accepted inner text/layout endpoints. The outer
-                // wrapper reports the current animated proposal to scrolling.
-                .frame(height: metrics.itemSize(progress: progress).height, alignment: .top)
-                .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .top)
+                      listWidth: metrics.width, isReordering: isReordering, initiallyMounted: initiallyMounted,
+                      keepsTransitionSource: transitionAlbumID == album.id, coverRevision: store.coverRevisions[album.id],
+                      coverVisible: {
+                          if listVisible, tabSelectionState.selection == .albums {
+                              store.openingCoverVisible()
+                          }
+                      })
+                      // Retain the accepted inner text/layout endpoints. The outer
+                      // wrapper reports the current animated proposal to scrolling.
+                      .frame(height: metrics.itemSize(progress: progress).height, alignment: .top)
+                      .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .top)
         }
         .buttonStyle(.plain)
         // Resolve each album's movement before drawing its descendants. Without
@@ -461,8 +500,9 @@ struct AlbumsView: View {
             guard generation == reorderGeneration else { return }
             reflowViewport.items[album.id] = geometry.frame
             if let anchor = reflowViewport.consumeMotionSample(albumID: album.id, size: geometry.size, generation: generation) {
+                let alignment = anchor.alignment(for: geometry.size.height, topClearance: topClearance)
                 withTransaction(Transaction(animation: nil)) {
-                    proxy.scrollTo(anchor.albumID, anchor: UnitPoint(x: 0.5, y: anchor.alignment(for: geometry.size.height)))
+                    proxy.scrollTo(anchor.albumID, anchor: UnitPoint(x: 0.5, y: alignment))
                 }
             }
         }
@@ -476,7 +516,7 @@ struct AlbumsView: View {
         let canCacheSource = !isReordering && !pinchInteraction.isActive
         cancelAlbumReflow()
         withTransaction(Transaction(animation: nil)) {
-            if !reduceMotion, listVisible, store.hasLoaded {
+            if !reduceMotion, listVisible, store.hasLoaded, let albumLabelHeight {
                 let viewport = reflowViewport.usableFrame
                 scopeSlide.prepare(current: contentScope.rawValue, target: next.rawValue,
                                    key: AlbumScopeCaptureKey(albums: store.albums, query: query, sort: sort,
@@ -499,6 +539,7 @@ struct AlbumsView: View {
         guard !isReordering, !pinchInteraction.isActive, !scopeSlide.isActive,
               accessibility || !pinchInteraction.blocksAlbumActivation
         else { return }
+        transitionAlbumID = album.id
         openAlbum(album)
     }
 
@@ -633,15 +674,19 @@ private final class AlbumScopeSlide {
     @ObservationIgnored private var direction = NativeTabPageDirection.next
     @ObservationIgnored private var generation = 0
 
-    func prepare(current: String, target: String, key: AlbumScopeCaptureKey,
-                 cacheSource: Bool, viewport: CGRect, direction: NativeTabPageDirection)
-    {
-        cancel()
+    var scrollViewContainingAnchor: UIScrollView? {
         var ancestor = anchor?.superview
         while let view = ancestor, !(view is UIScrollView) {
             ancestor = view.superview
         }
-        guard let scroll = ancestor as? UIScrollView,
+        return ancestor as? UIScrollView
+    }
+
+    func prepare(current: String, target: String, key: AlbumScopeCaptureKey,
+                 cacheSource: Bool, viewport: CGRect, direction: NativeTabPageDirection)
+    {
+        cancel()
+        guard let scroll = scrollViewContainingAnchor,
               let window = scroll.window, let stageHost, stageHost.window === window,
               !stageHost.isDescendant(of: scroll),
               !stageHost.bounds.isEmpty, !viewport.isEmpty else { return }
@@ -876,6 +921,11 @@ private struct AlbumLabelMeasurement: View {
     }
 }
 
+private nonisolated struct AlbumCardVisibility: Equatable {
+    let nearby: Bool
+    let visible: Bool
+}
+
 private struct AlbumCard: View {
     let album: AlbumSummary
     let media: MediaLibraryController
@@ -888,42 +938,65 @@ private struct AlbumCard: View {
     let coverWidth: CGFloat
     let listWidth: CGFloat
     let isReordering: Bool
-    @State private var coverVisible = false
-    @State private var withinCoverWindow = false
+    let initiallyMounted: Bool
+    let keepsTransitionSource: Bool
+    let coverRevision: Date?
+    let coverVisible: () -> Void
+    @State private var mounted: Bool?
+    @State private var visibility = AlbumCardVisibility(nearby: false, visible: false)
+    @State private var coverLoaded = false
 
     var body: some View {
-        AlbumCardReflowLayout(progress: progress, coverWidth: coverWidth, listWidth: listWidth) {
-            cover
-            labels(compact: false)
-                .opacity(1 - progress)
-                .accessibilityHidden(compact)
-            labels(compact: true)
-                .opacity(progress)
-                .accessibilityHidden(!compact)
-            Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
-                .opacity(progress)
-                .accessibilityHidden(!compact)
+        Group {
+            if keepsTransitionSource || (mounted ?? initiallyMounted) {
+                AlbumCardReflowLayout(progress: progress, coverWidth: coverWidth, listWidth: listWidth) {
+                    cover
+                    labels(compact: false)
+                        .opacity(1 - progress)
+                        .accessibilityHidden(compact)
+                    labels(compact: true)
+                        .opacity(progress)
+                        .accessibilityHidden(!compact)
+                    Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
+                        .opacity(progress)
+                        .accessibilityHidden(!compact)
+                }
+            } else {
+                Color.clear
+                    .accessibilityLabel(album.title)
+                    .accessibilityValue(album.countLabel)
+            }
         }
         .contentShape(.rect)
         .accessibilityElement(children: .combine)
-        .onGeometryChange(for: Bool.self) { geometry in
+        .onGeometryChange(for: AlbumCardVisibility.self) { geometry in
             guard let viewport = geometry.bounds(of: .scrollView(axis: .vertical)),
-                  !viewport.isEmpty, geometry.size.width > 0, geometry.size.height > 0 else { return false }
-            // The enclosing viewport is expressed in this card's local space.
-            // Prepare one card-height before entry and keep it for the same
-            // distance after exit. Only crossing this window publishes state.
-            let window = viewport.insetBy(dx: 0, dy: -geometry.size.height)
-            return CGRect(origin: .zero, size: geometry.size).intersects(window)
-        } action: { nearViewport in
-            withinCoverWindow = nearViewport
-            if nearViewport || !isReordering {
-                coverVisible = nearViewport
+                  !viewport.isEmpty, geometry.size.width > 0, geometry.size.height > 0
+            else { return .init(nearby: false, visible: false) }
+            let frame = CGRect(origin: .zero, size: geometry.size)
+            let margin = max(viewport.height / 2, frame.height)
+            return .init(nearby: frame.intersects(viewport.insetBy(dx: 0, dy: -margin)), visible: frame.intersects(viewport))
+        } action: { next in
+            visibility = next
+            if next.nearby || !isReordering {
+                updateMount(next.nearby)
+            }
+            if next.visible, coverLoaded {
+                coverVisible()
             }
         }
         .onChange(of: isReordering) { _, active in
             if !active {
-                coverVisible = withinCoverWindow
+                updateMount(visibility.nearby)
             }
+        }
+    }
+
+    private func updateMount(_ shouldMount: Bool) {
+        guard mounted != shouldMount else { return }
+        mounted = shouldMount
+        if !shouldMount, !keepsTransitionSource {
+            coverLoaded = false
         }
     }
 
@@ -950,11 +1023,17 @@ private struct AlbumCard: View {
 
     private var cover: some View {
         AlbumCover(album: album, media: media, persistence: persistence, scope: scope,
-                   requestWidth: coverWidth, isActive: coverVisible)
-            .clipShape(.rect(cornerRadius: DesignMetrics.defaultCornerRadius + (12 - DesignMetrics.defaultCornerRadius) * progress))
-            .matchedTransitionSource(id: album.id, in: transitionNamespace) { source in
-                source.clipShape(.rect(cornerRadius: DesignMetrics.defaultCornerRadius + (12 - DesignMetrics.defaultCornerRadius) * progress))
+                   requestWidth: coverWidth, cachedRevision: coverRevision)
+        {
+            coverLoaded = true
+            if visibility.visible {
+                coverVisible()
             }
+        }
+        .clipShape(.rect(cornerRadius: DesignMetrics.defaultCornerRadius + (12 - DesignMetrics.defaultCornerRadius) * progress))
+        .matchedTransitionSource(id: album.id, in: transitionNamespace) { source in
+            source.clipShape(.rect(cornerRadius: DesignMetrics.defaultCornerRadius + (12 - DesignMetrics.defaultCornerRadius) * progress))
+        }
     }
 }
 
@@ -966,19 +1045,20 @@ private struct AlbumCover: View {
     let persistence: (any AlbumCatalogStoring)?
     let scope: MediaAccountScope?
     let requestWidth: CGFloat
-    let isActive: Bool
+    let cachedRevision: Date?
+    let didLoad: () -> Void
     @State private var revision: Date?
 
     var body: some View {
         GeometryReader { geometry in
-            let descriptor = (isActive ? album.thumbnailAssetID : nil).flatMap { id in
-                revision.map { MediaRequestDescriptor(assetID: id, updatedAt: $0, derivative: .thumbnail,
-                                                      targetPixels: .init(width: Int(max(1, requestWidth) * displayScale),
-                                                                          height: Int(max(1, requestWidth * 0.75) * displayScale))) }
+            let descriptor = album.thumbnailAssetID.flatMap { id in
+                (cachedRevision ?? revision).map {
+                    AlbumReflowMetrics.coverDescriptor(assetID: id, revision: $0, width: requestWidth, scale: displayScale)
+                }
             }
             Group {
                 if let descriptor {
-                    ImmichThumbnail(descriptor: descriptor, media: media, animatesImageLoading: false)
+                    ImmichThumbnail(descriptor: descriptor, media: media, animatesImageLoading: false) { _ in didLoad() }
                 } else {
                     Rectangle().fill(.quaternary)
                         .overlay { Image(systemName: "rectangle.stack").foregroundStyle(.secondary) }
@@ -988,8 +1068,8 @@ private struct AlbumCover: View {
             .clipped()
         }
         .accessibilityHidden(true)
-        .task(id: "\(album.thumbnailAssetID ?? "none")|\(album.catalogRevision)|\(isActive)") {
-            guard isActive, let assetID = album.thumbnailAssetID else { return }
+        .task(id: "\(album.thumbnailAssetID ?? "none")|\(album.catalogRevision)|\(String(describing: cachedRevision))") {
+            guard cachedRevision == nil, let assetID = album.thumbnailAssetID else { return }
             let canonical: Date? = if let persistence, let scope {
                 try? await persistence.albumCoverRevision(scope: scope, albumID: album.id, assetID: assetID)
             } else {
@@ -1061,7 +1141,14 @@ private struct AlbumDetailView: View {
         let reader = AlbumTimelineReader(source: source, albumID: album.id, revision: album.catalogRevision,
                                          persistence: persistence, scope: scope)
         _reader = State(initialValue: reader)
-        _store = State(initialValue: PhotosTimelineStore(reader: reader))
+        _store = State(initialValue: PhotosTimelineStore(reader: reader, openingSource: .init(label: "album") {
+            guard let scope, let window = try await reader.openingWindow(limit: $0),
+                  !Task.isCancelled, media.scope == scope else { return nil }
+            media.registerWarmedThumbnails(
+                LibraryThumbnailCache.projectIndexedThumbnails(records: window.thumbnails, scope: scope), replacing: false
+            )
+            return window.snapshot
+        }))
     }
 
     var body: some View {

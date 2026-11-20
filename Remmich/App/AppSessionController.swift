@@ -72,6 +72,7 @@ final class AppSessionController {
     @ObservationIgnored var backgroundSyncInvalidated: (() -> Void)?
     private var preparationTask: Task<Void, Never>?
     private var foregroundPreparationTask: Task<Void, Never>?
+    @ObservationIgnored private var videoOpeningTask: Task<Void, Never>?
     private var preparationGeneration = 0
     private var didPrepareSession = false
     private(set) var foregroundResourcesReady = false
@@ -163,6 +164,12 @@ final class AppSessionController {
         self.endpointNormalizer = endpointNormalizer
         self.networkMonitoringEnabled = networkMonitoringEnabled
         self.pathChangeDebounce = pathChangeDebounce
+        photos.openingHistoryRequested = { [weak self] in
+            await self?.requestOpeningPhotosHistory()
+        }
+        videos.openingHistoryRequested = { [weak self] in
+            await self?.requestOpeningPhotosHistory()
+        }
         libraryIndex.acceptedBootstrapDidChange = { [weak self] bootstrap in
             guard let self else { return }
             photos.bootstrap(bootstrap.photos)
@@ -187,14 +194,15 @@ final class AppSessionController {
         }
         if !foregroundResourcesReady, case let .signedIn(session) = state {
             let generation = preparationGeneration
+            media.beginStartupTrace(at: .now)
             let task = Task {
                 await persistentAssetDetails.configure(session: session)
                 guard preparationIsCurrent(generation), case let .signedIn(current) = state, current == session else { return }
+                media.configure(session: session, activeEndpoint: activeRoute?.endpoint)
+                await bootstrapLocalLibrary(session: session, showOpeningWindow: true)
+                guard preparationIsCurrent(generation), case let .signedIn(updated) = state, updated == session else { return }
                 locations.configure(scope: MediaAccountScope(session: session))
                 locations.configureMap(session: session, endpoint: activeRoute?.endpoint)
-                media.configure(session: session, activeEndpoint: activeRoute?.endpoint)
-                await bootstrapLocalLibrary(session: session)
-                guard preparationIsCurrent(generation), case let .signedIn(updated) = state, updated == session else { return }
                 foregroundResourcesReady = true
             }
             foregroundPreparationTask = task
@@ -294,7 +302,6 @@ final class AppSessionController {
             if !inBackground {
                 await persistentAssetDetails.configure(session: session)
                 guard preparationIsCurrent(generation) else { return }
-                locations.configure(scope: MediaAccountScope(session: session))
                 media.configure(session: session, activeEndpoint: nil)
                 Self.startupLogger.info(
                     "Media pipeline configured elapsedMs=\(Self.elapsedMilliseconds(since: startupStartedAt))"
@@ -315,8 +322,11 @@ final class AppSessionController {
             } else {
                 let bootstrap = Task { @MainActor in
                     guard preparationIsCurrent(generation), case let .signedIn(current) = state, current == session else { return }
-                    await bootstrapLocalLibrary(session: session)
+                    await bootstrapLocalLibrary(session: session, showOpeningWindow: true)
                     guard preparationIsCurrent(generation), case let .signedIn(current) = state, current == session else { return }
+                    // Places configuration shares the SQLite actor with the cached timeline.
+                    locations.configure(scope: MediaAccountScope(session: session))
+                    locations.configureMap(session: session, endpoint: activeRoute?.endpoint)
                     foregroundResourcesReady = true
                     Self.startupLogger.info(
                         "Local library bootstrap published elapsedMs=\(Self.elapsedMilliseconds(since: startupStartedAt))"
@@ -414,7 +424,6 @@ final class AppSessionController {
             validatedNetworkPathSignature = lastNetworkPathSignature
             await persistentAssetDetails.configure(session: session)
             guard preparationIsCurrent(generation) else { return }
-            locations.configure(scope: MediaAccountScope(session: session))
             media.configure(session: session, activeEndpoint: session.apiURL)
             let routeChanged = await configureTimelines(
                 session: session,
@@ -423,6 +432,8 @@ final class AppSessionController {
             guard preparationIsCurrent(generation) else { return }
             await bootstrapLocalLibrary(session: session)
             guard preparationIsCurrent(generation) else { return }
+            locations.configure(scope: MediaAccountScope(session: session))
+            locations.configureMap(session: session, endpoint: activeRoute?.endpoint)
             foregroundResourcesReady = true
             if routeChanged {
                 photos.routeDidChange(isReachable: true)
@@ -1044,19 +1055,103 @@ final class AppSessionController {
         preparationTask = nil
         foregroundPreparationTask?.cancel()
         foregroundPreparationTask = nil
+        videoOpeningTask?.cancel()
+        videoOpeningTask = nil
+        media.resumeOpeningPhotosHydration()
         didPrepareSession = true
         foregroundResourcesReady = false
     }
 
-    private func bootstrapLocalLibrary(session: AccountSession) async {
+    private func bootstrapLocalLibrary(session: AccountSession, showOpeningWindow: Bool = false) async {
         let generation = preparationGeneration
-        guard !ProcessInfo.processInfo.arguments.contains("-ui-testing-signed-in"),
+        guard !ProcessInfo.processInfo.arguments.contains("-ui-testing-signed-in") else { return }
+        if showOpeningWindow,
+           let opening = await libraryIndex.prepareOpeningTimeline(session: session, limit: TimelineGridOrder.openingWindowLimit()),
+           preparationIsCurrent(generation)
+        {
+            let events = media.openingPhotosEvents()
+            photos.bootstrap(opening, openingWindow: true)
+            foregroundResourcesReady = true
+            // Wait for a displayed tile before asking SQLite for the full catalog.
+            // A timeout also lets startup finish if the scene stops displaying Photos.
+            await TimelineOpeningWindow.waitForDisplay(events)
+            guard preparationIsCurrent(generation) else { return }
+            media.resumeOpeningPhotosHydration()
+            await finishOpeningPhotosHistory(session: session, generation: generation)
+            return
+        }
+        guard preparationIsCurrent(generation),
               let bootstrap = await libraryIndex.bootstrap(session: session),
               preparationIsCurrent(generation)
         else { return }
         photos.bootstrap(bootstrap.photos)
         videos.bootstrap(bootstrap.videos)
         libraryIndex.completeBootstrapGroupedCatalogs(bootstrap)
+    }
+
+    func prepareVideosOpening() async {
+        if let videoOpeningTask {
+            await videoOpeningTask.value
+            return
+        }
+        guard !Task.isCancelled, isAppInForeground, videos.loadState == .idle,
+              case let .signedIn(session) = state else { return }
+        let generation = preparationGeneration
+        let task = Task(priority: .utility) {
+            let opening = await libraryIndex.prepareOpeningTimeline(session: session, limit: TimelineGridOrder.openingWindowLimit(),
+                                                                    mediaScope: .videos)
+            guard let opening, preparationIsCurrent(generation), isAppInForeground, videos.loadState == .idle else { return }
+            videos.bootstrap(opening, openingWindow: true)
+        }
+        videoOpeningTask = task
+        await task.value
+        if generation == preparationGeneration {
+            videoOpeningTask = nil
+        }
+    }
+
+    func openVideosTimeline() async {
+        let generation = preparationGeneration
+        if videos.loadState == .idle, photos.isOpeningWindow, let foregroundPreparationTask {
+            await prepareVideosOpening()
+            guard preparationIsCurrent(generation) else { return }
+            if videos.loadState == .idle {
+                media.resumeOpeningPhotosHydration()
+                await foregroundPreparationTask.value
+            }
+        }
+        guard preparationIsCurrent(generation) else { return }
+        if videos.isOpeningWindow {
+            await TimelineOpeningWindow.waitForDisplay(videos.openingDisplayEvents())
+            guard preparationIsCurrent(generation) else { return }
+            videos.resumeOpeningHistory()
+            media.resumeOpeningPhotosHydration()
+            return
+        }
+        await videos.load()
+    }
+
+    private func requestOpeningPhotosHistory() async {
+        media.resumeOpeningPhotosHydration()
+        if let foregroundPreparationTask {
+            await foregroundPreparationTask.value
+            return
+        }
+        guard photos.isOpeningWindow || videos.isOpeningWindow, case let .signedIn(session) = state else { return }
+        let generation = preparationGeneration
+        let task = Task { await finishOpeningPhotosHistory(session: session, generation: generation) }
+        foregroundPreparationTask = task
+        await task.value
+        if generation == preparationGeneration {
+            foregroundPreparationTask = nil
+        }
+    }
+
+    private func finishOpeningPhotosHistory(session: AccountSession, generation: Int) async {
+        let bootstrap = await libraryIndex.bootstrap(session: session, completesOpeningWindow: true)
+        guard preparationIsCurrent(generation), bootstrap == nil else { return }
+        photos.openingHistoryLoadFailed()
+        videos.openingHistoryLoadFailed()
     }
 
     private static func message(for error: Error) -> String {

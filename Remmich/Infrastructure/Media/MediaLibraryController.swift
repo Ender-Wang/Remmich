@@ -44,6 +44,12 @@ final class MediaLibraryController {
     private var activeResidencyPreloadGeneration: Int?
     private var cumulativePreloadCancellationCount = 0
     private var startupTraceStartedAt: Date?
+    @ObservationIgnored private var openingPhotosSignal: AsyncStream<Void>.Continuation?
+    private(set) var awaitsFirstVisibleStartupPhoto = false
+    var hasShownStartupPhoto: Bool {
+        startupTraceStartedAt != nil && !awaitsFirstVisibleStartupPhoto
+    }
+
     private var didLogShellPresentation = false
     private var timelinePresentationStartedAt: Date?
     private var didLogFirstTimelineThumbnail = false
@@ -138,10 +144,30 @@ final class MediaLibraryController {
     }
 
     func beginStartupTrace(at date: Date) {
+        resumeOpeningPhotosHydration()
+        awaitsFirstVisibleStartupPhoto = true
         startupTraceStartedAt = date
         didLogShellPresentation = false
         timelinePresentationStartedAt = nil
         didLogFirstTimelineThumbnail = false
+    }
+
+    func openingPhotosEvents() -> AsyncStream<Void> {
+        let (stream, continuation) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        openingPhotosSignal = continuation
+        return stream
+    }
+
+    func resumeOpeningPhotosHydration() {
+        openingPhotosSignal?.yield(())
+        openingPhotosSignal?.finish()
+        openingPhotosSignal = nil
+    }
+
+    func noteVisibleStartupPhoto() {
+        guard awaitsFirstVisibleStartupPhoto else { return }
+        awaitsFirstVisibleStartupPhoto = false
+        resumeOpeningPhotosHydration()
     }
 
     func logShellPresented() {
@@ -192,51 +218,13 @@ final class MediaLibraryController {
             )
             trace = pendingTrace
         }
-        if descriptor.derivative == .thumbnail,
-           let scope,
-           let fileURL = warmedThumbnailURLs[Self.warmedThumbnailKey(
-               assetID: descriptor.assetID,
-               revision: descriptor.updatedAt
-           )],
-           FileManager.default.fileExists(atPath: fileURL.path)
-        {
+        if let scope, let fileURL = managedThumbnailURL(for: descriptor) {
             if let trace {
                 Self.logger.info(
                     "First active thumbnail source resolved content=\(trace.name, privacy: .public) source=local elapsedMs=\(Self.elapsedMilliseconds(since: trace.startedAt))"
                 )
             }
-            let requestTrace = trace
-            var request = ImageRequest(
-                id: descriptor.cacheKey(in: scope),
-                data: {
-                    if let trace = requestTrace {
-                        Self.logger.info(
-                            "First active thumbnail file read started content=\(trace.name, privacy: .public) elapsedMs=\(Self.elapsedMilliseconds(since: trace.startedAt))"
-                        )
-                    }
-                    let data = try Data(contentsOf: fileURL)
-                    if let trace = requestTrace {
-                        Self.logger.info(
-                            "First active thumbnail file read finished content=\(trace.name, privacy: .public) bytes=\(data.count) elapsedMs=\(Self.elapsedMilliseconds(since: trace.startedAt))"
-                        )
-                    }
-                    return data
-                }
-            )
-            if let pixels = descriptor.targetPixels {
-                request.thumbnail = .init(
-                    size: .init(width: pixels.width, height: pixels.height),
-                    unit: .pixels,
-                    contentMode: .aspectFill
-                )
-            }
-            // The persistent thumbnail cache is the authoritative disk layer for
-            // warmed timeline assets. Keep Nuke's decoded memory cache, but do
-            // not perform a second disk-cache lookup/write for the same JPEG.
-            // Besides duplicating storage, DataCache reads update file metadata
-            // during the first visible batch and delay direct managed-file I/O.
-            request.options.insert(.disableDiskCache)
-            request.priority = priority
+            let request = managedThumbnailRequest(for: descriptor, scope: scope, fileURL: fileURL, priority: priority, trace: trace)
             registerExportRequest(request, descriptor: descriptor)
             return request
         }
@@ -572,11 +560,71 @@ final class MediaLibraryController {
         return request
     }
 
+    private func registeredThumbnailURL(for descriptor: MediaRequestDescriptor) -> URL? {
+        guard descriptor.derivative == .thumbnail else { return nil }
+        return warmedThumbnailURLs[Self.warmedThumbnailKey(assetID: descriptor.assetID, revision: descriptor.updatedAt)]
+    }
+
+    private func managedThumbnailURL(for descriptor: MediaRequestDescriptor) -> URL? {
+        guard let url = registeredThumbnailURL(for: descriptor),
+              FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return url
+    }
+
+    private func managedThumbnailRequest(for descriptor: MediaRequestDescriptor, scope: MediaAccountScope, fileURL: URL,
+                                         priority: ImageRequest.Priority, trace: TimelineContentTrace? = nil) -> ImageRequest
+    {
+        var request = ImageRequest(
+            id: descriptor.cacheKey(in: scope),
+            data: {
+                if let trace {
+                    Self.logger.info(
+                        "First active thumbnail file read started content=\(trace.name, privacy: .public) elapsedMs=\(Self.elapsedMilliseconds(since: trace.startedAt))"
+                    )
+                }
+                let data = try Data(contentsOf: fileURL)
+                if let trace {
+                    Self.logger.info(
+                        "First active thumbnail file read finished content=\(trace.name, privacy: .public) bytes=\(data.count) elapsedMs=\(Self.elapsedMilliseconds(since: trace.startedAt))"
+                    )
+                }
+                return data
+            },
+            priority: priority,
+            // Keep decoded memory caching. The managed file is the disk copy.
+            options: [.disableDiskCache]
+        )
+        if let pixels = descriptor.targetPixels {
+            request.thumbnail = .init(size: .init(width: pixels.width, height: pixels.height), unit: .pixels, contentMode: .aspectFill)
+        }
+        return request
+    }
+
+    func prefetchManagedThumbnails(_ descriptors: [MediaRequestDescriptor]) async {
+        guard let prefetcher, let scope else { return }
+        let candidates = descriptors.compactMap { descriptor in
+            registeredThumbnailURL(for: descriptor).map { (descriptor, $0) }
+        }
+        let available = await Self.existingThumbnailFiles(candidates)
+        guard !Task.isCancelled, self.scope == scope, self.prefetcher === prefetcher else { return }
+        prefetcher.priority = .normal
+        let requests = available.map { descriptor, fileURL in
+            managedThumbnailRequest(for: descriptor, scope: scope, fileURL: fileURL, priority: .normal)
+        }
+        prefetcher.startPrefetching(with: requests)
+    }
+
+    @concurrent
+    private nonisolated static func existingThumbnailFiles(
+        _ candidates: [(MediaRequestDescriptor, URL)]
+    ) async -> [(MediaRequestDescriptor, URL)] {
+        candidates.filter { FileManager.default.fileExists(atPath: $0.1.path) }
+    }
+
     func updatePrefetch(_ descriptors: [MediaRequestDescriptor]) {
         prefetcher?.stopPrefetching()
-        let requests = descriptors.compactMap {
-            imageRequest(for: $0, priority: .low)
-        }
+        prefetcher?.priority = .low
+        let requests = descriptors.compactMap { imageRequest(for: $0, priority: .low) }
         prefetcher?.startPrefetching(with: requests)
     }
 
@@ -629,10 +677,15 @@ final class MediaLibraryController {
         viewerPrefetchRequests.removeAll()
     }
 
-    func registerWarmedThumbnails(_ thumbnails: [LibraryThumbnailCache.AvailableThumbnail]) {
-        warmedThumbnailURLs = Dictionary(uniqueKeysWithValues: thumbnails.map {
+    func registerWarmedThumbnails(_ thumbnails: [LibraryThumbnailCache.AvailableThumbnail], replacing: Bool = true) {
+        let urls = Dictionary(uniqueKeysWithValues: thumbnails.map {
             ("\($0.assetID)|\($0.sourceRevision)", $0.fileURL)
         })
+        if replacing {
+            warmedThumbnailURLs = urls
+        } else {
+            warmedThumbnailURLs.merge(urls) { _, new in new }
+        }
         thumbnailInventoryRevision &+= 1
     }
 
@@ -836,6 +889,7 @@ final class MediaLibraryController {
     }
 
     func clearAll() {
+        resumeOpeningPhotosHydration()
         exports.reset()
         exportManifestSave?.cancel()
         exportManifestLoad?.cancel()

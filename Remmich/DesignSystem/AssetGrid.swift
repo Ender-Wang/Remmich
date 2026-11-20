@@ -231,6 +231,22 @@ private struct TimelineGridDisplaySlot: Identifiable {
 }
 
 nonisolated enum TimelineGridOrder {
+    static let openingScreenCount = 2
+
+    @MainActor static func openingWindowLimit() -> Int {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        guard let scene = scenes.first(where: { $0.activationState == .foregroundActive })
+            ?? scenes.first(where: { $0.activationState == .foregroundInactive })
+        else { return 120 }
+        let size = scene.keyWindow?.bounds.size ?? scene.effectiveGeometry.coordinateSpace.bounds.size
+        guard size.width > 0, size.height > 0 else { return 120 }
+        let columns = timelineColumnCount(
+            availableSize: size, minimumLandscapeColumnWidth: scene.traitCollection.userInterfaceIdiom == .phone ? 88 : 120
+        )
+        let rows = Int(ceil(size.height * CGFloat(columns) / size.width))
+        return min(240, max(24, openingScreenCount * rows * columns))
+    }
+
     static func contentHeight(itemCount: Int, columns: Int, width: CGFloat, spacing: CGFloat) -> CGFloat {
         guard itemCount > 0, columns > 0, width > 0 else { return 0 }
         let rows = (itemCount + columns - 1) / columns
@@ -597,14 +613,8 @@ struct TimelineAssetThumbnail: View {
     var body: some View {
         GeometryReader { proxy in
             let requestPoints = requestSide ?? max(proxy.size.width, proxy.size.height)
-            let requestPixels = Self.targetPixels(for: requestPoints, scale: displayScale)
             let progress = resolvedNaturalAspectProgress
-            let descriptor = MediaRequestDescriptor(
-                assetID: asset.id,
-                updatedAt: asset.thumbnailRevision,
-                derivative: .thumbnail,
-                targetPixels: .init(width: requestPixels, height: requestPixels)
-            )
+            let descriptor = Self.thumbnailDescriptor(for: asset, points: requestPoints, scale: displayScale)
             ImmichThumbnail(
                 descriptor: descriptor,
                 media: media,
@@ -722,8 +732,10 @@ struct TimelineAssetThumbnail: View {
         return values.joined(separator: ", ")
     }
 
-    private static func targetPixels(for points: CGFloat, scale: CGFloat) -> Int {
-        min(2048, max(1, Int((points * scale).rounded(.up))))
+    nonisolated static func thumbnailDescriptor(for asset: TimelineAssetSummary, points: CGFloat, scale: CGFloat) -> MediaRequestDescriptor {
+        let pixels = min(2048, max(1, Int((points * scale).rounded(.up))))
+        return .init(assetID: asset.id, updatedAt: asset.thumbnailRevision, derivative: .thumbnail,
+                     targetPixels: .init(width: pixels, height: pixels))
     }
 }
 

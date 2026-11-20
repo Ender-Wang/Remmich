@@ -65,6 +65,24 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
                             fetchedAt: state.fetchedAt, groupedCatalogs: state.groupedCatalogs)
     }
 
+    func albumOpeningWindow(scope: MediaAccountScope, albumID: String, limit: Int) throws -> AlbumOpeningWindow? {
+        guard limit > 0, try canRead(scope) else { return nil }
+        let db = try preparedDatabase(scope: scope)
+        let rows = try db.query("""
+        SELECT m.bucket_key,a.payload FROM album_assets m
+        JOIN album_catalogs c ON c.scope=m.scope AND c.album_id=m.album_id
+        JOIN catalog_assets a ON a.scope=m.scope AND a.asset_id=m.asset_id
+        WHERE m.scope=? AND m.album_id=? ORDER BY m.bucket_key DESC,m.position ASC,m.asset_id ASC
+        LIMIT ?
+        """, [.text(scope.cacheNamespace), .text(albumID), .int(min(240, limit))]) {
+            try (TimelineBucketID(rawValue: $0.text(0)), Self.decode(TimelineAssetSummary.self, from: $0.text(1)))
+        }
+        let buckets = Dictionary(grouping: rows, by: \.0).mapValues { $0.map(\.1) }
+        guard let snapshot = TimelineOpeningWindow.snapshot(generation: 0, assetsByBucket: buckets) else { return nil }
+        let thumbnails = try readOpeningThumbnails(assetIDs: rows.map(\.1.id), scope: scope, database: db)
+        return AlbumOpeningWindow(snapshot: snapshot, thumbnails: thumbnails)
+    }
+
     func albumCoverRevision(scope: MediaAccountScope, albumID _: String, assetID: String) throws -> Date? {
         guard try canRead(scope) else { return nil }
         let db = try preparedDatabase(scope: scope)
@@ -111,6 +129,52 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
         guard try db.scalarInt64("SELECT COUNT(*) FROM album_lists WHERE scope=?", [.text(scope.cacheNamespace)]) == 1 else { return nil }
         return try db.query("SELECT payload FROM albums WHERE scope=? ORDER BY position", [.text(scope.cacheNamespace)]) {
             try Self.decode(AlbumSummary.self, from: $0.text(0))
+        }
+    }
+
+    func cachedAlbumOverview(scope: MediaAccountScope) throws -> CachedAlbumOverview? {
+        guard try canRead(scope) else { return nil }
+        let db = try preparedDatabase(scope: scope)
+        let namespace = SQLiteValue.text(scope.cacheNamespace)
+        guard try db.scalarInt64("SELECT COUNT(*) FROM album_lists WHERE scope=?", [namespace]) == 1 else { return nil }
+        let rows = try db.query("""
+        SELECT a.payload, cover.revision
+        FROM albums a LEFT JOIN catalog_assets cover
+          ON cover.scope=a.scope AND cover.asset_id=json_extract(a.payload, '$.thumbnailAssetID')
+        WHERE a.scope=? ORDER BY a.position
+        """, [namespace]) {
+            try (Self.decode(AlbumSummary.self, from: $0.text(0)), $0.optionalDate(1))
+        }
+        let revisions = rows.reduce(into: [String: Date]()) { result, row in
+            if let revision = row.1 {
+                result[row.0.id] = revision
+            }
+        }
+        return CachedAlbumOverview(albums: rows.map(\.0), coverRevisions: revisions)
+    }
+
+    func albumCoverThumbnails(scope: MediaAccountScope, assetIDs: [String]) throws -> [LibraryIndexDerivativeRecord] {
+        guard !assetIDs.isEmpty, try canRead(scope) else { return [] }
+        return try readOpeningThumbnails(assetIDs: assetIDs, scope: scope, database: preparedDatabase(scope: scope))
+    }
+
+    func albumIndexSummary(scope: MediaAccountScope) throws -> AlbumIndexSummary? {
+        guard try canRead(scope) else { return nil }
+        let db = try preparedDatabase(scope: scope)
+        let namespace = SQLiteValue.text(scope.cacheNamespace)
+        guard try db.scalarInt64("SELECT COUNT(*) FROM album_lists WHERE scope=?", [namespace]) == 1 else { return nil }
+        return try db.queryOne("""
+        SELECT COUNT(*), COUNT(c.album_id),
+               (SELECT COUNT(*) FROM album_assets m
+                JOIN album_catalogs saved ON saved.scope=m.scope AND saved.album_id=m.album_id
+                WHERE m.scope=?),
+               COALESCE(SUM(json_extract(a.payload, '$.assetCount')), 0),
+               COUNT(c.album_id) = COUNT(CASE WHEN json_type(c.payload, '$.groupedCatalogs') = 'object' THEN 1 END)
+        FROM albums a LEFT JOIN album_catalogs c ON c.scope=a.scope AND c.album_id=a.album_id
+        WHERE a.scope=?
+        """, [namespace, namespace]) {
+            AlbumIndexSummary(albumCount: $0.int(0), indexedAlbumCount: $0.int(1), membershipCount: $0.int(2),
+                              totalItemCount: $0.int(3), groupsPrepared: $0.bool(4))
         }
     }
 
@@ -522,6 +586,38 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
             groups: readGroups(scope: scope, generation: generation, database: database),
             derivatives: readDerivatives(scope: scope, database: database),
             syncState: readSyncState(scope: scope, database: database)
+        )
+    }
+
+    func openingTimelineWindow(scope: MediaAccountScope, limit: Int,
+                               mediaScope: LibraryIndexMediaScope = .photos) throws -> TimelineIndexOpeningWindow?
+    {
+        guard limit > 0, try canRead(scope) else { return nil }
+        let database = try preparedDatabase(scope: scope)
+        let namespace = SQLiteValue.text(scope.cacheNamespace)
+        guard let generation = try database.scalarInt64(
+            "SELECT accepted_generation FROM sync_state WHERE scope = ?", [namespace]
+        ) else { return nil }
+        let assets = try readAssets(scope: scope, generation: generation, database: database,
+                                    openingLimit: min(limit, 240), videosOnly: mediaScope == .videos)
+        guard !assets.isEmpty else { return nil }
+        let thumbnails = try readOpeningThumbnails(assetIDs: assets.map(\.id), scope: scope, database: database)
+        return TimelineIndexOpeningWindow(generation: generation, assets: assets, thumbnails: thumbnails)
+    }
+
+    private func readOpeningThumbnails(assetIDs: [String], scope: MediaAccountScope, database: SQLiteConnection) throws -> [LibraryIndexDerivativeRecord] {
+        let placeholders = Array(repeating: "?", count: assetIDs.count).joined(separator: ",")
+        return try database.query(
+            """
+            SELECT asset_id, derivative, pixel_width, pixel_height, source_revision,
+                   relative_file_key, byte_count, digest, is_verified, last_accessed_at, completed_at
+            FROM cache.derivatives
+            WHERE scope = ? AND derivative = 'thumbnail' AND is_verified = 1
+              AND pixel_width = 0 AND pixel_height = 0
+              AND asset_id IN (\(placeholders))
+            """,
+            [.text(scope.cacheNamespace)] + assetIDs.map { .text($0) },
+            map: Self.derivativeRecord
         )
     }
 
@@ -1826,20 +1922,28 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
     private func readAssets(
         scope: MediaAccountScope,
         generation: Int64,
-        database: SQLiteConnection
+        database: SQLiteConnection,
+        openingLimit: Int? = nil,
+        videosOnly: Bool = false
     ) throws -> [LibraryIndexAssetRecord] {
-        try database.query(
+        let source = openingLimit == nil ? "assets" : "assets INDEXED BY assets_scope_day"
+        let kindFilter = videosOnly ? "AND kind = 'video'" : ""
+        let order = openingLimit == nil
+            ? "ORDER BY captured_at ASC, asset_id ASC"
+            : "AND visibility = 'timeline' AND is_trashed = 0 \(kindFilter) ORDER BY day_key DESC, captured_at DESC, asset_id DESC LIMIT ?"
+        let arguments: [SQLiteValue] = [.text(scope.cacheNamespace), .int64(generation)] + (openingLimit.map { [.int($0)] } ?? [])
+        return try database.query(
             """
             SELECT asset_id, owner_id, kind, live_photo_video_id, captured_at,
                    uploaded_at, updated_at, checksum, width, height, aspect_ratio,
                    duration_ms, is_favorite, visibility, is_trashed, is_offline,
                    bucket_key, day_key, week_key, month_key, year_key,
                    local_offset_hours, stack_id, stack_asset_count, projection_type, thumbhash
-            FROM assets
+            FROM \(source)
             WHERE scope = ? AND generation = ? AND tombstone = 0
-            ORDER BY captured_at ASC, asset_id ASC
+            \(order)
             """,
-            [.text(scope.cacheNamespace), .int64(generation)]
+            arguments
         ) { row in
             LibraryIndexAssetRecord(
                 id: row.text(0), ownerID: row.text(1),
@@ -1896,19 +2000,22 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
             FROM cache.derivatives WHERE scope = ?
             ORDER BY asset_id, derivative, pixel_width, pixel_height
             """,
-            [.text(scope.cacheNamespace)]
-        ) { row in
-            let width = row.int(2)
-            let height = row.int(3)
-            return LibraryIndexDerivativeRecord(
-                assetID: row.text(0),
-                derivative: MediaDerivative(rawValue: row.text(1)) ?? .thumbnail,
-                pixelSize: width > 0 && height > 0 ? .init(width: width, height: height) : nil,
-                sourceRevision: row.text(4), relativeFileKey: row.text(5),
-                byteCount: row.int64(6), digest: row.text(7), isVerified: row.bool(8),
-                lastAccessedAt: row.date(9), completedAt: row.date(10)
-            )
-        }
+            [.text(scope.cacheNamespace)],
+            map: Self.derivativeRecord
+        )
+    }
+
+    private static func derivativeRecord(_ row: SQLiteRow) -> LibraryIndexDerivativeRecord {
+        let width = row.int(2)
+        let height = row.int(3)
+        return LibraryIndexDerivativeRecord(
+            assetID: row.text(0),
+            derivative: MediaDerivative(rawValue: row.text(1)) ?? .thumbnail,
+            pixelSize: width > 0 && height > 0 ? .init(width: width, height: height) : nil,
+            sourceRevision: row.text(4), relativeFileKey: row.text(5),
+            byteCount: row.int64(6), digest: row.text(7), isVerified: row.bool(8),
+            lastAccessedAt: row.date(9), completedAt: row.date(10)
+        )
     }
 
     private func readSyncState(

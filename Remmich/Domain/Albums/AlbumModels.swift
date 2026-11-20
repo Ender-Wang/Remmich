@@ -56,11 +56,33 @@ nonisolated struct AlbumCatalog: Codable, Sendable {
     }
 }
 
+nonisolated struct AlbumIndexSummary: Sendable {
+    let albumCount: Int
+    let indexedAlbumCount: Int
+    let membershipCount: Int
+    let totalItemCount: Int
+    let groupsPrepared: Bool
+}
+
+nonisolated struct AlbumOpeningWindow: Sendable {
+    let snapshot: TimelineBootstrapSnapshot
+    let thumbnails: [LibraryIndexDerivativeRecord]
+}
+
+nonisolated struct CachedAlbumOverview: Sendable {
+    let albums: [AlbumSummary]
+    let coverRevisions: [String: Date]
+}
+
 nonisolated protocol AlbumCatalogStoring: Sendable {
     func albumCatalog(scope: MediaAccountScope, albumID: String) async throws -> AlbumCatalog?
+    func albumOpeningWindow(scope: MediaAccountScope, albumID: String, limit: Int) async throws -> AlbumOpeningWindow?
     func saveAlbumCatalog(_ catalog: AlbumCatalog, scope: MediaAccountScope, albumID: String) async throws
     func albumList(scope: MediaAccountScope) async throws -> [AlbumSummary]?
+    func cachedAlbumOverview(scope: MediaAccountScope) async throws -> CachedAlbumOverview?
+    func albumCoverThumbnails(scope: MediaAccountScope, assetIDs: [String]) async throws -> [LibraryIndexDerivativeRecord]
     func saveAlbumList(_ albums: [AlbumSummary], scope: MediaAccountScope) async throws
+    func albumIndexSummary(scope: MediaAccountScope) async throws -> AlbumIndexSummary?
     func albumStorageStatistics(scope: MediaAccountScope, refresh: Bool) async throws -> FeatureIndexStorage?
     func albumCoverRevision(scope: MediaAccountScope, albumID: String, assetID: String) async throws -> Date?
 }
@@ -170,6 +192,11 @@ actor AlbumTimelineReader: CompleteTimelineCatalogReading {
         scoped.includesStacks = false
         scoped.includesPartners = false
         return scoped
+    }
+
+    func openingWindow(limit: Int) async throws -> AlbumOpeningWindow? {
+        guard let persistence, let scope else { return nil }
+        return try await persistence.albumOpeningWindow(scope: scope, albumID: albumID, limit: limit)
     }
 
     func bucketSummaries(query: TimelineQuery) async throws -> [TimelineBucketSummary] {

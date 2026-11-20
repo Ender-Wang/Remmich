@@ -89,6 +89,12 @@ actor LibraryThumbnailCache {
     }
 
     private let rootURL: URL
+    private nonisolated static var defaultRootURL: URL {
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        return caches.appending(path: "RemmichDerivatives", directoryHint: .isDirectory)
+    }
+
     private let store: any LibraryIndexStoring
     private let assetDetails: (any AssetDetailReading)?
     private let transfers: LibraryTransferQueue?
@@ -109,13 +115,7 @@ actor LibraryThumbnailCache {
         self.store = store
         self.assetDetails = assetDetails
         self.transfers = transfers
-        if let rootURL {
-            self.rootURL = rootURL
-        } else {
-            let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
-                ?? FileManager.default.temporaryDirectory
-            self.rootURL = caches.appending(path: "RemmichDerivatives", directoryHint: .isDirectory)
-        }
+        self.rootURL = rootURL ?? Self.defaultRootURL
     }
 
     func warm(
@@ -543,12 +543,29 @@ actor LibraryThumbnailCache {
         from snapshot: LibraryIndexSnapshot,
         scope: MediaAccountScope
     ) -> [AvailableThumbnail] {
+        indexedThumbnails(records: snapshot.derivatives, scope: scope)
+    }
+
+    func indexedThumbnails(records: [LibraryIndexDerivativeRecord], scope: MediaAccountScope) -> [AvailableThumbnail] {
         let startedAt = ContinuousClock.now
-        let scopeDirectory = rootURL.appending(
+        let thumbnails = Self.projectIndexedThumbnails(records: records, scope: scope, rootURL: rootURL)
+        let components = startedAt.duration(to: .now).components
+        let elapsedMilliseconds = Int(components.seconds) * 1000
+            + Int(components.attoseconds / 1_000_000_000_000_000)
+        Self.logger.info(
+            "Indexed thumbnail manifest projected records=\(records.count) candidates=\(thumbnails.count) elapsedMs=\(elapsedMilliseconds)"
+        )
+        return thumbnails
+    }
+
+    nonisolated static func projectIndexedThumbnails(records: [LibraryIndexDerivativeRecord], scope: MediaAccountScope,
+                                                     rootURL: URL? = nil) -> [AvailableThumbnail]
+    {
+        let scopeDirectory = (rootURL ?? defaultRootURL).appending(
             path: scope.cacheNamespace,
             directoryHint: .isDirectory
         )
-        let thumbnails: [AvailableThumbnail] = snapshot.derivatives.compactMap { record in
+        return records.compactMap { record in
             guard record.derivative == .thumbnail, record.isVerified else { return nil }
             return .init(
                 assetID: record.assetID,
@@ -556,13 +573,6 @@ actor LibraryThumbnailCache {
                 fileURL: scopeDirectory.appending(path: record.relativeFileKey)
             )
         }
-        let components = startedAt.duration(to: .now).components
-        let elapsedMilliseconds = Int(components.seconds) * 1000
-            + Int(components.attoseconds / 1_000_000_000_000_000)
-        Self.logger.info(
-            "Indexed thumbnail manifest projected records=\(snapshot.derivatives.count) candidates=\(thumbnails.count) elapsedMs=\(elapsedMilliseconds)"
-        )
-        return thumbnails
     }
 
     private func promoteRebuiltThumbnails(

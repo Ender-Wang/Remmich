@@ -2,6 +2,17 @@ import Testing
 @testable import Remmich
 
 struct RootPageSwipePolicyTests {
+    @Test @MainActor func preparingOpeningTabsLeavesPhotosActive() {
+        let state = NativeTabContentActivationState()
+        state.prepare(.videos)
+        state.prepare(.albums)
+
+        #expect(state.activeDestination == .photos)
+        #expect(state.isHydrated(.videos))
+        #expect(state.isHydrated(.albums))
+        #expect(!state.isHydrated(.library))
+    }
+
     @Test func expandedProfileBlocksDraggingButRetainsAnimatedTabTaps() {
         #expect(!RootPageSwipePolicy.allowsPaging(viewerPresented: false, hasNavigationDestination: false,
                                                   librarySelected: true, libraryAccountPresented: true))
