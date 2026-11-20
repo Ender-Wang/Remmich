@@ -43,7 +43,7 @@ You can also follow [Build and run](CONTRIBUTING.md#build-and-run) to build from
 
 ## Features
 
-- **🔍 Timelines:** Separate Photos and Videos timelines with pinch-to-zoom, date cards and saved browsing positions.
+- **🔍 Timelines:** Separate Photos and Videos timelines with pinch-to-zoom, date cards and saved browsing positions. Cached timelines show about two screenfuls first, then load older items without moving the viewport. Videos and Albums prepare their first views while Photos loads its history.
 - **📸 Photos and memories:** Zoomable photos, Live Photo playback, filmstrip navigation and rotating memories.
 - **👆 Quick preview:** Long-press to preview, tap to open, and swipe down to dismiss with interruptible transitions.
 - **🗺️ Places and maps:** Photon landmarks, per-country language preferences and asset maps below Info.

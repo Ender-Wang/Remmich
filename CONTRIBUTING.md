@@ -136,6 +136,12 @@ New index writes persist capture-local day/week/month/year keys, including the I
 
 [TimelineCaptureDateFormattingTests](RemmichTests/TimelineCaptureDateFormattingTests.swift) and [CaptureTimePersistenceTests](RemmichTests/CaptureTimePersistenceTests.swift) cover offsets, DST, viewer consistency, new index writes, video fallback, and current-schema persistence.
 
+### Cached timeline startup
+
+On launch, the accepted local index supplies about two screenfuls of Photos and their cached thumbnails. Older Photos load after the opening tiles appear. Videos and Albums prepare their opening views alongside that work. If the cached opening data is unavailable, the loading logo stays visible until content or an empty or error state is ready.
+
+Videos and individual album timelines also use a small opening window. The timeline keeps the currently visible asset in place when the full history arrives and waits for active scrolling to settle before replacing the opening window. The Albums overview starts at the bottom with its header clearance measured from the window safe area, so attaching the prepared tab does not rebase the scroll offset. Re-tapping Albums returns to the same bottom position.
+
 ### Scoped timeline entry and transitions
 
 [PhotosRangeAssetsView](Remmich/Features/Photos/PhotosRangeViews.swift) opens date groups at the bottom, where the latest assets appear. It uses the native bottom anchor rather than scrolling to the card's rotating cover image. Removing the retained initial center-scroll request also prevents the underlying grid from shifting when the first viewer opens.
