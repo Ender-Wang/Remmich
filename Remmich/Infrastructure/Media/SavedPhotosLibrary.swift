@@ -134,6 +134,10 @@ final class SavedPhotosLibrary: NSObject {
         itemsByTimelineID[timelineID]
     }
 
+    func item(photosID: String) -> SavedPhoto? {
+        item(timelineID: "photos-local|\(photosID)")
+    }
+
     func cardCover(for request: CardCoverRequest) -> UIImage? {
         cardCover?.request == request ? cardCover?.image : nil
     }

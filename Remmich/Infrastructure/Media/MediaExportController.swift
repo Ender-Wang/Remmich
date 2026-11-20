@@ -55,6 +55,14 @@ final class MediaExportController: NSObject {
         journal.jobs
     }
 
+    var latestCompletedDownload: MediaExportJob? {
+        journal.jobs.lazy.filter { $0.stage == .completed }.max {
+            let first = $0.finishedAt ?? $0.startedAt
+            let second = $1.finishedAt ?? $1.startedAt
+            return first == second ? $0.id.uuidString < $1.id.uuidString : first < second
+        }
+    }
+
     func configure(media: MediaLibraryController, scope: MediaAccountScope) {
         self.media = media
         guard self.scope != scope else { return }

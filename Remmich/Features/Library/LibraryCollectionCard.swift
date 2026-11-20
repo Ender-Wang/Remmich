@@ -74,12 +74,30 @@ struct LibraryAssetCover: View {
     let assetID: String
     let revision: Date
     let media: MediaLibraryController
+    var savedPhoto: SavedPhoto?
+    @State private var savedImage: (request: SavedPhotosLibrary.CardCoverRequest, image: UIImage)?
+
     var body: some View {
         let pixels = LibraryCollectionCardMetrics.coverPixels(scale: scale)
-        ImmichThumbnail(descriptor: .init(assetID: assetID, updatedAt: revision, derivative: .thumbnail,
-                                          targetPixels: .init(width: Int(pixels.width), height: Int(pixels.height))),
-                        media: media)
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
+        let request = savedPhoto.map { SavedPhotosLibrary.CardCoverRequest(item: $0, pixels: pixels) }
+        Group {
+            if let savedImage, savedImage.request == request {
+                GeometryReader { geometry in
+                    Image(uiImage: savedImage.image).resizable().scaledToFill()
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        .clipped()
+                }
+            } else {
+                ImmichThumbnail(descriptor: .init(assetID: assetID, updatedAt: revision, derivative: .thumbnail,
+                                                  targetPixels: .init(width: Int(pixels.width), height: Int(pixels.height))),
+                                media: media)
+            }
+        }
+        .task(id: request) {
+            guard let savedPhoto, let request, savedImage?.request != request, let image = try? await SavedPhotosLibrary.image(savedPhoto, pixels: pixels), !Task.isCancelled else { return }
+            savedImage = (request, image)
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }

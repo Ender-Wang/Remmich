@@ -46,13 +46,22 @@ struct LibraryView: View {
                     VStack(alignment: .leading, spacing: 16) {
                         LibraryHubCardLayout {
                             if let exports {
+                                let newest = exports.latestCompletedDownload
                                 LibraryHubLink {
                                     DownloadsView(exports: exports)
                                         .libraryNavigationChrome()
                                 } label: {
                                     LibraryCollectionCard(title: "Downloads History",
                                                           detail: exports.activeCount > 0 ? "\(exports.activeCount) active" : "Save activity",
-                                                          symbol: "clock.arrow.circlepath", appearance: .glass) { EmptyView() }
+                                                          symbol: "clock.arrow.circlepath",
+                                                          appearance: newest == nil || media == nil ? .glass : .photographic)
+                                    {
+                                        if let newest, let media {
+                                            let saved = exports.journal.receipts.first { $0.key == newest.key }
+                                                .flatMap { savedPhotos.item(photosID: $0.photosID) }
+                                            LibraryAssetCover(assetID: newest.assetID, revision: newest.revision, media: media, savedPhoto: saved)
+                                        }
+                                    }
                                 }
                                 .buttonStyle(.plain)
                                 .accessibilityIdentifier("library-download-history")
