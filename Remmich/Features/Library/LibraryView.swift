@@ -102,7 +102,8 @@ struct LibraryView: View {
                                                          assetDetails: assetDetails, context: collectionNavigation, store: opening.people)
                                 }
                                 LibraryDirectoryCard(directory: .places, source: collectionSource, media: media,
-                                                     assetDetails: assetDetails, context: collectionNavigation, store: opening.places)
+                                                     assetDetails: assetDetails, context: collectionNavigation, store: opening.places,
+                                                     heatmap: opening.placesCover.image)
                                 if preferences?.sharedLinksEnabled == true {
                                     LibrarySharedLinksCard(source: collectionSource, media: media, assetDetails: assetDetails,
                                                            context: collectionNavigation, store: opening.links)

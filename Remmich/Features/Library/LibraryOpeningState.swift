@@ -39,6 +39,7 @@ final class LibraryOpeningState {
     let memories = LibraryMemoriesStore()
     let people = LibraryDirectoryStore()
     let places = LibraryDirectoryStore()
+    let placesCover = LibraryPlacesCover()
     let partners = LibraryDirectoryStore()
     let links = LibrarySharedLinksStore()
     let folders = LibraryFoldersStore()
@@ -112,7 +113,6 @@ final class LibraryOpeningState {
         if preferences?.peopleEnabled == true {
             jobs.append { await self.prepareDirectoryCover(.people, store: self.people, source: source, media: media, viewport: viewport) }
         }
-        jobs.append { await self.prepareDirectoryCover(.places, store: self.places, source: source, media: media, viewport: viewport) }
         if preferences?.sharedLinksEnabled == true {
             jobs.append {
                 await self.links.load(source: source)
@@ -254,7 +254,7 @@ final class LibraryOpeningState {
     private func prepareDirectoryCover(_ directory: LibraryDirectory, store: LibraryDirectoryStore, source: ImmichTimelineRepository,
                                        media: MediaLibraryController, viewport: LibraryOpeningViewport) async
     {
-        let limit = directory == .places ? 1 : (directory == .people ? 8 : 4)
+        let limit = directory == .people ? 8 : 4
         await store.loadNext(directory, source: source, openingLimit: limit)
         prefetch(store.imageRequests(directory: directory, media: media, scale: viewport.scale,
                                      cardWidth: viewport.cards.itemWidth, limit: limit, forHub: true, footerHeight: viewport.cardFooterHeight),

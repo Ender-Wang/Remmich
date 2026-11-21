@@ -443,14 +443,27 @@ struct LibraryIndexStoreTests {
         #expect(try await reader.cachedAssetDetail(id: detail.id, scope: scope) == nil)
     }
 
-    @Test func libraryCoverReadsUseScopedCameraMetadata() async throws {
+    @Test func libraryCoverReadsUseScopedCameraMetadataAndAcceptedGeotaggedAssets() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
         let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
         let scope = Self.scope(userID: "owner")
         let other = Self.scope(userID: "other")
+        let generation = try await store.beginGeneration(scope: scope)
+        let assets = [
+            Self.asset(id: "near", captureTime: 110),
+            Self.asset(id: "focus", captureTime: 120, kind: .video),
+            Self.asset(id: "archive", captureTime: 130, visibility: "archive"),
+            Self.asset(id: "partner", captureTime: 140, ownerID: "partner"),
+        ]
+        try await store.upsert(assets: assets, generation: generation, scope: scope)
+        _ = try await store.acceptGeneration(generation, watermark: nil, historicalCursor: nil, expectedAssetCount: assets.count, scope: scope)
+        let staging = try await store.beginGeneration(scope: scope)
+        try await store.upsert(assets: [Self.asset(id: "staging", captureTime: 150)], generation: staging, scope: scope)
+
         for (id, owner, longitude, model) in [
-            ("focus", scope, 179.8, "Z f"), ("near", scope, -179.9, " \n"), ("missing", other, 48.0, "Cam"),
+            ("focus", scope, 179.8, "Z f"), ("near", scope, -179.9, " \n"), ("archive", scope, 45.0, "Cam"),
+            ("partner", scope, 46.0, "Cam"), ("staging", scope, 47.0, "Cam"), ("missing", other, 48.0, "Cam"),
         ] {
             try await store.upsert(assetDetail: .init(
                 id: id, capturedAt: .now, originalFileName: "fixture.jpg", originalMimeType: nil,
@@ -462,6 +475,9 @@ struct LibraryIndexStoreTests {
 
         let flags = try await store.libraryCameraMetadata(assetIDs: ["near", "focus", "missing"], scope: scope)
         #expect(flags == ["near": false, "focus": true])
+        let places = try await store.libraryPlacesCoverCoordinates(scope: scope)
+        #expect(places.map(\.longitude) == [179.8, -179.9])
+        #expect(try await store.libraryPlacesCoverCoordinates(scope: other).isEmpty)
     }
 
     private static func scope(userID: String) -> MediaAccountScope {
@@ -478,11 +494,11 @@ struct LibraryIndexStoreTests {
 
     private static func asset(id: String, checksum: String = "checksum", captureTime: TimeInterval = 100,
                               visibility: String = "timeline", trashed: Bool = false,
-                              kind: LibraryIndexAssetKind = .image) -> LibraryIndexAssetRecord
+                              kind: LibraryIndexAssetKind = .image, ownerID: String = "owner") -> LibraryIndexAssetRecord
     {
         .init(
             id: id,
-            ownerID: "owner",
+            ownerID: ownerID,
             kind: kind,
             livePhotoVideoID: nil,
             capturedAt: Date(timeIntervalSince1970: captureTime),

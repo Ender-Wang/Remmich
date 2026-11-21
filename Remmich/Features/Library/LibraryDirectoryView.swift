@@ -179,13 +179,14 @@ struct LibraryDirectoryCard: View {
     let assetDetails: any AssetDetailReading
     let context: LibraryCollectionNavigation
     let store: LibraryDirectoryStore
+    var heatmap: UIImage?
 
     var body: some View {
         LibraryHubLink {
             LibraryDirectoryView(directory: directory, store: store, source: source, media: media, assetDetails: assetDetails, context: context)
         } label: {
             LibraryCollectionCard(title: directory.rawValue, count: store.finished ? store.entries.count : nil,
-                                  symbol: directory.symbol, appearance: store.entries.isEmpty ? .glass : .photographic)
+                                  symbol: directory.symbol, appearance: hasCover ? .photographic : .glass)
             {
                 if directory != .places {
                     GeometryReader { geometry in
@@ -203,12 +204,21 @@ struct LibraryDirectoryCard: View {
                         .frame(maxWidth: .infinity)
                         .padding(.top, LibraryPortraitCoverLayout.topPadding)
                     }
-                } else if case let .place(_, cover)? = store.entries.first {
-                    LibraryAssetCover(assetID: cover.id, revision: cover.thumbnailRevision, media: media)
+                } else if let heatmap {
+                    GeometryReader { geometry in
+                        Image(uiImage: heatmap).resizable().scaledToFill()
+                            .frame(width: geometry.size.width, height: geometry.size.height)
+                            .clipped()
+                    }
+                    .accessibilityHidden(true)
                 }
             }
         }
         .buttonStyle(.plain)
+    }
+
+    private var hasCover: Bool {
+        directory == .places ? heatmap != nil : !store.entries.isEmpty
     }
 }
 

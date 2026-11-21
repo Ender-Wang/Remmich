@@ -762,6 +762,30 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
         return result
     }
 
+    func libraryPlacesCoverCoordinates(scope: MediaAccountScope) throws -> [PlaceCoordinate] {
+        guard try canRead(scope) else { return [] }
+        let database = try preparedDatabase(scope: scope)
+        return try database.query("""
+        WITH eligible AS (
+            SELECT a.asset_id, a.captured_at, d.latitude, d.longitude
+            FROM assets a
+            JOIN sync_state s ON s.scope = a.scope AND s.accepted_generation = a.generation
+            JOIN cache.asset_details d ON d.scope = a.scope AND d.asset_id = a.asset_id
+            WHERE a.scope = ? AND a.owner_id = ? AND a.tombstone = 0 AND a.is_trashed = 0
+              AND a.visibility = 'timeline' AND a.kind IN ('image', 'video')
+              AND d.latitude BETWEEN -85 AND 85 AND d.longitude BETWEEN -180 AND 180
+        ), focus AS (
+            SELECT latitude, longitude FROM eligible ORDER BY captured_at DESC, asset_id DESC LIMIT 1
+        )
+        SELECT e.latitude, e.longitude FROM eligible e CROSS JOIN focus f
+        WHERE ABS(e.latitude - f.latitude) <= 1
+          AND MIN(ABS(e.longitude - f.longitude), 360 - ABS(e.longitude - f.longitude)) <= 2
+        ORDER BY e.captured_at DESC, e.asset_id DESC LIMIT 4096
+        """, [.text(scope.cacheNamespace), .text(scope.userID)]) { row in
+            PlaceCoordinate(latitude: row.double(0), longitude: row.double(1))
+        }.compactMap(\.self)
+    }
+
     func cachedAssetDetailIDs(scope: MediaAccountScope) async throws -> Set<String> {
         guard try canRead(scope) else { return [] }
         let database = try preparedDatabase(scope: scope)

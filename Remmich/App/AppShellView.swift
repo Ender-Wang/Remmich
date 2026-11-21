@@ -14,6 +14,7 @@ private final class AlbumsOverviewState {
 
 struct AppShellView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.scenePhase) private var exportScenePhase
 
     let session: AccountSession
@@ -427,6 +428,14 @@ struct AppShellView: View {
                   let scale = openingWindow?.traitCollection.displayScale else { return }
             await libraryOpening.refreshIncompleteTakenCover(media: media, scale: scale)
         }
+        .task(id: libraryPlacesCoverRequest) {
+            guard let request = libraryPlacesCoverRequest, let sessionController, let scale = openingWindow?.traitCollection.displayScale else {
+                libraryOpening.placesCover.stop()
+                return
+            }
+            await libraryOpening.placesCover.prepare(store: sessionController.libraryIndexStore, scope: MediaAccountScope(session: session),
+                                                     locations: sessionController.locations, dark: request.dark, scale: scale)
+        }
         .task(id: libraryDestinationRequest) {
             guard libraryDestinationRequest.isActive else {
                 libraryOpening.stopDestinationImages()
@@ -548,6 +557,20 @@ struct AppShellView: View {
     private struct LibraryDestinationRequest: Equatable {
         let isActive: Bool
         let endpoint: URL?
+    }
+
+    private struct LibraryPlacesCoverRequest: Equatable {
+        let indexUpdatedAt: Date?
+        let metadataUpdatedAt: Date?
+        let endpoint: URL?
+        let styles: AssetMapStyles?
+        let dark: Bool
+    }
+
+    private var libraryPlacesCoverRequest: LibraryPlacesCoverRequest? {
+        guard let sessionController, mayWarmLibraryCovers else { return nil }
+        return .init(indexUpdatedAt: libraryIndex.lastUpdatedAt, metadataUpdatedAt: libraryIndex.thumbnailWarmingLastUpdatedAt,
+                     endpoint: libraryReaderEndpoint, styles: sessionController.locations.mapStyles, dark: colorScheme == .dark)
     }
 
     private var libraryDestinationRequest: LibraryDestinationRequest {
