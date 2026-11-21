@@ -36,11 +36,13 @@ struct LibraryView: View {
     private let avatarImageSize: CGFloat = 32
     private let horizontalPadding: CGFloat = 16
     private let verticalPadding: CGFloat = 8
-    private let panelHeaderHorizontalInset: CGFloat = 24
-    private let panelHeaderVerticalInset: CGFloat = 12
+    private let panelAvatarInset: CGFloat = 12
 
     var body: some View {
         GeometryReader { geometry in
+            let cardAreaWidth = geometry.size.width - horizontalPadding * 2
+            let cardLayout = LibraryCardRows(availableWidth: cardAreaWidth)
+            let collapsedAvatarTrailingPadding = horizontalPadding + max(0, cardAreaWidth - cardLayout.rowWidth)
             ZStack(alignment: .topTrailing) {
                 LibraryHubScrollView {
                     VStack(alignment: .leading, spacing: 16) {
@@ -118,7 +120,7 @@ struct LibraryView: View {
                             }
                         }
                     }
-                    .padding(.horizontal, 16)
+                    .padding(.horizontal, horizontalPadding)
                     .padding(.top, geometry.safeAreaInsets.top + avatarTopPadding + avatarSize + 8)
                     .padding(.bottom, geometry.safeAreaInsets.bottom + 16)
                     .frame(width: geometry.size.width)
@@ -148,18 +150,18 @@ struct LibraryView: View {
                 }
 
                 GlassEffectContainer(spacing: 40) {
-                    accountGlassBackground(in: geometry)
+                    accountGlassBackground(in: geometry, collapsedTrailingPadding: collapsedAvatarTrailingPadding)
                 }
                 .allowsHitTesting(false)
                 .zIndex(1)
 
                 if accountContentMounted {
-                    accountPanelContent(in: geometry)
+                    accountPanelContent(in: geometry, collapsedTrailingPadding: collapsedAvatarTrailingPadding)
                         .contentShape(Rectangle())
                         .zIndex(2)
                 }
 
-                accountButton
+                accountButton(trailingPadding: interpolated(from: collapsedAvatarTrailingPadding, to: expandedAvatarTrailingPadding))
                     .zIndex(3)
             }
         }
@@ -242,7 +244,7 @@ struct LibraryView: View {
         .buttonStyle(.plain)
     }
 
-    private var accountButton: some View {
+    private func accountButton(trailingPadding: CGFloat) -> some View {
         Button {
             setAccountPresented(!accountPresented)
         } label: {
@@ -252,18 +254,18 @@ struct LibraryView: View {
         }
         .buttonStyle(.plain)
         .padding(.top, avatarTopPadding)
-        .padding(.trailing, avatarTrailingPadding)
+        .padding(.trailing, trailingPadding)
         .accessibilityLabel(accountPresented ? "Close Account Settings" : "Account")
         .accessibilityIdentifier(accountPresented ? "account-collapse-button" : "account-button")
         .accessibilityValue(accountPresented ? "Expanded" : "Collapsed")
     }
 
-    private func accountGlassBackground(in geometry: GeometryProxy) -> some View {
+    private func accountGlassBackground(in geometry: GeometryProxy, collapsedTrailingPadding: CGFloat) -> some View {
         let width = interpolated(from: avatarSize, to: panelWidth(in: geometry))
         let height = interpolated(from: avatarSize, to: panelHeight(in: geometry))
         let cornerRadius = interpolated(from: avatarSize / 2, to: 32)
         let animatedTopPadding = interpolated(from: avatarTopPadding, to: verticalPadding)
-        let animatedTrailingPadding = interpolated(from: avatarTrailingPadding, to: horizontalPadding)
+        let animatedTrailingPadding = interpolated(from: collapsedTrailingPadding, to: horizontalPadding)
 
         return Color.clear
             .frame(width: width, height: height)
@@ -278,7 +280,7 @@ struct LibraryView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
     }
 
-    private func accountPanelContent(in geometry: GeometryProxy) -> some View {
+    private func accountPanelContent(in geometry: GeometryProxy, collapsedTrailingPadding: CGFloat) -> some View {
         let width = panelWidth(in: geometry)
         let height = panelHeight(in: geometry)
 
@@ -301,8 +303,8 @@ struct LibraryView: View {
             collapsedSize: avatarSize,
             expandedWidth: width,
             expandedHeight: height,
-            collapsedHorizontalInset: avatarControlHorizontalInset,
-            collapsedVerticalInset: panelHeaderVerticalInset
+            collapsedHorizontalInset: collapsedTrailingPadding - horizontalPadding,
+            collapsedVerticalInset: panelAvatarInset
         ))
         .padding(.top, verticalPadding)
         .padding(.trailing, horizontalPadding)
@@ -319,15 +321,11 @@ struct LibraryView: View {
     }
 
     private var avatarTopPadding: CGFloat {
-        verticalPadding + panelHeaderVerticalInset
+        verticalPadding + panelAvatarInset
     }
 
-    private var avatarTrailingPadding: CGFloat {
-        horizontalPadding + avatarControlHorizontalInset
-    }
-
-    private var avatarControlHorizontalInset: CGFloat {
-        panelHeaderHorizontalInset - (avatarSize - avatarImageSize) / 2
+    private var expandedAvatarTrailingPadding: CGFloat {
+        horizontalPadding + panelAvatarInset
     }
 
     private func interpolated(from start: CGFloat, to end: CGFloat) -> CGFloat {

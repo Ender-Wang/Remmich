@@ -5,6 +5,10 @@ nonisolated struct LibraryCardRows {
     let columns: Int
     let itemWidth: CGFloat
 
+    var rowWidth: CGFloat {
+        CGFloat(columns) * itemWidth + CGFloat(columns - 1) * LibraryCollectionCardMetrics.spacing
+    }
+
     init(width: CGFloat, preferredColumns: Int?) {
         self.init(availableWidth: width - 32, preferredColumns: preferredColumns)
     }
