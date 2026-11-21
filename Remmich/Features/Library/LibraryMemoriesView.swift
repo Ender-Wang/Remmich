@@ -1,25 +1,85 @@
+import Nuke
 import Observation
 import SwiftUI
 
 @MainActor @Observable
 final class LibraryMemoriesStore {
     private(set) var memories: [TimelineMemorySummary] = []
-    private(set) var previewCover: LibraryCoverAsset?
+    private var previewCovers: [LibraryMemoryCover] = []
+    private(set) var coversFinished = false
+    private(set) var coverPagingFailed = false
+    @ObservationIgnored private var coverPage = 1
+    @ObservationIgnored private var coverPageTask: Task<Bool, Never>?
+    @ObservationIgnored private var seenCoverMemories: Set<String> = []
+    private let coverPageSize = 12
     private(set) var error: String?
     private(set) var finished = false
     private var loading = false
     private var page = 1
     private var pageSize = 24
 
-    var cover: LibraryCoverAsset? {
-        memories.first?.assets.first.map { .init(id: $0.id, revision: $0.revision) } ?? previewCover
+    var covers: [LibraryMemoryCover] {
+        let loaded = Self.coverChoices(memories)
+        var seen = Set<String>()
+        return (loaded + previewCovers).filter { seen.insert($0.id).inserted }.sorted {
+            $0.date == $1.date ? $0.id < $1.id : $0.date > $1.date
+        }
     }
 
-    func loadCover(from source: ImmichTimelineRepository) async {
-        guard cover == nil,
-              let values = try? await source.libraryMemories(page: 1, size: 4, includeTimelineAssets: false),
-              !Task.isCancelled else { return }
-        previewCover = values.lazy.compactMap(\.assets.first).first.map { .init(id: $0.id, revision: $0.revision) }
+    func loadCovers(from source: ImmichTimelineRepository) async {
+        guard coverPage == 1, !coversFinished else { return }
+        _ = await loadCoverPage(from: source)
+    }
+
+    func loadRemainingCovers(from source: ImmichTimelineRepository) async {
+        coverPagingFailed = false
+        while !Task.isCancelled, !coversFinished {
+            if await loadCoverPage(from: source) {
+                continue
+            }
+            do { try await Task.sleep(for: .seconds(2)) } catch { return }
+            if await loadCoverPage(from: source) {
+                continue
+            }
+            coverPagingFailed = !Task.isCancelled
+            return
+        }
+    }
+
+    private func loadCoverPage(from source: ImmichTimelineRepository) async -> Bool {
+        if let coverPageTask {
+            return await coverPageTask.value
+        }
+        let task = Task(priority: .utility) {
+            defer { coverPageTask = nil }
+            guard let values = try? await source.libraryMemories(page: coverPage, size: coverPageSize, includeTimelineAssets: false),
+                  !Task.isCancelled else { return false }
+            let unique = values.filter { seenCoverMemories.insert($0.id).inserted }
+            previewCovers.append(contentsOf: Self.coverChoices(unique))
+            coversFinished = values.count < coverPageSize || unique.isEmpty
+            if coverPage == 1, values.isEmpty, memories.isEmpty {
+                finished = true
+            }
+            coverPage += 1
+            return true
+        }
+        coverPageTask = task
+        return await task.value
+    }
+
+    private static func coverChoices(_ memories: [TimelineMemorySummary]) -> [LibraryMemoryCover] {
+        memories.compactMap { memory in
+            memory.assets.first.map { LibraryMemoryCover(id: memory.id, date: memory.memoryAt, asset: .init(id: $0.id, revision: $0.revision)) }
+        }
+    }
+
+    private static func isNewer(_ lhs: TimelineMemorySummary, _ rhs: TimelineMemorySummary) -> Bool {
+        let first = lhs.availableOn ?? lhs.memoryAt
+        let second = rhs.availableOn ?? rhs.memoryAt
+        if first != second {
+            return first > second
+        }
+        return lhs.memoryAt == rhs.memoryAt ? lhs.id < rhs.id : lhs.memoryAt > rhs.memoryAt
     }
 
     func prepareOpening(from source: ImmichTimelineRepository, limit: Int) async {
@@ -39,14 +99,7 @@ final class LibraryMemoriesStore {
             var seen = Set(memories.map(\.id))
             let unique = values.filter { seen.insert($0.id).inserted && !$0.assets.isEmpty }
             memories.append(contentsOf: unique)
-            memories.sort {
-                let first = $0.availableOn ?? $0.memoryAt
-                let second = $1.availableOn ?? $1.memoryAt
-                if first != second {
-                    return first > second
-                }
-                return $0.memoryAt == $1.memoryAt ? $0.id < $1.id : $0.memoryAt > $1.memoryAt
-            }
+            memories.sort(by: Self.isNewer)
             finished = values.count < size || unique.isEmpty
             page += 1
             error = nil
@@ -57,27 +110,134 @@ final class LibraryMemoriesStore {
     }
 }
 
+nonisolated struct LibraryMemoryCover: Identifiable, Equatable {
+    let id: String
+    let date: Date
+    let asset: LibraryCoverAsset
+}
+
 struct LibraryMemoriesCard: View {
     let source: ImmichTimelineRepository
     let media: MediaLibraryController
     let assetDetails: any AssetDetailReading
     let context: LibraryCollectionNavigation
     let catalog: LibraryMemoriesStore
+    let rotationEnabled: Bool
 
     var body: some View {
         LibraryHubLink {
             LibraryMemoriesView(source: source, catalog: catalog, media: media, assetDetails: assetDetails, context: context)
         } label: {
-            let cover = catalog.cover
+            let covers = catalog.covers
             LibraryCollectionCard(title: "Memories", count: catalog.finished ? catalog.memories.count : nil,
-                                  symbol: "sparkles.rectangle.stack", appearance: cover == nil ? .glass : .photographic)
+                                  symbol: "sparkles.rectangle.stack", appearance: covers.isEmpty ? .glass : .photographic)
             {
-                if let cover {
-                    LibraryAssetCover(assetID: cover.id, revision: cover.revision, media: media)
-                }
+                LibraryMemoryCoverRotation(catalog: catalog, source: source, media: media, enabled: rotationEnabled)
             }
         }
         .buttonStyle(.plain)
+    }
+}
+
+private struct LibraryMemoryCoverRotation: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.displayScale) private var displayScale
+    let catalog: LibraryMemoriesStore
+    let source: ImmichTimelineRepository
+    let media: MediaLibraryController
+    let enabled: Bool
+    @State private var visible = false
+    @State private var current: (cover: LibraryMemoryCover, image: UIImage)?
+    @State private var incoming: (cover: LibraryMemoryCover, image: UIImage)?
+    @State private var showsIncoming = false
+
+    var body: some View {
+        let active = enabled && visible && scenePhase == .active && !reduceMotion
+        let shouldRotate = active && (catalog.coversFinished || catalog.coverPagingFailed)
+        GeometryReader { geometry in
+            ZStack {
+                if let current {
+                    artwork(current, size: geometry.size)
+                } else if let fallback = catalog.covers.first {
+                    LibraryAssetCover(assetID: fallback.asset.id, revision: fallback.asset.revision, media: media)
+                        .overlay(alignment: .topTrailing) { dateLabel(fallback.date) }
+                }
+                if let incoming {
+                    artwork(incoming, size: geometry.size).opacity(showsIncoming ? 1 : 0)
+                }
+            }
+        }
+        .background { LibraryHubCardVisibility(visible: $visible) }
+        .task(id: active) {
+            if active {
+                await catalog.loadRemainingCovers(from: source)
+            }
+        }
+        .task(id: RotationRequest(active: shouldRotate, scale: displayScale, pipeline: media.pipeline.map(ObjectIdentifier.init))) {
+            incoming = nil
+            showsIncoming = false
+            if shouldRotate {
+                current = nil
+                await rotate()
+            }
+        }
+        .accessibilityHidden(true)
+    }
+
+    private struct RotationRequest: Equatable {
+        let active: Bool
+        let scale: CGFloat
+        let pipeline: ObjectIdentifier?
+    }
+
+    private func artwork(_ slide: (cover: LibraryMemoryCover, image: UIImage), size: CGSize) -> some View {
+        Image(uiImage: slide.image).resizable().scaledToFill()
+            .frame(width: size.width, height: size.height)
+            .clipped()
+            .overlay(alignment: .topTrailing) { dateLabel(slide.cover.date) }
+    }
+
+    private func dateLabel(_ date: Date) -> some View {
+        Text(date.formatted(date: .abbreviated, time: .omitted))
+            .font(.caption2.weight(.semibold))
+            .lineLimit(1)
+            .minimumScaleFactor(0.75)
+            .foregroundStyle(.white)
+            .padding(.horizontal, 15)
+            .padding(.vertical, 12)
+    }
+
+    private func load(_ cover: LibraryMemoryCover) async -> UIImage? {
+        guard let pipeline = media.pipeline,
+              let request = media.imageRequest(for: LibraryCollectionCardMetrics.coverDescriptor(cover.asset, scale: displayScale)) else { return nil }
+        return try? await pipeline.imageTask(with: request).response.image
+    }
+
+    private func rotate() async {
+        let covers = catalog.covers
+        guard covers.count > 1, let first = covers.first else { return }
+        if let image = await load(first), !Task.isCancelled {
+            current = (first, image)
+        }
+        var next = 1
+        while !Task.isCancelled {
+            do { try await Task.sleep(for: .seconds(TimelineCoverAnimation.initialHold)) } catch { return }
+            let candidate = covers[next]
+            next = (next + 1) % covers.count
+            let image = if let current, current.cover.asset == candidate.asset {
+                current.image
+            } else {
+                await load(candidate)
+            }
+            guard let image, !Task.isCancelled else { continue }
+            incoming = (candidate, image)
+            withAnimation(.linear(duration: TimelineCoverAnimation.fadeDuration)) { showsIncoming = true }
+            do { try await Task.sleep(for: .seconds(TimelineCoverAnimation.fadeDuration)) } catch { return }
+            current = (candidate, image)
+            incoming = nil
+            showsIncoming = false
+        }
     }
 }
 

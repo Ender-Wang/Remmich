@@ -101,8 +101,10 @@ final class LibraryOpeningState {
         }
         if preferences?.memoriesEnabled == true {
             jobs.append {
-                await self.memories.loadCover(from: source)
-                self.prefetchCovers([self.memories.cover].compactMap(\.self), media: media, scale: scale)
+                await self.memories.loadCovers(from: source)
+                if let cover = self.memories.covers.first {
+                    self.prefetchCovers([cover.asset], media: media, scale: scale)
+                }
             }
         }
         if preferences?.peopleEnabled == true {

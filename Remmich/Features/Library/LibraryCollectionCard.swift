@@ -87,7 +87,7 @@ struct LibraryCollectionCard<Cover: View>: View {
     }
 }
 
-nonisolated struct LibraryCoverAsset: Identifiable, Sendable {
+nonisolated struct LibraryCoverAsset: Identifiable, Equatable, Sendable {
     let id: String
     let revision: Date
 

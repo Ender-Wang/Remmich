@@ -25,6 +25,7 @@ struct LibraryView: View {
     var tabBarTop: Binding<CGFloat> = .constant(0)
     var viewerVisibilityChanged: (Bool) -> Void = { _ in }
     var opening = LibraryOpeningState()
+    var hubReadyForRotation = true
 
     @State private var accountPresented = false
     @State private var accountContentMounted = false
@@ -92,7 +93,9 @@ struct LibraryView: View {
                                 collectionCard(.favorites, source: collectionSource, media: media, assetDetails: assetDetails)
                                 if preferences?.memoriesEnabled == true {
                                     LibraryMemoriesCard(source: collectionSource, media: media, assetDetails: assetDetails,
-                                                        context: collectionNavigation, catalog: opening.memories)
+                                                        context: collectionNavigation, catalog: opening.memories,
+                                                        rotationEnabled: hubReadyForRotation && cardDestination == nil && !accountContentMounted
+                                                            && (tabSelectionState?.canActivateContent(in: .library) ?? true))
                                 }
                                 if preferences?.peopleEnabled == true {
                                     LibraryDirectoryCard(directory: .people, source: collectionSource, media: media,

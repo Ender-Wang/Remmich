@@ -244,7 +244,8 @@ struct AppShellView: View {
                             viewerPresentations: viewerPresentations,
                             tabBarTop: $tabBarTop,
                             viewerVisibilityChanged: setViewerPresented,
-                            opening: libraryOpening
+                            opening: libraryOpening,
+                            hubReadyForRotation: tabContentActivationState.isHydrated(.library)
                         )
                     }
                 }

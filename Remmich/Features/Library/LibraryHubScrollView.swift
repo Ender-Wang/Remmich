@@ -62,6 +62,72 @@ final class LibraryHubScrollController<Content: View>: UIViewController {
     }
 }
 
+/// The hub's scroll view is UIKit-owned, outside SwiftUI's scroll visibility environment.
+struct LibraryHubCardVisibility: UIViewRepresentable {
+    @Binding var visible: Bool
+
+    func makeUIView(context _: Context) -> Probe {
+        let view = Probe()
+        view.isUserInteractionEnabled = false
+        return view
+    }
+
+    func updateUIView(_ view: Probe, context _: Context) {
+        let binding = $visible
+        view.update = { value in
+            if binding.wrappedValue != value {
+                binding.wrappedValue = value
+            }
+        }
+        view.checkVisibility()
+    }
+
+    final class Probe: UIView {
+        var update: ((Bool) -> Void)?
+        private weak var scrollView: UIScrollView?
+        private var observation: NSKeyValueObservation?
+        private var lastVisibility: Bool?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            observation = nil
+            scrollView = nil
+            if window != nil {
+                var ancestor = superview
+                while let view = ancestor {
+                    if let scroll = view as? UIScrollView {
+                        scrollView = scroll
+                        observation = scroll.observe(\.contentOffset) { [weak self] _, _ in
+                            MainActor.assumeIsolated { self?.checkVisibility() }
+                        }
+                        break
+                    }
+                    ancestor = view.superview
+                }
+            }
+            checkVisibility()
+        }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            checkVisibility()
+        }
+
+        func checkVisibility() {
+            let visible = scrollView.map { scroll in
+                let intersection = convert(bounds, to: scroll).intersection(scroll.bounds)
+                return !bounds.isEmpty && !intersection.isNull && intersection.height >= bounds.height / 2
+            } ?? false
+            guard visible != lastVisibility else { return }
+            lastVisibility = visible
+            Task { @MainActor [weak self] in
+                guard let self, lastVisibility == visible else { return }
+                update?(visible)
+            }
+        }
+    }
+}
+
 /// The card content has its own hosting controller. Push detail views from the Library stack.
 struct LibraryHubLink<Destination: View, Label: View>: View {
     @Environment(\.libraryHubDestination) private var cardDestination
