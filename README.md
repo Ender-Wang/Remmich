@@ -43,14 +43,14 @@ You can also follow [Build and run](CONTRIBUTING.md#build-and-run) to build from
 
 ## Features
 
-- **🔍 Timelines:** Separate Photos and Videos timelines with pinch-to-zoom, date cards and saved browsing positions. Cached timelines show about two screenfuls first, then load older items without moving the viewport. Videos, Albums, Library, and Search prepare their first views while Photos loads its history.
+- **🔍 Timelines:** Separate Photos and Videos timelines with pinch-to-zoom, date cards and saved browsing positions. Cached timelines show about two screenfuls first, then load older items without moving the viewport. Videos, Albums, and Search prepare their first views while Photos loads its history.
 - **📸 Photos and memories:** Zoomable photos, Live Photo playback, filmstrip navigation and rotating memories.
 - **👆 Quick preview:** Long-press to preview, tap to open, and swipe down to dismiss with interruptible transitions.
 - **🗺️ Places and maps:** Photon landmarks, per-country language preferences and asset maps below Info.
 - **🎬 Video:** Native playback, Picture in Picture and iOS Now Playing with titles and artwork.
 - **💾 Offline browsing:** Cached timelines, thumbnails, asset information and place names, with background sync. Asset Cache and Place Cache have separate progress, Sync/Pause/Resume and automatic-cache settings; Rebuild and Clear maintain both caches together.
 - **📥 Downloads:** Save a quality tier to Photos → Remmich, with background transfers, pause/resume, automatic recovery, and cancel/retry. Browse saved photos and videos from Library. The Downloads History card shows the latest completed download when its cover is available.
-- **📚 Library collections** — Browse Recently taken, Recently added, Favorites, Memories, People, Places, Shared Links, Partners, Folders, Archive, and Trash. Recently taken and Recently added show seven-day summaries on their cards and open full timelines ordered by capture or upload date. Folders appears when folder browsing is enabled for the Immich account.
+- **📚 Library collections** — Browse Recently taken, Recently added, Favorites, Memories, People, Places, Shared Links, Partners, Folders, Archive, and Trash. Recently taken and Recently added show seven-day summaries on their cards and open full timelines ordered by capture or upload date. Optional cards follow the Immich account's feature settings. After Photos appears, Library warms its card covers. Switching to Library prepares up to two screenfuls of each enabled destination.
 - **📤 Sharing:** Share the viewed quality from the viewer or preview, retaining supported metadata and cached image compression.
 - **🗂️ Albums:** Browse owned/shared albums with search and six sorting options. All/Shared uses the same sliding animation as the main pages, with the search and scope controls staying above the content. Pinch between Cards and List around the album under your fingers, reopen album timelines at their saved positions, and browse indexed album metadata offline using the common timeline and viewer. First opening and tab retaps preserve bottom clearance, including wrapped titles.
 - **📊 Index controls:** Switch between Timeline Index and Album Index by tapping or swiping, and scroll from the status area as well as the statistics. Sync/Pause/Resume and **Rebuild index** sit directly below each section's statistics. Cache & Storage uses the same section layout and swiping. Per-10K storage estimates use current data and update during sync.
@@ -98,6 +98,8 @@ The timeline places upcoming milestones above **Now** and completed work below i
 | M8 | Search and filters | Planned | Server-backed search with supported people, place, date, media and camera filters. Search currently uses demo data. |
 | M9 | Wider native polish and resilience | Planned | Broader iPad, accessibility, interruption, offline and performance coverage across the completed workflows. |
 | M10 | Release verification and distribution | Planned | Broader real-device verification and sideloading distribution; AltStore remains under consideration. |
+
+A persistent Library Index is planned alongside Timeline Index and Album Index.
 
 ## Read-only by design
 

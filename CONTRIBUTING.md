@@ -78,6 +78,8 @@ Timeline Rebuild, Album Rebuild, Clear Cache and account deletion have distinct 
 
 Place progress counts assets whose required lookup is complete, including successful updates and valid no-result responses. A lookup shared by several assets completes each asset; an older display fallback does not complete newly required work. The shared cache database/WAL size appears once. Optional attached-cache DBSTAT attribution includes each feature's tables and indexes; these allocations are not additional file totals.
 
+Timeline Index and Asset Cache completion check the stored Place Cache queue before starting a pass. Pending lookups and scheduled retries still start the worker. A drained run can record its completion time once metadata discovery is ready. [AssetLocationStore](Remmich/Infrastructure/Location/AssetLocationStore.swift)
+
 All four per-10K estimates use the same calculation: current sample bytes divided by the matching stored-item count, multiplied by 10,000. They update during sync and show **—** for missing attribution or nonpositive bytes/counts. Asset Cache uses matched thumbnail bytes/counts. Places uses its allocated table/index bytes and represented desired assets, including pending work and retained variants in the footprint. Timeline includes stored staging generations and counts distinct asset IDs; Album Index retains its album-membership unit, including an asset appearing in several albums. These are normalized current footprints and can change as data fills, rather than predicting a finished cache's size. Database attribution refreshes outside rendering every 15 seconds while the relevant page is visible/active, with explicit entry/lifecycle refreshes; ordinary stored-report reads do not measure again. Index refreshes coalesce in flight, preserve a forced follow-up and reject stale account ownership. Failed attempts are throttled too.
 
 ### Albums
@@ -138,7 +140,7 @@ New index writes persist capture-local day/week/month/year keys, including the I
 
 ### Cached timeline startup
 
-On launch, the accepted local index supplies about two screenfuls of Photos and their cached thumbnails. After the opening tiles appear, older Photos load and the native tab shell prepares Videos, Albums, Library, and Search. Library also warms the Downloads count and cover from Apple Photos. Search prepares its demo grid and search field through the same tab path. If the cached Photos data is unavailable, the loading logo stays visible until content or an empty or error state is ready.
+On launch, the accepted local index supplies about two screenfuls of Photos and their cached thumbnails. After the opening tiles appear, older Photos load and the native tab shell prepares Videos, Albums, Library, and Search. Search prepares its demo grid and search field through the same tab path. If the cached Photos data is unavailable, the loading logo stays visible until content or an empty or error state is ready.
 
 Videos and individual album timelines also use a small opening window. The timeline keeps the currently visible asset in place when the full history arrives and waits for active scrolling to settle before replacing the opening window. The Albums overview starts at the bottom with its header clearance measured from the window safe area, so attaching the prepared tab does not rebase the scroll offset. Re-tapping Albums returns to the same bottom position.
 
@@ -152,9 +154,13 @@ Videos and individual album timelines also use a small opening window. The timel
 
 [LibraryHubScrollView](Remmich/Features/Library/LibraryHubScrollView.swift) hosts the Library cards in a UIKit scroll view with automatic inset adjustment disabled. The hub pads its content for the title and tab bar. Card taps push onto the outer Library navigation stack, keeping the hub's native bounce independent of the detail page's navigation bar.
 
+After Photos appears, the signed-in shell warms Library card covers as their sources become available. Selecting Library prepares up to two screenfuls per enabled destination. Opening a card uses the prepared data or joins the pending read. The timeline keeps its visible asset anchored when older items arrive. Some Immich endpoints return entire months or lists, so image warmup is bounded separately. Remote timeline warmup checks at most three months per lane. [LibraryOpeningState](Remmich/Features/Library/LibraryOpeningState.swift)
+
+Recently Taken and Places share capture-date summaries and month reads for matching queries, including requests in flight. Recently Added uses its own upload-date query. Downloads shares an Apple Photos inventory across the hub and timelines. The inventory refreshes on foreground entry, PhotoKit changes, export receipt changes, or a manual refresh. [LibraryCollectionTimeline](Remmich/Features/Library/LibraryCollectionTimeline.swift), [SavedPhotosLibrary](Remmich/Infrastructure/Media/SavedPhotosLibrary.swift)
+
 [LibraryTimelineViewport](Remmich/Features/Library/LibraryTimelineViewport.swift) measures safe-area and header clearance for Downloads and server collections. Paired Photos and Videos collections reuse the native media page host. [LibraryCardRows](Remmich/Features/Library/LibraryCardRows.swift) keeps newest-first card lists anchored to the bottom at entry and older items above them during paging. Recently Added uses the server's upload time for timeline grouping and order. The viewer continues to show capture metadata.
 
-[ImmichTimelineRepository](Remmich/Infrastructure/Timeline/ImmichTimelineRepository.swift) uses the typed Immich client for account-scoped collection reads. Folder browsing follows the account's `folders.enabled` preference, Shared Links reads the owner's links, and Partners scopes each timeline to the selected incoming partner. [LibraryReadTests](Packages/ImmichAPI/Tests/ImmichAPITests/LibraryReadTests.swift) covers request filters, share URLs, incoming partners, and folder preferences and path filtering.
+Folder browsing, Shared Links, Memories, and People follow the Immich account's feature preferences. Shared Links reads the owner's links, and Partners scopes each timeline to the selected incoming partner. [ImmichTimelineRepository](Remmich/Infrastructure/Timeline/ImmichTimelineRepository.swift), [LibraryReadTests](Packages/ImmichAPI/Tests/ImmichAPITests/LibraryReadTests.swift)
 
 ### Memory selection and card rotation
 
