@@ -180,11 +180,14 @@ actor ImmichTimelineRepository: TimelineReading, VideoReading, AssetDetailReadin
         .sorted { $0.createdAt == $1.createdAt ? $0.id < $1.id : $0.createdAt > $1.createdAt }
     }
 
-    func libraryPartners() async throws -> [ImmichPartner] {
+    func libraryPartners() async throws -> [LibraryPartner] {
         let (client, requestGeneration) = try requestContext()
         let partners = try await client.incomingPartners()
         try requireCurrent(requestGeneration)
-        return partners.sorted {
+        return partners.map {
+            LibraryPartner(id: $0.id, name: $0.name, hasProfileImage: $0.hasProfileImage, profileChangedAt: $0.profileChangedAt)
+        }
+        .sorted {
             let order = $0.name.localizedStandardCompare($1.name)
             return order == .orderedSame ? $0.id < $1.id : order == .orderedAscending
         }

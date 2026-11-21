@@ -1,6 +1,5 @@
 import AVKit
 import Foundation
-import ImmichAPI
 import Nuke
 import Observation
 import OSLog
@@ -611,7 +610,7 @@ final class MediaLibraryController {
                                  id: "person:\(person.id)", revision: person.updatedAt, pixels: pixels)
     }
 
-    func partnerProfileRequest(_ partner: ImmichPartner, pixels: Int) -> ImageRequest? {
+    func partnerProfileRequest(_ partner: LibraryPartner, pixels: Int) -> ImageRequest? {
         guard partner.hasProfileImage else { return nil }
         return directoryPortraitRequest(components: ["users", partner.id, "profile-image"],
                                         id: "partner:\(partner.id)", revision: partner.profileChangedAt, pixels: pixels)

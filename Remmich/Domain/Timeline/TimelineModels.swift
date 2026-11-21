@@ -152,6 +152,13 @@ nonisolated struct LibraryPerson: Identifiable, Hashable, Sendable {
     }
 }
 
+nonisolated struct LibraryPartner: Identifiable, Sendable {
+    let id: String
+    let name: String
+    let hasProfileImage: Bool
+    let profileChangedAt: Date
+}
+
 nonisolated struct TimelineAssetSummary: Codable, Hashable, Identifiable, Sendable {
     let id: String
     let ownerID: String

@@ -1,4 +1,3 @@
-import ImmichAPI
 import Nuke
 import NukeUI
 import Observation
@@ -29,7 +28,7 @@ nonisolated enum LibraryDirectory: String {
 private enum LibraryDirectoryEntry: Identifiable {
     case person(LibraryPerson)
     case place(TimelinePlace, cover: TimelineAssetSummary)
-    case partner(ImmichPartner)
+    case partner(LibraryPartner)
 
     var id: String {
         switch self {

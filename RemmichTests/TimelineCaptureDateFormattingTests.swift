@@ -55,7 +55,7 @@ struct TimelineCaptureDateFormattingTests {
         ])
         func libraryOpeningOffsetUsesTheBottomInsetOnce(content: Double, bounds: Double, top: Double, bottom: Double, expected: Double) {
             let offset = LibraryCardScrollOffset.latest(contentHeight: content, boundsHeight: bounds, topInset: top, bottomInset: bottom)
-            #expect(offset == expected)
+            #expect(offset == CGFloat(expected))
         }
 
         @Test func folderTreeSeparatesDirectAssetsFromChildFolders() throws {
