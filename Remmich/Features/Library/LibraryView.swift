@@ -53,8 +53,8 @@ struct LibraryView: View {
                                     DownloadsView(exports: exports)
                                         .libraryNavigationChrome()
                                 } label: {
-                                    LibraryCollectionCard(title: "Downloads History",
-                                                          detail: exports.activeCount > 0 ? "\(exports.activeCount) active" : "Save activity",
+                                    LibraryCollectionCard(title: "Save History",
+                                                          count: exports.ready ? exports.jobs.count : nil,
                                                           symbol: "clock.arrow.circlepath",
                                                           appearance: newest == nil || media == nil ? .glass : .photographic)
                                     {
@@ -76,7 +76,7 @@ struct LibraryView: View {
                                                 tabBarTop: tabBarTop,
                                                 preparedTimelines: opening.downloadTimelines(library: savedPhotos, scope: scope))
                             } label: {
-                                LibraryCollectionCard(title: "Downloads", detail: savedPhotos.summary,
+                                LibraryCollectionCard(title: "On Device", count: savedPhotos.state == .ready ? savedPhotos.items.count : nil,
                                                       symbol: "arrow.down.circle", appearance: savedPhotos.items.isEmpty ? .glass : .photographic)
                                 {
                                     if let photo = savedPhotos.items.first {
@@ -118,7 +118,7 @@ struct LibraryView: View {
                                     CollectionDetailView(collection: collection)
                                         .libraryNavigationChrome()
                                 } label: {
-                                    LibraryCollectionCard(title: collection.title, detail: collection.subtitle,
+                                    LibraryCollectionCard(title: collection.title,
                                                           symbol: collection.kind.systemImage, appearance: .photographic)
                                     {
                                         FixtureArtwork(palette: collection.palette)

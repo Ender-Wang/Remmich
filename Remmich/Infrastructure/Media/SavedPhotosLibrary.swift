@@ -116,19 +116,6 @@ final class SavedPhotosLibrary: NSObject {
     private var cardCover: (request: CardCoverRequest, image: UIImage)?
     @ObservationIgnored private var cardCoverLoad: CardCoverLoad?
 
-    var summary: String {
-        switch state {
-        case .ready: "\(items.count) \(limited ? "visible" : "saved")"
-        case .permission: "Photos access"
-        case .denied: "Access needed"
-        case .limitedUnavailable: "Limited access"
-        case .missing: "No saved items"
-        case .ambiguous: "Choose in Photos"
-        case .loading: "Loading…"
-        case .failed: "Unavailable"
-        }
-    }
-
     func item(timelineID: String) -> SavedPhoto? {
         itemsByTimelineID[timelineID]
     }

@@ -24,7 +24,8 @@ struct LibraryCollectionCard<Cover: View>: View {
     enum Appearance { case photographic, glass }
 
     let title: String
-    let detail: String
+    var count: Int?
+    var detail = ""
     let symbol: String
     let appearance: Appearance
     @ViewBuilder let cover: Cover
@@ -38,16 +39,19 @@ struct LibraryCollectionCard<Cover: View>: View {
             if appearance == .photographic {
                 LinearGradient(colors: [.clear, .black.opacity(0.7)], startPoint: .center, endPoint: .bottom)
             }
-            ViewThatFits(in: .horizontal) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Label(title, systemImage: symbol).font(.headline).fixedSize()
-                    Spacer(minLength: 0)
-                    Text(detail).font(.caption).foregroundStyle(.secondary).fixedSize()
-                }
-                VStack(alignment: .leading, spacing: 4) {
-                    Label(title, systemImage: symbol).font(.headline)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Text(detail).font(.caption).foregroundStyle(.secondary)
+            Group {
+                if detail.isEmpty {
+                    HStack(alignment: .center, spacing: 4) {
+                        Label(title, systemImage: symbol).font(.headline)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 0)
+                        if let count, count > 0 {
+                            Text(count.formatted()).font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary).fixedSize()
+                        }
+                    }
+                } else {
+                    detailFooter
                 }
             }
             .foregroundStyle(appearance == .glass ? AnyShapeStyle(.primary) : AnyShapeStyle(.white))
@@ -57,7 +61,29 @@ struct LibraryCollectionCard<Cover: View>: View {
         .clipShape(.rect(cornerRadius: DesignMetrics.defaultCornerRadius))
         .contentShape(.rect)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(title), \(detail)")
+        .accessibilityLabel(accessibilityTitle)
+    }
+
+    private var detailFooter: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Label(title, systemImage: symbol).font(.headline).fixedSize()
+                Spacer(minLength: 0)
+                Text(detail).font(.caption).foregroundStyle(.secondary).fixedSize()
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                Label(title, systemImage: symbol).font(.headline)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(detail).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var accessibilityTitle: String {
+        if let count {
+            return count == 0 ? "\(title), empty" : "\(title), \(count.formatted())"
+        }
+        return detail.isEmpty ? title : "\(title), \(detail)"
     }
 }
 

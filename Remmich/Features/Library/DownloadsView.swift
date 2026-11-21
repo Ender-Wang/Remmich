@@ -107,7 +107,7 @@ struct DownloadsView: View {
                         .buttonBorderShape(.circle)
                         .frame(width: 44, height: 44)
                         .accessibilityLabel("Back")
-                        Text("Downloads History").font(.headline).frame(maxWidth: .infinity)
+                        Text("Save History").font(.headline).frame(maxWidth: .infinity)
                         clearButton
                             .buttonStyle(.glass)
                             .buttonBorderShape(.circle)
@@ -150,7 +150,7 @@ struct DownloadsView: View {
         .font(.body)
         .fontWeight(.regular)
         .buttonStyle(.automatic)
-        .navigationTitle("Downloads History")
+        .navigationTitle("Save History")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(backAction == nil ? .visible : .hidden, for: .navigationBar)
         .nativeEdgeBackAction(active: backAction != nil,
@@ -585,7 +585,7 @@ private struct MediaExportQualityView: View {
                         }
                     }
                     HStack {
-                        Button("Downloads History", action: openDownloads)
+                        Button("Save History", action: openDownloads)
                             .foregroundStyle(.tint)
                         Spacer()
                         if let job = media.exports.activeJob(assetID: asset.id), job.canCancel {

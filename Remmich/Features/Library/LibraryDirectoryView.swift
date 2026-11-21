@@ -151,7 +151,7 @@ struct LibraryDirectoryCard: View {
         LibraryHubLink {
             LibraryDirectoryView(directory: directory, store: store, source: source, media: media, assetDetails: assetDetails, context: context)
         } label: {
-            LibraryCollectionCard(title: directory.rawValue, detail: store.finished ? store.entries.count.formatted() : "",
+            LibraryCollectionCard(title: directory.rawValue, count: store.finished ? store.entries.count : nil,
                                   symbol: directory.symbol, appearance: store.entries.isEmpty ? .glass : .photographic)
             {
                 if directory != .places {

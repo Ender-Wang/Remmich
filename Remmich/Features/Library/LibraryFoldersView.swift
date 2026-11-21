@@ -119,7 +119,7 @@ struct LibraryFoldersCard: View {
         LibraryHubLink {
             LibraryFoldersView(folder: nil, store: store, source: source, media: media, assetDetails: assetDetails, context: context)
         } label: {
-            LibraryCollectionCard(title: "Folders", detail: detail, symbol: "folder",
+            LibraryCollectionCard(title: "Folders", count: store.tree?.assetPaths.count, symbol: "folder",
                                   appearance: store.covers.isEmpty ? .glass : .photographic)
             {
                 let covers = store.covers
@@ -139,11 +139,6 @@ struct LibraryFoldersCard: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("library-folders")
-    }
-
-    private var detail: String {
-        guard let count = store.tree?.assetPaths.count else { return "" }
-        return "\(count.formatted()) \(count == 1 ? "folder" : "folders")"
     }
 }
 
@@ -176,7 +171,7 @@ private struct LibraryFoldersView: View {
                                 NavigationLink {
                                     folderTimeline(folder)
                                 } label: {
-                                    folderCard(title: "Photos & Videos", symbol: "photo.on.rectangle", folder: folder, detail: "")
+                                    folderCard(title: "Photos & Videos", symbol: "photo.on.rectangle", folder: folder)
                                 }
                                 .buttonStyle(.plain)
                             }
@@ -185,9 +180,7 @@ private struct LibraryFoldersView: View {
                                     LibraryFoldersView(folder: child, store: store, source: source,
                                                        media: media, assetDetails: assetDetails, context: context)
                                 } label: {
-                                    let count = tree.children(of: child).count
-                                    let detail = count == 0 ? "" : "\(count.formatted()) \(count == 1 ? "folder" : "folders")"
-                                    folderCard(title: child.name, symbol: "folder", folder: child, detail: detail)
+                                    folderCard(title: child.name, symbol: "folder", folder: child, count: tree.children(of: child).count)
                                 }
                                 .buttonStyle(.plain)
                             }
@@ -215,9 +208,9 @@ private struct LibraryFoldersView: View {
         }
     }
 
-    private func folderCard(title: String, symbol: String, folder: LibraryFolder, detail: String) -> some View {
+    private func folderCard(title: String, symbol: String, folder: LibraryFolder, count: Int? = nil) -> some View {
         let cover = store.coversByPath[folder.path]
-        return LibraryCollectionCard(title: title, detail: detail, symbol: symbol, appearance: cover == nil ? .glass : .photographic) {
+        return LibraryCollectionCard(title: title, count: count, symbol: symbol, appearance: cover == nil ? .glass : .photographic) {
             if let cover {
                 LibraryAssetCover(assetID: cover.id, revision: cover.revision, media: media)
             }

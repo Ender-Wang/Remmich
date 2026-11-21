@@ -44,12 +44,12 @@ struct SavedPhotosView: View {
                 }
             }
         }
-        .navigationTitle("Downloads")
+        .navigationTitle("On Device")
         .libraryNavigationChrome()
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button { Task { await library.refresh() } } label: { Image(systemName: "arrow.clockwise") }
-                    .accessibilityLabel("Refresh Downloads")
+                    .accessibilityLabel("Refresh On Device")
             }
         }
         .accessibilityIdentifier("saved-photos-list")
@@ -115,9 +115,9 @@ struct SavedPhotosView: View {
                                    description: Text("Rename the extra Remmich albums in Apple Photos, then refresh."))
         case .missing, .ready:
             ContentUnavailableView(library.limited ? "No Visible Saved Items" : "No Saved Items", systemImage: "arrow.down.circle",
-                                   description: Text("Items saved to Photos → Remmich will appear here. Download history is separate."))
+                                   description: Text("Items saved to Photos → Remmich will appear here. Check Save History for transfer activity."))
         case let .failed(message):
-            ContentUnavailableView("Downloads Unavailable", systemImage: "exclamationmark.circle", description: Text(message))
+            ContentUnavailableView("On Device Unavailable", systemImage: "exclamationmark.circle", description: Text(message))
         }
     }
 

@@ -11,12 +11,12 @@ nonisolated enum LibraryAssetCollection: String, CaseIterable, Identifiable {
         self
     }
 
-    var usesRecentWindow: Bool {
-        self == .recentlyTaken || self == .recentlyAdded
+    var showsCardCount: Bool {
+        self != .recentlyTaken && self != .recentlyAdded
     }
 
     var separatesMedia: Bool {
-        usesRecentWindow || self == .favorites
+        self == .recentlyTaken || self == .recentlyAdded || self == .favorites
     }
 
     var symbol: String {
@@ -50,7 +50,7 @@ nonisolated enum LibraryAssetCollection: String, CaseIterable, Identifiable {
 }
 
 nonisolated struct LibraryCollectionPreview: Sendable {
-    let count: Int
+    let count: Int?
     let cover: TimelineAssetSummary?
 }
 
@@ -314,56 +314,19 @@ actor LibraryScopedTimelineReader: TimelineReading {
         []
     }
 
-    func preview(for collection: LibraryAssetCollection, now: Date = .now) async throws -> LibraryCollectionPreview {
+    func preview(for collection: LibraryAssetCollection) async throws -> LibraryCollectionPreview {
         let summaries = try await bucketSummaries(query: query)
-        if !collection.usesRecentWindow {
-            let cover = collection == .trash ? nil : try await newestCover(from: summaries)
-            return .init(count: summaries.reduce(0) { $0 + $1.assetCount }, cover: cover)
+        let count = collection.showsCardCount ? summaries.reduce(0) { $0 + $1.assetCount } : nil
+        if collection == .trash {
+            return .init(count: count, cover: nil)
         }
-
-        let cutoff = now.addingTimeInterval(-7 * 86400)
-        // Capture buckets use capture-local month boundaries. Include the
-        // preceding day to cover assets whose capture offset crosses midnight.
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = .gmt
-        let firstMonth = calendar.dateInterval(of: .month, for: cutoff.addingTimeInterval(-86400))?.start ?? cutoff
-        var matches: [String: TimelineAssetSummary] = [:]
-        var newestAvailable: TimelineAssetSummary?
-        var olderBuckets: [TimelineBucketSummary] = []
-        for bucket in summaries {
-            guard (bucket.id.displayDate ?? .distantPast) >= firstMonth else {
-                olderBuckets.append(bucket)
-                continue
-            }
-            try Task.checkCancellation()
-            let values = try await assets(in: bucket.id, query: query)
-            newestAvailable = newestAvailable ?? values.first
-            for asset in values {
-                let timestamp = collection == .recentlyAdded ? asset.uploadedAt : asset.capturedAt
-                if timestamp >= cutoff, timestamp <= now {
-                    matches[asset.id] = asset
-                }
-            }
-        }
-        let cover = matches.values.max { first, second in
-            let lhs = collection == .recentlyAdded ? first.uploadedAt : first.capturedAt
-            let rhs = collection == .recentlyAdded ? second.uploadedAt : second.capturedAt
-            return lhs == rhs ? first.id < second.id : lhs < rhs
-        }
-        if let cover = cover ?? newestAvailable {
-            return .init(count: matches.count, cover: cover)
-        }
-        return try await .init(count: matches.count, cover: newestCover(from: olderBuckets))
-    }
-
-    private func newestCover(from summaries: [TimelineBucketSummary]) async throws -> TimelineAssetSummary? {
         for bucket in summaries {
             try Task.checkCancellation()
-            if let cover = try await assets(in: bucket.id, query: query).first {
-                return cover
+            if let cover = try await matchingAssets(in: bucket.id).first {
+                return .init(count: count, cover: cover)
             }
         }
-        return nil
+        return .init(count: count, cover: nil)
     }
 }
 
@@ -377,19 +340,13 @@ struct LibraryAssetCollectionCard: View {
     }
 
     var body: some View {
-        LibraryCollectionCard(title: collection.rawValue, detail: detail, symbol: collection.symbol,
+        LibraryCollectionCard(title: collection.rawValue, count: preview?.count, symbol: collection.symbol,
                               appearance: preview?.cover == nil ? .glass : .photographic)
         {
             if let asset = preview?.cover {
                 LibraryAssetCover(assetID: asset.id, revision: asset.thumbnailRevision, media: media)
             }
         }
-    }
-
-    private var detail: String {
-        guard let preview else { return collection.usesRecentWindow ? "Past 7 days" : "" }
-        let count = "\(preview.count.formatted()) \(preview.count == 1 ? "item" : "items")"
-        return collection.usesRecentWindow ? "\(count) · past 7 days" : count
     }
 }
 

@@ -43,7 +43,7 @@ nonisolated struct LibrarySharedLink: Identifiable, Sendable {
         if let expiresAt {
             return "Expires \(expiresAt.formatted(date: .abbreviated, time: .omitted))"
         }
-        return album != nil ? "Album" : "\(assets.count.formatted()) \(assets.count == 1 ? "item" : "items")"
+        return album != nil ? "Album" : ""
     }
 }
 
@@ -95,7 +95,7 @@ struct LibrarySharedLinksCard: View {
         LibraryHubLink {
             LibrarySharedLinksView(store: store, source: source, media: media, assetDetails: assetDetails, context: context)
         } label: {
-            LibraryCollectionCard(title: "Shared Links", detail: detail, symbol: "link",
+            LibraryCollectionCard(title: "Shared Links", count: store.links?.count, symbol: "link",
                                   appearance: cover == nil ? .glass : .photographic)
             {
                 if let cover {
@@ -105,11 +105,6 @@ struct LibrarySharedLinksCard: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("library-shared-links")
-    }
-
-    private var detail: String {
-        guard let count = store.links?.count else { return "" }
-        return "\(count.formatted()) \(count == 1 ? "link" : "links")"
     }
 }
 
@@ -169,7 +164,8 @@ private struct LibrarySharedLinksView: View {
 
     private func card(for link: LibrarySharedLink) -> some View {
         let cover = link.cover
-        return LibraryCollectionCard(title: link.title, detail: link.detail, symbol: link.symbol,
+        let detail = link.detail
+        return LibraryCollectionCard(title: link.title, count: detail.isEmpty ? link.assets.count : nil, detail: detail, symbol: link.symbol,
                                      appearance: cover == nil ? .glass : .photographic)
         {
             if let cover {

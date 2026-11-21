@@ -69,7 +69,7 @@ struct LibraryMemoriesCard: View {
             LibraryMemoriesView(source: source, catalog: catalog, media: media, assetDetails: assetDetails, context: context)
         } label: {
             let cover = catalog.cover
-            LibraryCollectionCard(title: "Memories", detail: catalog.finished ? "\(catalog.memories.count.formatted()) memories" : "",
+            LibraryCollectionCard(title: "Memories", count: catalog.finished ? catalog.memories.count : nil,
                                   symbol: "sparkles.rectangle.stack", appearance: cover == nil ? .glass : .photographic)
             {
                 if let cover {
