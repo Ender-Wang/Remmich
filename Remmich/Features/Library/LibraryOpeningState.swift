@@ -47,7 +47,6 @@ final class LibraryOpeningState {
     @ObservationIgnored private var preferenceTask: Task<LibraryFeaturePreferences?, Never>?
     @ObservationIgnored private var coverImages: (pipeline: ImagePipeline, prefetcher: ImagePrefetcher)?
     @ObservationIgnored private var destinationImages: [ObjectIdentifier: ImagePrefetcher] = [:]
-    @ObservationIgnored private var didPrepareDestinations = false
 
     func collection(_ collection: LibraryAssetCollection, source: ImmichTimelineRepository) -> LibraryCollectionOpening? {
         configureCollections(source: source)
@@ -57,12 +56,11 @@ final class LibraryOpeningState {
     private func configureCollections(source: ImmichTimelineRepository) {
         guard collections.isEmpty else { return }
         let placesQuery = LibraryDirectoryStore.placeQuery
-        let placeOpening = LibraryOpeningBuckets(source: source, query: placesQuery)
-        places.placeOpening = placeOpening
+        let placeOpening = places.placeReader(source: source)
         collections = Dictionary(uniqueKeysWithValues: LibraryAssetCollection.allCases.map { collection in
             let query = collection.query
             let opening = query == placesQuery ? placeOpening : LibraryOpeningBuckets(source: source, query: query)
-            return (collection, LibraryCollectionOpening(collection: collection, source: source, opening: opening))
+            return (collection, LibraryCollectionOpening(collection: collection, opening: opening))
         })
     }
 
@@ -99,7 +97,7 @@ final class LibraryOpeningState {
         await loadPreferences(source: source)
         let scale = viewport.scale
         var jobs: [@MainActor @Sendable () async -> Void] = LibraryAssetCollection.allCases.filter { $0 != .trash }.map { collection in
-            { await self.prepareCollectionCover(collection, media: media, scale: scale, refresh: true) }
+            { await self.prepareCollectionCover(collection, media: media, scale: scale) }
         }
         if preferences?.memoriesEnabled == true {
             jobs.append {
@@ -149,7 +147,6 @@ final class LibraryOpeningState {
     func prepareDestinations(source: ImmichTimelineRepository, media: MediaLibraryController, viewport: LibraryOpeningViewport) async {
         configureCollections(source: source)
         await loadPreferences(source: source)
-        let refreshCovers = didPrepareDestinations
         let scale = viewport.scale
         let limit = viewport.cardLimit
         let layout = PhotosPresentationState().preferences.assetLayout
@@ -160,7 +157,7 @@ final class LibraryOpeningState {
                 if let videos = opening.videos {
                     await self.prepareTimeline(videos, runtime: opening.videoRuntime, media: media, viewport: viewport, layout: layout)
                 }
-                await self.prepareCollectionCover(collection, media: media, scale: scale, refresh: refreshCovers)
+                await self.prepareCollectionCover(collection, media: media, scale: scale)
             }
         }
         if preferences?.memoriesEnabled == true {
@@ -199,9 +196,6 @@ final class LibraryOpeningState {
             }
         }
         await run(jobs)
-        if !Task.isCancelled {
-            didPrepareDestinations = true
-        }
     }
 
     func stopDestinationImages() {
@@ -231,12 +225,12 @@ final class LibraryOpeningState {
         _ = await task.value
     }
 
-    private func prepareCollectionCover(_ collection: LibraryAssetCollection, media: MediaLibraryController, scale: CGFloat, refresh: Bool) async {
+    private func prepareCollectionCover(_ collection: LibraryAssetCollection, media: MediaLibraryController, scale: CGFloat) async {
         guard !Task.isCancelled, let opening = collections[collection] else { return }
         if let date = previewDates[collection], Date.now.timeIntervalSince(date) < 5 {
             return
         }
-        guard let preview = try? await opening.preview(for: collection, refresh: refresh && previews[collection] != nil),
+        guard let preview = try? await opening.preview(for: collection),
               !Task.isCancelled else { return }
         previewDates[collection] = .now
         previews[collection] = preview

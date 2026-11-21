@@ -88,8 +88,7 @@ struct TimelineCaptureDateFormattingTests {
                 .init(id: november, assetCount: 2), .init(id: october, assetCount: 1),
             ], assets: [november: [newest, earlier], october: [oldest]])
             let query = TimelineQuery()
-            let reader = LibraryScopedTimelineReader(source: source, query: query, media: .photos,
-                                                     opening: LibraryOpeningBuckets(source: source, query: query))
+            let reader = LibraryScopedTimelineReader(source: LibraryOpeningBuckets(source: source, query: query), query: query, media: .photos)
             let store = PhotosTimelineStore(reader: reader, openingSource: .init(label: "Test") { _ in
                 try await reader.openingWindow(limit: 1)
             })
@@ -147,6 +146,20 @@ struct TimelineCaptureDateFormattingTests {
             _ = try await opening.assets(in: month, query: added)
             #expect(await source.requestedSummaryQueries == [taken, added])
             #expect(await source.requestedAssetQueries == [taken, added])
+
+            let photos = LibraryScopedTimelineReader(source: opening, query: taken, media: .photos)
+            let videos = LibraryScopedTimelineReader(source: opening, query: taken, media: .videos)
+            _ = try await photos.openingWindow(limit: 1)
+            _ = try await photos.assets(in: month, query: taken)
+            _ = try await videos.assets(in: month, query: taken)
+            #expect(await source.requestedAssetQueries == [taken, added])
+
+            await opening.invalidateCompletedReads()
+            _ = try await photos.bucketSummaries(query: taken)
+            _ = try await photos.assets(in: month, query: taken)
+            _ = try await videos.assets(in: month, query: taken)
+            #expect(await source.requestedSummaryQueries == [taken, added, taken])
+            #expect(await source.requestedAssetQueries == [taken, added, taken])
         }
     #endif
 

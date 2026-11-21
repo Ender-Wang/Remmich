@@ -366,6 +366,10 @@ actor ImmichTimelineRepository: TimelineReading, VideoReading, AssetDetailReadin
         return (client, generation)
     }
 
+    func timelineReadGeneration() throws -> UInt64 {
+        try requestContext().1
+    }
+
     private func requireCurrent(_ requestGeneration: UInt64) throws {
         guard requestGeneration == generation else {
             throw TimelineReadError.staleGeneration

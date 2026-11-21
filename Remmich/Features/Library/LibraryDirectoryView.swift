@@ -53,10 +53,19 @@ final class LibraryDirectoryStore {
     private(set) var error: String?
     private(set) var finished = false
     @ObservationIgnored private var loadTask: Task<Void, Never>?
-    @ObservationIgnored var placeOpening: LibraryOpeningBuckets?
+    @ObservationIgnored private var placeOpening: LibraryOpeningBuckets?
     private var buckets: [TimelineBucketSummary]?
     private var nextBucket = 0
     private var places: Set<TimelinePlace> = []
+
+    func placeReader(source: ImmichTimelineRepository) -> LibraryOpeningBuckets {
+        if let placeOpening {
+            return placeOpening
+        }
+        let reader = LibraryOpeningBuckets(source: source, query: Self.placeQuery)
+        placeOpening = reader
+        return reader
+    }
 
     func loadNext(_ directory: LibraryDirectory, source: ImmichTimelineRepository, openingLimit: Int? = nil) async {
         if let loadTask {
@@ -89,11 +98,7 @@ final class LibraryDirectoryStore {
                 entries = partners.map(LibraryDirectoryEntry.partner)
                 finished = true
             case .places:
-                let reader: any TimelineReading = if let placeOpening {
-                    placeOpening
-                } else {
-                    source
-                }
+                let reader = placeReader(source: source)
                 if buckets == nil {
                     buckets = try await reader.bucketSummaries(query: Self.placeQuery)
                 }
@@ -196,7 +201,8 @@ private struct LibraryDirectoryView: View {
                 LibraryTimelineViewport { clearance in
                     LibraryTimelineLane(store: timeline, name: selected.name, active: true, media: media, assetDetails: assetDetails,
                                         tabSelectionState: context.tabSelectionState, viewerPresentations: context.viewerPresentations,
-                                        tabBarTop: context.tabBarTop, clearance: clearance)
+                                        tabBarTop: context.tabBarTop, clearance: clearance,
+                                        sharedReads: directory == .places ? store.placeReader(source: source) : nil)
                         .id(selected.id)
                 } header: {
                     header(selected, portraitWidth: 72)
@@ -326,7 +332,12 @@ private struct LibraryDirectoryView: View {
             let day = TimelineCaptureDay(capturedAt: cover.captureLocalDate)
             newestBucket = .init(rawValue: String(format: "%04d-%02d-01", day.year, day.month))
         }
-        let store = PhotosTimelineStore(reader: LibraryScopedTimelineReader(source: source, query: query, media: nil,
+        let reader: any TimelineReading = if place != nil {
+            store.placeReader(source: source)
+        } else {
+            source
+        }
+        let store = PhotosTimelineStore(reader: LibraryScopedTimelineReader(source: reader, query: query, media: nil,
                                                                             place: place, newestBucket: newestBucket),
                                         hasUnfilteredBucketCounts: place != nil)
         withAnimation(reduceMotion ? nil : .smooth(duration: 0.35)) {
