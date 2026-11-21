@@ -142,6 +142,13 @@ nonisolated struct TimelinePlace: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
+nonisolated struct LibraryFeaturePreferences: Sendable {
+    let foldersEnabled: Bool
+    let sharedLinksEnabled: Bool
+    let memoriesEnabled: Bool
+    let peopleEnabled: Bool
+}
+
 nonisolated struct LibraryPerson: Identifiable, Hashable, Sendable {
     let id: String
     let name: String

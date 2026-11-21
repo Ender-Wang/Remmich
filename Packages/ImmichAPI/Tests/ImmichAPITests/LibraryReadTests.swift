@@ -82,7 +82,7 @@ struct LibraryReadTests {
     }
 
     @Test(arguments: [(true, false), (false, true)])
-    func folderAvailabilityUsesTheFeaturePreference(enabled: Bool, sidebarWeb: Bool) async throws {
+    func libraryAvailabilityUsesFeaturePreferences(enabled: Bool, sidebarWeb: Bool) async throws {
         let client = try Self.client { request, operation in
             #expect(operation == "getMyPreferences")
             #expect(request.url?.path == "/api/users/me/preferences")
@@ -93,17 +93,21 @@ struct LibraryReadTests {
               "download":{"archiveSize":100000,"includeEmbeddedVideos":false},
               "emailNotifications":{"enabled":false,"albumInvite":false,"albumUpdate":false},
               "folders":{"enabled":\#(enabled),"sidebarWeb":\#(sidebarWeb)},
-              "memories":{"enabled":true,"duration":5,"sidebarWeb":false},
-              "people":{"enabled":true,"sidebarWeb":false},
+              "memories":{"enabled":\#(!enabled),"duration":5,"sidebarWeb":\#(!sidebarWeb)},
+              "people":{"enabled":\#(enabled),"sidebarWeb":\#(sidebarWeb)},
               "purchase":{"showSupportBadge":false,"hideBuyButtonUntil":""},
               "ratings":{"enabled":false},
               "recentlyAdded":{"sidebarWeb":false},
-              "sharedLinks":{"enabled":true,"sidebarWeb":false},
+              "sharedLinks":{"enabled":\#(!enabled),"sidebarWeb":\#(!sidebarWeb)},
               "tags":{"enabled":true,"sidebarWeb":false}
             }
             """#
         }
-        #expect(try await client.foldersEnabled() == enabled)
+        let preferences = try await client.libraryPreferences()
+        #expect(preferences.foldersEnabled == enabled)
+        #expect(preferences.sharedLinksEnabled == !enabled)
+        #expect(preferences.memoriesEnabled == !enabled)
+        #expect(preferences.peopleEnabled == enabled)
     }
 
     private static func client(

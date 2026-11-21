@@ -193,11 +193,14 @@ actor ImmichTimelineRepository: TimelineReading, VideoReading, AssetDetailReadin
         }
     }
 
-    func libraryFoldersEnabled() async throws -> Bool {
+    func libraryPreferences() async throws -> LibraryFeaturePreferences {
         let (client, requestGeneration) = try requestContext()
-        let enabled = try await client.foldersEnabled()
+        let preferences = try await client.libraryPreferences()
         try requireCurrent(requestGeneration)
-        return enabled
+        return LibraryFeaturePreferences(foldersEnabled: preferences.foldersEnabled,
+                                         sharedLinksEnabled: preferences.sharedLinksEnabled,
+                                         memoriesEnabled: preferences.memoriesEnabled,
+                                         peopleEnabled: preferences.peopleEnabled)
     }
 
     func libraryFolderTree() async throws -> LibraryFolderTree {

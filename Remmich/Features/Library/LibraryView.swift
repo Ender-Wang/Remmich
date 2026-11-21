@@ -29,7 +29,7 @@ struct LibraryView: View {
     @State private var accountContentMounted = false
     @State private var accountExpansion: CGFloat = 0
     @State private var photosObserver = UUID()
-    @State private var foldersEnabled = false
+    @State private var libraryPreferences: LibraryFeaturePreferences?
     @State private var cardDestination: LibraryHubDestination?
 
     private let avatarSize: CGFloat = 44
@@ -87,17 +87,23 @@ struct LibraryView: View {
                                 collectionCard(.recentlyTaken, source: collectionSource, media: media, assetDetails: assetDetails)
                                 collectionCard(.recentlyAdded, source: collectionSource, media: media, assetDetails: assetDetails)
                                 collectionCard(.favorites, source: collectionSource, media: media, assetDetails: assetDetails)
-                                LibraryMemoriesCard(source: collectionSource, media: media, assetDetails: assetDetails,
-                                                    context: collectionNavigation)
-                                LibraryDirectoryCard(directory: .people, source: collectionSource, media: media,
-                                                     assetDetails: assetDetails, context: collectionNavigation)
+                                if libraryPreferences?.memoriesEnabled == true {
+                                    LibraryMemoriesCard(source: collectionSource, media: media, assetDetails: assetDetails,
+                                                        context: collectionNavigation)
+                                }
+                                if libraryPreferences?.peopleEnabled == true {
+                                    LibraryDirectoryCard(directory: .people, source: collectionSource, media: media,
+                                                         assetDetails: assetDetails, context: collectionNavigation)
+                                }
                                 LibraryDirectoryCard(directory: .places, source: collectionSource, media: media,
                                                      assetDetails: assetDetails, context: collectionNavigation)
-                                LibrarySharedLinksCard(source: collectionSource, media: media, assetDetails: assetDetails,
-                                                       context: collectionNavigation)
+                                if libraryPreferences?.sharedLinksEnabled == true {
+                                    LibrarySharedLinksCard(source: collectionSource, media: media, assetDetails: assetDetails,
+                                                           context: collectionNavigation)
+                                }
                                 LibraryDirectoryCard(directory: .partners, source: collectionSource, media: media,
                                                      assetDetails: assetDetails, context: collectionNavigation)
-                                if foldersEnabled {
+                                if libraryPreferences?.foldersEnabled == true {
                                     LibraryFoldersCard(source: collectionSource, media: media, assetDetails: assetDetails,
                                                        context: collectionNavigation)
                                 }
@@ -197,11 +203,11 @@ struct LibraryView: View {
             savedPhotos.configure(photosContext)
             await savedPhotos.refresh(reuseInFlight: true)
         }
-        .task(id: folderPreferenceEndpoint) {
-            guard folderPreferenceEndpoint != nil, let collectionSource else { return }
-            let enabled = await (try? collectionSource.libraryFoldersEnabled()) == true
-            guard !Task.isCancelled else { return }
-            foldersEnabled = enabled
+        .task(id: libraryPreferenceEndpoint) {
+            guard libraryPreferenceEndpoint != nil, let collectionSource,
+                  let preferences = try? await collectionSource.libraryPreferences(), !Task.isCancelled
+            else { return }
+            libraryPreferences = preferences
         }
         .onAppear { savedPhotos.observe(owner: photosObserver) }
         .onDisappear { savedPhotos.stopObserving(owner: photosObserver) }
@@ -216,7 +222,7 @@ struct LibraryView: View {
         SavedPhotosContext(scope: MediaAccountScope(session: session), journal: exports?.journal)
     }
 
-    private var folderPreferenceEndpoint: URL? {
+    private var libraryPreferenceEndpoint: URL? {
         scenePhase == .active ? collectionNavigation.activeEndpoint : nil
     }
 

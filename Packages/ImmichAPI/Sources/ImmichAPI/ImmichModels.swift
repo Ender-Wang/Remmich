@@ -373,6 +373,13 @@ public struct ImmichPartner: Identifiable, Sendable {
     public let profileChangedAt: Date
 }
 
+public struct ImmichLibraryPreferences: Sendable {
+    public let foldersEnabled: Bool
+    public let sharedLinksEnabled: Bool
+    public let memoriesEnabled: Bool
+    public let peopleEnabled: Bool
+}
+
 public struct ImmichSharedLink: Identifiable, Sendable {
     public let id: String
     public let description: String?

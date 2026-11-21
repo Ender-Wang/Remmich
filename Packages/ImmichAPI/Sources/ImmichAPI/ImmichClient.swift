@@ -439,10 +439,19 @@ public actor ImmichClient {
     }
 
     public func foldersEnabled() async throws -> Bool {
+        try await libraryPreferences().foldersEnabled
+    }
+
+    public func libraryPreferences() async throws -> ImmichLibraryPreferences {
         guard credential != nil else { throw ImmichAPIError.unauthorized }
         do {
             switch try await makeClient().getMyPreferences(.init()) {
-            case let .ok(response): return try response.body.json.folders.enabled
+            case let .ok(response):
+                let preferences = try response.body.json
+                return ImmichLibraryPreferences(foldersEnabled: preferences.folders.enabled,
+                                                sharedLinksEnabled: preferences.sharedLinks.enabled,
+                                                memoriesEnabled: preferences.memories.enabled,
+                                                peopleEnabled: preferences.people.enabled)
             case let .undocumented(statusCode, _): throw Self.map(status: statusCode)
             }
         } catch { throw Self.map(error) }
