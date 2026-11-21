@@ -155,7 +155,7 @@ nonisolated struct LibraryPerson: Identifiable, Hashable, Sendable {
     let updatedAt: Date
 
     var displayName: String {
-        name.isEmpty ? "Unnamed person" : name
+        name.isEmpty ? "Unnamed" : name
     }
 }
 

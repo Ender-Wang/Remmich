@@ -24,6 +24,36 @@ nonisolated enum LibraryDirectory: String {
     }
 }
 
+nonisolated struct LibraryPortraitCoverLayout {
+    static let spacing: CGFloat = 6
+    static let topPadding: CGFloat = 8
+
+    let columns: Int
+    let count: Int
+    let size: CGFloat
+
+    init(width: CGFloat, height: CGFloat, count: Int, expands: Bool, footerHeight: CGFloat) {
+        let space = max(1, height - footerHeight - Self.topPadding)
+        let capacity = max(0, count)
+        let availableWidth = max(1, width - 24)
+        func size(columns: Int, rows: Int) -> CGFloat {
+            min(52, max(1, (availableWidth - CGFloat(columns - 1) * Self.spacing) / CGFloat(columns)),
+                max(1, (space - CGFloat(rows - 1) * Self.spacing) / CGFloat(rows)))
+        }
+        if expands, capacity >= 8, size(columns: 4, rows: 2) >= 38 {
+            columns = 4
+            self.count = 8
+        } else if expands, capacity >= 6, size(columns: 3, rows: 2) >= 32 {
+            columns = 3
+            self.count = 6
+        } else {
+            columns = 2
+            self.count = min(capacity, 4)
+        }
+        self.size = size(columns: columns, rows: self.count > columns ? 2 : 1)
+    }
+}
+
 private enum LibraryDirectoryEntry: Identifiable {
     case person(LibraryPerson)
     case place(TimelinePlace, cover: TimelineAssetSummary)
@@ -125,21 +155,24 @@ final class LibraryDirectoryStore {
         }
     }
 
-    func imageRequests(directory _: LibraryDirectory, media: MediaLibraryController, scale: CGFloat,
-                       cardWidth: CGFloat, limit: Int, forHub: Bool) -> [ImageRequest]
+    func imageRequests(directory: LibraryDirectory, media: MediaLibraryController, scale: CGFloat,
+                       cardWidth: CGFloat, limit: Int, forHub: Bool, footerHeight: CGFloat = 52) -> [ImageRequest]
     {
-        entries.prefix(limit).compactMap { entry in
+        let layout = LibraryPortraitCoverLayout(width: cardWidth, height: cardWidth / LibraryCollectionCardMetrics.aspectRatio,
+                                                count: entries.count, expands: directory == .people, footerHeight: footerHeight)
+        return entries.prefix(forHub ? min(limit, layout.count) : limit).compactMap { entry in
             if case let .place(_, asset) = entry {
                 let descriptor = LibraryCollectionCardMetrics.coverDescriptor(.init(asset), scale: scale)
                 return media.imageRequest(for: descriptor, priority: .low)
             }
-            let size = forHub ? cardWidth / 4 : cardWidth
+            let size = forHub ? layout.size : cardWidth
             return LibraryDirectoryPortrait.request(for: entry, media: media, pixels: max(1, Int((size * scale).rounded(.up))))
         }
     }
 }
 
 struct LibraryDirectoryCard: View {
+    @ScaledMetric(relativeTo: .caption) private var footerHeight: CGFloat = 52
     let directory: LibraryDirectory
     let source: ImmichTimelineRepository
     let media: MediaLibraryController
@@ -156,19 +189,19 @@ struct LibraryDirectoryCard: View {
             {
                 if directory != .places {
                     GeometryReader { geometry in
-                        let size = min(geometry.size.width / 4, geometry.size.height / 3)
-                        let people = Array(store.entries.prefix(4))
-                        VStack(spacing: 6) {
-                            ForEach([0, 2], id: \.self) { offset in
-                                HStack(spacing: 6) {
-                                    ForEach(people.dropFirst(offset).prefix(2)) { entry in
-                                        LibraryDirectoryPortrait(entry: entry, media: media, size: size)
+                        let layout = LibraryPortraitCoverLayout(width: geometry.size.width, height: geometry.size.height,
+                                                                count: store.entries.count, expands: directory == .people, footerHeight: footerHeight)
+                        VStack(spacing: LibraryPortraitCoverLayout.spacing) {
+                            ForEach(Array(stride(from: 0, to: layout.count, by: layout.columns)), id: \.self) { offset in
+                                HStack(spacing: LibraryPortraitCoverLayout.spacing) {
+                                    ForEach(store.entries[offset ..< min(layout.count, offset + layout.columns)]) { entry in
+                                        LibraryDirectoryPortrait(entry: entry, media: media, size: layout.size)
                                     }
                                 }
                             }
                         }
                         .frame(maxWidth: .infinity)
-                        .padding(.top, 8)
+                        .padding(.top, LibraryPortraitCoverLayout.topPadding)
                     }
                 } else if case let .place(_, cover)? = store.entries.first {
                     LibraryAssetCover(assetID: cover.id, revision: cover.thumbnailRevision, media: media)

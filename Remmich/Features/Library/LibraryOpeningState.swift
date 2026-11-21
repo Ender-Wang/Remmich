@@ -8,6 +8,7 @@ nonisolated struct LibraryOpeningViewport: Sendable {
     let scale: CGFloat
     let isPhone: Bool
     let isDark: Bool
+    let cardFooterHeight: CGFloat
 
     @MainActor init(window: UIWindow) {
         size = window.bounds.size
@@ -17,6 +18,7 @@ nonisolated struct LibraryOpeningViewport: Sendable {
         scale = window.traitCollection.displayScale
         isPhone = window.traitCollection.userInterfaceIdiom == .phone
         isDark = window.traitCollection.userInterfaceStyle == .dark
+        cardFooterHeight = UIFontMetrics(forTextStyle: .caption1).scaledValue(for: 52, compatibleWith: window.traitCollection)
     }
 
     var cards: LibraryCardRows {
@@ -252,9 +254,10 @@ final class LibraryOpeningState {
     private func prepareDirectoryCover(_ directory: LibraryDirectory, store: LibraryDirectoryStore, source: ImmichTimelineRepository,
                                        media: MediaLibraryController, viewport: LibraryOpeningViewport) async
     {
-        await store.loadNext(directory, source: source, openingLimit: directory == .places ? 1 : 4)
+        let limit = directory == .places ? 1 : (directory == .people ? 8 : 4)
+        await store.loadNext(directory, source: source, openingLimit: limit)
         prefetch(store.imageRequests(directory: directory, media: media, scale: viewport.scale,
-                                     cardWidth: viewport.cards.itemWidth, limit: directory == .places ? 1 : 4, forHub: true),
+                                     cardWidth: viewport.cards.itemWidth, limit: limit, forHub: true, footerHeight: viewport.cardFooterHeight),
                  media: media, forHub: true)
     }
 
