@@ -77,6 +77,77 @@ struct TimelineCaptureDateFormattingTests {
             let first = try #require(buckets.first)
             #expect(try await reader.assets(in: first.id, query: .init()).map(\.id) == ["current"])
         }
+
+        @MainActor @Test func preloadedLibraryTimelineReusesItsOpeningMonthAndKeepsItsVisibleAnchor() async throws {
+            let newest = try Self.asset(instant: "2026-11-20T00:00:00Z", offset: 0, id: "newest")
+            let earlier = try Self.asset(instant: "2026-11-15T00:00:00Z", offset: 0, id: "earlier")
+            let oldest = try Self.asset(instant: "2026-10-15T00:00:00Z", offset: 0, id: "oldest")
+            let november = TimelineBucketID(rawValue: "2026-11-01")
+            let october = TimelineBucketID(rawValue: "2026-10-01")
+            let source = OpeningTimelineTestReader(summaries: [
+                .init(id: november, assetCount: 2), .init(id: october, assetCount: 1),
+            ], assets: [november: [newest, earlier], october: [oldest]])
+            let query = TimelineQuery()
+            let reader = LibraryScopedTimelineReader(source: source, query: query, media: .photos,
+                                                     opening: LibraryOpeningBuckets(source: source, query: query))
+            let store = PhotosTimelineStore(reader: reader, openingSource: .init(label: "Test") { _ in
+                try await reader.openingWindow(limit: 1)
+            })
+
+            await store.preloadOpening()
+            #expect(store.isOpeningWindow)
+            #expect(store.semanticAssetsSnapshot().map(\.id) == ["newest"])
+            #expect(await source.requestedBuckets == [november])
+            let anchor = TimelineVisibleAnchor(bucketID: november, assetID: newest.id)
+            store.updateVisibleAnchor(anchor)
+
+            let opening = Task { await store.load() }
+            for _ in 0 ..< 100 {
+                if store.awaitsOpeningDisplay {
+                    break
+                }
+                await Task.yield()
+            }
+            store.resumeOpeningHistory()
+            await opening.value
+
+            #expect(!store.isOpeningWindow)
+            #expect(store.visibleAnchor == anchor)
+            #expect(store.semanticAssetsSnapshot().map(\.id) == ["newest", "earlier"])
+            #expect(await source.requestedBuckets == [november])
+
+            await store.loadOlderSemanticPage()
+            #expect(store.visibleAnchor == anchor)
+            #expect(store.semanticAssetsSnapshot().map(\.id) == ["newest", "earlier", "oldest"])
+            #expect(await source.requestedBuckets == [november, october])
+        }
+
+        @MainActor @Test func recentlyTakenAndPlacesShareReadsByFullQuery() async throws {
+            let month = TimelineBucketID(rawValue: "2026-10-01")
+            let taken = LibraryAssetCollection.recentlyTaken.query
+            let places = LibraryDirectoryStore.placeQuery
+            let added = LibraryAssetCollection.recentlyAdded.query
+            let source = OpeningTimelineTestReader(summaries: [.init(id: month, assetCount: 0)], assets: [:])
+            let opening = LibraryOpeningBuckets(source: source, query: taken)
+
+            #expect(places == taken)
+            #expect(added != taken)
+            async let takenSummaries = opening.bucketSummaries(query: taken)
+            async let placesSummaries = opening.bucketSummaries(query: places)
+            let (timeline, directory) = try await (takenSummaries, placesSummaries)
+            #expect(timeline == directory)
+
+            async let takenAssets = opening.assets(in: month, query: taken)
+            async let placesAssets = opening.assets(in: month, query: places)
+            _ = try await (takenAssets, placesAssets)
+            #expect(await source.requestedSummaryQueries == [taken])
+            #expect(await source.requestedAssetQueries == [taken])
+
+            _ = try await opening.bucketSummaries(query: added)
+            _ = try await opening.assets(in: month, query: added)
+            #expect(await source.requestedSummaryQueries == [taken, added])
+            #expect(await source.requestedAssetQueries == [taken, added])
+        }
     #endif
 
     @Test(arguments: [
@@ -170,3 +241,33 @@ struct TimelineCaptureDateFormattingTests {
         )
     }
 }
+
+#if canImport(UIKit)
+    private actor OpeningTimelineTestReader: TimelineReading {
+        let summaries: [TimelineBucketSummary]
+        let assets: [TimelineBucketID: [TimelineAssetSummary]]
+        private(set) var requestedBuckets: [TimelineBucketID] = []
+        private(set) var requestedSummaryQueries: [TimelineQuery] = []
+        private(set) var requestedAssetQueries: [TimelineQuery] = []
+
+        init(summaries: [TimelineBucketSummary], assets: [TimelineBucketID: [TimelineAssetSummary]]) {
+            self.summaries = summaries
+            self.assets = assets
+        }
+
+        func bucketSummaries(query: TimelineQuery) -> [TimelineBucketSummary] {
+            requestedSummaryQueries.append(query)
+            return summaries
+        }
+
+        func assets(in bucket: TimelineBucketID, query: TimelineQuery) -> [TimelineAssetSummary] {
+            requestedBuckets.append(bucket)
+            requestedAssetQueries.append(query)
+            return assets[bucket, default: []]
+        }
+
+        func memories() -> [TimelineMemorySummary] {
+            []
+        }
+    }
+#endif

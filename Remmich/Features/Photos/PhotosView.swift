@@ -2276,8 +2276,7 @@ private struct TimelineMemoryCard: View {
     }
 
     private func coverDescriptor(for asset: TimelineMemoryAssetSummary) -> MediaRequestDescriptor {
-        .init(assetID: asset.id, updatedAt: asset.revision, derivative: .thumbnail,
-              targetPixels: .init(width: Int(width * displayScale), height: Int(height * displayScale)))
+        TimelineMemoryCardPresentation.coverDescriptor(for: asset, width: width, height: height, scale: displayScale)
     }
 
     private func runSlideshow() async {
@@ -2386,6 +2385,11 @@ private struct TimelineMemoryCard: View {
 }
 
 nonisolated enum TimelineMemoryCardPresentation {
+    static func coverDescriptor(for asset: TimelineMemoryAssetSummary, width: CGFloat, height: CGFloat, scale: CGFloat) -> MediaRequestDescriptor {
+        .init(assetID: asset.id, updatedAt: asset.revision, derivative: .thumbnail,
+              targetPixels: .init(width: max(1, Int(width * scale)), height: max(1, Int(height * scale))))
+    }
+
     static func itemCountLabel(_ count: Int) -> String {
         count == 1 ? "1 item" : "\(count.formatted()) items"
     }

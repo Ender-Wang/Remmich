@@ -1,7 +1,6 @@
 import AVFoundation
 import Foundation
 import Observation
-import OSLog
 import Photos
 import Synchronization
 import UIKit
@@ -78,7 +77,6 @@ nonisolated struct SavedPhotosContext: Equatable, Sendable {
 
 @MainActor @Observable
 final class SavedPhotosLibrary: NSObject {
-    private static let logger = Logger(subsystem: "io.github.ender-wang.Remmich", category: "SavedPhotos")
     nonisolated enum State: Equatable, Sendable {
         case loading, permission, denied, limitedUnavailable, missing, ambiguous, ready
         case failed(String)
@@ -111,9 +109,10 @@ final class SavedPhotosLibrary: NSObject {
     @ObservationIgnored private var context: SavedPhotosContext?
     @ObservationIgnored private var resolvedAlbumID: String?
     @ObservationIgnored private var generation = UUID()
-    @ObservationIgnored private var observers: Set<UUID> = []
-    @ObservationIgnored private var pending: Task<Snapshot, Error>?
-    @ObservationIgnored private var refreshTask: Task<Void, Never>?
+    @ObservationIgnored private var isObserving = false
+    @ObservationIgnored private var loadedAuthorization: PHAuthorizationStatus?
+    @ObservationIgnored private var inventoryLoad: (authorization: PHAuthorizationStatus, task: Task<Void, Never>)?
+    @ObservationIgnored private var changeRefresh: Task<Void, Never>?
     private var cardCover: (request: CardCoverRequest, image: UIImage)?
     @ObservationIgnored private var cardCoverLoad: CardCoverLoad?
 
@@ -180,9 +179,7 @@ final class SavedPhotosLibrary: NSObject {
 
     func configure(_ next: SavedPhotosContext) {
         guard context != next else { return }
-        pending?.cancel()
-        pending = nil
-        generation = UUID()
+        invalidateInventory()
         if context?.scope != next.scope {
             resolvedAlbumID = nil
             publishItems([])
@@ -192,75 +189,91 @@ final class SavedPhotosLibrary: NSObject {
         context = next
     }
 
-    func observe(owner: UUID) {
-        if observers.isEmpty {
-            PHPhotoLibrary.shared().register(self)
-        }
-        observers.insert(owner)
+    func startObserving() {
+        guard !isObserving else { return }
+        isObserving = true
+        PHPhotoLibrary.shared().register(self)
     }
 
-    func stopObserving(owner: UUID) {
-        observers.remove(owner)
-        guard observers.isEmpty else { return }
+    func stopObserving() {
+        guard isObserving else { return }
+        isObserving = false
         PHPhotoLibrary.shared().unregisterChangeObserver(self)
-        pending?.cancel()
-        pending = nil
-        refreshTask?.cancel()
-        refreshTask = nil
-        generation = UUID()
+        changeRefresh?.cancel()
+        changeRefresh = nil
+        invalidateInventory()
     }
 
     func requestAccess() async {
         guard let owner = context?.scope else { return }
         _ = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
-        guard !Task.isCancelled, context?.scope == owner, !observers.isEmpty else { return }
+        guard !Task.isCancelled, context?.scope == owner, isObserving else { return }
         await refresh()
     }
 
-    func refresh(reuseInFlight: Bool = false, priority: TaskPriority = .userInitiated) async {
-        guard let context else { return }
-        if reuseInFlight, let pending {
-            _ = try? await pending.value
+    func refresh() async {
+        guard !Task.isCancelled else { return }
+        loadedAuthorization = nil
+        await loadIfNeeded()
+    }
+
+    func loadIfNeeded(priority: TaskPriority = .userInitiated) async {
+        guard !Task.isCancelled, let context else { return }
+        let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        if loadedAuthorization == status {
             return
         }
-        pending?.cancel()
-        pending = nil
-        let owner = UUID()
-        generation = owner
-        let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        if let inventoryLoad, inventoryLoad.authorization == status {
+            await inventoryLoad.task.value
+            return
+        }
+        invalidateInventory()
         limited = status == .limited
         guard status == .authorized || status == .limited else {
             publishItems([])
             state = status == .notDetermined ? .permission : .denied
+            loadedAuthorization = status
             return
         }
+        let owner = generation
+        let load = Task(priority: priority) {
+            await readInventory(context, authorization: status, owner: owner, priority: priority)
+            if generation == owner {
+                inventoryLoad = nil
+            }
+        }
+        inventoryLoad = (status, load)
+        await load.value
+    }
+
+    private func invalidateInventory() {
+        generation = UUID()
+        loadedAuthorization = nil
+        inventoryLoad?.task.cancel()
+        inventoryLoad = nil
+    }
+
+    private func readInventory(_ context: SavedPhotosContext, authorization: PHAuthorizationStatus, owner: UUID, priority: TaskPriority) async {
+        guard !Task.isCancelled, generation == owner else { return }
         let preferredAlbumID = context.albumID ?? resolvedAlbumID
-        let startedAt = ContinuousClock.now
         let operation = Task.detached(priority: priority) { try Self.read(context, preferredAlbumID: preferredAlbumID) }
-        pending = operation
         do {
             let snapshot = try await withTaskCancellationHandler {
                 try await operation.value
             } onCancel: { operation.cancel() }
             guard !Task.isCancelled, generation == owner,
-                  PHPhotoLibrary.authorizationStatus(for: .readWrite) == status else { return }
+                  PHPhotoLibrary.authorizationStatus(for: .readWrite) == authorization else { return }
             publishItems(snapshot.items)
             albumTitle = snapshot.title
             resolvedAlbumID = snapshot.albumID
             state = snapshot.state == .missing && limited ? .limitedUnavailable : snapshot.state
-            if state == .ready {
-                let duration = String(describing: ContinuousClock.now - startedAt)
-                Self.logger.info("Timeline opening destination=downloads stage=inventory-ready assets=\(snapshot.items.count) elapsed=\(duration, privacy: .public)")
-            }
+            loadedAuthorization = authorization
         } catch is CancellationError {
             // A replacement query or departure owns the next result.
         } catch {
             guard generation == owner else { return }
             publishItems([])
             state = .failed(error.localizedDescription)
-        }
-        if generation == owner {
-            pending = nil
         }
     }
 
@@ -418,9 +431,10 @@ final class SavedPhotosLibrary: NSObject {
 extension SavedPhotosLibrary: PHPhotoLibraryChangeObserver {
     nonisolated func photoLibraryDidChange(_: PHChange) {
         Task { @MainActor [weak self] in
-            guard let self, !observers.isEmpty else { return }
-            refreshTask?.cancel()
-            refreshTask = Task { [weak self] in await self?.refresh() }
+            guard let self, isObserving else { return }
+            invalidateInventory()
+            changeRefresh?.cancel()
+            changeRefresh = Task { [weak self] in await self?.loadIfNeeded() }
         }
     }
 }

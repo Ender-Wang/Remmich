@@ -26,6 +26,12 @@ nonisolated struct LibraryCardRows {
         }
     }
 
+    func openingCount(viewportHeight: CGFloat, rowHeight: CGFloat) -> Int {
+        let rowStride = max(1, rowHeight + LibraryCollectionCardMetrics.spacing)
+        let rows = Int(ceil(max(1, viewportHeight) / rowStride))
+        return max(1, rows * TimelineGridOrder.openingScreenCount * columns)
+    }
+
     func identifiedRows<Item: Identifiable>(_ newestFirst: [Item]) -> [LibraryCardRow<Item>] {
         rows(newestFirst).compactMap { items in
             items.first.map { LibraryCardRow(id: $0.id, items: items) }

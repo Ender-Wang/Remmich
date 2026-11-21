@@ -123,42 +123,22 @@ struct DownloadsView: View {
                 }
             }
             ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    if !exports.ready {
-                        if let message = exports.message {
-                            ContentUnavailableView {
-                                Label("Downloads Unavailable", systemImage: "exclamationmark.circle")
-                            } description: { Text(message) } actions: {
-                                Button("Try Again") { exports.retryLoading() }
-                            }
-                        } else {
-                            ProgressView("Loading downloads…")
-                        }
-                    }
-                    if exports.jobs.isEmpty, exports.ready {
-                        ContentUnavailableView("No Downloads", systemImage: "arrow.down.circle")
-                    }
-                    let jobs = exports.jobs
-                    ForEach(jobs) { job in
-                        row(job)
-                            .modifier(DownloadHistoryRemoval(enabled: exports.canRemoveHistory(job),
-                                                             isFirst: jobs.first?.id == job.id,
-                                                             isLast: jobs.last?.id == job.id,
-                                                             id: job.id, revealedID: $revealedJob,
-                                                             confirm: { removingJob = job.id },
-                                                             remove: { removeHistory(job.id) }))
-                    }
-                    if let message = exports.message {
-                        Text(message).font(.footnote).foregroundStyle(.secondary)
+                Group {
+                    if contentHeightChanged == nil {
+                        LazyVStack(alignment: .leading, spacing: 0) { historyRows }
+                    } else {
+                        VStack(alignment: .leading, spacing: 0) { historyRows }
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 8)
                 .padding(.bottom, 8)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .fixedSize(horizontal: false, vertical: true)
                 .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
-                    measuredContentHeight = ceil(size.height)
+                    if contentHeightChanged != nil {
+                        measuredContentHeight = ceil(size.height)
+                    }
                 }
             }
             .scrollBounceBehavior(.basedOnSize)
@@ -235,12 +215,45 @@ struct DownloadsView: View {
         .presentationCompactAdaptation(.popover)
     }
 
+    @ViewBuilder private var historyRows: some View {
+        if !exports.ready {
+            if let message = exports.message {
+                ContentUnavailableView {
+                    Label("Downloads Unavailable", systemImage: "exclamationmark.circle")
+                } description: { Text(message) } actions: {
+                    Button("Try Again") { exports.retryLoading() }
+                }
+            } else {
+                ProgressView("Loading downloads…")
+            }
+        }
+        let jobs = exports.jobs
+        if jobs.isEmpty, exports.ready {
+            ContentUnavailableView("No Downloads", systemImage: "arrow.down.circle")
+        }
+        ForEach(jobs) { job in
+            row(job)
+                .modifier(DownloadHistoryRemoval(enabled: exports.canRemoveHistory(job),
+                                                 isFirst: jobs.first?.id == job.id, isLast: jobs.last?.id == job.id,
+                                                 id: job.id, revealedID: $revealedJob,
+                                                 confirm: { removingJob = job.id }, remove: { removeHistory(job.id) }))
+        }
+        if let message = exports.message {
+            Text(message).font(.footnote).foregroundStyle(.secondary)
+        }
+    }
+
+    nonisolated static func thumbnailDescriptor(for job: MediaExportJob, scale: CGFloat) -> MediaRequestDescriptor {
+        let pixels = max(1, Int(76 * scale))
+        return .init(assetID: job.assetID, updatedAt: job.revision, derivative: .thumbnail,
+                     targetPixels: .init(width: pixels, height: pixels))
+    }
+
     private func row(_ job: MediaExportJob) -> some View {
         HStack(alignment: .center, spacing: 12) {
             if let media = exports.media {
                 ImmichThumbnail(
-                    descriptor: .init(assetID: job.assetID, updatedAt: job.revision, derivative: .thumbnail,
-                                      targetPixels: .init(width: Int(76 * displayScale), height: Int(76 * displayScale))),
+                    descriptor: Self.thumbnailDescriptor(for: job, scale: displayScale),
                     media: media,
                     priority: .low
                 )

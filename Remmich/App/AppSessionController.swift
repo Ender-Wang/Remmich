@@ -28,6 +28,7 @@ final class AppSessionController {
 
     private(set) var state: State = .loading
     private(set) var activeRoute: ActiveConnectionRoute?
+    private(set) var timelineEndpoint: URL?
     private(set) var routeStatus: ConnectionRouteStatus = .waitingForNetwork
     private(set) var connectionProfile = ConnectionProfile()
     private(set) var savedAccounts: [AccountSession] = []
@@ -908,6 +909,7 @@ final class AppSessionController {
             catch { Self.routeLogger.error("Library transfer configuration could not be persisted") }
         }
         guard preparationIsCurrent(generation) else { return false }
+        timelineEndpoint = endpoint
         return changed
     }
 
@@ -923,6 +925,7 @@ final class AppSessionController {
         do { try await libraryTransfers?.configure(session: session, endpoint: endpoint, cacheAllowed: LibraryCacheResourceConditions.current.waitReason == nil) }
         catch { Self.routeLogger.error("Library transfer route could not be persisted") }
         guard preparationIsCurrent(generation) else { return false }
+        timelineEndpoint = endpoint
         return changed
     }
 
@@ -1050,6 +1053,7 @@ final class AppSessionController {
 
     private func invalidatePreparation() {
         preparationGeneration += 1
+        timelineEndpoint = nil
         isRestoringSession = false
         preparationTask?.cancel()
         preparationTask = nil

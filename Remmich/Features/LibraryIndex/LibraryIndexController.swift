@@ -1424,24 +1424,33 @@ final class LibraryIndexController {
         placesAreRunning = false
     }
 
-    private func refreshPlaces(manual: Bool = false, retryFailed: Bool = false) {
+    private func refreshPlaces(manual: Bool = false, retryFailed: Bool = false, onlyIfNeeded: Bool = false) {
         guard let locations, let scope, scope.cacheNamespace == locations.namespace,
               !backgroundRefreshOnly, placeTask == nil,
               placeCachingEnabled || manual || hasManualPlaceCacheIntent(namespace: scope.cacheNamespace), !placeCachingPaused,
               resourceConditions().waitReason == nil else { return }
+        let checkForWork = onlyIfNeeded && !manual && !retryFailed && !hasManualPlaceCacheIntent(namespace: scope.cacheNamespace)
         let run = UUID()
         placeRunID = run
-        placesAreRunning = locations.automaticCachingAllowed
+        placesAreRunning = !checkForWork && locations.automaticCachingAllowed
         placeTask = Task { [weak self] in
             guard let self, placeRunID == run, self.scope == scope, !Task.isCancelled else { return }
+            let completionAllowed: @MainActor () -> Bool = { [weak self] in self?.placeCacheMetadataReady == true }
+            if checkForWork {
+                let settingsRevision = locations.revision
+                let idleRevision = await locations.idleCacheRevision(completionAllowed: completionAllowed)
+                guard placeRunID == run, self.scope == scope, !Task.isCancelled else { return }
+                if let idleRevision, idleRevision == locations.cachedMetadataRevision, settingsRevision == locations.revision {
+                    placeTask = nil
+                    return
+                }
+                placesAreRunning = locations.automaticCachingAllowed
+            }
             await transfers?.setEnabled(true, lane: "places", namespace: scope.cacheNamespace)
             guard placeRunID == run, self.scope == scope, !Task.isCancelled, !placeCachingPaused else { return }
             var resetFailures = retryFailed
             while !Task.isCancelled {
-                let metadataRevision = locations.cachedMetadataRevision
-                await locations.refreshCachedPlaces(retryFailed: resetFailures, completionAllowed: { [weak self] in
-                    self?.placeCacheMetadataReady == true
-                }) { [weak self] in
+                let checkedRevision = await locations.refreshCachedPlaces(retryFailed: resetFailures, completionAllowed: completionAllowed) { [weak self] in
                     guard let self else { return false }
                     return placeRunID == run && self.scope == scope && !placeCachingPaused
                         && resourceConditions().waitReason == nil
@@ -1450,7 +1459,7 @@ final class LibraryIndexController {
                 guard placeRunID == run, self.scope == scope else { return }
                 guard !placeCachingPaused, resourceConditions().waitReason == nil,
                       locations.automaticCachingAllowed, locations.lastStorageError == nil,
-                      metadataRevision != locations.cachedMetadataRevision else { break }
+                      let checkedRevision, checkedRevision != locations.cachedMetadataRevision else { break }
             }
             guard placeRunID == run else { return }
             placeTask = nil
@@ -1467,7 +1476,7 @@ final class LibraryIndexController {
     }
 
     private func warmThumbnails(manual: Bool = false, rebuild: Bool = false, resetTransfers: Bool = false) {
-        refreshPlaces()
+        refreshPlaces(onlyIfNeeded: true)
         guard !backgroundRefreshOnly, warmingTask == nil, thumbnailWarmingEnabled || manual, !thumbnailWarmingPaused else { return }
         let continuesRun = !resetTransfers && pendingThumbnailRequest != nil
             && activeThumbnailRequest?.rebuild == rebuild && thumbnailWarmingStartedAt != nil
@@ -1613,7 +1622,7 @@ final class LibraryIndexController {
                 Self.logger.info(
                     "Offline asset caching completed paired=\(finalProgress.cachedCount) thumbnails=\(finalProgress.thumbnailCachedCount) metadata=\(finalProgress.metadataCachedCount) eligible=\(finalProgress.eligibleCount) unavailable=\(unavailableCount) bytes=\(finalProgress.cachedBytes) elapsedMs=\(Self.elapsedMilliseconds(since: startedAt))"
                 )
-                refreshPlaces()
+                refreshPlaces(onlyIfNeeded: true)
             } catch {
                 if Task.isCancelled {
                     Self.logger.info(

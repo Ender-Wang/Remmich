@@ -2,7 +2,7 @@ import SwiftUI
 
 struct LibraryView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.displayScale) private var displayScale
 
     let collections: [FixtureCollection]
     var exports: MediaExportController?
@@ -24,12 +24,11 @@ struct LibraryView: View {
     var viewerPresentations: AssetViewerPresentationStore?
     var tabBarTop: Binding<CGFloat> = .constant(0)
     var viewerVisibilityChanged: (Bool) -> Void = { _ in }
+    var opening = LibraryOpeningState()
 
     @State private var accountPresented = false
     @State private var accountContentMounted = false
     @State private var accountExpansion: CGFloat = 0
-    @State private var photosObserver = UUID()
-    @State private var libraryPreferences: LibraryFeaturePreferences?
     @State private var cardDestination: LibraryHubDestination?
 
     private let avatarSize: CGFloat = 44
@@ -39,6 +38,7 @@ struct LibraryView: View {
     private let panelAvatarInset: CGFloat = 12
 
     var body: some View {
+        let preferences = opening.preferences
         GeometryReader { geometry in
             let cardAreaWidth = geometry.size.width - horizontalPadding * 2
             let cardLayout = LibraryCardRows(availableWidth: cardAreaWidth)
@@ -61,7 +61,8 @@ struct LibraryView: View {
                                         if let newest, let media {
                                             let saved = exports.journal.receipts.first { $0.key == newest.key }
                                                 .flatMap { savedPhotos.item(photosID: $0.photosID) }
-                                            LibraryAssetCover(assetID: newest.assetID, revision: newest.revision, media: media, savedPhoto: saved)
+                                            LibraryAssetCover(assetID: newest.assetID, revision: newest.revision, media: media, savedPhoto: saved,
+                                                              preparedImage: opening.historyImage(for: newest, photo: saved, scale: displayScale))
                                         }
                                     }
                                 }
@@ -69,9 +70,11 @@ struct LibraryView: View {
                                 .accessibilityIdentifier("library-download-history")
                             }
                             LibraryHubLink {
-                                SavedPhotosView(library: savedPhotos, scope: MediaAccountScope(session: session),
+                                let scope = MediaAccountScope(session: session)
+                                SavedPhotosView(library: savedPhotos,
                                                 tabSelectionState: tabSelectionState, viewerPresentations: viewerPresentations,
-                                                tabBarTop: tabBarTop)
+                                                tabBarTop: tabBarTop,
+                                                preparedTimelines: opening.downloadTimelines(library: savedPhotos, scope: scope))
                             } label: {
                                 LibraryCollectionCard(title: "Downloads", detail: savedPhotos.summary,
                                                       symbol: "arrow.down.circle", appearance: savedPhotos.items.isEmpty ? .glass : .photographic)
@@ -87,25 +90,25 @@ struct LibraryView: View {
                                 collectionCard(.recentlyTaken, source: collectionSource, media: media, assetDetails: assetDetails)
                                 collectionCard(.recentlyAdded, source: collectionSource, media: media, assetDetails: assetDetails)
                                 collectionCard(.favorites, source: collectionSource, media: media, assetDetails: assetDetails)
-                                if libraryPreferences?.memoriesEnabled == true {
+                                if preferences?.memoriesEnabled == true {
                                     LibraryMemoriesCard(source: collectionSource, media: media, assetDetails: assetDetails,
-                                                        context: collectionNavigation)
+                                                        context: collectionNavigation, catalog: opening.memories)
                                 }
-                                if libraryPreferences?.peopleEnabled == true {
+                                if preferences?.peopleEnabled == true {
                                     LibraryDirectoryCard(directory: .people, source: collectionSource, media: media,
-                                                         assetDetails: assetDetails, context: collectionNavigation)
+                                                         assetDetails: assetDetails, context: collectionNavigation, store: opening.people)
                                 }
                                 LibraryDirectoryCard(directory: .places, source: collectionSource, media: media,
-                                                     assetDetails: assetDetails, context: collectionNavigation)
-                                if libraryPreferences?.sharedLinksEnabled == true {
+                                                     assetDetails: assetDetails, context: collectionNavigation, store: opening.places)
+                                if preferences?.sharedLinksEnabled == true {
                                     LibrarySharedLinksCard(source: collectionSource, media: media, assetDetails: assetDetails,
-                                                           context: collectionNavigation)
+                                                           context: collectionNavigation, store: opening.links)
                                 }
                                 LibraryDirectoryCard(directory: .partners, source: collectionSource, media: media,
-                                                     assetDetails: assetDetails, context: collectionNavigation)
-                                if libraryPreferences?.foldersEnabled == true {
+                                                     assetDetails: assetDetails, context: collectionNavigation, store: opening.partners)
+                                if preferences?.foldersEnabled == true {
                                     LibraryFoldersCard(source: collectionSource, media: media, assetDetails: assetDetails,
-                                                       context: collectionNavigation)
+                                                       context: collectionNavigation, store: opening.folders)
                                 }
                                 collectionCard(.archive, source: collectionSource, media: media, assetDetails: assetDetails)
                                 collectionCard(.trash, source: collectionSource, media: media, assetDetails: assetDetails)
@@ -199,31 +202,6 @@ struct LibraryView: View {
             guard accountPresented || accountContentMounted else { return }
             setAccountPresented(false)
         }
-        .task(id: photosContext) {
-            savedPhotos.configure(photosContext)
-            await savedPhotos.refresh(reuseInFlight: true)
-        }
-        .task(id: libraryPreferenceEndpoint) {
-            guard libraryPreferenceEndpoint != nil, let collectionSource,
-                  let preferences = try? await collectionSource.libraryPreferences(), !Task.isCancelled
-            else { return }
-            libraryPreferences = preferences
-        }
-        .onAppear { savedPhotos.observe(owner: photosObserver) }
-        .onDisappear { savedPhotos.stopObserving(owner: photosObserver) }
-        .onChange(of: scenePhase) { _, phase in
-            if phase == .active {
-                Task { await savedPhotos.refresh() }
-            }
-        }
-    }
-
-    private var photosContext: SavedPhotosContext {
-        SavedPhotosContext(scope: MediaAccountScope(session: session), journal: exports?.journal)
-    }
-
-    private var libraryPreferenceEndpoint: URL? {
-        scenePhase == .active ? collectionNavigation.activeEndpoint : nil
     }
 
     private var visibleFixtureCollections: [FixtureCollection] {
@@ -231,8 +209,7 @@ struct LibraryView: View {
     }
 
     private var collectionNavigation: LibraryCollectionNavigation {
-        .init(activeEndpoint: tabSelectionState?.selection == .library ? activeRoute?.endpoint : nil,
-              tabBarTop: tabBarTop, tabSelectionState: tabSelectionState, viewerPresentations: viewerPresentations,
+        .init(tabBarTop: tabBarTop, tabSelectionState: tabSelectionState, viewerPresentations: viewerPresentations,
               viewerVisibilityChanged: viewerVisibilityChanged)
     }
 
@@ -240,12 +217,13 @@ struct LibraryView: View {
                                 media: MediaLibraryController, assetDetails: any AssetDetailReading) -> some View
     {
         LibraryHubLink {
+            let prepared = opening.collection(collection, source: source)
             LibraryCollectionTimeline(title: collection.rawValue, source: source, query: collection.query,
                                       separatesMedia: collection.separatesMedia, media: media, assetDetails: assetDetails,
-                                      tabSelectionState: tabSelectionState, viewerPresentations: viewerPresentations, tabBarTop: tabBarTop)
+                                      tabSelectionState: tabSelectionState, viewerPresentations: viewerPresentations,
+                                      tabBarTop: tabBarTop, opening: prepared)
         } label: {
-            LibraryAssetCollectionCard(collection: collection, source: source, media: media,
-                                       activeEndpoint: activeRoute?.endpoint, isActive: tabSelectionState?.selection == .library)
+            LibraryAssetCollectionCard(collection: collection, media: media, opening: opening)
         }
         .buttonStyle(.plain)
     }
@@ -437,10 +415,11 @@ private struct CollectionDetailView: View {
 }
 
 #Preview {
+    @Previewable @State var savedPhotos = SavedPhotosLibrary()
     NavigationStack {
         LibraryView(
             collections: PreviewFixtures.collections,
-            savedPhotos: SavedPhotosLibrary(),
+            savedPhotos: savedPhotos,
             session: .fixture,
             profile: .init(),
             activeRoute: .init(kind: .fallback, endpoint: URL(string: "https://immich.example/api")!),
@@ -452,4 +431,10 @@ private struct CollectionDetailView: View {
             accountPresentationChanged: { _ in }
         )
     }
+    .task {
+        savedPhotos.configure(.init(scope: MediaAccountScope(session: .fixture), journal: nil))
+        savedPhotos.startObserving()
+        await savedPhotos.loadIfNeeded()
+    }
+    .onDisappear { savedPhotos.stopObserving() }
 }

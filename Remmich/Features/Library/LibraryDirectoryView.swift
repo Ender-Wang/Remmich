@@ -4,7 +4,6 @@ import Observation
 import SwiftUI
 
 struct LibraryCollectionNavigation {
-    let activeEndpoint: URL?
     let tabBarTop: Binding<CGFloat>
     let tabSelectionState: NativeTabSelectionState?
     let viewerPresentations: AssetViewerPresentationStore?
@@ -48,20 +47,35 @@ private enum LibraryDirectoryEntry: Identifiable {
 }
 
 @MainActor @Observable
-private final class LibraryDirectoryStore {
+final class LibraryDirectoryStore {
     static let placeQuery = TimelineQuery(includesStacks: true, includesPartners: false)
-    private(set) var entries: [LibraryDirectoryEntry] = []
+    fileprivate private(set) var entries: [LibraryDirectoryEntry] = []
     private(set) var error: String?
     private(set) var finished = false
-    private var loading = false
+    @ObservationIgnored private var loadTask: Task<Void, Never>?
+    @ObservationIgnored var placeOpening: LibraryOpeningBuckets?
     private var buckets: [TimelineBucketSummary]?
     private var nextBucket = 0
     private var places: Set<TimelinePlace> = []
 
-    func loadNext(_ directory: LibraryDirectory, source: ImmichTimelineRepository) async {
-        guard !loading, !finished, !Task.isCancelled else { return }
-        loading = true
-        defer { loading = false }
+    func loadNext(_ directory: LibraryDirectory, source: ImmichTimelineRepository, openingLimit: Int? = nil) async {
+        if let loadTask {
+            await loadTask.value
+            if openingLimit == nil, !entries.isEmpty || error != nil {
+                return
+            }
+        }
+        guard !finished, !Task.isCancelled, loadTask == nil,
+              openingLimit.map({ entries.count < $0 }) ?? true else { return }
+        let task = Task(priority: openingLimit == nil ? .userInitiated : .utility) {
+            defer { loadTask = nil }
+            await loadPage(directory, source: source, openingLimit: openingLimit)
+        }
+        loadTask = task
+        await task.value
+    }
+
+    private func loadPage(_ directory: LibraryDirectory, source: ImmichTimelineRepository, openingLimit: Int?) async {
         do {
             switch directory {
             case .people:
@@ -75,14 +89,20 @@ private final class LibraryDirectoryStore {
                 entries = partners.map(LibraryDirectoryEntry.partner)
                 finished = true
             case .places:
+                let reader: any TimelineReading = if let placeOpening {
+                    placeOpening
+                } else {
+                    source
+                }
                 if buckets == nil {
-                    buckets = try await source.bucketSummaries(query: Self.placeQuery)
+                    buckets = try await reader.bucketSummaries(query: Self.placeQuery)
                 }
                 guard let buckets else { return }
-                let initialCount = entries.count
-                while nextBucket < buckets.count, entries.count == initialCount {
+                let target = openingLimit ?? (entries.count + 1)
+                let end = openingLimit == nil ? buckets.count : min(buckets.count, nextBucket + LibraryOpeningBuckets.monthLimit)
+                while nextBucket < end, entries.count < target {
                     try Task.checkCancellation()
-                    let assets = try await source.assets(in: buckets[nextBucket].id, query: Self.placeQuery)
+                    let assets = try await reader.assets(in: buckets[nextBucket].id, query: Self.placeQuery)
                     try Task.checkCancellation()
                     nextBucket += 1
                     for asset in assets where asset.mediaKind == .image || asset.mediaKind == .video {
@@ -99,6 +119,19 @@ private final class LibraryDirectoryStore {
             self.error = error.localizedDescription
         }
     }
+
+    func imageRequests(directory _: LibraryDirectory, media: MediaLibraryController, scale: CGFloat,
+                       cardWidth: CGFloat, limit: Int, forHub: Bool) -> [ImageRequest]
+    {
+        entries.prefix(limit).compactMap { entry in
+            if case let .place(_, asset) = entry {
+                let descriptor = LibraryCollectionCardMetrics.coverDescriptor(.init(asset), scale: scale)
+                return media.imageRequest(for: descriptor, priority: .low)
+            }
+            let size = forHub ? cardWidth / 4 : cardWidth
+            return LibraryDirectoryPortrait.request(for: entry, media: media, pixels: max(1, Int((size * scale).rounded(.up))))
+        }
+    }
 }
 
 struct LibraryDirectoryCard: View {
@@ -107,7 +140,7 @@ struct LibraryDirectoryCard: View {
     let media: MediaLibraryController
     let assetDetails: any AssetDetailReading
     let context: LibraryCollectionNavigation
-    @State private var store = LibraryDirectoryStore()
+    let store: LibraryDirectoryStore
 
     var body: some View {
         LibraryHubLink {
@@ -138,10 +171,6 @@ struct LibraryDirectoryCard: View {
             }
         }
         .buttonStyle(.plain)
-        .task(id: context.activeEndpoint) {
-            guard context.activeEndpoint != nil, store.entries.isEmpty else { return }
-            await store.loadNext(directory, source: source)
-        }
     }
 }
 
@@ -342,7 +371,11 @@ private struct LibraryDirectoryPortrait: View {
 
     private var request: ImageRequest? {
         let pixels = max(1, Int((size * scale).rounded(.up)))
-        return switch entry {
+        return Self.request(for: entry, media: media, pixels: pixels)
+    }
+
+    static func request(for entry: LibraryDirectoryEntry, media: MediaLibraryController, pixels: Int) -> ImageRequest? {
+        switch entry {
         case let .person(person): media.personThumbnailRequest(person, pixels: pixels)
         case let .partner(partner): media.partnerProfileRequest(partner, pixels: pixels)
         case .place: nil

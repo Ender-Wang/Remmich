@@ -194,11 +194,47 @@ import SwiftUI
         }
     }
 
+    /// Check the stored queue without starting transfers. A drained run can still finish its timing.
+    func idleCacheRevision(completionAllowed: @MainActor () -> Bool = { false }) async -> UInt64? {
+        let token = sessionID
+        do {
+            try await configuration?.value
+            guard !Task.isCancelled, token == sessionID, lastStorageError == nil,
+                  let scope, automaticCachingAllowed else { return nil }
+            let metadataRevision = cachedMetadataRevision
+            let settingsRevision = revision
+            let now = Date()
+            guard try await store.pendingPlaces(scope: scope, retryFailed: false, now: now).isEmpty,
+                  try await store.nextPlaceRetry(scope: scope) == nil,
+                  !Task.isCancelled, token == sessionID, metadataRevision == cachedMetadataRevision,
+                  settingsRevision == revision else { return nil }
+            if completionAllowed(), cacheRun.startedAt != nil, !cacheRun.isFinished {
+                await reloadProgress()
+                guard !Task.isCancelled, token == sessionID, metadataRevision == cachedMetadataRevision,
+                      settingsRevision == revision, progress.pending == 0, lastStorageError == nil else { return nil }
+                if completionAllowed() {
+                    cacheRun.observe(completed: progress.resolved, total: progress.eligible, failed: progress.failed,
+                                     canComplete: true, at: .now)
+                    if cacheRun.isFinished {
+                        persistCacheRun(force: true)
+                    }
+                }
+            }
+            return metadataRevision
+        } catch {
+            // The normal worker owns reporting storage errors and retrying the scan.
+            return nil
+        }
+    }
+
+    /// Returns the metadata revision whose queue was fully checked, if the pass settled.
+    @discardableResult
     func refreshCachedPlaces(retryFailed: Bool, completionAllowed: @escaping @MainActor () -> Bool = { true },
-                             shouldContinue: @escaping @MainActor () -> Bool) async
+                             shouldContinue: @escaping @MainActor () -> Bool) async -> UInt64?
     {
         let token = sessionID
         let timingOwner = UUID()
+        var checkedRevision: UInt64?
         do {
             try await configuration?.value
             guard let scope, automaticCachingAllowed else {
@@ -207,7 +243,7 @@ import SwiftUI
                     _ = try await store.pendingPlaces(scope: scope, retryFailed: true, now: .now)
                 }
                 await reloadProgress()
-                return
+                return nil
             }
             cacheTimingOwner = timingOwner
             Self.logger.info("Place cache pass started retryFailed=\(retryFailed)")
@@ -237,6 +273,7 @@ import SwiftUI
                         continue
                     }
                     guard let retry else {
+                        checkedRevision = metadataRevision
                         if cacheTimingOwner == timingOwner, !Task.isCancelled, shouldContinue(), completionAllowed() {
                             // An explicit Sync may successfully verify an already
                             // complete cache; automatic restored statistics do not.
@@ -297,14 +334,17 @@ import SwiftUI
                 lastStorageError = error.localizedDescription
             }
         }
-        if token == sessionID {
+        guard token == sessionID else { return nil }
+        if checkedRevision == nil {
             await reloadProgress()
-            if cacheTimingOwner == timingOwner {
-                stopCacheWorkTiming(preservingTransfers: Task.isCancelled)
-            }
-            let report = progress
-            Self.logger.info("Place cache pass finished cancelled=\(Task.isCancelled) eligible=\(report.eligible) resolved=\(report.resolved) pending=\(report.pending) failed=\(report.failed)")
         }
+        guard token == sessionID else { return nil }
+        if cacheTimingOwner == timingOwner {
+            stopCacheWorkTiming(preservingTransfers: Task.isCancelled)
+        }
+        let report = progress
+        Self.logger.info("Place cache pass finished cancelled=\(Task.isCancelled) eligible=\(report.eligible) resolved=\(report.resolved) pending=\(report.pending) failed=\(report.failed)")
+        return checkedRevision
     }
 
     /// Wake only the queue scan; never cancel a lookup or bypass its durable backoff.

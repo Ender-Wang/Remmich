@@ -156,9 +156,9 @@ actor ImmichTimelineRepository: TimelineReading, VideoReading, AssetDetailReadin
         }
     }
 
-    func libraryMemories(page: Int, size: Int) async throws -> [TimelineMemorySummary] {
+    func libraryMemories(page: Int, size: Int, includeTimelineAssets: Bool = true) async throws -> [TimelineMemorySummary] {
         let (client, requestGeneration) = try requestContext()
-        let values = try await client.memories(query: .init(page: page, size: size), includeTimelineAssets: true)
+        let values = try await client.memories(query: .init(page: page, size: size), includeTimelineAssets: includeTimelineAssets)
         try requireCurrent(requestGeneration)
         return values.map { memory in
             TimelineMemorySummary(id: memory.id, memoryAt: memory.memoryAt, sourceYear: memory.year,

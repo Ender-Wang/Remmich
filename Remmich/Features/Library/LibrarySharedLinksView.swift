@@ -48,11 +48,29 @@ nonisolated struct LibrarySharedLink: Identifiable, Sendable {
 }
 
 @MainActor @Observable
-private final class LibrarySharedLinksStore {
+final class LibrarySharedLinksStore {
     private(set) var links: [LibrarySharedLink]?
     private(set) var didFail = false
+    @ObservationIgnored private var loadTask: Task<Void, Never>?
 
-    func load(source: ImmichTimelineRepository) async {
+    var cover: LibraryCoverAsset? {
+        links?.lazy.filter { !$0.isExpired }.compactMap(\.cover).first
+    }
+
+    func load(source: ImmichTimelineRepository, refresh: Bool = false) async {
+        if let loadTask {
+            await loadTask.value; return
+        }
+        guard links == nil || refresh else { return }
+        let task = Task {
+            defer { loadTask = nil }
+            await fetch(source: source)
+        }
+        loadTask = task
+        await task.value
+    }
+
+    private func fetch(source: ImmichTimelineRepository) async {
         do {
             let result = try await source.librarySharedLinks()
             try Task.checkCancellation()
@@ -70,10 +88,10 @@ struct LibrarySharedLinksCard: View {
     let media: MediaLibraryController
     let assetDetails: any AssetDetailReading
     let context: LibraryCollectionNavigation
-    @State private var store = LibrarySharedLinksStore()
+    let store: LibrarySharedLinksStore
 
     var body: some View {
-        let cover = store.links?.lazy.filter { !$0.isExpired }.compactMap(\.cover).first
+        let cover = store.cover
         LibraryHubLink {
             LibrarySharedLinksView(store: store, source: source, media: media, assetDetails: assetDetails, context: context)
         } label: {
@@ -87,10 +105,6 @@ struct LibrarySharedLinksCard: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("library-shared-links")
-        .task(id: context.activeEndpoint) {
-            guard context.activeEndpoint != nil, store.links == nil else { return }
-            await store.load(source: source)
-        }
     }
 
     private var detail: String {
@@ -132,7 +146,7 @@ private struct LibrarySharedLinksView: View {
                         .padding(.horizontal, 16)
                         .padding(.top, 16)
                     }
-                    .refreshable { await store.load(source: source) }
+                    .refreshable { await store.load(source: source, refresh: true) }
                 }
             } else if media.activeAPIURL == nil {
                 ContentUnavailableView("Immich Is Unavailable", systemImage: "wifi.slash")

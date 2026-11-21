@@ -378,6 +378,7 @@ struct AssetLocationTests {
         let failed = try #require(try await fixture.store.desiredPlace(assetID: "asset", scope: account))
         let retry = try #require(failed.retryAfter)
         #expect(retry > Date())
+        #expect(await locations.idleCacheRevision() == nil)
         try await fixture.seed(scope: account, id: "new", longitude: 122)
         locations.cachedMetadataDidChange()
         for _ in 0 ..< 200 {
@@ -393,7 +394,7 @@ struct AssetLocationTests {
         #expect(unchanged.attempts == failed.attempts)
         #expect(unchanged.retryAfter == retry)
         work.cancel()
-        await work.value
+        _ = await work.value
         locations.reset()
     }
 
@@ -509,7 +510,7 @@ struct AssetLocationTests {
         }
         #expect(locations.cachedMetadataRevision != before)
         await client.resume()
-        await work.value
+        _ = await work.value
         let requests = await client.endpoints.map(\.absoluteString)
         if locations.automaticCachingAllowed {
             #expect(requests == ["https://places.example", endpoint, endpoint, endpoint])
@@ -553,7 +554,7 @@ struct AssetLocationTests {
         #expect(locations.progress.failed == 0)
         #expect(try await fixture.store.placeProgress(scope: account, now: .now).resolved == 1)
         work.cancel()
-        await work.value
+        _ = await work.value
         locations.reset()
     }
 
@@ -614,11 +615,16 @@ struct AssetLocationTests {
                                                client: LocationTestClient(), store: fixture.store)
         locations.configure(scope: account)
         try locations.save(.init(endpoint: "https://places.example"))
-        await locations.refreshCachedPlaces(retryFailed: false, completionAllowed: { false }) { true }
+        let beforeSetup = locations.cachedMetadataRevision
+        let checkedRevision = await locations.refreshCachedPlaces(retryFailed: false, completionAllowed: { false }) { true }
+        #expect(checkedRevision != beforeSetup)
+        #expect(checkedRevision == locations.cachedMetadataRevision)
         #expect(locations.progress.resolved == locations.progress.eligible)
         #expect(locations.cacheRun.lastSyncedAt == nil)
-        await locations.refreshCachedPlaces(retryFailed: false, completionAllowed: { true }) { true }
+        #expect(await locations.idleCacheRevision(completionAllowed: { true }) == checkedRevision)
         #expect(locations.cacheRun.lastSyncedAt != nil)
+        try await fixture.seed(scope: account, id: "new", longitude: 122)
+        #expect(await locations.idleCacheRevision() == nil)
     }
 
     @Test @MainActor func independentControlsDoNotResumeOrPauseTheOtherCache() async throws {

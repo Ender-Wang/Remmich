@@ -52,10 +52,12 @@ nonisolated struct LibraryFolderTree: Sendable {
 }
 
 @MainActor @Observable
-private final class LibraryFoldersStore {
+final class LibraryFoldersStore {
     private(set) var tree: LibraryFolderTree?
     private(set) var didFail = false
     private(set) var coversByPath: [String: LibraryCoverAsset] = [:]
+    @ObservationIgnored private var loadTask: Task<Void, Never>?
+    @ObservationIgnored private var loadingCoverPaths: Set<String> = []
 
     private var sampledPaths: [String] {
         tree?.coverSamplePaths ?? []
@@ -65,7 +67,20 @@ private final class LibraryFoldersStore {
         sampledPaths.compactMap { coversByPath[$0] }
     }
 
-    func load(source: ImmichTimelineRepository) async {
+    func load(source: ImmichTimelineRepository, refresh: Bool = false) async {
+        if let loadTask {
+            await loadTask.value; return
+        }
+        guard tree == nil || refresh else { return }
+        let task = Task {
+            defer { loadTask = nil }
+            await fetch(source: source)
+        }
+        loadTask = task
+        await task.value
+    }
+
+    private func fetch(source: ImmichTimelineRepository) async {
         do {
             let tree = try await source.libraryFolderTree()
             try Task.checkCancellation()
@@ -78,10 +93,11 @@ private final class LibraryFoldersStore {
         }
     }
 
-    func loadCovers(source: ImmichTimelineRepository) async {
-        for path in sampledPaths {
+    func loadCovers(source: ImmichTimelineRepository, paths: [String]? = nil) async {
+        for path in paths ?? sampledPaths {
             guard !Task.isCancelled else { return }
-            guard coversByPath[path] == nil else { continue }
+            guard coversByPath[path] == nil, loadingCoverPaths.insert(path).inserted else { continue }
+            defer { loadingCoverPaths.remove(path) }
             if let assets = try? await source.libraryFolderAssets(path: path), !Task.isCancelled,
                tree?.assetPaths.contains(path) == true,
                let cover = assets.max(by: { $0.isCaptured(before: $1) })
@@ -97,7 +113,7 @@ struct LibraryFoldersCard: View {
     let media: MediaLibraryController
     let assetDetails: any AssetDetailReading
     let context: LibraryCollectionNavigation
-    @State private var store = LibraryFoldersStore()
+    let store: LibraryFoldersStore
 
     var body: some View {
         LibraryHubLink {
@@ -123,13 +139,6 @@ struct LibraryFoldersCard: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("library-folders")
-        .task(id: context.activeEndpoint) {
-            guard context.activeEndpoint != nil else { return }
-            if store.tree == nil {
-                await store.load(source: source)
-            }
-            await store.loadCovers(source: source)
-        }
     }
 
     private var detail: String {
@@ -186,7 +195,7 @@ private struct LibraryFoldersView: View {
                         .padding(16)
                     }
                     .refreshable {
-                        await store.load(source: source)
+                        await store.load(source: source, refresh: true)
                         await store.loadCovers(source: source)
                     }
                 }

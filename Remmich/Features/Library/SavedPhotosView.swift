@@ -17,16 +17,13 @@ nonisolated enum SavedPhotosMedia: String, CaseIterable, Identifiable, Sendable 
 }
 
 struct SavedPhotosView: View {
-    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let library: SavedPhotosLibrary
-    let scope: MediaAccountScope
     let tabSelectionState: NativeTabSelectionState?
     let viewerPresentations: AssetViewerPresentationStore?
     @Binding var tabBarTop: CGFloat
-    @State private var observer = UUID()
     @State private var media = SavedPhotosMedia.photos
-    @State private var timelines: [SavedPhotosMedia: SavedPhotosTimelineState] = [:]
+    let preparedTimelines: [SavedPhotosMedia: SavedPhotosTimelineState]
 
     var body: some View {
         Group {
@@ -53,21 +50,6 @@ struct SavedPhotosView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Button { Task { await library.refresh() } } label: { Image(systemName: "arrow.clockwise") }
                     .accessibilityLabel("Refresh Downloads")
-            }
-        }
-        .onAppear { library.observe(owner: observer) }
-        .onDisappear { library.stopObserving(owner: observer) }
-        .task {
-            if timelines.isEmpty {
-                timelines = Dictionary(uniqueKeysWithValues: SavedPhotosMedia.allCases.map {
-                    ($0, SavedPhotosTimelineState(library: library, scope: scope, kind: $0))
-                })
-            }
-            await library.refresh(reuseInFlight: true)
-        }
-        .onChange(of: scenePhase) { _, phase in
-            if phase == .active {
-                Task { await library.refresh() }
             }
         }
         .accessibilityIdentifier("saved-photos-list")
@@ -104,7 +86,7 @@ struct SavedPhotosView: View {
     }
 
     private func timeline(_ kind: SavedPhotosMedia, clearance: EdgeInsets) -> AnyView {
-        guard let state = timelines[kind] else { return AnyView(Color.clear) }
+        guard let state = preparedTimelines[kind] else { return AnyView(Color.clear) }
         return AnyView(SavedPhotosTimeline(library: library, kind: kind, state: state, selected: media == kind,
                                            tabBarTop: $tabBarTop, tabSelectionState: tabSelectionState,
                                            viewerPresentations: viewerPresentations, clearance: clearance))
@@ -148,11 +130,12 @@ struct SavedPhotosView: View {
     }
 }
 
-private final class SavedPhotosTimelineState {
+final class SavedPhotosTimelineState {
     let reader: SavedPhotosTimelineReader
     let store: PhotosTimelineStore
     let media: MediaLibraryController
     let presentation: PhotosPresentationState
+    let runtime = TimelineSemanticRuntime()
 
     init(library: SavedPhotosLibrary, scope: MediaAccountScope, kind: SavedPhotosMedia) {
         let reader = SavedPhotosTimelineReader(library: library, media: kind)
@@ -180,7 +163,8 @@ private struct SavedPhotosTimeline: View {
 
     var body: some View {
         PhotosView(store: state.store, presentation: state.presentation, media: state.media, assetDetails: state.reader,
-                   navigationPath: $path, tabBarTop: $tabBarTop, contentName: kind.rawValue,
+                   navigationPath: $path, tabBarTop: $tabBarTop,
+                   timelineRuntime: state.store.isOpeningWindow ? state.runtime : nil, contentName: kind.rawValue,
                    rootAccessibilityID: "downloads-timeline-\(kind.rawValue.lowercased())",
                    compactChromeChanged: { _ in },
                    tabSelectionState: tabSelectionState, tabDestination: .library,

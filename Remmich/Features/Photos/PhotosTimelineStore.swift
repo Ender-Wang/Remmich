@@ -157,6 +157,7 @@ final class PhotosTimelineStore {
     private var rangeCardCoverCache: [TimelineBucketID: [TimelineAssetSummary]] = [:]
     private var rangeCardCoverTasks: [TimelineBucketID: Task<[TimelineAssetSummary]?, Never>] = [:]
     private var initialTask: Task<Void, Never>?
+    private var openingTask: (id: UUID, task: Task<TimelineBootstrapSnapshot?, Never>)?
     private var refreshTask: Task<Void, Never>?
     private var memoryTask: Task<Void, Never>?
     private var retainsPersistentBootstrap = false
@@ -286,11 +287,14 @@ final class PhotosTimelineStore {
             await initialTask.value
             return
         }
-        guard loadState == .idle || (resumingDeferred && loadState == .loading) else { return }
+        guard loadState == .idle || (resumingDeferred && loadState == .loading)
+            || (isOpeningWindow && openingSource != nil) else { return }
 
         generation &+= 1
         let requestGeneration = generation
-        loadState = .loading
+        if !isOpeningWindow {
+            loadState = .loading
+        }
         Self.logger.info("Initial load started generation=\(requestGeneration)")
         startMemoryLoad(generation: requestGeneration)
         let task = Task { [weak self] in
@@ -323,23 +327,56 @@ final class PhotosTimelineStore {
     }
 
     private func prepareScopedOpeningWindow(generation request: UInt64) async {
-        guard let openingSource else { return }
-        let limit = TimelineGridOrder.openingWindowLimit()
-        let preview: TimelineBootstrapSnapshot?
-        do {
-            preview = try await openingSource.read(limit)
-        } catch {
-            if !Task.isCancelled, !(error is CancellationError) {
-                Self.logger.error("Could not read the cached \(openingSource.label, privacy: .public) timeline: \(error.localizedDescription, privacy: .private)")
+        guard openingSource != nil else { return }
+        let events = openingDisplayEvents()
+        if !isOpeningWindow, let preview = await readOpeningWindow(),
+           !Task.isCancelled, request == generation
+        {
+            installCompleteCatalog(preview, openingWindow: true)
+        }
+        guard isOpeningWindow, !Task.isCancelled, request == generation else {
+            if request == generation {
+                resumeOpeningHistory()
             }
             return
         }
-        guard let preview, !Task.isCancelled, request == generation else { return }
-        let events = openingDisplayEvents()
-        installCompleteCatalog(preview, openingWindow: true)
         await TimelineOpeningWindow.waitForDisplay(events)
         guard request == generation else { return }
         resumeOpeningHistory()
+    }
+
+    /// Publish a bounded first window without starting the destination's normal history load.
+    func preloadOpening() async {
+        guard loadState == .idle, initialTask == nil else { return }
+        let request = generation
+        guard let preview = await readOpeningWindow(), !Task.isCancelled, request == generation,
+              loadState == .idle, initialTask == nil else { return }
+        installCompleteCatalog(preview, openingWindow: true)
+    }
+
+    private func readOpeningWindow() async -> TimelineBootstrapSnapshot? {
+        if let openingTask {
+            return await openingTask.task.value
+        }
+        guard let openingSource else { return nil }
+        let limit = TimelineGridOrder.openingWindowLimit()
+        let id = UUID()
+        let read = Task {
+            do {
+                return try await openingSource.read(limit)
+            } catch {
+                if !Task.isCancelled, !(error is CancellationError) {
+                    Self.logger.error("Could not read the \(openingSource.label, privacy: .public) opening timeline: \(error.localizedDescription, privacy: .private)")
+                }
+                return nil
+            }
+        }
+        openingTask = (id, read)
+        let preview = await read.value
+        if openingTask?.id == id {
+            openingTask = nil
+        }
+        return preview
     }
 
     func retryInitialLoad() async {
@@ -472,6 +509,10 @@ final class PhotosTimelineStore {
             resumeOpeningHistory()
             if let initialTask {
                 await initialTask.value
+                return
+            }
+            if openingSource != nil {
+                await load(resumingDeferred: true)
                 return
             }
         }
@@ -855,6 +896,10 @@ final class PhotosTimelineStore {
                                              assetsByBucket: assetsByBucket, groupedCatalogs: catalogs, isComplete: true))
                 return
             }
+            if isOpeningWindow {
+                try await completeScopedOpening(with: summaries, generation: requestGeneration)
+                return
+            }
             publishSummaries(summaries)
             Self.logger.info(
                 "Initial summaries published generation=\(requestGeneration) count=\(summaries.count)"
@@ -906,6 +951,38 @@ final class PhotosTimelineStore {
                 "Initial load failed at summaries generation=\(requestGeneration) error=\(Self.errorSummary(error), privacy: .public) message=\(message, privacy: .public)"
             )
         }
+    }
+
+    private func completeScopedOpening(with summaries: [TimelineBucketSummary], generation request: UInt64) async throws {
+        var openingIDs = Set(bucketSummaries.map(\.id))
+        if let newest = summaries.first {
+            openingIDs.insert(newest.id)
+        }
+        var openingBuckets: [TimelineBucketID: [TimelineAssetSummary]] = [:]
+        for summary in summaries where openingIDs.contains(summary.id) {
+            let assets = try await reader.assets(in: summary.id, query: query)
+            guard request == generation, !Task.isCancelled else { return }
+            openingBuckets[summary.id] = Self.deduplicate(assets)
+        }
+        guard request == generation, !Task.isCancelled else { return }
+
+        // Publish the expanded buckets and the end of the opening window together,
+        // so the collection can preserve its visible anchor in one layout update.
+        publishSummaries(summaries)
+        for (id, assets) in openingBuckets {
+            rawAssetsByID[id] = assets
+            semanticAssetsByBucket[id] = assets
+            sectionsByID[id]?.loadState = .loaded
+        }
+        reconcileCrossBucketDuplicates()
+        for id in openingBuckets.keys {
+            updateGroupedCatalogContributions(loadedBucketID: id)
+        }
+        isOpeningWindow = false
+        retainsPersistentBootstrap = false
+        semanticContentRevision &+= 1
+        loadState = summaries.isEmpty ? .empty : .loaded
+        refreshState = .idle
     }
 
     private func performBucketLoad(
@@ -1284,6 +1361,8 @@ final class PhotosTimelineStore {
     }
 
     private func cancelInFlightWork() {
+        openingTask?.task.cancel()
+        openingTask = nil
         resumeOpeningHistory()
         initialTask?.cancel()
         refreshTask?.cancel()

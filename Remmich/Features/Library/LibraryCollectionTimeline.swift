@@ -54,6 +54,108 @@ nonisolated struct LibraryCollectionPreview: Sendable {
     let cover: TimelineAssetSummary?
 }
 
+/// Share raw opening reads between consumers of one exact timeline query.
+actor LibraryOpeningBuckets: TimelineReading {
+    static let monthLimit = 3
+    static let lifetime: Duration = .seconds(60)
+    private let source: any TimelineReading
+    private let query: TimelineQuery
+    private var summaries: Task<[TimelineBucketSummary], Error>?
+    private var months: [TimelineBucketID: Task<[TimelineAssetSummary], Error>] = [:]
+    private var expiresAt = ContinuousClock.now + LibraryOpeningBuckets.lifetime
+
+    init(source: any TimelineReading, query: TimelineQuery) {
+        self.source = source
+        self.query = query
+    }
+
+    func bucketSummaries(query: TimelineQuery) async throws -> [TimelineBucketSummary] {
+        guard query == self.query else { return try await source.bucketSummaries(query: query) }
+        discardExpiredReads()
+        if let summaries {
+            return try await summaries.value
+        }
+        let task = Task(priority: .utility) { try await source.bucketSummaries(query: query) }
+        summaries = task
+        do {
+            return try await task.value
+        } catch {
+            if summaries == task {
+                summaries = nil
+            }
+            throw error
+        }
+    }
+
+    func assets(in bucket: TimelineBucketID, query: TimelineQuery) async throws -> [TimelineAssetSummary] {
+        guard query == self.query else { return try await source.assets(in: bucket, query: query) }
+        discardExpiredReads()
+        if let task = months[bucket] {
+            return try await task.value
+        }
+        guard months.count < Self.monthLimit else { return try await source.assets(in: bucket, query: query) }
+        let task = Task(priority: .utility) { try await source.assets(in: bucket, query: query) }
+        months[bucket] = task
+        do {
+            return try await task.value
+        } catch {
+            if months[bucket] == task {
+                months[bucket] = nil
+            }
+            throw error
+        }
+    }
+
+    func memories() -> [TimelineMemorySummary] {
+        []
+    }
+
+    private func discardExpiredReads() {
+        guard ContinuousClock.now >= expiresAt else { return }
+        summaries = nil
+        months = [:]
+        expiresAt = .now + Self.lifetime
+    }
+}
+
+@MainActor
+final class LibraryCollectionOpening {
+    let photos: PhotosTimelineStore
+    let videos: PhotosTimelineStore?
+    let photoRuntime = TimelineSemanticRuntime()
+    let videoRuntime = TimelineSemanticRuntime()
+    private let coverReader: LibraryScopedTimelineReader
+    private let freshCoverReader: LibraryScopedTimelineReader
+    private var coverTask: Task<LibraryCollectionPreview, Error>?
+
+    init(collection: LibraryAssetCollection, source: any TimelineReading, opening: LibraryOpeningBuckets) {
+        let query = collection.query
+        coverReader = LibraryScopedTimelineReader(source: opening, query: query, media: nil)
+        freshCoverReader = LibraryScopedTimelineReader(source: source, query: query, media: nil)
+        photos = Self.store(source: source, opening: opening, query: query, lane: collection.separatesMedia ? .photos : nil)
+        videos = collection.separatesMedia ? Self.store(source: source, opening: opening, query: query, lane: .videos) : nil
+    }
+
+    func preview(for collection: LibraryAssetCollection, refresh: Bool) async throws -> LibraryCollectionPreview {
+        if let coverTask {
+            return try await coverTask.value
+        }
+        let reader = refresh ? freshCoverReader : coverReader
+        let task = Task(priority: .utility) { try await reader.preview(for: collection) }
+        coverTask = task
+        defer { coverTask = nil }
+        return try await task.value
+    }
+
+    private static func store(source: any TimelineReading, opening: LibraryOpeningBuckets, query: TimelineQuery,
+                              lane: SavedPhotosMedia?) -> PhotosTimelineStore
+    {
+        let reader = LibraryScopedTimelineReader(source: source, query: query, media: lane, opening: opening)
+        return PhotosTimelineStore(reader: reader, openingSource: .init(label: "Library") { try await reader.openingWindow(limit: $0) },
+                                   hasUnfilteredBucketCounts: lane != nil)
+    }
+}
+
 actor LibrarySelectionTimelineReader: TimelineReading {
     private let loadAssets: @Sendable () async throws -> [TimelineAssetSummary]
     private var assetsByBucket: [TimelineBucketID: [TimelineAssetSummary]] = [:]
@@ -95,26 +197,79 @@ actor LibraryScopedTimelineReader: TimelineReading {
     let media: SavedPhotosMedia?
     let place: TimelinePlace?
     let newestBucket: TimelineBucketID?
+    private let opening: LibraryOpeningBuckets?
+    private var preparedSummaries: [TimelineBucketSummary]?
+    private var preparedMonths: Set<TimelineBucketID> = []
+    private var preparedAt: ContinuousClock.Instant?
 
     init(source: any TimelineReading, query: TimelineQuery, media: SavedPhotosMedia?,
-         place: TimelinePlace? = nil, newestBucket: TimelineBucketID? = nil)
+         place: TimelinePlace? = nil, newestBucket: TimelineBucketID? = nil, opening: LibraryOpeningBuckets? = nil)
     {
         self.source = source
         self.query = query
         self.media = media
         self.place = place
         self.newestBucket = newestBucket
+        self.opening = opening
     }
 
     func bucketSummaries(query _: TimelineQuery) async throws -> [TimelineBucketSummary] {
+        if let preparedSummaries {
+            self.preparedSummaries = nil
+            if let preparedAt, ContinuousClock.now - preparedAt < LibraryOpeningBuckets.lifetime {
+                return preparedSummaries
+            }
+            preparedMonths.removeAll()
+        }
         let buckets = try await source.bucketSummaries(query: query)
         guard let newestBucket else { return buckets }
         return buckets.filter { $0.id.rawValue <= newestBucket.rawValue }
     }
 
     func assets(in bucketID: TimelineBucketID, query _: TimelineQuery) async throws -> [TimelineAssetSummary] {
-        let values = try await source.assets(in: bucketID, query: query)
-        return values.compactMap { value in
+        let reader: any TimelineReading = if let opening, preparedMonths.remove(bucketID) != nil {
+            opening
+        } else {
+            source
+        }
+        return try await matchingAssets(reader.assets(in: bucketID, query: query))
+    }
+
+    func openingWindow(limit: Int) async throws -> TimelineBootstrapSnapshot? {
+        guard let opening else { return nil }
+        let summaries = try await opening.bucketSummaries(query: query)
+        var window: [TimelineBucketID: [TimelineAssetSummary]] = [:]
+        var scanned = Set<TimelineBucketID>()
+        var seen = Set<String>()
+        for summary in summaries.prefix(LibraryOpeningBuckets.monthLimit) {
+            try Task.checkCancellation()
+            let assets = try await matchingAssets(opening.assets(in: summary.id, query: query))
+            scanned.insert(summary.id)
+            var items: [TimelineAssetSummary] = []
+            for asset in assets {
+                if seen.insert(asset.id).inserted {
+                    items.append(asset)
+                }
+                if seen.count == limit {
+                    break
+                }
+            }
+            if !items.isEmpty {
+                window[summary.id] = items
+            }
+            if seen.count == limit {
+                break
+            }
+        }
+        try Task.checkCancellation()
+        preparedSummaries = summaries
+        preparedMonths = scanned
+        preparedAt = .now
+        return TimelineOpeningWindow.snapshot(generation: 0, assetsByBucket: window)
+    }
+
+    private func matchingAssets(_ values: [TimelineAssetSummary]) -> [TimelineAssetSummary] {
+        values.compactMap { value in
             guard value.mediaKind == .image || value.mediaKind == .video,
                   media?.includes(video: value.mediaKind == .video) != false,
                   place == nil || value.place == place else { return nil }
@@ -185,11 +340,12 @@ actor LibraryScopedTimelineReader: TimelineReading {
 
 struct LibraryAssetCollectionCard: View {
     let collection: LibraryAssetCollection
-    let source: any TimelineReading
     let media: MediaLibraryController
-    let activeEndpoint: URL?
-    let isActive: Bool
-    @State private var preview: LibraryCollectionPreview?
+    let opening: LibraryOpeningState
+
+    private var preview: LibraryCollectionPreview? {
+        opening.previews[collection]
+    }
 
     var body: some View {
         LibraryCollectionCard(title: collection.rawValue, detail: detail, symbol: collection.symbol,
@@ -198,12 +354,6 @@ struct LibraryAssetCollectionCard: View {
             if let asset = preview?.cover {
                 LibraryAssetCover(assetID: asset.id, revision: asset.thumbnailRevision, media: media)
             }
-        }
-        .task(id: isActive ? activeEndpoint : nil) {
-            guard isActive, activeEndpoint != nil else { return }
-            let reader = LibraryScopedTimelineReader(source: source, query: collection.query, media: nil)
-            guard let result = try? await reader.preview(for: collection), !Task.isCancelled else { return }
-            preview = result
         }
     }
 
@@ -221,6 +371,7 @@ struct LibraryCollectionTimeline: View {
     let assetDetails: any AssetDetailReading
     let tabSelectionState: NativeTabSelectionState?
     let viewerPresentations: AssetViewerPresentationStore?
+    let opening: LibraryCollectionOpening?
     @Binding var tabBarTop: CGFloat
     @State private var selected = SavedPhotosMedia.photos
     @State private var photos: PhotosTimelineStore
@@ -228,20 +379,22 @@ struct LibraryCollectionTimeline: View {
 
     init(title: String, source: any TimelineReading, query: TimelineQuery, separatesMedia: Bool = false,
          media: MediaLibraryController, assetDetails: any AssetDetailReading,
-         tabSelectionState: NativeTabSelectionState?, viewerPresentations: AssetViewerPresentationStore?, tabBarTop: Binding<CGFloat>)
+         tabSelectionState: NativeTabSelectionState?, viewerPresentations: AssetViewerPresentationStore?, tabBarTop: Binding<CGFloat>,
+         opening: LibraryCollectionOpening? = nil)
     {
         self.title = title
         self.media = media
         self.assetDetails = assetDetails
         self.tabSelectionState = tabSelectionState
         self.viewerPresentations = viewerPresentations
+        self.opening = opening
         _tabBarTop = tabBarTop
-        _photos = State(initialValue: PhotosTimelineStore(reader: LibraryScopedTimelineReader(
+        _photos = State(initialValue: opening?.photos ?? PhotosTimelineStore(reader: LibraryScopedTimelineReader(
             source: source, query: query, media: separatesMedia ? .photos : nil
         ), hasUnfilteredBucketCounts: separatesMedia))
-        _videos = State(initialValue: separatesMedia ? PhotosTimelineStore(reader: LibraryScopedTimelineReader(
+        _videos = State(initialValue: opening?.videos ?? (separatesMedia ? PhotosTimelineStore(reader: LibraryScopedTimelineReader(
             source: source, query: query, media: .videos
-        ), hasUnfilteredBucketCounts: true) : nil)
+        ), hasUnfilteredBucketCounts: true) : nil))
     }
 
     var body: some View {
@@ -268,9 +421,10 @@ struct LibraryCollectionTimeline: View {
     }
 
     private func timeline(_ store: PhotosTimelineStore, name: String, active: Bool, clearance: EdgeInsets) -> some View {
-        LibraryTimelineLane(store: store, name: name, active: active, media: media, assetDetails: assetDetails,
-                            tabSelectionState: tabSelectionState, viewerPresentations: viewerPresentations, tabBarTop: $tabBarTop,
-                            clearance: clearance)
+        let runtime = store === photos ? opening?.photoRuntime : opening?.videoRuntime
+        return LibraryTimelineLane(store: store, name: name, active: active, media: media, assetDetails: assetDetails,
+                                   tabSelectionState: tabSelectionState, viewerPresentations: viewerPresentations, tabBarTop: $tabBarTop,
+                                   clearance: clearance, openingRuntime: runtime)
     }
 }
 
@@ -284,6 +438,7 @@ struct LibraryTimelineLane: View {
     let viewerPresentations: AssetViewerPresentationStore?
     @Binding var tabBarTop: CGFloat
     let clearance: EdgeInsets
+    var openingRuntime: TimelineSemanticRuntime?
     @State private var path: [PhotosRangeRoute] = []
     @State private var presentation = PhotosPresentationState()
 
@@ -302,12 +457,17 @@ struct LibraryTimelineLane: View {
 
     private var timeline: some View {
         PhotosView(store: store, presentation: presentation, media: media, assetDetails: assetDetails,
-                   navigationPath: $path, tabBarTop: $tabBarTop, contentName: name,
+                   navigationPath: $path, tabBarTop: $tabBarTop,
+                   timelineRuntime: store.isOpeningWindow ? openingRuntime : nil, contentName: name,
                    rootAccessibilityID: "library-collection-timeline", compactChromeChanged: { _ in },
                    tabSelectionState: tabSelectionState, tabDestination: .library, isCollectionPageActive: active,
                    libraryTimelineClearance: clearance,
                    viewerPresentations: viewerPresentations, loadTimeline: {
-                       await store.load(resumingDeferred: true)
+                       if openingRuntime != nil, !store.isOpeningWindow, store.loadState == .loaded || store.loadState == .empty {
+                           await store.refresh()
+                       } else {
+                           await store.load(resumingDeferred: true)
+                       }
                        if store.semanticAssetsSnapshot().isEmpty, store.hasUnloadedSemanticBuckets {
                            await store.loadOlderSemanticPage()
                        }

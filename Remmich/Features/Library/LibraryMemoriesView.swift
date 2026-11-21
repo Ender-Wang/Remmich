@@ -2,18 +2,37 @@ import Observation
 import SwiftUI
 
 @MainActor @Observable
-private final class LibraryMemoriesStore {
+final class LibraryMemoriesStore {
     private(set) var memories: [TimelineMemorySummary] = []
+    private(set) var previewCover: LibraryCoverAsset?
     private(set) var error: String?
     private(set) var finished = false
     private var loading = false
     private var page = 1
+    private var pageSize = 24
+
+    var cover: LibraryCoverAsset? {
+        memories.first?.assets.first.map { .init(id: $0.id, revision: $0.revision) } ?? previewCover
+    }
+
+    func loadCover(from source: ImmichTimelineRepository) async {
+        guard cover == nil,
+              let values = try? await source.libraryMemories(page: 1, size: 4, includeTimelineAssets: false),
+              !Task.isCancelled else { return }
+        previewCover = values.lazy.compactMap(\.assets.first).first.map { .init(id: $0.id, revision: $0.revision) }
+    }
+
+    func prepareOpening(from source: ImmichTimelineRepository, limit: Int) async {
+        guard page == 1, !loading else { return }
+        pageSize = limit
+        await loadNext(from: source)
+    }
 
     func loadNext(from source: ImmichTimelineRepository) async {
         guard !finished, !loading, !Task.isCancelled else { return }
         loading = true
         defer { loading = false }
-        let size = 24
+        let size = pageSize
         do {
             let values = try await source.libraryMemories(page: page, size: size)
             try Task.checkCancellation()
@@ -43,13 +62,13 @@ struct LibraryMemoriesCard: View {
     let media: MediaLibraryController
     let assetDetails: any AssetDetailReading
     let context: LibraryCollectionNavigation
-    @State private var catalog = LibraryMemoriesStore()
+    let catalog: LibraryMemoriesStore
 
     var body: some View {
         LibraryHubLink {
             LibraryMemoriesView(source: source, catalog: catalog, media: media, assetDetails: assetDetails, context: context)
         } label: {
-            let cover = catalog.memories.first?.assets.first
+            let cover = catalog.cover
             LibraryCollectionCard(title: "Memories", detail: catalog.finished ? "\(catalog.memories.count.formatted()) memories" : "",
                                   symbol: "sparkles.rectangle.stack", appearance: cover == nil ? .glass : .photographic)
             {
@@ -59,10 +78,6 @@ struct LibraryMemoriesCard: View {
             }
         }
         .buttonStyle(.plain)
-        .task(id: context.activeEndpoint) {
-            guard context.activeEndpoint != nil, catalog.memories.isEmpty else { return }
-            await catalog.loadNext(from: source)
-        }
     }
 }
 

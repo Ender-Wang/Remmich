@@ -10,6 +10,12 @@ nonisolated enum LibraryCollectionCardMetrics {
         let width = min(1024, max(1, (maximumWidth * scale).rounded(.up)))
         return CGSize(width: width, height: (width / aspectRatio).rounded(.up))
     }
+
+    static func coverDescriptor(_ cover: LibraryCoverAsset, scale: CGFloat) -> MediaRequestDescriptor {
+        let pixels = coverPixels(scale: scale)
+        return .init(assetID: cover.id, updatedAt: cover.revision, derivative: .thumbnail,
+                     targetPixels: .init(width: Int(pixels.width), height: Int(pixels.height)))
+    }
 }
 
 /// One geometry and footer contract for every Library destination. Data loading
@@ -75,26 +81,27 @@ struct LibraryAssetCover: View {
     let revision: Date
     let media: MediaLibraryController
     var savedPhoto: SavedPhoto?
+    var preparedImage: UIImage?
     @State private var savedImage: (request: SavedPhotosLibrary.CardCoverRequest, image: UIImage)?
 
     var body: some View {
         let pixels = LibraryCollectionCardMetrics.coverPixels(scale: scale)
         let request = savedPhoto.map { SavedPhotosLibrary.CardCoverRequest(item: $0, pixels: pixels) }
         Group {
-            if let savedImage, savedImage.request == request {
+            if let image = preparedImage ?? (savedImage?.request == request ? savedImage?.image : nil) {
                 GeometryReader { geometry in
-                    Image(uiImage: savedImage.image).resizable().scaledToFill()
+                    Image(uiImage: image).resizable().scaledToFill()
                         .frame(width: geometry.size.width, height: geometry.size.height)
                         .clipped()
                 }
             } else {
-                ImmichThumbnail(descriptor: .init(assetID: assetID, updatedAt: revision, derivative: .thumbnail,
-                                                  targetPixels: .init(width: Int(pixels.width), height: Int(pixels.height))),
+                ImmichThumbnail(descriptor: LibraryCollectionCardMetrics.coverDescriptor(.init(id: assetID, revision: revision), scale: scale),
                                 media: media)
             }
         }
         .task(id: request) {
-            guard let savedPhoto, let request, savedImage?.request != request, let image = try? await SavedPhotosLibrary.image(savedPhoto, pixels: pixels), !Task.isCancelled else { return }
+            guard preparedImage == nil, let savedPhoto, let request, savedImage?.request != request,
+                  let image = try? await SavedPhotosLibrary.image(savedPhoto, pixels: pixels), !Task.isCancelled else { return }
             savedImage = (request, image)
         }
         .allowsHitTesting(false)

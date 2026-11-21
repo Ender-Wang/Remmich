@@ -46,6 +46,7 @@ struct AppShellView: View {
     @State private var albumsScrollRequest = 0
     @State private var albumsOverview = AlbumsOverviewState()
     @State private var savedPhotos = SavedPhotosLibrary()
+    @State private var libraryOpening = LibraryOpeningState()
     @State private var libraryDismissAccountRequest = 0
     @State private var libraryAccountPresented = false
     @State private var videoPresentation = PhotosPresentationState(
@@ -70,6 +71,8 @@ struct AppShellView: View {
         @Bindable var navigation = tabSelectionState
         // The native tab retains its hosting root across selections.
         let overviewState = albumsOverview
+        let inventoryContext = downloadsInventoryContext
+        let historyCoverID = inventoryContext == nil ? nil : media.exports.latestCompletedDownload?.id
         NativeAppTabShell(
             selection: $navigation.selection,
             tabBarTop: $tabBarTop,
@@ -240,7 +243,8 @@ struct AppShellView: View {
                             tabSelectionState: tabSelectionState,
                             viewerPresentations: viewerPresentations,
                             tabBarTop: $tabBarTop,
-                            viewerVisibilityChanged: setViewerPresented
+                            viewerVisibilityChanged: setViewerPresented,
+                            opening: libraryOpening
                         )
                     }
                 }
@@ -407,9 +411,56 @@ struct AppShellView: View {
                 tabContentActivationState.prepare(.search)
             }
             async let videoOpening: Void = prepareVideosOpening(using: sessionController)
-            async let libraryOpening: Void = prepareLibraryOpening()
+            if !tabContentActivationState.isHydrated(.library) {
+                tabContentActivationState.prepare(.library)
+            }
             await prepareAlbumsOpening(in: overviewState, preloading: true)
-            _ = await (videoOpening, libraryOpening)
+            await videoOpening
+        }
+        .task(id: libraryCoverEndpoint) {
+            guard libraryCoverEndpoint != nil, let source = sessionController?.timeline, let window = openingWindow else { return }
+            await libraryOpening.prepareCovers(source: source, media: media, viewport: .init(window: window))
+        }
+        .task(id: libraryDestinationRequest) {
+            guard libraryDestinationRequest.isActive else {
+                libraryOpening.stopDestinationImages()
+                return
+            }
+            guard let window = openingWindow else { return }
+            let viewport = LibraryOpeningViewport(window: window)
+            if libraryDestinationRequest.endpoint != nil, let source = sessionController?.timeline {
+                await libraryOpening.prepareDestinations(source: source, media: media, viewport: viewport)
+            }
+        }
+        .onChange(of: mayWarmLibraryCovers, initial: true) { _, active in
+            if active {
+                savedPhotos.startObserving()
+            } else {
+                savedPhotos.stopObserving()
+            }
+        }
+        .onDisappear { savedPhotos.stopObserving() }
+        .task(id: inventoryContext) {
+            guard let context = inventoryContext else { return }
+            await prepareSavedPhotosInventory(context)
+            if !Task.isCancelled, let item = savedPhotos.items.first, let scale = openingWindow?.traitCollection.displayScale {
+                await savedPhotos.prepareCardCover(.init(item: item, pixels: LibraryCollectionCardMetrics.coverPixels(scale: scale)))
+            }
+        }
+        .task(id: tabSelectionState.selection == .library ? inventoryContext : nil) {
+            guard tabSelectionState.selection == .library, let context = inventoryContext, let window = openingWindow else { return }
+            let viewport = LibraryOpeningViewport(window: window)
+            libraryOpening.prepareHistoryRows(media: media, viewport: viewport)
+            await prepareSavedPhotosInventory(context)
+            guard !Task.isCancelled else { return }
+            await libraryOpening.prepareDownloads(library: savedPhotos, scope: context.scope, viewport: viewport)
+        }
+        .task(id: historyCoverID) {
+            guard let id = historyCoverID, let job = media.exports.latestCompletedDownload, job.id == id,
+                  let context = inventoryContext, let scale = openingWindow?.traitCollection.displayScale else { return }
+            await prepareSavedPhotosInventory(context)
+            guard !Task.isCancelled else { return }
+            await libraryOpening.prepareHistoryCover(job, savedPhotos: savedPhotos, media: media, scale: scale)
         }
         .task(id: tabSelectionState.selection) {
             guard tabSelectionState.selection == .albums else { return }
@@ -488,16 +539,39 @@ struct AppShellView: View {
         UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first
     }
 
-    private func prepareLibraryOpening() async {
-        guard !tabContentActivationState.isHydrated(.library) else { return }
-        let scope = MediaAccountScope(session: session)
-        savedPhotos.configure(SavedPhotosContext(scope: scope, journal: media.exports.journal))
-        await savedPhotos.refresh(reuseInFlight: true, priority: .utility)
-        guard !Task.isCancelled, media.scope == scope, !tabContentActivationState.isHydrated(.library) else { return }
-        tabContentActivationState.prepare(.library)
-        if let item = savedPhotos.items.first, let scale = openingWindow?.traitCollection.displayScale {
-            await savedPhotos.prepareCardCover(.init(item: item, pixels: LibraryCollectionCardMetrics.coverPixels(scale: scale)))
-        }
+    private struct LibraryDestinationRequest: Equatable {
+        let isActive: Bool
+        let endpoint: URL?
+    }
+
+    private var libraryDestinationRequest: LibraryDestinationRequest {
+        let active = exportScenePhase == .active && tabSelectionState.selection == .library
+        return .init(isActive: active, endpoint: active ? libraryReaderEndpoint : nil)
+    }
+
+    private var mayWarmLibraryCovers: Bool {
+        exportScenePhase == .active && (media.hasShownStartupPhoto || photos.loadState == .empty || tabSelectionState.selection == .library)
+    }
+
+    private var libraryCoverEndpoint: URL? {
+        mayWarmLibraryCovers ? libraryReaderEndpoint : nil
+    }
+
+    private var libraryReaderEndpoint: URL? {
+        // Route selection can be visible while the repository is still being configured.
+        guard let selected = activeRoute?.endpoint, sessionController?.timelineEndpoint == selected else { return nil }
+        return selected
+    }
+
+    private var downloadsInventoryContext: SavedPhotosContext? {
+        guard mayWarmLibraryCovers, media.exports.ready || media.exports.message != nil else { return nil }
+        return SavedPhotosContext(scope: MediaAccountScope(session: session), journal: media.exports.journal)
+    }
+
+    private func prepareSavedPhotosInventory(_ context: SavedPhotosContext) async {
+        guard !Task.isCancelled else { return }
+        savedPhotos.configure(context)
+        await savedPhotos.loadIfNeeded(priority: .utility)
     }
 
     private func showAccount() {
