@@ -49,8 +49,8 @@ You can also follow [Build and run](CONTRIBUTING.md#build-and-run) to build from
 - **🗺️ Places and maps:** Photon landmarks, per-country language preferences and asset maps below Info.
 - **🎬 Video:** Native playback, Picture in Picture and iOS Now Playing with titles and artwork.
 - **💾 Offline browsing:** Cached timelines, thumbnails, asset information and place names, with background sync. Asset Cache and Place Cache have separate progress, Sync/Pause/Resume and automatic-cache settings; Rebuild and Clear maintain both caches together.
-- **📥 Downloads:** Save a quality tier to Photos → Remmich, with background transfers, pause/resume, automatic recovery, and cancel/retry. Browse saved photos and videos from Library. The Downloads History card shows the latest completed download when its cover is available.
-- **📚 Library collections** — Browse Recently taken, Recently added, Favorites, Memories, People, Places, Shared Links, Partners, Folders, Archive, and Trash. Recently taken and Recently added show seven-day summaries on their cards and open full timelines ordered by capture or upload date. Optional cards follow the Immich account's feature settings. After Photos appears, Library warms its card covers. Switching to Library prepares up to two screenfuls of each enabled destination.
+- **📥 Downloads:** Save a quality tier to Photos → Remmich, with background transfers, pause/resume, automatic recovery, and cancel/retry. Browse saved photos and videos in Library → On Device. Save History shows the latest completed download when its cover is available.
+- **📚 Library collections** — Browse Recently taken, Recently added, Favorites, Memories, People, Places, Shared Links, Partners, Folders, Archive, and Trash. Recently taken and Recently added show their newest eligible covers and open full timelines ordered by capture or upload date. Optional cards follow the Immich account's feature settings. After Photos appears, Library warms its card covers. Switching to Library prepares up to two screenfuls of each enabled destination.
 - **📤 Sharing:** Share the viewed quality from the viewer or preview, retaining supported metadata and cached image compression.
 - **🗂️ Albums:** Browse owned/shared albums with search and six sorting options. All/Shared uses the same sliding animation as the main pages, with the search and scope controls staying above the content. Pinch between Cards and List around the album under your fingers, reopen album timelines at their saved positions, and browse indexed album metadata offline using the common timeline and viewer. First opening and tab retaps preserve bottom clearance, including wrapped titles.
 - **📊 Index controls:** Switch between Timeline Index and Album Index by tapping or swiping, and scroll from the status area as well as the statistics. Sync/Pause/Resume and **Rebuild index** sit directly below each section's statistics. Cache & Storage uses the same section layout and swiping. Per-10K storage estimates use current data and update during sync.
@@ -79,7 +79,7 @@ You can also follow [Build and run](CONTRIBUTING.md#build-and-run) to build from
 | M4 | ✅ Done | Real server-backed Photos timeline |
 | M5 | ✅ Done | Timelines, viewers, preview, places/maps, Sharing and Download/Save to Photos with Pause/Resume |
 | M6 | ✅ Done | Albums, automatic Album Index, interactive Card/List transitions and navigation refinements |
-| M7 | In verification | Read-only Library collections and Downloads History covers |
+| M7 | In verification | Read-only Library collections and the Save History cover |
 | M8 | Planned | Server-backed Search with native filters |
 | M9 | Planned | Further improvements and verification for iPad, accessibility, resilience, and performance |
 | M10 | Planned | Broader real-device release verification and additional distribution options |
