@@ -48,19 +48,19 @@ final class LibraryOpeningState {
     @ObservationIgnored private var coverImages: (pipeline: ImagePipeline, prefetcher: ImagePrefetcher)?
     @ObservationIgnored private var destinationImages: [ObjectIdentifier: ImagePrefetcher] = [:]
 
-    func collection(_ collection: LibraryAssetCollection, source: ImmichTimelineRepository) -> LibraryCollectionOpening? {
-        configureCollections(source: source)
+    func collection(_ collection: LibraryAssetCollection, source: ImmichTimelineRepository, camera: LibraryCameraMetadata?) -> LibraryCollectionOpening? {
+        configureCollections(source: source, camera: camera)
         return collections[collection]
     }
 
-    private func configureCollections(source: ImmichTimelineRepository) {
+    private func configureCollections(source: ImmichTimelineRepository, camera: LibraryCameraMetadata?) {
         guard collections.isEmpty else { return }
         let placesQuery = LibraryDirectoryStore.placeQuery
         let placeOpening = places.placeReader(source: source)
         collections = Dictionary(uniqueKeysWithValues: LibraryAssetCollection.allCases.map { collection in
             let query = collection.query
             let opening = query == placesQuery ? placeOpening : LibraryOpeningBuckets(source: source, query: query)
-            return (collection, LibraryCollectionOpening(collection: collection, opening: opening))
+            return (collection, LibraryCollectionOpening(collection: collection, opening: opening, camera: camera))
         })
     }
 
@@ -92,8 +92,8 @@ final class LibraryOpeningState {
         }
     }
 
-    func prepareCovers(source: ImmichTimelineRepository, media: MediaLibraryController, viewport: LibraryOpeningViewport) async {
-        configureCollections(source: source)
+    func prepareCovers(source: ImmichTimelineRepository, media: MediaLibraryController, viewport: LibraryOpeningViewport, camera: LibraryCameraMetadata?) async {
+        configureCollections(source: source, camera: camera)
         await loadPreferences(source: source)
         let scale = viewport.scale
         var jobs: [@MainActor @Sendable () async -> Void] = LibraryAssetCollection.allCases.filter { $0 != .trash }.map { collection in
@@ -144,8 +144,10 @@ final class LibraryOpeningState {
         prefetch(requests, media: media, forHub: false)
     }
 
-    func prepareDestinations(source: ImmichTimelineRepository, media: MediaLibraryController, viewport: LibraryOpeningViewport) async {
-        configureCollections(source: source)
+    func prepareDestinations(source: ImmichTimelineRepository, media: MediaLibraryController, viewport: LibraryOpeningViewport,
+                             camera: LibraryCameraMetadata?) async
+    {
+        configureCollections(source: source, camera: camera)
         await loadPreferences(source: source)
         let scale = viewport.scale
         let limit = viewport.cardLimit
@@ -203,6 +205,12 @@ final class LibraryOpeningState {
             prefetcher.stopPrefetching()
         }
         destinationImages.removeAll()
+    }
+
+    func refreshIncompleteTakenCover(media: MediaLibraryController, scale: CGFloat) async {
+        guard previews[.recentlyTaken]?.hasMissingMetadata == true else { return }
+        previewDates[.recentlyTaken] = nil
+        await prepareCollectionCover(.recentlyTaken, media: media, scale: scale)
     }
 
     private func loadPreferences(source: ImmichTimelineRepository) async {

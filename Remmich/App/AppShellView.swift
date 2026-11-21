@@ -419,7 +419,12 @@ struct AppShellView: View {
         }
         .task(id: libraryCoverEndpoint) {
             guard libraryCoverEndpoint != nil, let source = sessionController?.timeline, let window = openingWindow else { return }
-            await libraryOpening.prepareCovers(source: source, media: media, viewport: .init(window: window))
+            await libraryOpening.prepareCovers(source: source, media: media, viewport: .init(window: window), camera: libraryCameraMetadata)
+        }
+        .task(id: libraryCoverEndpoint == nil ? nil : libraryIndex.thumbnailWarmingLastUpdatedAt) {
+            guard libraryCoverEndpoint != nil, libraryIndex.thumbnailWarmingLastUpdatedAt != nil,
+                  let scale = openingWindow?.traitCollection.displayScale else { return }
+            await libraryOpening.refreshIncompleteTakenCover(media: media, scale: scale)
         }
         .task(id: libraryDestinationRequest) {
             guard libraryDestinationRequest.isActive else {
@@ -429,7 +434,7 @@ struct AppShellView: View {
             guard let window = openingWindow else { return }
             let viewport = LibraryOpeningViewport(window: window)
             if libraryDestinationRequest.endpoint != nil, let source = sessionController?.timeline {
-                await libraryOpening.prepareDestinations(source: source, media: media, viewport: viewport)
+                await libraryOpening.prepareDestinations(source: source, media: media, viewport: viewport, camera: libraryCameraMetadata)
             }
         }
         .onChange(of: mayWarmLibraryCovers, initial: true) { _, active in
@@ -551,6 +556,10 @@ struct AppShellView: View {
 
     private var mayWarmLibraryCovers: Bool {
         exportScenePhase == .active && (media.hasShownStartupPhoto || photos.loadState == .empty || tabSelectionState.selection == .library)
+    }
+
+    private var libraryCameraMetadata: LibraryCameraMetadata? {
+        sessionController.map { .init(store: $0.libraryIndexStore, scope: MediaAccountScope(session: session), details: $0.persistentAssetDetails) }
     }
 
     private var libraryCoverEndpoint: URL? {

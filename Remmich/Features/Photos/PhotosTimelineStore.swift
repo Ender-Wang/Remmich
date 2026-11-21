@@ -117,6 +117,7 @@ final class PhotosTimelineStore {
         }
         guard !retainsPersistentBootstrap else { return }
         let requestGeneration = generation
+        var bucketsRead = 0
         semanticHistoryState = .loading
         for summary in bucketSummaries {
             if semanticAssetsByBucket[summary.id] != nil {
@@ -133,6 +134,10 @@ final class PhotosTimelineStore {
                 semanticHistoryState = .loaded
                 return
             }
+            bucketsRead += 1
+            if bucketsRead == semanticHistoryBucketLimit {
+                break
+            }
         }
         semanticHistoryState = .empty
     }
@@ -141,6 +146,7 @@ final class PhotosTimelineStore {
     private let openingSource: TimelineOpeningSource?
     private let persistentRefreshPolicy: PersistentTimelineRefreshPolicy
     private let hasUnfilteredBucketCounts: Bool
+    private let semanticHistoryBucketLimit: Int?
     private let now: () -> Date
     private var query: TimelineQuery
     private var generation: UInt64 = 0
@@ -171,6 +177,7 @@ final class PhotosTimelineStore {
         query: TimelineQuery = .init(),
         openingSource: TimelineOpeningSource? = nil,
         hasUnfilteredBucketCounts: Bool = false,
+        semanticHistoryBucketLimit: Int? = nil,
         now: @escaping () -> Date = { .now }
     ) {
         self.reader = reader
@@ -178,6 +185,7 @@ final class PhotosTimelineStore {
         self.query = query
         self.openingSource = openingSource
         self.hasUnfilteredBucketCounts = hasUnfilteredBucketCounts
+        self.semanticHistoryBucketLimit = semanticHistoryBucketLimit
         self.now = now
     }
 

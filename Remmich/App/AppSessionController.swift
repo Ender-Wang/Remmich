@@ -60,7 +60,7 @@ final class AppSessionController {
     private let networkMonitoringEnabled: Bool
     private let pathChangeDebounce: Duration
     private let photosForegroundRetryEnabled: Bool
-    private let persistentAssetDetails: CachedAssetDetailReader
+    let persistentAssetDetails: CachedAssetDetailReader
     private let pathMonitor = NWPathMonitor()
     private let routeEvaluationGate = RouteEvaluationGate()
     private var isMonitoringNetwork = false

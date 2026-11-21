@@ -443,6 +443,27 @@ struct LibraryIndexStoreTests {
         #expect(try await reader.cachedAssetDetail(id: detail.id, scope: scope) == nil)
     }
 
+    @Test func libraryCoverReadsUseScopedCameraMetadata() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        let scope = Self.scope(userID: "owner")
+        let other = Self.scope(userID: "other")
+        for (id, owner, longitude, model) in [
+            ("focus", scope, 179.8, "Z f"), ("near", scope, -179.9, " \n"), ("missing", other, 48.0, "Cam"),
+        ] {
+            try await store.upsert(assetDetail: .init(
+                id: id, capturedAt: .now, originalFileName: "fixture.jpg", originalMimeType: nil,
+                width: nil, height: nil, description: nil, cameraMake: nil, cameraModel: model, lensModel: nil,
+                fileSizeBytes: nil, iso: nil, focalLength: nil, aperture: nil, exposureTime: nil,
+                latitude: 25, longitude: longitude, city: nil, state: nil, country: nil
+            ), scope: owner)
+        }
+
+        let flags = try await store.libraryCameraMetadata(assetIDs: ["near", "focus", "missing"], scope: scope)
+        #expect(flags == ["near": false, "focus": true])
+    }
+
     private static func scope(userID: String) -> MediaAccountScope {
         MediaAccountScope(session: .init(
             apiURL: URL(string: "https://example.com/api")!,

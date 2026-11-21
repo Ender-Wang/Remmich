@@ -243,6 +243,10 @@ nonisolated struct AssetDetail: Hashable, Identifiable, Sendable {
     let state: String?
     let country: String?
     var cachedPlace: PlaceLocation?
+
+    static func hasCameraMetadata(make: String?, model: String?) -> Bool {
+        [make, model].contains { $0?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false }
+    }
 }
 
 nonisolated struct TimelineCaptureDay: Codable, Hashable, Identifiable, Sendable {

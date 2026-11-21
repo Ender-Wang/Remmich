@@ -1064,7 +1064,11 @@ struct PhotosView: View {
                 if semanticCatalog?.assets.isEmpty == true {
                     switch store.semanticHistoryState {
                     case .empty:
-                        Text("No displayable assets in these periods.").foregroundStyle(.secondary)
+                        if store.hasUnloadedSemanticBuckets {
+                            Button("Load older items") { Task { await store.loadOlderSemanticPage() } }
+                        } else {
+                            Text("No displayable assets in these periods.").foregroundStyle(.secondary)
+                        }
                     case .failed:
                         Button("Retry loading timeline") { Task { await store.loadOlderSemanticPage() } }
                     case .idle, .loading, .loaded:

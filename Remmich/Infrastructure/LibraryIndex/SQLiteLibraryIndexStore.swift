@@ -737,6 +737,31 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
         }
     }
 
+    func libraryCameraMetadata(assetIDs: [String], scope: MediaAccountScope) throws -> [String: Bool] {
+        guard !assetIDs.isEmpty, try canRead(scope) else { return [:] }
+        let database = try preparedDatabase(scope: scope)
+        var result: [String: Bool] = [:]
+        for start in stride(from: 0, to: assetIDs.count, by: 400) {
+            try Task.checkCancellation()
+            let ids = assetIDs[start ..< min(start + 400, assetIDs.count)]
+            let parameters = Array(repeating: "?", count: ids.count).joined(separator: ",")
+            let rows = try database.query("""
+            SELECT d.asset_id, make.value, model.value
+            FROM cache.asset_details d
+            LEFT JOIN cache.asset_detail_strings make ON make.id = d.camera_make_id AND make.scope = d.scope
+            LEFT JOIN cache.asset_detail_strings model ON model.id = d.camera_model_id AND model.scope = d.scope
+            WHERE d.scope = ? AND d.asset_id IN (\(parameters))
+            """, [.text(scope.cacheNamespace)] + ids.map(SQLiteValue.text)) { row in
+                let hasCamera = AssetDetail.hasCameraMetadata(make: row.optionalText(1), model: row.optionalText(2))
+                return (row.text(0), hasCamera)
+            }
+            for (id, hasCamera) in rows {
+                result[id] = hasCamera
+            }
+        }
+        return result
+    }
+
     func cachedAssetDetailIDs(scope: MediaAccountScope) async throws -> Set<String> {
         guard try canRead(scope) else { return [] }
         let database = try preparedDatabase(scope: scope)

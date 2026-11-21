@@ -217,11 +217,14 @@ struct LibraryView: View {
                                 media: MediaLibraryController, assetDetails: any AssetDetailReading) -> some View
     {
         LibraryHubLink {
-            let prepared = opening.collection(collection, source: source)
+            let camera = sessionController.map {
+                LibraryCameraMetadata(store: $0.libraryIndexStore, scope: MediaAccountScope(session: session), details: $0.persistentAssetDetails)
+            }
+            let prepared = opening.collection(collection, source: source, camera: camera)
             LibraryCollectionTimeline(title: collection.rawValue, source: source, query: collection.query,
                                       separatesMedia: collection.separatesMedia, media: media, assetDetails: assetDetails,
                                       tabSelectionState: tabSelectionState, viewerPresentations: viewerPresentations,
-                                      tabBarTop: tabBarTop, opening: prepared)
+                                      tabBarTop: tabBarTop, opening: prepared, libraryIndex: collection == .recentlyTaken ? libraryIndex : nil)
         } label: {
             LibraryAssetCollectionCard(collection: collection, media: media, opening: opening)
         }

@@ -11,6 +11,7 @@ actor CachedAssetDetailReader: AssetDetailReading {
     private let store: any LibraryIndexStoring
     private var scope: MediaAccountScope?
     private var generation: UInt64 = 0
+    private var reads: [String: Task<AssetDetail, any Error>] = [:]
 
     init(source: any AssetDetailReading, store: any LibraryIndexStoring) {
         self.source = source
@@ -18,13 +19,21 @@ actor CachedAssetDetailReader: AssetDetailReading {
     }
 
     func configure(session: AccountSession) {
-        generation &+= 1
+        invalidateReads()
         scope = MediaAccountScope(session: session)
     }
 
     func clearSession() {
-        generation &+= 1
+        invalidateReads()
         scope = nil
+    }
+
+    private func invalidateReads() {
+        generation &+= 1
+        for read in reads.values {
+            read.cancel()
+        }
+        reads.removeAll()
     }
 
     func cachedAssetDetail(id: String) async -> AssetDetail? {
@@ -44,7 +53,31 @@ actor CachedAssetDetailReader: AssetDetailReading {
 
     func assetDetail(id: String) async throws -> AssetDetail {
         guard let scope else { throw CancellationError() }
+        return try await assetDetail(id: id, scope: scope)
+    }
+
+    func assetDetail(id: String, scope: MediaAccountScope) async throws -> AssetDetail {
+        guard self.scope == scope, !Task.isCancelled else { throw CancellationError() }
         let requestGeneration = generation
+        if let read = reads[id] {
+            let detail = try await read.value
+            guard requestGeneration == generation, !Task.isCancelled else { throw CancellationError() }
+            return detail
+        }
+        let read = Task { try await fetchAssetDetail(id: id, scope: scope, generation: requestGeneration) }
+        reads[id] = read
+        defer {
+            if generation == requestGeneration {
+                reads[id] = nil
+            }
+        }
+        let detail = try await read.value
+        guard requestGeneration == generation, !Task.isCancelled else { throw CancellationError() }
+        return detail
+    }
+
+    private func fetchAssetDetail(id: String, scope: MediaAccountScope, generation requestGeneration: UInt64) async throws -> AssetDetail {
+        guard !Task.isCancelled, requestGeneration == generation, self.scope == scope else { throw CancellationError() }
         let detail = try await source.assetDetail(id: id)
         guard !Task.isCancelled, requestGeneration == generation, self.scope == scope else { throw CancellationError() }
         do {
