@@ -7,6 +7,7 @@ import UIKit
 @Observable
 final class NativeTabSelectionState {
     var selection: NativeTabDestination = .photos
+    var isAlbumSearchExpanded = false
     @ObservationIgnored var isPageInteractionActive = false
 
     func canActivateContent(in destination: NativeTabDestination) -> Bool {
@@ -239,6 +240,7 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
     let compactOwner: NativeTabDestination?
     let isViewerPresented: Bool
     let pageSwipeEnabled: Bool
+    var albumSearchExpanded: () -> Bool = { false }
     var pageInteractionChanged: (Bool) -> Void = { _ in }
     let photosScrollRequest: Int
     let videosScrollRequest: Int
@@ -312,6 +314,7 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
         private var pageInteractionController: UIPercentDrivenInteractiveTransition?
         private var pageInteractionDestination: NativeTabDestination?
         private weak var pageInteractionPreviousTab: UITab?
+        private var pendingTabBarTop: CGFloat?
 
         private lazy var pagePanRecognizer: UIPanGestureRecognizer = {
             let recognizer = UIPanGestureRecognizer(target: self, action: #selector(primaryPagePanned(_:)))
@@ -460,9 +463,19 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
         }
 
         func setTabBarTop(_ top: CGFloat) {
+            if pendingTabBarTop != nil {
+                pendingTabBarTop = top
+                return
+            }
             guard abs(parent.tabBarTop - top) > 0.5 else { return }
+            pendingTabBarTop = top
             Task { @MainActor [weak self] in
-                self?.parent.tabBarTop = top
+                guard let self, let top = pendingTabBarTop else { return }
+                pendingTabBarTop = nil
+                // A second layout can restore the published value before this task runs.
+                if abs(parent.tabBarTop - top) > 0.5 {
+                    parent.tabBarTop = top
+                }
             }
         }
 
@@ -605,6 +618,11 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
             _ tabBarController: UITabBarController,
             shouldSelectTab tab: UITab
         ) -> Bool {
+            if !isUpdatingTabs, tab !== albumsTab, tabBarController.selectedTab === albumsTab,
+               parent.albumSearchExpanded(), let outgoingView = albumsTab.viewController?.viewIfLoaded
+            {
+                outgoingView.endEditing(true)
+            }
             // Handle Albums reselection before UIKit's default pop-to-root.
             // Its current destination owns the existing scroll-to-latest request.
             if !isUpdatingTabs, pageInteractionController == nil,
@@ -872,17 +890,14 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
             _: UIGestureRecognizer,
             shouldReceive touch: UITouch
         ) -> Bool {
-            guard parent.pageSwipeEnabled,
-                  !parent.isViewerPresented
-            else { return false }
+            guard canSwipePages else { return false }
 
             return !NativeTabPageGesturePolicy.blocksRootPaging(startingAt: touch.view)
         }
 
         func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
             guard gestureRecognizer === pagePanRecognizer,
-                  parent.pageSwipeEnabled,
-                  !parent.isViewerPresented,
+                  canSwipePages,
                   !UIAccessibility.isReduceMotionEnabled,
                   pageInteractionController == nil,
                   let controller
@@ -903,6 +918,11 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
                 direction: direction,
                 compactOwner: parent.compactOwner
             ) != nil
+        }
+
+        private var canSwipePages: Bool {
+            parent.pageSwipeEnabled && !parent.isViewerPresented
+                && !(parent.selection == .albums && parent.albumSearchExpanded())
         }
 
         func gestureRecognizer(

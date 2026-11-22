@@ -57,6 +57,7 @@ struct AlbumsView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
     @Environment(\.scenePhase) private var scenePhase
+    @ScaledMetric(relativeTo: .body) private var headerTextHeight: CGFloat = 24
     let source: any AlbumReading & TimelineReading
     let media: MediaLibraryController
     let assetDetails: any AssetDetailReading
@@ -67,6 +68,7 @@ struct AlbumsView: View {
     let viewerPresentations: AssetViewerPresentationStore
     let tabSelectionState: NativeTabSelectionState
     @Binding var tabBarTop: CGFloat
+    @Binding private var navigationPath: NavigationPath
     let windowTopInset: CGFloat
     let showsLoadingOverlay: Bool
     let openingLayoutMeasured: () -> Void
@@ -83,11 +85,7 @@ struct AlbumsView: View {
     @State private var showsList = false
     @State private var albumLayoutProgress: CGFloat = 0
     @State private var pinchSettling = false
-    @State private var chromeTracker = PhotosChromeTracker()
-    @State private var searchHidden = false
-    @State private var searchRowHeight: CGFloat = 44
-    @State private var scopePickerHeight: CGFloat = 32
-    @State private var userScrolling = false
+    @State private var searchFocusRequest: UUID?
     @State private var albumLabelHeight: CGFloat?
     @State private var reflowCompletion = AlbumReflowCompletion()
     @State private var reflowViewport = AlbumReflowViewport()
@@ -99,13 +97,15 @@ struct AlbumsView: View {
     @State private var timelineSessions = AlbumTimelineSessions()
     @State private var scopeSlide = AlbumScopeSlide()
     @FocusState private var searchFocused: Bool
+    private let headerControlSize: CGFloat = 44
 
     init(store: AlbumsStore, source: any AlbumReading & TimelineReading, media: MediaLibraryController,
          assetDetails: any AssetDetailReading, activeEndpoint: URL?,
          scrollToLatestRequest: Int = 0,
          persistence: (any AlbumCatalogStoring)? = nil, scope: MediaAccountScope? = nil,
          viewerPresentations: AssetViewerPresentationStore, tabSelectionState: NativeTabSelectionState,
-         tabBarTop: Binding<CGFloat>, windowTopInset: CGFloat, showsLoadingOverlay: Bool = true,
+         tabBarTop: Binding<CGFloat>, navigationPath: Binding<NavigationPath>, windowTopInset: CGFloat,
+         showsLoadingOverlay: Bool = true,
          openingLayoutMeasured: @escaping () -> Void,
          openAlbum: @escaping (AlbumSummary, Bool) -> Void,
          showAccount: @escaping () -> Void)
@@ -120,6 +120,7 @@ struct AlbumsView: View {
         self.viewerPresentations = viewerPresentations
         self.tabSelectionState = tabSelectionState
         _tabBarTop = tabBarTop
+        _navigationPath = navigationPath
         self.windowTopInset = windowTopInset
         self.showsLoadingOverlay = showsLoadingOverlay
         self.openingLayoutMeasured = openingLayoutMeasured
@@ -134,12 +135,20 @@ struct AlbumsView: View {
         }, direction: sortDirection)
     }
 
-    private var expandedHeaderHeight: CGFloat {
-        searchRowHeight + 10 + scopePickerHeight + 16
+    private var isSearchExpanded: Bool {
+        tabSelectionState.isAlbumSearchExpanded
+    }
+
+    private var canDismissSearchBySwipe: Bool {
+        isSearchExpanded && listVisible && navigationPath.isEmpty && tabSelectionState.canActivateContent(in: .albums)
     }
 
     private var topClearance: CGFloat {
-        windowTopInset + expandedHeaderHeight
+        windowTopInset + headerRowHeight + 16
+    }
+
+    private var headerRowHeight: CGFloat {
+        max(headerControlSize, headerTextHeight + 12)
     }
 
     var body: some View {
@@ -201,6 +210,15 @@ struct AlbumsView: View {
         }
         .accessibilityIdentifier("albums-root")
         .background { CardNavigationRootAnchor(root: navigationRoot).allowsHitTesting(false) }
+        .onChange(of: tabSelectionState.selection) { _, current in
+            if current != .albums {
+                dismissSearch(animated: false)
+            }
+            cancelAlbumReflow()
+            scopeSlide.cancel(clearCache: true)
+        }
+        .gesture(AlbumSearchDismissSwipe(enabled: canDismissSearchBySwipe, dismiss: dismissSearchBySwipe))
+        .nativeEdgeBackAction(active: canDismissSearchBySwipe, animatesContent: false, action: dismissSearchBySwipe)
     }
 
     private func albumContent(availableWidth: CGFloat, viewportHeight: CGFloat, labelHeight: CGFloat) -> some View {
@@ -284,6 +302,8 @@ struct AlbumsView: View {
             }
             .onDisappear {
                 listVisible = false
+                searchFocusRequest = nil
+                searchFocused = false
                 cancelAlbumReflow()
                 scopeSlide.cancel(clearCache: true)
                 // Navigation retains this ScrollView. Geometry callbacks report
@@ -300,10 +320,6 @@ struct AlbumsView: View {
                 if phase == .interacting, !pinchInteraction.isActive {
                     reflowViewport.cancelMotion()
                 }
-                userScrolling = !pinchInteraction.isActive && (phase == .interacting || phase == .decelerating)
-                if !userScrolling {
-                    chromeTracker.scrollingEnded()
-                }
             }
             .onScrollGeometryChange(for: AlbumScrollGeometry.self) {
                 AlbumScrollGeometry(offset: max(0, $0.contentOffset.y + $0.contentInsets.top),
@@ -315,23 +331,9 @@ struct AlbumsView: View {
                 if old.viewportHeight != new.viewportHeight || old.topInset != new.topInset || old.bottomInset != new.bottomInset {
                     cancelAlbumReflow()
                 }
-                // Reflow gestures still use the viewport below the expanded
+                // Reflow gestures still use the viewport below the
                 // header, even though the reserved space is now in the content.
                 reflowViewport.visibleHeight = max(0, new.viewportHeight - topClearance)
-                guard !searchFocused else { return }
-                // Inset animations and lazy content measurement can rebase the
-                // offset without a finger changing direction. They are layout,
-                // not scroll travel, and must not reverse the header decision.
-                guard let delta = new.scrollDelta(from: old) else {
-                    chromeTracker.scrollingEnded()
-                    return
-                }
-                // Match the bottom-anchored main timelines' scroll convention.
-                if let hidden = chromeTracker.update(offsetDelta: delta, bottomGap: new.bottomGap,
-                                                     userScrolling: userScrolling, programmaticJump: false)
-                {
-                    withAnimation(reduceMotion ? nil : .smooth(duration: 0.25)) { searchHidden = hidden }
-                }
             }
             .refreshable { await store.load() }
             .onChange(of: contentScope) {
@@ -363,10 +365,6 @@ struct AlbumsView: View {
                     contentScope = scope
                 }
             }
-            .onChange(of: tabSelectionState.selection) { _, _ in
-                cancelAlbumReflow()
-                scopeSlide.cancel(clearCache: true)
-            }
             .onChange(of: query) { _, _ in scopeSlide.cancel(clearCache: true) }
             .onChange(of: store.albums) { _, _ in scopeSlide.cancel(clearCache: true) }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
@@ -387,87 +385,134 @@ struct AlbumsView: View {
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
             }
+            .animation(nil, value: isSearchExpanded)
             .overlay(alignment: .top) {
-                VStack(spacing: 0) {
-                    HStack(spacing: 12) {
-                        HStack(spacing: 8) {
-                            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                            TextField("Search Albums", text: $query)
-                                .focused($searchFocused)
-                                .textInputAutocapitalization(.never)
-                                .autocorrectionDisabled()
-                                .submitLabel(.search)
-                                .accessibilityIdentifier("albums-search")
-                            if !query.isEmpty {
-                                Button { query = "" } label: {
-                                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel("Clear Search")
-                            }
-                        }
-                        .padding(.horizontal, 14)
-                        .frame(minHeight: 44)
-                        .background(.quaternary, in: .capsule)
-                        Menu {
-                            Picker("Sort Albums", selection: Binding(get: { sort }, set: { updateAlbumLayout(sort: $0, direction: sortDirection, metrics: metrics) })) {
-                                ForEach(AlbumSort.allCases) { Text($0.rawValue).tag($0) }
-                            }
-                            Divider()
-                            Picker("Order", selection: Binding(get: { sortDirection }, set: { updateAlbumLayout(sort: sort, direction: $0, metrics: metrics) })) {
-                                ForEach(AlbumSortDirection.allCases) { Text($0.rawValue).tag($0) }
-                            }
-                            .pickerStyle(.inline)
-                            Divider()
-                            Toggle("List View", isOn: Binding(get: { showsList }, set: { updateAlbumLayout(sort: sort, direction: sortDirection, list: $0, metrics: metrics) }))
-                        } label: {
-                            Image(systemName: "arrow.up.arrow.down").frame(width: 44, height: 44)
-                        }
-                        .buttonStyle(.plain)
-                        .glassEffect(.regular.interactive(), in: .circle)
-                        .accessibilityLabel("Album Options")
-                        .allowsHitTesting(!scopeSlide.isActive)
-                    }
-                    .fixedSize(horizontal: false, vertical: true)
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
-                        guard height > 0, abs(searchRowHeight - height) > 0.5 else { return }
-                        searchRowHeight = height
-                    }
-                    .frame(height: searchHidden ? 0 : searchRowHeight, alignment: .top)
-                    .opacity(searchHidden ? 0 : 1)
-                    .clipped()
-                    .allowsHitTesting(!searchHidden)
-                    .accessibilityHidden(searchHidden)
-                    Picker("Album scope", selection: Binding(get: { scope }, set: selectAlbumScope)) {
-                        ForEach(AlbumScope.allCases) { Text($0.rawValue).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
-                    .allowsHitTesting(!scopeSlide.isActive)
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
-                        guard height > 0, abs(scopePickerHeight - height) > 0.5 else { return }
-                        scopePickerHeight = height
-                    }
-                    .padding(.top, searchHidden ? 0 : 10)
-                }
-                .padding(.horizontal)
-                .padding(.vertical, 8)
-                .padding(.top, windowTopInset)
-                .background {
-                    ZStack {
-                        TimelineMemoryGradientBackdrop(visible: true, extended: true, reduceMotion: reduceMotion)
-                            .ignoresSafeArea(edges: .top)
-                        // The shared blur is noninteractive. Fill the gaps behind
-                        // the controls so taps cannot reach album links below it.
-                        Color.clear
-                            .contentShape(.rect)
-                            .onTapGesture {}
-                            .accessibilityHidden(true)
-                    }
-                }
-                .ignoresSafeArea(.container, edges: .horizontal)
+                albumHeader(metrics: metrics)
             }
             .scrollDismissesKeyboard(.interactively)
         }
+    }
+
+    private func albumHeader(metrics: AlbumReflowMetrics) -> some View {
+        let spacing: CGFloat = 12
+        return GeometryReader { geometry in
+            let searchWidth = isSearchExpanded ? max(headerControlSize, geometry.size.width - headerControlSize - spacing) : headerControlSize
+            ZStack(alignment: .leading) {
+                AlbumScopeControl(selection: Binding(get: { scope }, set: selectAlbumScope))
+                    .frame(height: headerControlSize)
+                    .padding(.horizontal, headerControlSize + spacing)
+                    .opacity(isSearchExpanded ? 0 : 1)
+                    .allowsHitTesting(!isSearchExpanded && !scopeSlide.isActive)
+                    .accessibilityHidden(isSearchExpanded)
+
+                HStack(spacing: 0) {
+                    searchControl(width: searchWidth)
+                    Spacer(minLength: spacing)
+                    albumOptions(metrics: metrics)
+                }
+                .allowsHitTesting(!scopeSlide.isActive)
+            }
+        }
+        .frame(height: headerRowHeight)
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+        .padding(.top, windowTopInset)
+        .background {
+            ZStack {
+                TimelineMemoryGradientBackdrop(visible: true, extended: true, reduceMotion: reduceMotion)
+                    .ignoresSafeArea(edges: .top)
+                // Fill the gaps between controls so taps cannot open albums underneath.
+                Color.clear
+                    .contentShape(.rect)
+                    .onTapGesture {}
+                    .accessibilityHidden(true)
+            }
+        }
+        .ignoresSafeArea(.container, edges: .horizontal)
+    }
+
+    private func searchControl(width: CGFloat) -> some View {
+        let focusRequest = searchFocusRequest
+        return HStack(spacing: 0) {
+            Button {
+                if isSearchExpanded {
+                    dismissSearch()
+                } else {
+                    expandSearch()
+                }
+            } label: {
+                Image(systemName: isSearchExpanded ? "xmark" : "magnifyingglass")
+                    .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
+                    .frame(width: headerControlSize, height: headerControlSize)
+                    .contentShape(.circle)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text(isSearchExpanded ? "Close Search" : "Search Albums"))
+            .accessibilityIdentifier(isSearchExpanded ? "albums-search-close-button" : "albums-search-button")
+
+            if isSearchExpanded {
+                TextField("Search Albums", text: $query)
+                    .focused($searchFocused)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .submitLabel(.search)
+                    .accessibilityIdentifier("albums-search")
+                    .padding(.trailing, 16)
+                    .transition(.opacity)
+                    .task(id: focusRequest) {
+                        guard let focusRequest, searchFocusRequest == focusRequest, canDismissSearchBySwipe, !Task.isCancelled else { return }
+                        searchFocusRequest = nil
+                        searchFocused = true
+                    }
+            }
+        }
+        .frame(width: width, height: isSearchExpanded ? headerRowHeight : headerControlSize, alignment: .leading)
+        .clipped()
+        .glassEffect(.regular.interactive(), in: .capsule)
+    }
+
+    private func albumOptions(metrics: AlbumReflowMetrics) -> some View {
+        Menu {
+            Picker("Sort Albums", selection: Binding(get: { sort }, set: { updateAlbumLayout(sort: $0, direction: sortDirection, metrics: metrics) })) {
+                ForEach(AlbumSort.allCases) { Text($0.rawValue).tag($0) }
+            }
+            Divider()
+            Picker("Order", selection: Binding(get: { sortDirection }, set: { updateAlbumLayout(sort: sort, direction: $0, metrics: metrics) })) {
+                ForEach(AlbumSortDirection.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.inline)
+            Divider()
+            Toggle("List View", isOn: Binding(get: { showsList }, set: { updateAlbumLayout(sort: sort, direction: sortDirection, list: $0, metrics: metrics) }))
+        } label: {
+            Image(systemName: "arrow.up.arrow.down").frame(width: headerControlSize, height: headerControlSize)
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: .circle)
+        .accessibilityLabel("Album Options")
+    }
+
+    private func expandSearch() {
+        guard !isSearchExpanded, !scopeSlide.isActive, tabSelectionState.canActivateContent(in: .albums) else { return }
+        cancelAlbumReflow()
+        searchFocusRequest = UUID()
+        withAnimation(reduceMotion ? nil : .smooth(duration: 0.3)) {
+            tabSelectionState.isAlbumSearchExpanded = true
+        }
+    }
+
+    private func dismissSearch(animated: Bool = true) {
+        guard isSearchExpanded else { return }
+        searchFocusRequest = nil
+        searchFocused = false
+        query = ""
+        withAnimation(animated && !reduceMotion ? .smooth(duration: 0.3) : nil) {
+            tabSelectionState.isAlbumSearchExpanded = false
+        }
+    }
+
+    private func dismissSearchBySwipe() {
+        guard canDismissSearchBySwipe else { return }
+        dismissSearch()
     }
 
     private func albumLink(_ album: AlbumSummary, compact: Bool, progress: CGFloat, metrics: AlbumReflowMetrics,
@@ -542,6 +587,8 @@ struct AlbumsView: View {
               accessibility || !pinchInteraction.blocksAlbumActivation
         else { return }
         transitionAlbumID = album.id
+        searchFocusRequest = nil
+        searchFocused = false
         openAlbum(album, navigationRoot.isSettledRoot)
     }
 
@@ -600,8 +647,6 @@ struct AlbumsView: View {
                 reorderGeneration &+= 1
                 pinchSettling = false
                 isReordering = true
-                userScrolling = false
-                chromeTracker.scrollingEnded()
                 albumLayoutProgress = progress
                 reflowViewport.beginMotion(anchor: anchor, destinationSize: nil, generation: reorderGeneration)
                 pinchInteraction.begin(showsList: showsList, anchor: anchor, progress: progress)
@@ -911,6 +956,94 @@ private struct AlbumScopeSlideAnchor: UIViewRepresentable {
 
     func updateUIView(_ view: UIView, context _: Context) {
         slide.anchor = view
+    }
+}
+
+private struct AlbumScopeControl: UIViewRepresentable {
+    @Binding var selection: AlbumScope
+
+    func makeUIView(context: Context) -> UISegmentedControl {
+        let control = UISegmentedControl(items: AlbumScope.allCases.map(\.rawValue))
+        control.accessibilityIdentifier = "albums-scope"
+        control.addTarget(context.coordinator, action: #selector(Coordinator.selectionChanged(_:)), for: .valueChanged)
+        return control
+    }
+
+    func updateUIView(_ control: UISegmentedControl, context: Context) {
+        context.coordinator.selection = $selection
+        control.selectedSegmentIndex = AlbumScope.allCases.firstIndex(of: selection) ?? 0
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UISegmentedControl, context _: Context) -> CGSize? {
+        let intrinsic = uiView.intrinsicContentSize
+        return CGSize(width: proposal.width ?? intrinsic.width, height: proposal.height ?? intrinsic.height)
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(selection: $selection)
+    }
+
+    final class Coordinator: NSObject {
+        var selection: Binding<AlbumScope>
+
+        init(selection: Binding<AlbumScope>) {
+            self.selection = selection
+        }
+
+        @objc func selectionChanged(_ control: UISegmentedControl) {
+            let scopes = AlbumScope.allCases
+            guard scopes.indices.contains(control.selectedSegmentIndex) else { return }
+            selection.wrappedValue = scopes[control.selectedSegmentIndex]
+            // The scope can reject another selection while its slide is in flight.
+            control.selectedSegmentIndex = scopes.firstIndex(of: selection.wrappedValue) ?? 0
+        }
+    }
+}
+
+private struct AlbumSearchDismissSwipe: UIGestureRecognizerRepresentable {
+    let enabled: Bool
+    let dismiss: () -> Void
+
+    func makeCoordinator(converter _: CoordinateSpaceConverter) -> Coordinator {
+        Coordinator()
+    }
+
+    func makeUIGestureRecognizer(context: Context) -> UISwipeGestureRecognizer {
+        let swipe = UISwipeGestureRecognizer()
+        swipe.direction = .left
+        swipe.cancelsTouchesInView = false
+        swipe.isEnabled = enabled
+        swipe.delegate = context.coordinator
+        return swipe
+    }
+
+    func updateUIGestureRecognizer(_ swipe: UISwipeGestureRecognizer, context _: Context) {
+        if swipe.isEnabled != enabled {
+            swipe.isEnabled = enabled
+        }
+    }
+
+    func handleUIGestureRecognizerAction(_ swipe: UISwipeGestureRecognizer, context _: Context) {
+        if enabled, swipe.state == .ended {
+            dismiss()
+        }
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        func gestureRecognizer(_: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            var candidate = touch.view
+            while let view = candidate {
+                if view is UITextField || view is UITextView {
+                    return false
+                }
+                candidate = view.superview
+            }
+            return true
+        }
+
+        func gestureRecognizer(_: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+            other is UIPanGestureRecognizer
+        }
     }
 }
 
