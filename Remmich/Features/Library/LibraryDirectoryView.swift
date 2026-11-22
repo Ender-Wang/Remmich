@@ -223,52 +223,22 @@ struct LibraryDirectoryCard: View {
 }
 
 private struct LibraryDirectoryView: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.dismiss) private var dismiss
     let directory: LibraryDirectory
     let store: LibraryDirectoryStore
     let source: ImmichTimelineRepository
     let media: MediaLibraryController
     let assetDetails: any AssetDetailReading
     let context: LibraryCollectionNavigation
-    @Namespace private var headerNamespace
-    @State private var selected: LibraryDirectoryEntry?
-    @State private var timeline: PhotosTimelineStore?
+    @Namespace private var cardTransition
 
     var body: some View {
-        ZStack {
-            directoryContent
-                .opacity(selected == nil ? 1 : 0)
-                .allowsHitTesting(selected == nil)
-                .accessibilityHidden(selected != nil)
-            if let selected, let timeline {
-                LibraryTimelineViewport { clearance in
-                    LibraryTimelineLane(store: timeline, name: selected.name, active: true, media: media, assetDetails: assetDetails,
-                                        tabSelectionState: context.tabSelectionState, viewerPresentations: context.viewerPresentations,
-                                        tabBarTop: context.tabBarTop, clearance: clearance,
-                                        sharedReads: directory == .places ? store.placeReader(source: source) : nil)
-                        .id(selected.id)
-                } header: {
-                    if directory != .places {
-                        LibraryDirectoryPortrait(entry: selected, media: media, size: 72)
-                            .matchedGeometryEffect(id: selected.id, in: headerNamespace)
-                            .padding(.top, 4)
-                            .padding(.bottom, 8)
-                            .frame(maxWidth: .infinity)
-                    }
+        directoryContent
+            .libraryPageHeader(directory.rawValue)
+            .task {
+                if store.entries.isEmpty {
+                    await store.loadNext(directory, source: source)
                 }
-                .transition(.identity)
             }
-        }
-        .libraryPageHeader(selected?.name ?? directory.rawValue,
-                           backLabel: selected == nil ? "Back" : "Back to \(directory.rawValue)", back: goBack)
-        .nativeEdgeBackAction(active: selected != nil && context.viewerPresentations?.activeID == nil,
-                              priority: 50, action: close)
-        .task {
-            if store.entries.isEmpty {
-                await store.loadNext(directory, source: source)
-            }
-        }
     }
 
     @ViewBuilder private var directoryContent: some View {
@@ -279,17 +249,18 @@ private struct LibraryDirectoryView: View {
                 let rows = layout.identifiedRows(store.entries)
                 LibraryCardScroll(initialRowID: store.entries.first?.id ?? "", viewportHeight: geometry.size.height,
                                   alignment: directory == .partners ? .top : .bottom,
-                                  oldestRowID: directory == .places && selected == nil ? rows.first?.id : nil,
+                                  oldestRowID: directory == .places ? rows.first?.id : nil,
                                   oldestItemID: store.entries.last?.id, loadOlder: { await store.loadNext(directory, source: source) })
                 {
                     LazyVStack(spacing: LibraryCollectionCardMetrics.spacing) {
                         ForEach(directory == .partners ? Array(rows.reversed()) : rows) { row in
                             HStack(alignment: .top, spacing: LibraryCollectionCardMetrics.spacing) {
                                 ForEach(row.items) { entry in
-                                    Button { open(entry) } label: {
+                                    LibraryCardLink(id: entry.id, namespace: cardTransition) {
+                                        timeline(for: entry)
+                                    } label: {
                                         rowCard(entry, width: layout.itemWidth)
                                     }
-                                    .buttonStyle(.plain)
                                 }
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -318,7 +289,7 @@ private struct LibraryDirectoryView: View {
         switch entry {
         case .person, .partner:
             VStack(spacing: 4) {
-                directoryPortrait(entry, width: width)
+                LibraryDirectoryPortrait(entry: entry, media: media, size: width)
                 Text(entry.name)
                     .font(.caption)
                     .lineLimit(2)
@@ -345,20 +316,7 @@ private struct LibraryDirectoryView: View {
         }
     }
 
-    @ViewBuilder private func directoryPortrait(_ entry: LibraryDirectoryEntry, width: CGFloat) -> some View {
-        if selected?.id == entry.id {
-            Color.clear
-                .frame(width: width, height: width)
-                .transition(.identity)
-        } else {
-            LibraryDirectoryPortrait(entry: entry, media: media, size: width)
-                .matchedGeometryEffect(id: entry.id, in: headerNamespace)
-                .transition(.identity)
-        }
-    }
-
-    private func open(_ entry: LibraryDirectoryEntry) {
-        guard selected == nil else { return }
+    private func timeline(for entry: LibraryDirectoryEntry) -> some View {
         var query = LibraryDirectoryStore.placeQuery
         var place: TimelinePlace?
         var newestBucket: TimelineBucketID?
@@ -373,33 +331,44 @@ private struct LibraryDirectoryView: View {
             let day = TimelineCaptureDay(capturedAt: cover.captureLocalDate)
             newestBucket = .init(rawValue: String(format: "%04d-%02d-01", day.year, day.month))
         }
-        let reader: any TimelineReading = if place != nil {
-            store.placeReader(source: source)
+        let sharedReads = place.map { _ in store.placeReader(source: source) }
+        let reader: any TimelineReading = if let sharedReads {
+            sharedReads
         } else {
             source
         }
-        let store = PhotosTimelineStore(reader: LibraryScopedTimelineReader(source: reader, query: query, media: nil,
-                                                                            place: place, newestBucket: newestBucket),
-                                        hasUnfilteredBucketCounts: place != nil)
-        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.35)) {
-            timeline = store
-            selected = entry
-        }
+        let timelineReader = LibraryScopedTimelineReader(source: reader, query: query, media: nil, place: place, newestBucket: newestBucket)
+        return LibraryDirectoryTimeline(entry: entry, directory: directory, media: media, assetDetails: assetDetails, context: context,
+                                        sharedReads: sharedReads,
+                                        store: PhotosTimelineStore(reader: timelineReader, hasUnfilteredBucketCounts: place != nil))
     }
+}
 
-    private func close() {
-        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.35)) {
-            selected = nil
-            timeline = nil
-        }
-    }
+private struct LibraryDirectoryTimeline: View {
+    let entry: LibraryDirectoryEntry
+    let directory: LibraryDirectory
+    let media: MediaLibraryController
+    let assetDetails: any AssetDetailReading
+    let context: LibraryCollectionNavigation
+    let sharedReads: LibraryOpeningBuckets?
+    @State var store: PhotosTimelineStore
 
-    private func goBack() {
-        if selected == nil {
-            dismiss()
-        } else {
-            close()
+    var body: some View {
+        LibraryTimelineViewport { clearance in
+            LibraryTimelineLane(store: store, name: entry.name, active: true, media: media, assetDetails: assetDetails,
+                                tabSelectionState: context.tabSelectionState, viewerPresentations: context.viewerPresentations,
+                                tabBarTop: context.tabBarTop, clearance: clearance, sharedReads: sharedReads)
+        } header: {
+            VStack(spacing: 0) {
+                LibraryPageHeader(title: entry.name, backLabel: "Back to \(directory.rawValue)") { EmptyView() }
+                if directory != .places {
+                    LibraryDirectoryPortrait(entry: entry, media: media, size: 72)
+                        .padding(.top, 4)
+                        .padding(.bottom, 8)
+                }
+            }
         }
+        .toolbar(.hidden, for: .navigationBar)
     }
 }
 
