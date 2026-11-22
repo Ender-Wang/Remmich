@@ -60,6 +60,7 @@ struct AppShellView: View {
     @State private var photosPath: [PhotosRangeRoute] = []
     @State private var videosPath: [PhotosRangeRoute] = []
     @State private var albumsPath = NavigationPath()
+    @State private var albumAfterPathRecovery: AlbumSummary?
     @State private var libraryPath = NavigationPath()
     @State private var searchPath = NavigationPath()
     @State private var showsAccount = false
@@ -206,12 +207,7 @@ struct AppShellView: View {
                                        windowTopInset: windowTopInset,
                                        showsLoadingOverlay: primaryContentLoadingChanged == nil,
                                        openingLayoutMeasured: { overviewState.hasMeasuredOpeningLayout = true },
-                                       openAlbum: { album in
-                                           guard albumsPath.isEmpty, tabSelectionState.canActivateContent(in: .albums) else {
-                                               return
-                                           }
-                                           withAnimation { albumsPath.append(album) }
-                                       },
+                                       openAlbum: openAlbum,
                                        showAccount: showAccount)
                         }
                     }
@@ -481,8 +477,18 @@ struct AppShellView: View {
             guard tabSelectionState.selection == .albums else { return }
             await prepareAlbumsOpening(in: overviewState, preloading: false)
         }
+        .task(id: albumsPath.count) {
+            // The tab host retains its content. Observe the cleared path from the shell.
+            guard albumsPath.isEmpty, let albumAfterPathRecovery else { return }
+            await Task.yield()
+            guard !Task.isCancelled, albumsPath.isEmpty, self.albumAfterPathRecovery == albumAfterPathRecovery else { return }
+            self.albumAfterPathRecovery = nil
+            guard tabSelectionState.canActivateContent(in: .albums) else { return }
+            pushAlbum(albumAfterPathRecovery)
+        }
         .onChange(of: tabSelectionState.selection) { previous, current in
             if previous == .albums, current != .albums {
+                albumAfterPathRecovery = nil
                 media.cancelPrefetching()
             }
             if current != .photos, current != .videos {
@@ -500,6 +506,23 @@ struct AppShellView: View {
             viewerPresentations.removeAll()
         }
         .environment(\.assetLocations, sessionController?.locations)
+    }
+
+    private func openAlbum(_ album: AlbumSummary, listIsSettledRoot: Bool) {
+        guard tabSelectionState.canActivateContent(in: .albums), albumAfterPathRecovery == nil else { return }
+        if albumsPath.isEmpty {
+            pushAlbum(album)
+        } else if listIsSettledRoot {
+            // An interrupted native zoom can leave the bound path ahead of the visible stack.
+            albumAfterPathRecovery = album
+            var transaction = Transaction(animation: nil)
+            transaction.disablesAnimations = true
+            withTransaction(transaction) { albumsPath = NavigationPath() }
+        }
+    }
+
+    private func pushAlbum(_ album: AlbumSummary) {
+        withAnimation { albumsPath.append(album) }
     }
 
     private func prepareVideosOpening(using sessionController: AppSessionController) async {

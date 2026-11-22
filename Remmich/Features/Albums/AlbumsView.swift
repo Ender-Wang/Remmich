@@ -70,7 +70,7 @@ struct AlbumsView: View {
     let windowTopInset: CGFloat
     let showsLoadingOverlay: Bool
     let openingLayoutMeasured: () -> Void
-    let openAlbum: (AlbumSummary) -> Void
+    let openAlbum: (AlbumSummary, Bool) -> Void
     let showAccount: () -> Void
     private let store: AlbumsStore
     @State private var scope: AlbumScope = .all
@@ -94,6 +94,7 @@ struct AlbumsView: View {
     @State private var pinchInteraction = AlbumPinchInteraction()
     @State private var listVisible = false
     @State private var transitionAlbumID: String?
+    @State private var navigationRoot = CardNavigationRoot()
     @Namespace private var albumTransition
     @State private var timelineSessions = AlbumTimelineSessions()
     @State private var scopeSlide = AlbumScopeSlide()
@@ -106,7 +107,7 @@ struct AlbumsView: View {
          viewerPresentations: AssetViewerPresentationStore, tabSelectionState: NativeTabSelectionState,
          tabBarTop: Binding<CGFloat>, windowTopInset: CGFloat, showsLoadingOverlay: Bool = true,
          openingLayoutMeasured: @escaping () -> Void,
-         openAlbum: @escaping (AlbumSummary) -> Void,
+         openAlbum: @escaping (AlbumSummary, Bool) -> Void,
          showAccount: @escaping () -> Void)
     {
         self.source = source
@@ -199,6 +200,7 @@ struct AlbumsView: View {
                 .cardNavigationDestination(id: album.id, in: albumTransition)
         }
         .accessibilityIdentifier("albums-root")
+        .background { CardNavigationRootAnchor(root: navigationRoot).allowsHitTesting(false) }
     }
 
     private func albumContent(availableWidth: CGFloat, viewportHeight: CGFloat, labelHeight: CGFloat) -> some View {
@@ -540,7 +542,7 @@ struct AlbumsView: View {
               accessibility || !pinchInteraction.blocksAlbumActivation
         else { return }
         transitionAlbumID = album.id
-        openAlbum(album)
+        openAlbum(album, navigationRoot.isSettledRoot)
     }
 
     private func updateAlbumLayout(sort nextSort: AlbumSort, direction: AlbumSortDirection, list: Bool? = nil,
