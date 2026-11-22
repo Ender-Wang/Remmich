@@ -32,6 +32,61 @@ nonisolated struct PlaceLocation: Codable, Hashable, Sendable {
     let address: String
     let countryCode: String
     let language: PlaceLanguage
+    var administrativePlace: TimelinePlace? = nil
+
+    func directoryAdministrativePlace(for place: TimelinePlace, english: Self?) -> TimelinePlace? {
+        guard language == .local else { return administrativePlace }
+        let paired = english.flatMap { legacyLocalAdministrativePlace(for: place, english: $0) }
+        let country = administrativePlace?.country ?? paired?.country
+        guard place.city != nil else { return TimelinePlace(city: nil, country: country ?? address) }
+
+        let parts = address.components(separatedBy: " · ")
+        let matchedCity: String?
+        if countryCode == "CN", let city = place.city {
+            let key = Self.chineseLocalityKey(city)
+            matchedCity = parts.first { !key.isEmpty && Self.chineseLocalityKey($0) == key }
+        } else {
+            matchedCity = nil
+        }
+        // The old cache may only have a formatted Photon address. Keep that
+        // source language when the administrative component cannot be matched.
+        let fallback = parts.filter { $0 != country }.joined(separator: " · ")
+        return TimelinePlace(city: paired?.city ?? matchedCity ?? administrativePlace?.city ?? fallback, country: country)
+    }
+
+    func legacyLocalAdministrativePlace(for place: TimelinePlace, english: Self) -> TimelinePlace? {
+        guard language == .local, english.language == .english, !countryCode.isEmpty, english.countryCode == countryCode else { return nil }
+        let englishParts = english.address.components(separatedBy: " · ")
+        let localParts = address.components(separatedBy: " · ")
+        // The legacy formatter appended country last. Match that boundary before
+        // using the matching position of a known city in the paired Photon result.
+        let knownCountry = place.country ?? Locale(identifier: "en_US").localizedString(forRegionCode: countryCode)
+        guard let knownCountry, englishParts.last?.caseInsensitiveCompare(knownCountry) == .orderedSame else { return nil }
+        let chineseKey = countryCode == "CN" ? place.city.map(Self.chineseLocalityKey) : nil
+        let city: String? = if let knownCity = place.city, englishParts.count == localParts.count,
+                               let index = englishParts.dropLast().firstIndex(where: {
+                                   if let chineseKey, !chineseKey.isEmpty {
+                                       return Self.chineseLocalityKey($0) == chineseKey
+                                   }
+                                   return $0.caseInsensitiveCompare(knownCity) == .orderedSame
+                               })
+        {
+            localParts[index]
+        } else {
+            nil
+        }
+        return TimelinePlace(city: city, country: localParts.last)
+    }
+
+    private static func chineseLocalityKey(_ name: String) -> String {
+        let lower = name.lowercased()
+        let suffix = ["街道办事处", "街道", "新区", "镇", "乡", "区", "市", " subdistrict", " township", " district", " town", " city"]
+            .first { lower.hasSuffix($0) && lower.count > $0.count }
+        let base = suffix.map { String(lower.dropLast($0.count)) } ?? lower
+        return (base.applyingTransform(.toLatin, reverse: false) ?? base)
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: nil)
+            .filter(\.isLetter)
+    }
 }
 
 nonisolated struct MapsPlacesPreferences: Codable, Equatable, Sendable {
@@ -226,6 +281,7 @@ nonisolated struct PhotonResponse: Decodable, Sendable {
         guard let fallbackTitle = unique.first else { return nil }
         let title = unique.prefix(Set(names).count).joined(separator: " · ")
         return .init(title: title.isEmpty ? fallbackTitle : title, address: unique.joined(separator: " · "),
-                     countryCode: value.countrycode?.uppercased() ?? "", language: language)
+                     countryCode: value.countrycode?.uppercased() ?? "", language: language,
+                     administrativePlace: TimelinePlace(city: value.city, country: value.country))
     }
 }

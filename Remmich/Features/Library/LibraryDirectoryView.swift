@@ -62,7 +62,7 @@ private enum LibraryDirectoryEntry: Identifiable {
     var id: String {
         switch self {
         case let .person(person): person.id
-        case let .place(place, _): "\(place.country ?? "")\u{1f}\(place.city ?? "")"
+        case let .place(place, _): place.directoryID
         case let .partner(partner): partner.id
         }
     }
@@ -74,6 +74,21 @@ private enum LibraryDirectoryEntry: Identifiable {
         case let .partner(partner): partner.name.isEmpty ? "Partner" : partner.name
         }
     }
+
+    var place: TimelinePlace? {
+        guard case let .place(place, _) = self else { return nil }
+        return place
+    }
+}
+
+private struct LibraryPlaceLabelRequest: Hashable {
+    let place: TimelinePlace
+    let revision: Int
+}
+
+private struct LibraryPlaceLabelLoad: Equatable {
+    let request: LibraryPlaceLabelRequest
+    let cacheSyncDate: Date?
 }
 
 @MainActor @Observable
@@ -82,11 +97,54 @@ final class LibraryDirectoryStore {
     fileprivate private(set) var entries: [LibraryDirectoryEntry] = []
     private(set) var error: String?
     private(set) var finished = false
+    fileprivate var selectedPlace: LibraryDirectoryEntry?
+    fileprivate private(set) var placeLabels: [LibraryPlaceLabelRequest: TimelinePlace] = [:]
+    @ObservationIgnored private var loadingPlaceLabels: Set<LibraryPlaceLabelRequest> = []
     @ObservationIgnored private var loadTask: Task<Void, Never>?
     @ObservationIgnored private var placeOpening: LibraryOpeningBuckets?
     private var buckets: [TimelineBucketSummary]?
     private var nextBucket = 0
     private var places: Set<TimelinePlace> = []
+
+    @discardableResult
+    func dismissSelectedPlace() -> Bool {
+        guard selectedPlace != nil else { return false }
+        selectedPlace = nil
+        return true
+    }
+
+    fileprivate func loadPlaceLabel(_ request: LibraryPlaceLabelRequest, assetID: String, locations: AssetLocationStore,
+                                    mapSource: LibraryPlacesMapSource?) async
+    {
+        guard placeLabels[request] == nil, loadingPlaceLabels.insert(request).inserted else { return }
+        defer { loadingPlaceLabels.remove(request) }
+        let place = request.place
+        do {
+            var label = try await locations.libraryPlaceLabel(assetID: assetID, place: place)
+            if label == nil, let mapSource, usesLocalPlaceNames(place, preferences: locations.preferences) {
+                let candidates = try await mapSource.store.libraryLocalPlaceLabelAssets(place, scope: mapSource.scope)
+                for candidate in candidates where candidate != assetID {
+                    try Task.checkCancellation()
+                    label = try await locations.libraryPlaceLabel(assetID: candidate, place: place)
+                    if label != nil {
+                        break
+                    }
+                }
+            }
+            guard !Task.isCancelled, locations.revision == request.revision else { return }
+            placeLabels[request] = label
+        } catch {
+            // An unavailable place cache leaves the Immich label usable.
+        }
+    }
+
+    private func usesLocalPlaceNames(_ place: TimelinePlace, preferences: MapsPlacesPreferences) -> Bool {
+        guard let country = place.country else { return !preferences.localCountries.isEmpty }
+        let english = Locale(identifier: "en_US")
+        return preferences.localCountries.contains {
+            english.localizedString(forRegionCode: $0)?.caseInsensitiveCompare(country) == .orderedSame
+        }
+    }
 
     func placeReader(source: ImmichTimelineRepository) -> LibraryOpeningBuckets {
         if let placeOpening {
@@ -180,10 +238,12 @@ struct LibraryDirectoryCard: View {
     let context: LibraryCollectionNavigation
     let store: LibraryDirectoryStore
     var heatmap: UIImage?
+    var placesMapSource: LibraryPlacesMapSource?
 
     var body: some View {
         LibraryHubLink {
-            LibraryDirectoryView(directory: directory, store: store, source: source, media: media, assetDetails: assetDetails, context: context)
+            LibraryDirectoryView(directory: directory, store: store, source: source, media: media, assetDetails: assetDetails,
+                                 context: context, placesMapSource: placesMapSource)
         } label: {
             LibraryCollectionCard(title: directory.rawValue, count: store.finished ? store.entries.count : nil,
                                   symbol: directory.symbol, appearance: hasCover ? .photographic : .glass)
@@ -223,22 +283,84 @@ struct LibraryDirectoryCard: View {
 }
 
 private struct LibraryDirectoryView: View {
+    @Environment(\.assetLocations) private var locations
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let directory: LibraryDirectory
     let store: LibraryDirectoryStore
     let source: ImmichTimelineRepository
     let media: MediaLibraryController
     let assetDetails: any AssetDetailReading
     let context: LibraryCollectionNavigation
+    let placesMapSource: LibraryPlacesMapSource?
     @Namespace private var cardTransition
 
     var body: some View {
-        directoryContent
-            .libraryPageHeader(directory.rawValue)
-            .task {
-                if store.entries.isEmpty {
-                    await store.loadNext(directory, source: source)
+        Group {
+            if directory == .places {
+                placesPage
+            } else {
+                directoryContent.libraryPageHeader(directory.rawValue)
+            }
+        }
+        .task {
+            if store.entries.isEmpty {
+                await store.loadNext(directory, source: source)
+            }
+        }
+    }
+
+    private var placesPage: some View {
+        let selection = store.selectedPlace
+        return GeometryReader { geometry in
+            let layout = LibraryCardRows(availableWidth: geometry.size.width - 32)
+            let twoRows = 2 * layout.itemWidth / LibraryCollectionCardMetrics.aspectRatio
+            let mapHeight = min(twoRows, geometry.size.height * (geometry.size.width > geometry.size.height ? 0.46 : 0.55))
+            VStack(spacing: 0) {
+                placesMapHeader(height: mapHeight, selection: selection)
+                placesContent(selection: selection)
+            }
+        }
+        .toolbar(.hidden, for: .navigationBar)
+        .nativeEdgeBackAction(active: selection != nil && (context.tabSelectionState?.canActivateContent(in: .library) ?? true),
+                              animatesContent: false, action: dismissPlace)
+    }
+
+    private func placesMapHeader(height: CGFloat, selection: LibraryDirectoryEntry?) -> some View {
+        let backAction: (() -> Void)? = selection == nil ? nil : { dismissPlace() }
+        return LibraryPlacesMap(source: placesMapSource, place: selection?.place)
+            .ignoresSafeArea(.container, edges: [.top, .horizontal])
+            .frame(height: height)
+            .overlay(alignment: .top) {
+                LibraryPageHeader(title: selection.map { title(for: $0) } ?? directory.rawValue,
+                                  backLabel: selection == nil ? "Back to Library" : "Back to Places", backAction: backAction)
+                {
+                    EmptyView()
+                }
+                .background {
+                    TimelineMemoryGradientBackdrop(visible: true, extended: true, reduceMotion: reduceMotion)
+                        .ignoresSafeArea(.container, edges: [.top, .horizontal])
+                        .allowsHitTesting(false)
                 }
             }
+    }
+
+    private func placesContent(selection: LibraryDirectoryEntry?) -> some View {
+        ZStack {
+            directoryContent
+                .opacity(selection == nil ? 1 : 0)
+                .allowsHitTesting(selection == nil)
+                .accessibilityHidden(selection != nil)
+            if let selection {
+                timeline(for: selection, showsHeader: false)
+                    .id(selection.id)
+                    .transition(.opacity)
+            }
+        }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: selection?.id)
+    }
+
+    private func dismissPlace() {
+        store.dismissSelectedPlace()
     }
 
     @ViewBuilder private var directoryContent: some View {
@@ -256,11 +378,7 @@ private struct LibraryDirectoryView: View {
                         ForEach(directory == .partners ? Array(rows.reversed()) : rows) { row in
                             HStack(alignment: .top, spacing: LibraryCollectionCardMetrics.spacing) {
                                 ForEach(row.items) { entry in
-                                    LibraryCardLink(id: entry.id, namespace: cardTransition) {
-                                        timeline(for: entry)
-                                    } label: {
-                                        rowCard(entry, width: layout.itemWidth)
-                                    }
+                                    directoryLink(entry, width: layout.itemWidth)
                                 }
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -285,6 +403,40 @@ private struct LibraryDirectoryView: View {
         }
     }
 
+    @ViewBuilder private func directoryLink(_ entry: LibraryDirectoryEntry, width: CGFloat) -> some View {
+        if case let .place(place, cover) = entry {
+            let load = locations.map {
+                LibraryPlaceLabelLoad(request: .init(place: place, revision: $0.revision), cacheSyncDate: $0.cacheRun.lastSyncedAt)
+            }
+            Button {
+                store.selectedPlace = entry
+            } label: {
+                rowCard(entry, width: width)
+            }
+            .buttonStyle(.plain)
+            .task(id: load) {
+                guard let load, let locations else { return }
+                await store.loadPlaceLabel(load.request, assetID: cover.id, locations: locations, mapSource: placesMapSource)
+            }
+        } else {
+            LibraryCardLink(id: entry.id, namespace: cardTransition) {
+                timeline(for: entry)
+            } label: {
+                rowCard(entry, width: width)
+            }
+        }
+    }
+
+    private func localizedLabel(for place: TimelinePlace) -> TimelinePlace? {
+        guard let locations else { return nil }
+        return store.placeLabels[.init(place: place, revision: locations.revision)]
+    }
+
+    private func title(for entry: LibraryDirectoryEntry) -> String {
+        guard let place = entry.place, let label = localizedLabel(for: place) else { return entry.name }
+        return (place.city == nil ? label.country : label.city) ?? entry.name
+    }
+
     @ViewBuilder private func rowCard(_ entry: LibraryDirectoryEntry, width: CGFloat) -> some View {
         switch entry {
         case .person, .partner:
@@ -298,13 +450,15 @@ private struct LibraryDirectoryView: View {
             .frame(width: width)
             .accessibilityElement(children: .combine)
         case let .place(place, cover):
+            let label = localizedLabel(for: place)
             ZStack(alignment: .bottomLeading) {
                 LibraryAssetCover(assetID: cover.id, revision: cover.thumbnailRevision, media: media)
                 LinearGradient(colors: [.clear, .black.opacity(0.7)], startPoint: .center, endPoint: .bottom)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(entry.name)
+                    Text(title(for: entry))
                         .font(.headline)
-                    if place.city != nil, let country = place.country {
+                        .lineLimit(2)
+                    if place.city != nil, let country = label == nil ? place.country : label?.country {
                         Text(country).font(.caption)
                     }
                 }
@@ -316,7 +470,7 @@ private struct LibraryDirectoryView: View {
         }
     }
 
-    private func timeline(for entry: LibraryDirectoryEntry) -> some View {
+    private func timeline(for entry: LibraryDirectoryEntry, showsHeader: Bool = true) -> some View {
         var query = LibraryDirectoryStore.placeQuery
         var place: TimelinePlace?
         var newestBucket: TimelineBucketID?
@@ -339,7 +493,7 @@ private struct LibraryDirectoryView: View {
         }
         let timelineReader = LibraryScopedTimelineReader(source: reader, query: query, media: nil, place: place, newestBucket: newestBucket)
         return LibraryDirectoryTimeline(entry: entry, directory: directory, media: media, assetDetails: assetDetails, context: context,
-                                        sharedReads: sharedReads,
+                                        sharedReads: sharedReads, title: title(for: entry), showsHeader: showsHeader,
                                         store: PhotosTimelineStore(reader: timelineReader, hasUnfilteredBucketCounts: place != nil))
     }
 }
@@ -351,20 +505,24 @@ private struct LibraryDirectoryTimeline: View {
     let assetDetails: any AssetDetailReading
     let context: LibraryCollectionNavigation
     let sharedReads: LibraryOpeningBuckets?
+    let title: String
+    let showsHeader: Bool
     @State var store: PhotosTimelineStore
 
     var body: some View {
         LibraryTimelineViewport { clearance in
-            LibraryTimelineLane(store: store, name: entry.name, active: true, media: media, assetDetails: assetDetails,
+            LibraryTimelineLane(store: store, name: title, active: true, media: media, assetDetails: assetDetails,
                                 tabSelectionState: context.tabSelectionState, viewerPresentations: context.viewerPresentations,
                                 tabBarTop: context.tabBarTop, clearance: clearance, sharedReads: sharedReads)
         } header: {
-            VStack(spacing: 0) {
-                LibraryPageHeader(title: entry.name, backLabel: "Back to \(directory.rawValue)") { EmptyView() }
-                if directory != .places {
-                    LibraryDirectoryPortrait(entry: entry, media: media, size: 72)
-                        .padding(.top, 4)
-                        .padding(.bottom, 8)
+            if showsHeader {
+                VStack(spacing: 0) {
+                    LibraryPageHeader(title: title, backLabel: "Back to \(directory.rawValue)") { EmptyView() }
+                    if directory != .places {
+                        LibraryDirectoryPortrait(entry: entry, media: media, size: 72)
+                            .padding(.top, 4)
+                            .padding(.bottom, 8)
+                    }
                 }
             }
         }

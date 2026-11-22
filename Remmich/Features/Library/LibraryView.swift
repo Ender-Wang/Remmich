@@ -90,7 +90,10 @@ struct LibraryView: View {
                                 }
                                 LibraryDirectoryCard(directory: .places, source: collectionSource, media: media,
                                                      assetDetails: assetDetails, context: collectionNavigation, store: opening.places,
-                                                     heatmap: opening.placesCover.image)
+                                                     heatmap: opening.placesCover.image, placesMapSource: sessionController.map {
+                                                         LibraryPlacesMapSource(store: $0.libraryIndexStore,
+                                                                                scope: MediaAccountScope(session: session), index: libraryIndex)
+                                                     })
                                 if preferences?.sharedLinksEnabled == true {
                                     LibrarySharedLinksCard(source: collectionSource, media: media, assetDetails: assetDetails,
                                                            context: collectionNavigation, store: opening.links)

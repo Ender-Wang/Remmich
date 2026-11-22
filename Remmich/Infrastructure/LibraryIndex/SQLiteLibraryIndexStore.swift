@@ -786,6 +786,48 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
         }.compactMap(\.self)
     }
 
+    func libraryPlacesMapCoordinates(scope: MediaAccountScope) throws -> [TimelinePlace?: [PlaceCoordinate]] {
+        guard try canRead(scope) else { return [:] }
+        let database = try preparedDatabase(scope: scope)
+        let rows = try database.query("""
+        SELECT city.value, country.value, d.latitude, d.longitude
+        FROM assets a
+        JOIN sync_state s ON s.scope = a.scope AND s.accepted_generation = a.generation
+        JOIN cache.asset_details d ON d.scope = a.scope AND d.asset_id = a.asset_id
+        LEFT JOIN cache.asset_detail_strings city ON city.scope = d.scope AND city.id = d.city_id
+        LEFT JOIN cache.asset_detail_strings country ON country.scope = d.scope AND country.id = d.country_id
+        WHERE a.scope = ? AND a.owner_id = ? AND a.tombstone = 0 AND a.is_trashed = 0
+          AND a.visibility = 'timeline' AND a.kind IN ('image', 'video')
+          AND d.latitude BETWEEN -85 AND 85 AND d.longitude BETWEEN -180 AND 180
+        """, [.text(scope.cacheNamespace), .text(scope.userID)]) { row in
+            (TimelinePlace(city: row.optionalText(0), country: row.optionalText(1)),
+             PlaceCoordinate(latitude: row.double(2), longitude: row.double(3)))
+        }
+        try Task.checkCancellation()
+        return Dictionary(grouping: rows, by: \.0).mapValues { $0.compactMap(\.1) }
+    }
+
+    func libraryLocalPlaceLabelAssets(_ place: TimelinePlace, scope: MediaAccountScope) throws -> [String] {
+        guard try canRead(scope) else { return [] }
+        let database = try preparedDatabase(scope: scope)
+        return try database.query("""
+        SELECT a.asset_id
+        FROM assets a
+        JOIN sync_state s ON s.scope = a.scope AND s.accepted_generation = a.generation
+        JOIN cache.asset_details d ON d.scope = a.scope AND d.asset_id = a.asset_id
+        LEFT JOIN cache.asset_detail_strings city ON city.scope = d.scope AND city.id = d.city_id
+        LEFT JOIN cache.asset_detail_strings country ON country.scope = d.scope AND country.id = d.country_id
+        JOIN cache.asset_places ap ON ap.scope = a.scope AND ap.asset_id = a.asset_id AND ap.desired = 1
+        JOIN cache.place_lookups p ON p.scope = ap.scope AND p.lookup_id = ap.lookup_id
+        WHERE a.scope = ? AND a.owner_id = ? AND a.tombstone = 0 AND a.is_trashed = 0
+          AND a.visibility = 'timeline' AND a.kind IN ('image', 'video')
+          AND NULLIF(TRIM(city.value), '') IS ? AND NULLIF(TRIM(country.value), '') IS ?
+          AND json_extract(p.location_json, '$.language') = ?
+        ORDER BY a.captured_at DESC, a.asset_id DESC LIMIT 6
+        """, [.text(scope.cacheNamespace), .text(scope.userID), .optionalText(place.city), .optionalText(place.country),
+              .text(PlaceLanguage.local.rawValue)]) { $0.text(0) }
+    }
+
     func cachedAssetDetailIDs(scope: MediaAccountScope) async throws -> Set<String> {
         guard try canRead(scope) else { return [] }
         let database = try preparedDatabase(scope: scope)

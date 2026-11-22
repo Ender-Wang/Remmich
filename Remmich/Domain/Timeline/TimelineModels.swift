@@ -140,6 +140,10 @@ nonisolated struct TimelinePlace: Codable, Hashable, Identifiable, Sendable {
     var name: String {
         city ?? country ?? ""
     }
+
+    var directoryID: String {
+        "\(country ?? "")\u{1f}\(city ?? "")"
+    }
 }
 
 nonisolated struct LibraryFeaturePreferences: Sendable {

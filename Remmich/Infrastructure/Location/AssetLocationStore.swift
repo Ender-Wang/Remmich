@@ -173,6 +173,24 @@ import SwiftUI
         return try await store.cachedAssetMetadata(id: assetID, scope: scope)?.cachedPlace
     }
 
+    func libraryPlaceLabel(assetID: String, place: TimelinePlace) async throws -> TimelinePlace? {
+        try await configuration?.value
+        let token = sessionID
+        let settingsRevision = revision
+        guard let scope, let record = try await store.desiredPlace(assetID: assetID, scope: scope),
+              let cached = record.location, token == sessionID, settingsRevision == revision,
+              cached.language == preferences.language(countryCode: cached.countryCode) else { return nil }
+        var english: PlaceLocation?
+        if cached.language == .local {
+            let englishKey = try PlaceCacheKey(endpoint: record.key.endpoint, coordinate: record.key.coordinate,
+                                               language: .english, version: record.key.version)
+            english = try await store.cachedPlace(englishKey, scope: scope)?.location
+        }
+        try Task.checkCancellation()
+        guard token == sessionID, settingsRevision == revision else { return nil }
+        return cached.directoryAdministrativePlace(for: place, english: english)
+    }
+
     func prepareCacheRebuild() async {
         let token = sessionID
         do {

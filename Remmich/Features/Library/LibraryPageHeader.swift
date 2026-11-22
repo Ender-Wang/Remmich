@@ -6,16 +6,24 @@ struct LibraryPageHeader<Trailing: View>: View {
     let title: String
     let backLabel: String
     let trailing: Trailing
+    private let backAction: (() -> Void)?
 
-    init(title: String, backLabel: String = "Back", @ViewBuilder trailing: () -> Trailing) {
+    init(title: String, backLabel: String = "Back", backAction: (() -> Void)? = nil, @ViewBuilder trailing: () -> Trailing) {
         self.title = title
         self.backLabel = backLabel
         self.trailing = trailing()
+        self.backAction = backAction
     }
 
     var body: some View {
         HStack(spacing: 12) {
-            Button { dismiss() } label: {
+            Button {
+                if let backAction {
+                    backAction()
+                } else {
+                    dismiss()
+                }
+            } label: {
                 Image(systemName: "chevron.backward")
                     .font(.title3.weight(.semibold))
                     .frame(width: 44, height: 44)

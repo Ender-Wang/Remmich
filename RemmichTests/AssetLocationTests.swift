@@ -47,6 +47,35 @@ struct AssetLocationTests {
         #expect(local?.countryCode == "CN")
     }
 
+    @Test func legacyPhotonCacheCanLocalizeACardWithoutRefetching() throws {
+        let legacy = Data(#"{"title":"世纪公园","address":"世纪公园 · 花木街道 · 浦东新区 · 上海市 · 中国","countryCode":"CN","language":"Local"}"#.utf8)
+        let local = try JSONDecoder().decode(PlaceLocation.self, from: legacy)
+        let english = PlaceLocation(title: "Century Park", address: "Century Park · Huamu · Pudong · Shanghai · China",
+                                    countryCode: "CN", language: .english)
+        let place = try #require(TimelinePlace(city: "Shanghai", country: "China"))
+        #expect(local.administrativePlace == nil)
+        #expect(local.legacyLocalAdministrativePlace(for: place, english: english) == TimelinePlace(city: "上海市", country: "中国"))
+
+        let mismatched = PlaceLocation(title: "Pudong", address: "Pudong · Shanghai · China", countryCode: "CN", language: .english)
+        #expect(local.legacyLocalAdministrativePlace(for: place, english: mismatched) == TimelinePlace(city: nil, country: "中国"))
+        let otherCountry = PlaceLocation(title: "Shanghai", address: "Shanghai · China", countryCode: "GB", language: .english)
+        #expect(local.legacyLocalAdministrativePlace(for: place, english: otherCountry) == nil)
+    }
+
+    @Test func localPlaceCardsMatchTownshipsAndKeepLocalizedAddressesAsFallback() throws {
+        let local = PlaceLocation(title: "金桥镇", address: "金桥镇 · 浦东新区 · 上海市 · 中国", countryCode: "CN", language: .local)
+        let jinqiao = try #require(TimelinePlace(city: "Jinqiao", country: "China"))
+        #expect(local.directoryAdministrativePlace(for: jinqiao, english: nil)?.city == "金桥镇")
+
+        let miaohang = try #require(TimelinePlace(city: "Miaohang", country: "China"))
+        let other = PlaceLocation(title: "超市", address: "超市 · 庙行镇 · 宝山区 · 上海市 · 中国", countryCode: "CN", language: .local)
+        let english = PlaceLocation(title: "Supermarket", address: "Supermarket · Miaohang Town · Baoshan · Shanghai · China",
+                                    countryCode: "CN", language: .english)
+        #expect(other.directoryAdministrativePlace(for: miaohang, english: english) == TimelinePlace(city: "庙行镇", country: "中国"))
+        let unmatched = try #require(TimelinePlace(city: "Unmatched", country: "China"))
+        #expect(other.directoryAdministrativePlace(for: unmatched, english: nil)?.city == other.address)
+    }
+
     @Test func aRoadDoesNotPromoteAnUnrelatedLaterPeak() throws {
         let data = Data(#"{"features":[{"properties":{"name":"Moorhowe Road","osm_key":"highway","city":"Windermere","country":"United Kingdom"}},{"properties":{"name":"Allen Knott","osm_key":"natural"}}]}"#.utf8)
         let response = try JSONDecoder().decode(PhotonResponse.self, from: data)

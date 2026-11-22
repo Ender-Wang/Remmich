@@ -494,7 +494,9 @@ struct AppShellView: View {
             pushAlbum(albumAfterPathRecovery)
         }
         .task(id: libraryPath.count) {
-            guard libraryPath.isEmpty, let card = libraryCardAfterPathRecovery else { return }
+            guard libraryPath.isEmpty else { return }
+            libraryOpening.places.dismissSelectedPlace()
+            guard let card = libraryCardAfterPathRecovery else { return }
             await Task.yield()
             guard !Task.isCancelled, libraryPath.isEmpty, libraryCardAfterPathRecovery == card else { return }
             libraryCardAfterPathRecovery = nil
@@ -542,7 +544,7 @@ struct AppShellView: View {
         libraryCardAfterPathRecovery = nil
         if libraryPath.isEmpty {
             libraryDismissAccountRequest &+= 1
-        } else {
+        } else if !libraryOpening.places.dismissSelectedPlace() {
             withAnimation { libraryPath.removeLast() }
         }
     }
@@ -575,6 +577,7 @@ struct AppShellView: View {
     }
 
     private func pushLibraryCard(_ card: LibraryHubDestination) {
+        libraryOpening.places.dismissSelectedPlace()
         libraryPushGeneration &+= 1
         withAnimation { libraryPath.append(card) }
     }
