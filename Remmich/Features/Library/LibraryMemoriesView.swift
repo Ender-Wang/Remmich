@@ -7,6 +7,7 @@ final class LibraryMemoriesStore {
     private(set) var memories: [TimelineMemorySummary] = []
     private var previewCovers: [LibraryMemoryCover] = []
     private(set) var coversFinished = false
+    private var usesIndexedCovers = false
     private(set) var coverPagingFailed = false
     @ObservationIgnored private var coverPage = 1
     @ObservationIgnored private var coverPageTask: Task<Bool, Never>?
@@ -19,11 +20,27 @@ final class LibraryMemoriesStore {
     private var pageSize = 24
 
     var covers: [LibraryMemoryCover] {
-        let loaded = Self.coverChoices(memories)
+        let loaded = usesIndexedCovers ? [] : Self.coverChoices(memories)
         var seen = Set<String>()
         return (loaded + previewCovers).filter { seen.insert($0.id).inserted }.sorted {
             $0.date == $1.date ? $0.id < $1.id : $0.date > $1.date
         }
+    }
+
+    func adoptIndexedCovers(_ entries: [TimelineMemorySummary], from source: ImmichTimelineRepository) async {
+        guard coverPageTask == nil else { return }
+        previewCovers = Self.coverChoices(entries)
+        usesIndexedCovers = true
+        coversFinished = true
+        coverPagingFailed = false
+        guard page > 1, !loading else { return }
+        let readPage = page
+        let loadedCount = (readPage - 1) * pageSize
+        guard let latest = try? await source.libraryMemories(page: 1, size: loadedCount),
+              !Task.isCancelled, !loading, page == readPage else { return }
+        memories = latest.filter { !$0.assets.isEmpty }.sorted(by: Self.isNewer)
+        finished = latest.count < loadedCount
+        error = nil
     }
 
     func loadCovers(from source: ImmichTimelineRepository) async {

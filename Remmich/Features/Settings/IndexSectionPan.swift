@@ -56,7 +56,7 @@ struct IndexSectionPan: UIGestureRecognizerRepresentable {
             let velocity = pan.velocity(in: pan.view?.window)
             return (startLocation.x >= 32 || velocity.x < 0)
                 && HorizontalPageSwipePolicy.canBegin(velocityX: velocity.x, velocityY: velocity.y)
-                && velocity.x * direction > 0
+                && (direction == 0 || velocity.x * direction > 0)
         }
 
         func gestureRecognizer(_: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith _: UIGestureRecognizer) -> Bool {

@@ -50,6 +50,7 @@ final class LibraryOpeningState {
     @ObservationIgnored private var preferenceTask: Task<LibraryFeaturePreferences?, Never>?
     @ObservationIgnored private var coverImages: (pipeline: ImagePipeline, prefetcher: ImagePrefetcher)?
     @ObservationIgnored private var destinationImages: [ObjectIdentifier: ImagePrefetcher] = [:]
+    @ObservationIgnored private var adoptedIndexRevision: Int?
 
     func collection(_ collection: LibraryAssetCollection, source: ImmichTimelineRepository, camera: LibraryCameraMetadata?) -> LibraryCollectionOpening? {
         configureCollections(source: source, camera: camera)
@@ -215,6 +216,41 @@ final class LibraryOpeningState {
         guard previews[.recentlyTaken]?.hasMissingMetadata == true else { return }
         previewDates[.recentlyTaken] = nil
         await prepareCollectionCover(.recentlyTaken, media: media, scale: scale)
+    }
+
+    func refreshIndexedCovers(revision: Int, source: ImmichTimelineRepository, media: MediaLibraryController,
+                              viewport: LibraryOpeningViewport, camera: LibraryCameraMetadata?) async
+    {
+        guard revision != adoptedIndexRevision else { return }
+        if let indexed = try? await source.indexedLibraryValue([LibraryPerson].self, key: LibraryIndexCard.people.rawValue) {
+            people.adoptIndexedPeople(indexed)
+        }
+        if let indexed = try? await source.indexedLibraryValue([LibraryPartner].self, key: LibraryIndexCard.partners.rawValue) {
+            partners.adoptIndexedPartners(indexed)
+        }
+        if let indexed = try? await source.indexedLibraryValue([LibrarySharedLink].self, key: LibraryIndexCard.sharedLinks.rawValue) {
+            links.adoptIndexedLinks(indexed)
+        }
+        if let indexed = try? await source.indexedLibraryValue(LibraryFolderTree.self, key: LibraryIndexCard.folders.rawValue) {
+            folders.adoptIndexedTree(indexed)
+        }
+        if let indexed = try? await source.indexedLibraryValue([TimelineMemorySummary].self, key: "memoryCovers") {
+            await memories.adoptIndexedCovers(indexed, from: source)
+        }
+        guard !Task.isCancelled else { return }
+        await places.refreshIndexedPlaces(source: source)
+        previewDates.removeAll()
+        await prepareCovers(source: source, media: media, viewport: viewport, camera: camera)
+        await prepareCollectionCover(.trash, media: media, scale: viewport.scale)
+        if !Task.isCancelled {
+            adoptedIndexRevision = revision
+        }
+    }
+
+    func refreshIndexedPreferences(source: ImmichTimelineRepository) async {
+        guard let indexed = try? await source.indexedLibraryValue(LibraryFeaturePreferences.self, key: "preferences") else { return }
+        preferences = indexed
+        preferencesLoadedAt = .now
     }
 
     private func loadPreferences(source: ImmichTimelineRepository) async {

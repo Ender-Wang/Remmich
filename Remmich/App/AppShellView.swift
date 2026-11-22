@@ -422,9 +422,23 @@ struct AppShellView: View {
             await prepareAlbumsOpening(in: overviewState, preloading: true)
             await videoOpening
         }
-        .task(id: libraryCoverEndpoint) {
-            guard libraryCoverEndpoint != nil, let source = sessionController?.timeline, let window = openingWindow else { return }
+        .task(id: libraryCoverRequest) {
+            guard libraryCoverRequest.isActive, let source = sessionController?.timeline, let window = openingWindow else { return }
             await libraryOpening.prepareCovers(source: source, media: media, viewport: .init(window: window), camera: libraryCameraMetadata)
+            if !Task.isCancelled, libraryCoverRequest.endpoint != nil {
+                libraryIndex.collections.start()
+            }
+        }
+        .task(id: libraryPath.isEmpty && mayWarmLibraryCovers ? libraryIndex.collections.publicationRevision : nil) {
+            guard libraryPath.isEmpty, libraryIndex.collections.publicationRevision > 0, mayWarmLibraryCovers,
+                  let source = sessionController?.timeline, let window = openingWindow else { return }
+            await libraryOpening.refreshIndexedCovers(revision: libraryIndex.collections.publicationRevision,
+                                                      source: source, media: media, viewport: .init(window: window),
+                                                      camera: libraryCameraMetadata)
+        }
+        .task(id: libraryIndex.collections.featureRevision) {
+            guard libraryIndex.collections.featureRevision > 0, let source = sessionController?.timeline else { return }
+            await libraryOpening.refreshIndexedPreferences(source: source)
         }
         .task(id: libraryCoverEndpoint == nil ? nil : libraryIndex.thumbnailWarmingLastUpdatedAt) {
             guard libraryCoverEndpoint != nil, libraryIndex.thumbnailWarmingLastUpdatedAt != nil,
@@ -446,9 +460,13 @@ struct AppShellView: View {
             }
             guard let window = openingWindow else { return }
             let viewport = LibraryOpeningViewport(window: window)
-            if libraryDestinationRequest.endpoint != nil, let source = sessionController?.timeline {
+            if let source = sessionController?.timeline {
                 await libraryOpening.prepareDestinations(source: source, media: media, viewport: viewport, camera: libraryCameraMetadata)
             }
+        }
+        .onChange(of: libraryIndex.lastUpdatedAt) {
+            guard libraryCoverEndpoint != nil else { return }
+            libraryIndex.collections.start()
         }
         .onChange(of: mayWarmLibraryCovers, initial: true) { _, active in
             if active {
@@ -683,6 +701,11 @@ struct AppShellView: View {
 
     private var libraryDestinationRequest: LibraryDestinationRequest {
         let active = exportScenePhase == .active && tabSelectionState.selection == .library
+        return .init(isActive: active, endpoint: active ? libraryReaderEndpoint : nil)
+    }
+
+    private var libraryCoverRequest: LibraryDestinationRequest {
+        let active = mayWarmLibraryCovers && (libraryReaderEndpoint != nil || sessionController?.foregroundResourcesReady == true)
         return .init(isActive: active, endpoint: active ? libraryReaderEndpoint : nil)
     }
 

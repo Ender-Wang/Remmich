@@ -3,7 +3,7 @@ import OSLog
 import SQLite3
 
 actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
-    static let currentSchemaVersion = 1
+    static let currentSchemaVersion = 2
     static let currentCacheSchemaVersion = 1
     private static let logger = Logger(subsystem: "io.github.ender-wang.Remmich", category: "AccountStorage")
 
@@ -96,6 +96,174 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
         ON CONFLICT(scope,asset_id) DO UPDATE SET payload=excluded.payload,revision=excluded.revision
         WHERE excluded.revision >= catalog_assets.revision
         """, [.text(scope.cacheNamespace), .text(asset.id), .text(Self.encode(asset)), .date(asset.thumbnailRevision)])
+    }
+
+    func collectionTimeline(_ key: String, scope: MediaAccountScope) throws -> LibraryTimelineCatalog? {
+        guard try canRead(scope) else { return nil }
+        let db = try preparedDatabase(scope: scope)
+        return try db.queryOne("SELECT payload FROM library_timelines WHERE scope=? AND catalog_key=?",
+                               [.text(scope.cacheNamespace), .text(key)])
+        {
+            try Self.decode(LibraryTimelineCatalog.self, from: $0.text(0))
+        }
+    }
+
+    func collectionAssets(_ key: String, bucket: TimelineBucketID, scope: MediaAccountScope) throws -> [TimelineAssetSummary]? {
+        guard try canRead(scope) else { return nil }
+        let db = try preparedDatabase(scope: scope)
+        let arguments: [SQLiteValue] = [.text(scope.cacheNamespace), .text(key), .text(bucket.rawValue)]
+        guard try db.scalarInt64("SELECT 1 FROM library_months WHERE scope=? AND catalog_key=? AND bucket=?", arguments) == 1 else { return nil }
+        return try db.query("""
+        SELECT a.payload,m.stack_payload,m.place_payload FROM library_assets m
+        JOIN catalog_assets a ON a.scope=m.scope AND a.asset_id=m.asset_id
+        WHERE m.scope=? AND m.catalog_key=? AND m.bucket=? ORDER BY m.position
+        """, arguments, map: Self.decodeCollectionAsset)
+    }
+
+    func collectionPlaceCovers(scope: MediaAccountScope, offset: Int, limit: Int) throws -> LibraryIndexedPlaces? {
+        guard try canRead(scope) else { return nil }
+        let db = try preparedDatabase(scope: scope)
+        let key = LibraryIndexCard.places.timelineKey
+        let selection: [SQLiteValue] = [.text(scope.cacheNamespace), .text(key)]
+        guard try db.scalarInt64("SELECT 1 FROM library_timelines WHERE scope=? AND catalog_key=?", selection) == 1 else { return nil }
+        let count = try db.scalarInt64("""
+        SELECT COUNT(DISTINCT place_key) FROM library_assets WHERE scope=? AND catalog_key=? AND place_key IS NOT NULL
+        """, selection) ?? 0
+        let covers = try db.query("""
+        WITH ranked AS (
+            SELECT scope,asset_id,bucket,position,stack_payload,place_payload,
+                ROW_NUMBER() OVER(PARTITION BY place_key ORDER BY bucket DESC,position,asset_id) AS place_rank
+            FROM library_assets
+            WHERE scope=? AND catalog_key=? AND place_key IS NOT NULL
+        )
+        SELECT a.payload,r.stack_payload,r.place_payload FROM ranked r JOIN catalog_assets a ON a.scope=r.scope AND a.asset_id=r.asset_id
+        WHERE r.place_rank=1 ORDER BY r.bucket DESC,r.position,r.asset_id LIMIT ? OFFSET ?
+        """, selection + [.int(limit), .int(offset)], map: Self.decodeCollectionAsset)
+        return LibraryIndexedPlaces(count: Int(count), covers: covers)
+    }
+
+    private static func decodeCollectionAsset(_ row: SQLiteRow) throws -> TimelineAssetSummary {
+        var asset = try decode(TimelineAssetSummary.self, from: row.text(0))
+        asset.stack = try row.optionalText(1).map { try decode(TimelineStackSummary.self, from: $0) }
+        asset.place = try row.optionalText(2).map { try decode(TimelinePlace.self, from: $0) }
+        return asset
+    }
+
+    func saveCollectionTimeline(_ catalog: LibraryTimelineCatalog, key: String, scope: MediaAccountScope,
+                                replacing: [TimelineBucketID: [TimelineAssetSummary]], removing: Set<TimelineBucketID>) throws
+    {
+        try Task.checkCancellation()
+        let db = try preparedDatabase(scope: scope)
+        let catalogArguments: [SQLiteValue] = [.text(scope.cacheNamespace), .text(key)]
+        try db.transaction {
+            for bucket in removing {
+                try db.execute("DELETE FROM library_months WHERE scope=? AND catalog_key=? AND bucket=?",
+                               catalogArguments + [.text(bucket.rawValue)])
+            }
+            for (bucket, assets) in replacing {
+                try Task.checkCancellation()
+                try replaceCollectionMonth(assets, key: key, bucket: bucket, scope: scope, database: db)
+            }
+            try db.execute("""
+            INSERT INTO library_timelines(scope,catalog_key,payload) VALUES(?,?,?)
+            ON CONFLICT(scope,catalog_key) DO UPDATE SET payload=excluded.payload
+            """, catalogArguments + [.text(Self.encode(catalog))])
+            try pruneCanonicalAssets(scope: scope, database: db)
+            try Task.checkCancellation()
+        }
+    }
+
+    func saveCollectionMonth(_ assets: [TimelineAssetSummary], key: String, bucket: TimelineBucketID, scope: MediaAccountScope) throws {
+        try Task.checkCancellation()
+        let db = try preparedDatabase(scope: scope)
+        try db.transaction {
+            try replaceCollectionMonth(assets, key: key, bucket: bucket, scope: scope, database: db)
+            try Task.checkCancellation()
+        }
+    }
+
+    private func replaceCollectionMonth(_ assets: [TimelineAssetSummary], key: String, bucket: TimelineBucketID,
+                                        scope: MediaAccountScope, database db: SQLiteConnection) throws
+    {
+        let values: [SQLiteValue] = [.text(scope.cacheNamespace), .text(key), .text(bucket.rawValue)]
+        try db.execute("INSERT OR IGNORE INTO library_months(scope,catalog_key,bucket) VALUES(?,?,?)", values)
+        try db.execute("DELETE FROM library_assets WHERE scope=? AND catalog_key=? AND bucket=?", values)
+        for (position, asset) in assets.enumerated() {
+            if position.isMultiple(of: 128) {
+                try Task.checkCancellation()
+            }
+            var canonical = asset
+            canonical.stack = nil
+            try saveCanonicalAsset(canonical, scope: scope, database: db)
+            let place = key == LibraryIndexCard.places.timelineKey && (asset.mediaKind == .image || asset.mediaKind == .video)
+                ? asset.place?.directoryID : nil
+            try db.execute("""
+            INSERT OR IGNORE INTO library_assets(scope,catalog_key,bucket,asset_id,position,place_key,stack_payload,place_payload)
+            VALUES(?,?,?,?,?,?,?,?)
+            """, values + [.text(asset.id), .int(position), place.map(SQLiteValue.text) ?? .null,
+                           asset.stack.map { try .text(Self.encode($0)) } ?? .null,
+                           asset.place.map { try .text(Self.encode($0)) } ?? .null])
+        }
+    }
+
+    func collectionPayload<Value: Decodable & Sendable>(_ type: Value.Type, key: String, scope: MediaAccountScope) throws -> Value? {
+        guard try canRead(scope) else { return nil }
+        let db = try preparedDatabase(scope: scope)
+        return try db.queryOne("SELECT payload FROM library_directories WHERE scope=? AND catalog_key=?",
+                               [.text(scope.cacheNamespace), .text(key)])
+        {
+            try Self.decode(type, from: $0.text(0))
+        }
+    }
+
+    func saveCollectionPayload(_ value: some Encodable & Sendable, key: String, scope: MediaAccountScope,
+                               childPrefix: String? = nil, childIDs: Set<String> = []) throws
+    {
+        try Task.checkCancellation()
+        let db = try preparedDatabase(scope: scope)
+        let payload = try Self.encode(value)
+        try db.transaction {
+            try writeCollectionPayload(payload, key: key, scope: scope, database: db)
+            if let childPrefix {
+                let arguments: [SQLiteValue] = [.text(scope.cacheNamespace), .text(childPrefix)]
+                let previous = try db.query("""
+                SELECT catalog_key FROM library_timelines WHERE scope=? AND instr(catalog_key,?)=1
+                UNION SELECT catalog_key FROM library_months WHERE scope=? AND instr(catalog_key,?)=1
+                """, arguments + arguments) { $0.text(0) }
+                let visible = Set(childIDs.map { childPrefix + $0 })
+                let removed = previous.filter { !visible.contains($0) }
+                for child in removed {
+                    let values: [SQLiteValue] = [.text(scope.cacheNamespace), .text(child)]
+                    try db.execute("DELETE FROM library_timelines WHERE scope=? AND catalog_key=?", values)
+                    try db.execute("DELETE FROM library_months WHERE scope=? AND catalog_key=?", values)
+                }
+                if !removed.isEmpty {
+                    try pruneCanonicalAssets(scope: scope, database: db)
+                }
+            }
+            try Task.checkCancellation()
+        }
+    }
+
+    func saveCollectionMemories(_ entries: [TimelineMemorySummary], scope: MediaAccountScope) throws {
+        try Task.checkCancellation()
+        let db = try preparedDatabase(scope: scope)
+        let covers = entries.map {
+            TimelineMemorySummary(id: $0.id, memoryAt: $0.memoryAt, sourceYear: $0.sourceYear,
+                                  assets: Array($0.assets.prefix(1)), availableOn: $0.availableOn)
+        }
+        try db.transaction {
+            try writeCollectionPayload(Self.encode(entries), key: LibraryIndexCard.memories.rawValue, scope: scope, database: db)
+            try writeCollectionPayload(Self.encode(covers), key: "memoryCovers", scope: scope, database: db)
+            try Task.checkCancellation()
+        }
+    }
+
+    private func writeCollectionPayload(_ payload: String, key: String, scope: MediaAccountScope, database db: SQLiteConnection) throws {
+        try db.execute("""
+        INSERT INTO library_directories(scope,catalog_key,payload) VALUES(?,?,?)
+        ON CONFLICT(scope,catalog_key) DO UPDATE SET payload=excluded.payload
+        """, [.text(scope.cacheNamespace), .text(key), .text(payload)])
     }
 
     func saveAlbumCatalog(_ catalog: AlbumCatalog, scope: MediaAccountScope, albumID: String) throws {
@@ -1343,7 +1511,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
         guard try canRead(scope) else { return .empty }
         let database = try preparedDatabase(scope: scope)
         if refresh {
-            try refreshStorageStatistics(features: ["timeline", "assets", "albums"], scope: scope, database: database)
+            try refreshStorageStatistics(features: ["timeline", "assets", "albums", "library"], scope: scope, database: database)
         }
         var report = LibraryIndexStorageReport.empty
         report.metadataBytes = metadataFileBytes()
@@ -1402,7 +1570,8 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
         // Called after sync/maintenance or a throttled visible-page refresh,
         // never directly from scrolling or UI rendering.
         let tables = ["assets": ["catalog_assets"], "timeline": ["assets", "grouped_catalogs", "generations", "sync_state"],
-                      "albums": ["albums", "album_lists", "album_catalogs", "album_assets"]]
+                      "albums": ["albums", "album_lists", "album_catalogs", "album_assets"],
+                      "library": ["library_timelines", "library_months", "library_assets", "library_directories"]]
         for feature in features {
             guard let names = tables[feature] else { continue }
             let placeholders = Array(repeating: "?", count: names.count).joined(separator: ",")
@@ -1412,6 +1581,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
             """, names.map { .text($0) }) ?? 0
             let count: Int64 = switch feature {
             case "albums": try database.scalarInt64("SELECT COUNT(*) FROM album_assets WHERE scope=?", [.text(scope.cacheNamespace)]) ?? 0
+            case "library": try database.scalarInt64("SELECT COUNT(*) FROM library_assets WHERE scope=?", [.text(scope.cacheNamespace)]) ?? 0
             case "assets": try database.scalarInt64("SELECT COUNT(*) FROM catalog_assets WHERE scope=?", [.text(scope.cacheNamespace)]) ?? 0
             // Allocation includes retained/staging generations. Count their
             // distinct stored assets so cold sync can supply a sample too.
@@ -1649,6 +1819,13 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
         if version == Self.currentSchemaVersion {
             return
         }
+        if version == 1 {
+            try database.transaction {
+                try createLibraryCollectionSchema(database)
+                try database.execute("PRAGMA user_version = \(Self.currentSchemaVersion)")
+            }
+            return
+        }
         guard version == 0 else {
             throw LibraryIndexStoreError.unsupportedSchema(version)
         }
@@ -1749,8 +1926,55 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
             """)
             try createAlbumSchema(database)
             try createMediaExportSchema(database)
+            try createLibraryCollectionSchema(database)
             try database.execute("PRAGMA user_version = \(Self.currentSchemaVersion)")
         }
+    }
+
+    private func createLibraryCollectionSchema(_ database: SQLiteConnection) throws {
+        try database.execute("""
+        CREATE TABLE library_timelines(
+            scope TEXT NOT NULL REFERENCES scopes(scope) ON DELETE CASCADE,
+            catalog_key TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            PRIMARY KEY(scope,catalog_key)
+        ) WITHOUT ROWID
+        """)
+        try database.execute("""
+        CREATE TABLE library_months(
+            scope TEXT NOT NULL REFERENCES scopes(scope) ON DELETE CASCADE,
+            catalog_key TEXT NOT NULL,
+            bucket TEXT NOT NULL,
+            PRIMARY KEY(scope,catalog_key,bucket)
+        ) WITHOUT ROWID
+        """)
+        try database.execute("""
+        CREATE TABLE library_assets(
+            scope TEXT NOT NULL,
+            catalog_key TEXT NOT NULL,
+            bucket TEXT NOT NULL,
+            asset_id TEXT NOT NULL,
+            position INTEGER NOT NULL,
+            place_key TEXT,
+            stack_payload TEXT,
+            place_payload TEXT,
+            PRIMARY KEY(scope,catalog_key,bucket,asset_id),
+            FOREIGN KEY(scope,catalog_key,bucket) REFERENCES library_months(scope,catalog_key,bucket) ON DELETE CASCADE
+        ) WITHOUT ROWID
+        """)
+        try database.execute("CREATE INDEX library_asset_references ON library_assets(scope,asset_id)")
+        try database.execute("""
+        CREATE INDEX library_place_membership ON library_assets(scope,catalog_key,place_key,bucket DESC,position)
+        WHERE place_key IS NOT NULL
+        """)
+        try database.execute("""
+        CREATE TABLE library_directories(
+            scope TEXT NOT NULL REFERENCES scopes(scope) ON DELETE CASCADE,
+            catalog_key TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            PRIMARY KEY(scope,catalog_key)
+        ) WITHOUT ROWID
+        """)
     }
 
     private func prepareCacheSchema(_ database: SQLiteConnection) throws {
@@ -1948,6 +2172,8 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
         try database.execute("""
         DELETE FROM catalog_assets WHERE scope=?
           AND NOT EXISTS(SELECT 1 FROM album_assets m
+                         WHERE m.scope=catalog_assets.scope AND m.asset_id=catalog_assets.asset_id)
+          AND NOT EXISTS(SELECT 1 FROM library_assets m
                          WHERE m.scope=catalog_assets.scope AND m.asset_id=catalog_assets.asset_id)
           AND NOT EXISTS(SELECT 1 FROM assets a JOIN sync_state s
                          ON s.scope=a.scope AND s.accepted_generation=a.generation

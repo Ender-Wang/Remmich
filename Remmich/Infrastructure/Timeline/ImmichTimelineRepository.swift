@@ -19,17 +19,24 @@ actor ImmichTimelineRepository: TimelineReading, VideoReading, AssetDetailReadin
     private var client: ImmichClient?
     private var generation: UInt64 = 0
     private let transfers: LibraryTransferQueue?
+    private var collectionStore: SQLiteLibraryIndexStore?
+    private var collectionReads: [TimelineQuery: LibraryOpeningBuckets] = [:]
+    private var collectionRequests: [String: Task<any Sendable, Error>] = [:]
 
     init(transfers: LibraryTransferQueue? = nil) {
         self.transfers = transfers
     }
 
     @discardableResult
-    func configure(session: AccountSession, activeEndpoint: URL?) -> Bool {
+    func configure(session: AccountSession, activeEndpoint: URL?, collectionStore: SQLiteLibraryIndexStore? = nil) -> Bool {
+        if let collectionStore {
+            self.collectionStore = collectionStore
+        }
         let nextIdentity = AccountIdentity(server: session.apiURL, userID: session.userID)
         let credentialChanged = self.session?.accessToken != session.accessToken
         if identity != nextIdentity || credentialChanged {
             generation &+= 1
+            cancelCollectionRequests()
             identity = nextIdentity
             client = nil
             self.activeEndpoint = nil
@@ -42,6 +49,7 @@ actor ImmichTimelineRepository: TimelineReading, VideoReading, AssetDetailReadin
     func updateRoute(_ endpoint: URL?) -> Bool {
         guard activeEndpoint != endpoint else { return false }
         generation &+= 1
+        cancelCollectionRequests()
         activeEndpoint = endpoint
         guard let endpoint, let session else {
             client = nil
@@ -65,10 +73,140 @@ actor ImmichTimelineRepository: TimelineReading, VideoReading, AssetDetailReadin
 
     func clear() {
         generation &+= 1
+        cancelCollectionRequests()
+        collectionReads.removeAll()
         session = nil
         identity = nil
         activeEndpoint = nil
         client = nil
+    }
+
+    private func cancelCollectionRequests() {
+        for task in collectionRequests.values {
+            task.cancel()
+        }
+        collectionRequests.removeAll()
+    }
+
+    func collectionNetworkReader(for query: TimelineQuery) -> LibraryOpeningBuckets {
+        if let reader = collectionReads[query] {
+            return reader
+        }
+        let reader = LibraryOpeningBuckets(source: self, query: query, readsCatalog: false)
+        collectionReads[query] = reader
+        return reader
+    }
+
+    func libraryPlaceCovers(offset: Int, limit: Int) async throws -> LibraryIndexedPlaces? {
+        guard let collectionStore, let session else { return nil }
+        let owner = generation
+        let saved = try await collectionStore.collectionPlaceCovers(scope: .init(session: session), offset: offset, limit: limit)
+        try requireCurrent(owner)
+        return saved
+    }
+
+    func requireCollectionAccount(_ scope: MediaAccountScope) throws {
+        guard let session, MediaAccountScope(session: session) == scope else { throw TimelineReadError.staleGeneration }
+        _ = try requestContext()
+    }
+
+    func collectionSummaries(query: TimelineQuery, refresh: Bool) async throws -> [TimelineBucketSummary] {
+        let indexedKey = LibraryIndexCard.timelineKey(for: query)
+        guard let key = indexedKey ?? LibraryIndexCard.drillDownKey(for: query) else {
+            return try await bucketSummaries(query: query)
+        }
+        let owner = generation
+        let scope = session.map { MediaAccountScope(session: $0) }
+        let saved: LibraryTimelineCatalog? = if let collectionStore, let scope {
+            try? await collectionStore.collectionTimeline(key, scope: scope)
+        } else {
+            nil
+        }
+        try requireCurrent(owner)
+        if let saved, (indexedKey != nil && !refresh) || activeEndpoint == nil {
+            return saved.summaries
+        }
+        if indexedKey != nil {
+            return try await collectionNetworkReader(for: query).bucketSummaries(query: query)
+        }
+        let fresh = try await collectionNetworkValue("summary:\(key)") { try await self.bucketSummaries(query: query) }
+        if let collectionStore, let scope {
+            let removed = Set(saved?.summaries.map(\.id) ?? []).subtracting(fresh.map(\.id))
+            try? await collectionStore.saveCollectionTimeline(.init(summaries: fresh, olderCursor: 0), key: key,
+                                                              scope: scope, replacing: [:], removing: removed)
+            try requireCurrent(owner)
+        }
+        return fresh
+    }
+
+    func collectionBucket(_ bucket: TimelineBucketID, query: TimelineQuery, refresh: Bool) async throws -> [TimelineAssetSummary] {
+        let indexedKey = LibraryIndexCard.timelineKey(for: query)
+        guard let key = indexedKey ?? LibraryIndexCard.drillDownKey(for: query) else {
+            return try await assets(in: bucket, query: query)
+        }
+        let owner = generation
+        let scope = session.map { MediaAccountScope(session: $0) }
+        if let collectionStore, let scope, (indexedKey != nil && !refresh) || activeEndpoint == nil,
+           let saved = try? await collectionStore.collectionAssets(key, bucket: bucket, scope: scope)
+        {
+            try requireCurrent(owner)
+            return saved
+        }
+        try requireCurrent(owner)
+        if indexedKey != nil {
+            return try await collectionNetworkReader(for: query).assets(in: bucket, query: query)
+        }
+        let fresh = try await collectionNetworkValue("bucket:\(key):\(bucket.rawValue)") {
+            try await self.assets(in: bucket, query: query)
+        }
+        if let collectionStore, let scope {
+            try? await collectionStore.saveCollectionMonth(fresh, key: key, bucket: bucket, scope: scope)
+            try requireCurrent(owner)
+        }
+        return fresh
+    }
+
+    private func collectionValue<Value: Codable & Sendable>(_ key: String, refresh: Bool,
+                                                            fetch: @escaping @Sendable () async throws -> Value) async throws -> Value
+    {
+        let owner = generation
+        if !refresh || activeEndpoint == nil, let saved = try await indexedLibraryValue(Value.self, key: key) {
+            return saved
+        }
+        try requireCurrent(owner)
+        return try await collectionNetworkValue(key, fetch: fetch)
+    }
+
+    func indexedLibraryValue<Value: Decodable & Sendable>(_ type: Value.Type, key: String) async throws -> Value? {
+        guard let collectionStore, let session else { return nil }
+        let owner = generation
+        let saved = try? await collectionStore.collectionPayload(type, key: key, scope: .init(session: session))
+        try Task.checkCancellation()
+        try requireCurrent(owner)
+        return saved
+    }
+
+    private func collectionNetworkValue<Value: Sendable>(_ key: String,
+                                                         fetch: @escaping @Sendable () async throws -> Value) async throws -> Value
+    {
+        let owner = generation
+        let task: Task<any Sendable, Error>
+        if let running = collectionRequests[key] {
+            task = running
+        } else {
+            task = Task { try await fetch() }
+            collectionRequests[key] = task
+        }
+        defer {
+            if collectionRequests[key] == task {
+                collectionRequests[key] = nil
+            }
+        }
+        let result = try await task.value
+        try Task.checkCancellation()
+        try requireCurrent(owner)
+        guard let value = result as? Value else { throw TimelineReadError.invalidResponse }
+        return value
     }
 
     func bucketSummaries(query: TimelineQuery) async throws -> [TimelineBucketSummary] {
@@ -135,7 +273,11 @@ actor ImmichTimelineRepository: TimelineReading, VideoReading, AssetDetailReadin
         try await loadMemories(matching: kind)
     }
 
-    func libraryPeople() async throws -> [LibraryPerson] {
+    func libraryPeople(refresh: Bool = false) async throws -> [LibraryPerson] {
+        try await collectionValue(LibraryIndexCard.people.rawValue, refresh: refresh) { try await self.fetchLibraryPeople() }
+    }
+
+    private func fetchLibraryPeople() async throws -> [LibraryPerson] {
         let (client, requestGeneration) = try requestContext()
         var people: [String: LibraryPerson] = [:]
         var page = 1
@@ -156,7 +298,22 @@ actor ImmichTimelineRepository: TimelineReading, VideoReading, AssetDetailReadin
         }
     }
 
-    func libraryMemories(page: Int, size: Int, includeTimelineAssets: Bool = true) async throws -> [TimelineMemorySummary] {
+    func libraryMemories(page: Int, size: Int, includeTimelineAssets: Bool = true, refresh: Bool = false) async throws -> [TimelineMemorySummary] {
+        let owner = generation
+        let key = includeTimelineAssets ? LibraryIndexCard.memories.rawValue : "memoryCovers"
+        if let collectionStore, let session, !refresh || activeEndpoint == nil,
+           let saved = try? await collectionStore.collectionPayload([TimelineMemorySummary].self, key: key, scope: .init(session: session))
+        {
+            try requireCurrent(owner)
+            return Array(saved.dropFirst((page - 1) * size).prefix(size))
+        }
+        try requireCurrent(owner)
+        return try await collectionNetworkValue("memories-\(page)-\(size)-\(includeTimelineAssets)") {
+            try await self.fetchLibraryMemories(page: page, size: size, includeTimelineAssets: includeTimelineAssets)
+        }
+    }
+
+    private func fetchLibraryMemories(page: Int, size: Int, includeTimelineAssets: Bool) async throws -> [TimelineMemorySummary] {
         let (client, requestGeneration) = try requestContext()
         let values = try await client.memories(query: .init(page: page, size: size), includeTimelineAssets: includeTimelineAssets)
         try requireCurrent(requestGeneration)
@@ -167,7 +324,11 @@ actor ImmichTimelineRepository: TimelineReading, VideoReading, AssetDetailReadin
         }
     }
 
-    func librarySharedLinks() async throws -> [LibrarySharedLink] {
+    func librarySharedLinks(refresh: Bool = false) async throws -> [LibrarySharedLink] {
+        try await collectionValue(LibraryIndexCard.sharedLinks.rawValue, refresh: refresh) { try await self.fetchLibrarySharedLinks() }
+    }
+
+    private func fetchLibrarySharedLinks() async throws -> [LibrarySharedLink] {
         let (client, requestGeneration) = try requestContext()
         guard let serverURL = session?.apiURL else { throw TimelineReadError.routeUnavailable }
         let links = try await client.sharedLinks(serverURL: serverURL)
@@ -180,7 +341,11 @@ actor ImmichTimelineRepository: TimelineReading, VideoReading, AssetDetailReadin
         .sorted { $0.createdAt == $1.createdAt ? $0.id < $1.id : $0.createdAt > $1.createdAt }
     }
 
-    func libraryPartners() async throws -> [LibraryPartner] {
+    func libraryPartners(refresh: Bool = false) async throws -> [LibraryPartner] {
+        try await collectionValue(LibraryIndexCard.partners.rawValue, refresh: refresh) { try await self.fetchLibraryPartners() }
+    }
+
+    private func fetchLibraryPartners() async throws -> [LibraryPartner] {
         let (client, requestGeneration) = try requestContext()
         let partners = try await client.incomingPartners()
         try requireCurrent(requestGeneration)
@@ -193,7 +358,11 @@ actor ImmichTimelineRepository: TimelineReading, VideoReading, AssetDetailReadin
         }
     }
 
-    func libraryPreferences() async throws -> LibraryFeaturePreferences {
+    func libraryPreferences(refresh: Bool = false) async throws -> LibraryFeaturePreferences {
+        try await collectionValue("preferences", refresh: refresh) { try await self.fetchLibraryPreferences() }
+    }
+
+    private func fetchLibraryPreferences() async throws -> LibraryFeaturePreferences {
         let (client, requestGeneration) = try requestContext()
         let preferences = try await client.libraryPreferences()
         try requireCurrent(requestGeneration)
@@ -203,14 +372,38 @@ actor ImmichTimelineRepository: TimelineReading, VideoReading, AssetDetailReadin
                                          peopleEnabled: preferences.peopleEnabled)
     }
 
-    func libraryFolderTree() async throws -> LibraryFolderTree {
+    func libraryFolderTree(refresh: Bool = false) async throws -> LibraryFolderTree {
+        try await collectionValue(LibraryIndexCard.folders.rawValue, refresh: refresh) { try await self.fetchLibraryFolderTree() }
+    }
+
+    private func fetchLibraryFolderTree() async throws -> LibraryFolderTree {
         let (client, requestGeneration) = try requestContext()
         let paths = try await client.folderPaths()
         try requireCurrent(requestGeneration)
         return LibraryFolderTree(paths: paths)
     }
 
-    func libraryFolderAssets(path: String) async throws -> [TimelineAssetSummary] {
+    func libraryFolderAssets(path: String, refresh: Bool = false) async throws -> [TimelineAssetSummary] {
+        let key = "folder:\(path)"
+        let owner = generation
+        let bucket = TimelineBucketID(rawValue: "")
+        let scope = session.map { MediaAccountScope(session: $0) }
+        if let collectionStore, let scope, !refresh || activeEndpoint == nil,
+           let saved = try? await collectionStore.collectionAssets(key, bucket: bucket, scope: scope)
+        {
+            try requireCurrent(owner)
+            return saved
+        }
+        try requireCurrent(owner)
+        let value = try await collectionNetworkValue(key) { try await self.fetchLibraryFolderAssets(path: path) }
+        if let collectionStore, let scope {
+            try? await collectionStore.saveCollectionMonth(value, key: key, bucket: bucket, scope: scope)
+            try requireCurrent(owner)
+        }
+        return value
+    }
+
+    private func fetchLibraryFolderAssets(path: String) async throws -> [TimelineAssetSummary] {
         let (client, requestGeneration) = try requestContext()
         let assets = try await client.folderAssets(path: path)
         try requireCurrent(requestGeneration)

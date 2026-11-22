@@ -102,6 +102,7 @@ final class AppSessionController {
         librarySyncSource = syncSource
         libraryIndex = LibraryIndexController(
             source: syncSource,
+            collectionSource: timeline,
             store: libraryIndexStore,
             media: media,
             assetDetails: syncSource,
@@ -897,7 +898,7 @@ final class AppSessionController {
     @discardableResult
     private func configureTimelines(session: AccountSession, endpoint: URL?) async -> Bool {
         let generation = preparationGeneration
-        let changed = await timeline.configure(session: session, activeEndpoint: endpoint)
+        let changed = await timeline.configure(session: session, activeEndpoint: endpoint, collectionStore: libraryIndexStore)
         guard preparationIsCurrent(generation) else { return false }
         locations.configureMap(session: session, endpoint: endpoint)
         await librarySyncSource.configure(session: session, activeEndpoint: endpoint)

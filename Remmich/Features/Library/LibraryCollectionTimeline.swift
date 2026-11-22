@@ -112,17 +112,23 @@ actor LibraryOpeningBuckets: TimelineReading {
 
     private let source: any TimelineReading
     private let query: TimelineQuery
+    private let readsCatalog: Bool
+    private var refreshUntil: ContinuousClock.Instant?
     private var summaries: Read<[TimelineBucketSummary]>?
     private var months: [TimelineBucketID: Read<[TimelineAssetSummary]>] = [:]
     private var generation: UInt64?
 
-    init(source: any TimelineReading, query: TimelineQuery) {
+    init(source: any TimelineReading, query: TimelineQuery, readsCatalog: Bool = true) {
         self.source = source
         self.query = query
+        self.readsCatalog = readsCatalog
     }
 
     func bucketSummaries(query: TimelineQuery) async throws -> [TimelineBucketSummary] {
         guard query == self.query else { return try await source.bucketSummaries(query: query) }
+        if readsCatalog, let repository = source as? ImmichTimelineRepository {
+            return try await repository.collectionSummaries(query: query, refresh: wantsRefresh)
+        }
         let generation = try await prepareRead()
         if let summaries, summaries.isFresh {
             let value = try await summaries.task.value
@@ -148,6 +154,9 @@ actor LibraryOpeningBuckets: TimelineReading {
 
     func assets(in bucket: TimelineBucketID, query: TimelineQuery) async throws -> [TimelineAssetSummary] {
         guard query == self.query else { return try await source.assets(in: bucket, query: query) }
+        if readsCatalog, let repository = source as? ImmichTimelineRepository {
+            return try await repository.collectionBucket(bucket, query: query, refresh: wantsRefresh)
+        }
         let generation = try await prepareRead()
         if let existing = months[bucket], existing.isFresh {
             let value = try await existing.task.value
@@ -180,7 +189,17 @@ actor LibraryOpeningBuckets: TimelineReading {
         []
     }
 
-    func invalidateCompletedReads() {
+    private var wantsRefresh: Bool {
+        refreshUntil.map { $0 > .now } ?? false
+    }
+
+    func invalidateCompletedReads() async {
+        if readsCatalog, let repository = source as? ImmichTimelineRepository,
+           LibraryIndexCard.timelineKey(for: query) != nil
+        {
+            refreshUntil = .now.advanced(by: Self.lifetime)
+            await repository.collectionNetworkReader(for: query).invalidateCompletedReads()
+        }
         if summaries?.finishedAt != nil {
             summaries = nil
         }
@@ -225,6 +244,7 @@ final class LibraryCollectionOpening {
     private let coverReader: LibraryScopedTimelineReader
     let sharedReads: LibraryOpeningBuckets
     private var coverTask: Task<LibraryCollectionPreview, Error>?
+    private var appliedIndexRevision = 0
 
     init(collection: LibraryAssetCollection, opening: LibraryOpeningBuckets, camera: LibraryCameraMetadata? = nil) {
         let query = collection.query
@@ -247,6 +267,17 @@ final class LibraryCollectionOpening {
         coverTask = task
         defer { coverTask = nil }
         return try await task.value
+    }
+
+    func refreshIndexedTimelines(revision: Int) async {
+        guard revision > appliedIndexRevision else { return }
+        for store in [photos, videos].compactMap(\.self) where store.loadState != .idle && store.loadState != .loading {
+            guard !Task.isCancelled else { return }
+            await store.refresh()
+        }
+        if !Task.isCancelled {
+            appliedIndexRevision = revision
+        }
     }
 
     private static func store(opening: LibraryOpeningBuckets, query: TimelineQuery,
@@ -496,6 +527,10 @@ struct LibraryCollectionTimeline: View {
             }
         }
         .toolbar(.hidden, for: .navigationBar)
+        .task(id: libraryIndex?.collections.publicationRevision) {
+            guard let revision = libraryIndex?.collections.publicationRevision else { return }
+            await opening?.refreshIndexedTimelines(revision: revision)
+        }
         .task(id: libraryIndex?.thumbnailWarmingLastUpdatedAt) {
             guard libraryIndex?.thumbnailWarmingLastUpdatedAt != nil, media.activeAPIURL != nil else { return }
             let lane = selected == .photos ? photos : videos
@@ -534,14 +569,7 @@ struct LibraryTimelineLane: View {
     @State private var presentation = PhotosPresentationState()
 
     var body: some View {
-        Group {
-            if media.activeAPIURL == nil, store.loadState != .loaded {
-                ContentUnavailableView("Immich Is Unavailable", systemImage: "wifi.slash")
-            } else {
-                timeline
-            }
-        }
-        .onChange(of: media.activeAPIURL) { _, endpoint in
+        timeline.onChange(of: media.activeAPIURL) { _, endpoint in
             store.routeDidChange(isReachable: endpoint != nil && active && (tabSelectionState?.selection == .library || tabSelectionState == nil))
         }
     }

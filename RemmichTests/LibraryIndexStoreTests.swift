@@ -200,6 +200,51 @@ struct LibraryIndexStoreTests {
         #expect(cacheClearedSnapshot.syncState.lastCacheSyncAt == nil)
     }
 
+    @Test func collectionCatalogSurvivesTimelinePublicationAndKeepsExactQueryFields() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        let scope = Self.scope(userID: "owner")
+        let other = Self.scope(userID: "other")
+        let record = Self.asset(id: "cover")
+        let bucket = TimelineBucketID(rawValue: record.bucketKey)
+        let key = LibraryIndexCard.recentlyTaken.timelineKey
+        var asset = record.timelineAssetSummary
+        asset.stack = .init(id: "stack", assetCount: 2)
+        asset.place = .init(city: "Shanghai", country: "China")
+        try await store.saveCollectionTimeline(.init(summaries: [.init(id: bucket, assetCount: 1)], olderCursor: 0),
+                                               key: key, scope: scope, replacing: [bucket: [asset]], removing: [])
+
+        let generation = try await store.beginGeneration(scope: scope)
+        try await store.upsert(assets: [record], generation: generation, scope: scope)
+        _ = try await store.acceptGeneration(generation, watermark: nil, historicalCursor: nil, expectedAssetCount: 1, scope: scope)
+        let saved = try await store.collectionAssets(key, bucket: bucket, scope: scope)
+        #expect(saved == [asset])
+        #expect(try await store.collectionAssets(key, bucket: bucket, scope: other) == nil)
+        let places = try await store.collectionPlaceCovers(scope: scope, offset: 0, limit: 1)
+        #expect(places?.count == 1 && places?.covers == [asset])
+
+        try await store.saveCollectionTimeline(.init(summaries: [], olderCursor: 0), key: key,
+                                               scope: scope, replacing: [:], removing: [bucket])
+        #expect(try await store.collectionAssets(key, bucket: bucket, scope: scope) == nil)
+        let remainingPlaces = try await store.collectionPlaceCovers(scope: scope, offset: 0, limit: 1)?.count
+        #expect(remainingPlaces == 0)
+        #expect(try await store.snapshot(scope: scope)?.assets.map(\.id) == [record.id])
+    }
+
+    @Test func libraryDeltaChecksRecentAndChangedMonthsAndRotatesEarlierMonths() {
+        let summaries = (1 ... 7).reversed().map {
+            TimelineBucketSummary(id: .init(rawValue: "2026-0\($0)-01"), assetCount: 2)
+        }
+        let prior = summaries.dropLast().map(\.self)
+        let first = LibraryTimelineCatalog.delta(from: .init(summaries: prior, olderCursor: 0), summaries: summaries, rebuild: false)
+        #expect(first.buckets.map(\.id) == Array(summaries.prefix(4)).map(\.id) + [summaries[6].id])
+        let next = LibraryTimelineCatalog.delta(from: .init(summaries: summaries, olderCursor: first.cursor),
+                                                summaries: summaries, rebuild: false)
+        #expect(next.buckets.map(\.id) == [summaries[0].id, summaries[1].id, summaries[4].id, summaries[5].id])
+        #expect(LibraryTimelineCatalog.delta(from: nil, summaries: summaries, rebuild: true).buckets == summaries)
+    }
+
     @Test func isolatesAccountsAndRetainsPriorAcceptedGeneration() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }

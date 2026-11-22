@@ -1,7 +1,7 @@
 import Observation
 import SwiftUI
 
-nonisolated struct LibrarySharedLink: Identifiable, Sendable {
+nonisolated struct LibrarySharedLink: Codable, Identifiable, Sendable {
     let id: String
     let name: String?
     let createdAt: Date
@@ -57,6 +57,12 @@ final class LibrarySharedLinksStore {
         links?.lazy.filter { !$0.isExpired }.compactMap(\.cover).first
     }
 
+    func adoptIndexedLinks(_ links: [LibrarySharedLink]) {
+        guard loadTask == nil else { return }
+        self.links = links
+        didFail = false
+    }
+
     func load(source: ImmichTimelineRepository, refresh: Bool = false) async {
         if let loadTask {
             await loadTask.value; return
@@ -64,15 +70,15 @@ final class LibrarySharedLinksStore {
         guard links == nil || refresh else { return }
         let task = Task {
             defer { loadTask = nil }
-            await fetch(source: source)
+            await fetch(source: source, refresh: refresh)
         }
         loadTask = task
         await task.value
     }
 
-    private func fetch(source: ImmichTimelineRepository) async {
+    private func fetch(source: ImmichTimelineRepository, refresh: Bool) async {
         do {
-            let result = try await source.librarySharedLinks()
+            let result = try await source.librarySharedLinks(refresh: refresh)
             try Task.checkCancellation()
             links = result
             didFail = false

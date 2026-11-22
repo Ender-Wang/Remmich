@@ -1,39 +1,35 @@
 import SwiftUI
 import UIKit
 
-/// The shared two-section layout for Index and Cache & Storage.
-struct SettingsSectionPager<Context: View, First: View, Second: View>: View {
+/// The shared segmented layout for Index and Cache & Storage.
+struct SettingsSectionPager<Context: View, Page: View>: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding var selection: Int
     let title: String
-    let labels: (String, String)
+    let labels: [String]
     let enabled: Bool
     let context: Context
-    let first: First
-    let second: Second
+    let page: (Int) -> Page
     @State private var origin: Int?
     @State private var offset: CGFloat = 0
     @State private var width: CGFloat = 1
-    @State private var firstHeight: CGFloat = 0
-    @State private var secondHeight: CGFloat = 0
+    @State private var heights: [Int: CGFloat] = [:]
 
-    init(_ title: String, labels: (String, String), selection: Binding<Int>, enabled: Bool,
-         @ViewBuilder context: () -> Context, @ViewBuilder first: () -> First, @ViewBuilder second: () -> Second)
+    init(_ title: String, labels: [String], selection: Binding<Int>, enabled: Bool,
+         @ViewBuilder context: () -> Context, @ViewBuilder page: @escaping (Int) -> Page)
     {
         self.title = title
         self.labels = labels
         _selection = selection
         self.enabled = enabled
         self.context = context()
-        self.first = first()
-        self.second = second()
+        self.page = page
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Picker(title, selection: Binding(get: { selection }, set: select)) {
-                Text(labels.0).tag(0)
-                Text(labels.1).tag(1)
+                ForEach(labels.indices, id: \.self) { index in Text(labels[index]).tag(index) }
             }
             .pickerStyle(.segmented)
             .padding(.bottom, 20)
@@ -48,33 +44,25 @@ struct SettingsSectionPager<Context: View, First: View, Second: View>: View {
     }
 
     private var pages: some View {
-        let height = selection == 0 ? firstHeight : secondHeight
+        let direction: CGFloat = selection == 0 ? -1 : selection == labels.count - 1 ? 1 : 0
         return ZStack(alignment: .topLeading) {
-            first
-                .frame(maxWidth: .infinity)
-                .fixedSize(horizontal: false, vertical: true)
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { firstHeight = $0 }
-                // Keep glass control edges and shadows inside their own page
-                // before sliding it beside the neighboring page.
-                .clipped()
-                .offset(x: (selection == 0 ? 0 : -width) + offset)
-                .allowsHitTesting(selection == 0 && origin == nil)
-                .accessibilityHidden(selection != 0)
-            second
-                .frame(maxWidth: .infinity)
-                .fixedSize(horizontal: false, vertical: true)
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { secondHeight = $0 }
-                .clipped()
-                .offset(x: (selection == 1 ? 0 : width) + offset)
-                .allowsHitTesting(selection == 1 && origin == nil)
-                .accessibilityHidden(selection != 1)
+            ForEach(labels.indices, id: \.self) { index in
+                page(index)
+                    .frame(maxWidth: .infinity)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { heights[index] = $0 }
+                    .clipped()
+                    .offset(x: CGFloat(index - selection) * width + offset)
+                    .allowsHitTesting(selection == index && origin == nil)
+                    .accessibilityHidden(selection != index)
+            }
         }
-        .frame(height: height > 0 ? height : nil, alignment: .top)
+        .frame(height: heights[selection], alignment: .top)
         .frame(maxWidth: .infinity)
         .clipped()
         .contentShape(.rect)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = max(1, $0) }
-        .gesture(IndexSectionPan(enabled: enabled && !reduceMotion, direction: selection == 0 ? -1 : 1, update: pan))
+        .gesture(IndexSectionPan(enabled: enabled && !reduceMotion, direction: direction, update: pan))
     }
 
     private func select(_ section: Int) {
@@ -91,13 +79,16 @@ struct SettingsSectionPager<Context: View, First: View, Second: View>: View {
             origin = selection
         case .changed:
             guard let origin else { return }
-            offset = origin == 0 ? max(-width, min(0, translation.x)) : min(width, max(0, translation.x))
+            let lower: CGFloat = origin == labels.count - 1 ? 0 : -width
+            let upper: CGFloat = origin == 0 ? 0 : width
+            offset = min(upper, max(lower, translation.x))
         case .ended:
             guard let origin else { return }
-            let direction: CGFloat = origin == 0 ? -1 : 1
+            let direction: CGFloat = (offset == 0 ? velocity.x : offset) < 0 ? -1 : 1
             let progress = HorizontalPageSwipePolicy.progress(distance: translation.x * direction, width: width)
             let finish = HorizontalPageSwipePolicy.shouldFinish(progress: progress, forwardVelocity: velocity.x * direction)
-            select(finish ? 1 - origin : origin)
+            let destination = origin - Int(direction)
+            select(finish && labels.indices.contains(destination) ? destination : origin)
         case .cancelled, .failed:
             guard origin != nil else { return }
             select(selection)

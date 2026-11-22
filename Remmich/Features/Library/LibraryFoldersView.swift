@@ -1,7 +1,7 @@
 import Observation
 import SwiftUI
 
-nonisolated struct LibraryFolder: Identifiable, Sendable {
+nonisolated struct LibraryFolder: Codable, Identifiable, Sendable {
     let path: String
     let name: String
 
@@ -10,7 +10,7 @@ nonisolated struct LibraryFolder: Identifiable, Sendable {
     }
 }
 
-nonisolated struct LibraryFolderTree: Sendable {
+nonisolated struct LibraryFolderTree: Codable, Sendable {
     let assetPaths: Set<String>
     let coverSamplePaths: [String]
     private let childrenByPath: [String: [LibraryFolder]]
@@ -67,6 +67,17 @@ final class LibraryFoldersStore {
         sampledPaths.compactMap { coversByPath[$0] }
     }
 
+    func adoptIndexedTree(_ tree: LibraryFolderTree) {
+        guard loadTask == nil else { return }
+        install(tree)
+    }
+
+    private func install(_ tree: LibraryFolderTree) {
+        coversByPath = coversByPath.filter { tree.assetPaths.contains($0.key) }
+        self.tree = tree
+        didFail = false
+    }
+
     func load(source: ImmichTimelineRepository, refresh: Bool = false) async {
         if let loadTask {
             await loadTask.value; return
@@ -74,19 +85,17 @@ final class LibraryFoldersStore {
         guard tree == nil || refresh else { return }
         let task = Task {
             defer { loadTask = nil }
-            await fetch(source: source)
+            await fetch(source: source, refresh: refresh)
         }
         loadTask = task
         await task.value
     }
 
-    private func fetch(source: ImmichTimelineRepository) async {
+    private func fetch(source: ImmichTimelineRepository, refresh: Bool) async {
         do {
-            let tree = try await source.libraryFolderTree()
+            let tree = try await source.libraryFolderTree(refresh: refresh)
             try Task.checkCancellation()
-            coversByPath = coversByPath.filter { tree.assetPaths.contains($0.key) }
-            self.tree = tree
-            didFail = false
+            install(tree)
         } catch {
             guard !Task.isCancelled, !(error is CancellationError), (error as? TimelineReadError) != .staleGeneration else { return }
             didFail = true
@@ -228,7 +237,7 @@ private struct LibraryFoldersView: View {
 
     private func folderTimeline(_ folder: LibraryFolder, title: String) -> some View {
         let reader = LibrarySelectionTimelineReader { [source] in
-            try await source.libraryFolderAssets(path: folder.path)
+            try await source.libraryFolderAssets(path: folder.path, refresh: true)
         }
         return LibraryCollectionTimeline(title: title, source: reader, query: .init(includesPartners: false),
                                          media: media, assetDetails: assetDetails, tabSelectionState: context.tabSelectionState,

@@ -133,6 +133,7 @@ struct AccountSettingsView: View {
     @State private var libraryIndexClock = Date()
     @State private var profileCardSummaries: [SettingsPage: ProfileCardSummary] = [:]
     @State private var albumIndexCardSummary: ProfileCardSummary?
+    @State private var libraryIndexCardSummary: ProfileCardSummary?
     @State private var placeCacheCardSummary: ProfileCardSummary?
     @State private var selectedPage = SettingsPage.home
     @State private var selectedIndexSection = 0
@@ -372,6 +373,7 @@ struct AccountSettingsView: View {
                     .cache: syncCardSummary(for: .cache),
                 ]
                 albumIndexCardSummary = albumIndexSummary()
+                libraryIndexCardSummary = collectionIndexSummary()
                 placeCacheCardSummary = placeCacheSummary()
                 do { try await Task.sleep(for: .seconds(1)) } catch { return }
             }
@@ -480,8 +482,9 @@ struct AccountSettingsView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             VStack(alignment: .leading, spacing: 0) {
                 if page == .index {
-                    indexCardStatus("Timeline", summary: profileCardSummaries[page] ?? syncCardSummary(for: page))
+                    indexCardStatus("Timelines", summary: profileCardSummaries[page] ?? syncCardSummary(for: page))
                     indexCardStatus("Albums", summary: albumIndexCardSummary ?? albumIndexSummary())
+                    indexCardStatus("Library", summary: libraryIndexCardSummary ?? collectionIndexSummary())
                 } else if page == .cache {
                     indexCardStatus("Assets", summary: profileCardSummaries[page] ?? syncCardSummary(for: page))
                     indexCardStatus("Places", summary: placeCacheCardSummary ?? placeCacheSummary())
@@ -588,16 +591,24 @@ struct AccountSettingsView: View {
 
     private func albumIndexSummary() -> ProfileCardSummary {
         let index = libraryIndex.albumIndex
-        let percentage = index.albumCount > 0 ? (index.fractionCompleted * 1000).rounded(.down) / 10
-            : index.status == .upToDate ? 100.0 : nil
-        let status = switch index.status {
+        return indexCardSummary(status: index.status, fraction: index.albumCount > 0 ? index.fractionCompleted : nil)
+    }
+
+    private func collectionIndexSummary() -> ProfileCardSummary {
+        let index = libraryIndex.collections
+        return indexCardSummary(status: index.status, fraction: (index.cardCount ?? 0) > 0 ? index.fractionCompleted : nil)
+    }
+
+    private func indexCardSummary(status: LibraryIndexController.Status, fraction: Double?) -> ProfileCardSummary {
+        let percentage = fraction.map { ($0 * 1000).rounded(.down) / 10 } ?? (status == .upToDate ? 100 : nil)
+        let label = switch status {
         case .idle: "Waiting"
         case .indexing: "Indexing"
         case .paused: "Paused"
         case .upToDate: "Up to date"
         case .failed: "Needs attention"
         }
-        return ProfileCardSummary(percentage: percentage, status: status, isRunning: index.status == .indexing)
+        return ProfileCardSummary(percentage: percentage, status: label, isRunning: status == .indexing)
     }
 
     private func indexCardStatus(_ title: String, summary: ProfileCardSummary) -> some View {
@@ -1139,19 +1150,82 @@ struct AccountSettingsView: View {
     }
 
     private var indexPage: some View {
-        SettingsSectionPager("Index", labels: ("Timeline Index", "Album Index"), selection: $selectedIndexSection,
+        SettingsSectionPager("Index", labels: ["Timelines", "Albums", "Library"], selection: $selectedIndexSection,
                              enabled: selectedPage == .index && !isPageTransitioning)
         {
             VStack(spacing: 0) {
                 statistic("Account catalog", ByteCountFormatter.string(fromByteCount: libraryIndex.storageReport.metadataBytes, countStyle: .file))
                 statistic("Shared asset catalog", libraryIndex.storageReport.featureStorage["assets"].map { ByteCountFormatter.string(fromByteCount: $0.bytes, countStyle: .file) } ?? "—")
             }
-        } first: {
-            timelineIndexPage
-        } second: {
-            albumIndexPage
+        } page: { index in
+            switch index {
+            case 0: timelineIndexPage
+            case 1: albumIndexPage
+            default: collectionIndexPage
+            }
         }
-        .task(id: [libraryIndex.status, libraryIndex.albumIndex.status]) { await libraryIndex.refreshIndexStorageStatistics() }
+        .task(id: [libraryIndex.status, libraryIndex.albumIndex.status, libraryIndex.collections.status]) {
+            await libraryIndex.refreshIndexStorageStatistics()
+        }
+    }
+
+    private var collectionIndexPage: some View {
+        let index = libraryIndex.collections
+        let presentation: StatusPresentation = switch index.status {
+        case .idle: .init(systemImage: "clock", tint: .primary, accessibilityValue: "Waiting")
+        case .indexing: .init(systemImage: "arrow.trianglehead.2.clockwise", tint: .primary, accessibilityValue: "Indexing")
+        case .paused: .init(systemImage: "pause.fill", tint: .primary, accessibilityValue: "Paused")
+        case .upToDate: .init(systemImage: "checkmark.circle.fill", tint: .green, accessibilityValue: "Up to date")
+        case .failed: .init(systemImage: "exclamationmark.triangle.fill", tint: .red, accessibilityValue: "Failed")
+        }
+        let actionTitle = switch index.status {
+        case .indexing: "Pause"
+        case .paused: "Resume"
+        case .failed: "Retry"
+        default: "Sync now"
+        }
+        return VStack(alignment: .leading, spacing: 10) {
+            syncHeading(presentation, active: index.isRunning, diagnostics: nil)
+            if let total = index.cardCount {
+                let count = "\(index.indexedCardCount.formatted()) / \(total.formatted()) cards indexed"
+                progressMeter(index.fractionCompleted, tint: Self.indexColor, label: "Library indexing progress", value: count)
+                progressCaption(percentage: Self.progressPercentage(completed: index.indexedCardCount, total: total), count: count)
+            } else if index.isRunning {
+                Text("Checking Library cards").font(.caption).foregroundStyle(.secondary)
+            }
+            VStack(spacing: 0) {
+                if index.isRunning {
+                    statistic("Current card", index.currentCard?.title ?? "—")
+                    if let total = index.monthsToCheck {
+                        statistic("Months checked", "\(index.checkedMonths.formatted()) / \(total.formatted())")
+                    }
+                }
+                statistic("Index database", libraryIndex.storageReport.featureStorage["library"].map {
+                    ByteCountFormatter.string(fromByteCount: $0.bytes, countStyle: .file)
+                } ?? "—")
+                statistic("Last synced", Self.syncedDate(index.lastSyncedAt))
+            }
+            if case let .failed(message) = index.status {
+                Text(message).font(.footnote).foregroundStyle(.red)
+            }
+            summaryActionButton(actionTitle, width: 96) {
+                switch index.status {
+                case .indexing: index.pause()
+                case .paused: index.resume()
+                default: index.start(automatic: false)
+                }
+            }
+            .contentTransition(.opacity)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: actionTitle)
+            Divider().padding(.top, 8)
+            Button { index.start(automatic: false, rebuild: true) } label: {
+                actionRow("Rebuild index", symbol: "arrow.triangle.2.circlepath")
+            }
+            .buttonStyle(.plain).disabled(index.isRunning || index.isPaused)
+            Text("Rebuild updates the Library catalog.")
+                .font(.caption).foregroundStyle(.secondary)
+                .padding(.bottom, 8)
+        }
     }
 
     private var albumIndexPage: some View {
@@ -1286,14 +1360,16 @@ struct AccountSettingsView: View {
 
     private var cachePage: some View {
         VStack(alignment: .leading, spacing: 0) {
-            SettingsSectionPager("Cache", labels: ("Asset Cache", "Place Cache"), selection: $selectedCacheSection,
+            SettingsSectionPager("Cache", labels: ["Asset Cache", "Place Cache"], selection: $selectedCacheSection,
                                  enabled: selectedPage == .cache && !isPageTransitioning)
             {
                 statistic("Cache database", ByteCountFormatter.string(fromByteCount: libraryIndex.storageReport.cacheMetadataBytes, countStyle: .file))
-            } first: {
-                assetCachePage
-            } second: {
-                placeCachePage
+            } page: { index in
+                if index == 0 {
+                    assetCachePage
+                } else {
+                    placeCachePage
+                }
             }
             Divider()
                 .padding(.top, 18)

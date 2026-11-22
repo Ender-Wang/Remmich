@@ -84,6 +84,7 @@ final class LibraryIndexController {
 
     private let store: SQLiteLibraryIndexStore
     let albumIndex: AlbumIndexController
+    let collections: LibraryCollectionIndexController
     private let synchronizer: LibraryIndexSynchronizer
     private let thumbnailCache: LibraryThumbnailCache
     private let transfers: LibraryTransferQueue?
@@ -171,6 +172,7 @@ final class LibraryIndexController {
 
     init(
         source: any TimelineReading,
+        collectionSource: ImmichTimelineRepository? = nil,
         store: SQLiteLibraryIndexStore = .init(),
         media: MediaLibraryController? = nil,
         assetDetails: (any AssetDetailReading)? = nil,
@@ -188,6 +190,7 @@ final class LibraryIndexController {
         self.preferences = preferences
         albumIndex = AlbumIndexController(source: source as? any AlbumReading & TimelineReading,
                                           store: store, transfers: transfers, preferences: preferences)
+        collections = LibraryCollectionIndexController(source: collectionSource, store: store, defaults: preferences)
         synchronizer = LibraryIndexSynchronizer(source: source, store: store)
         thumbnailCache = LibraryThumbnailCache(store: store, rootURL: cacheRootURL, assetDetails: assetDetails, transfers: transfers)
         thumbnailWarmingStatus = if thumbnailWarmingEnabled {
@@ -208,11 +211,12 @@ final class LibraryIndexController {
     }
 
     var hasActiveSyncWork: Bool {
-        task != nil || warmingTask != nil || albumIndex.isRunning
+        task != nil || warmingTask != nil || albumIndex.isRunning || collections.isRunning
     }
 
     var hasAutomaticSyncWork: Bool {
         !indexPaused || albumIndex.automaticWorkEnabled || (thumbnailWarmingEnabled && !thumbnailWarmingPaused)
+            || collections.automaticWorkEnabled
             || (!placeCachingPaused && (placeCachingEnabled || scope.map { hasManualPlaceCacheIntent(namespace: $0.cacheNamespace) } == true))
     }
 
@@ -223,6 +227,7 @@ final class LibraryIndexController {
     func setBackgroundRefreshOnly(_ enabled: Bool) {
         backgroundRefreshOnly = enabled
         if enabled {
+            collections.suspend()
             stopPlaceWork(preservingTransfers: true)
         }
         if enabled, warmingTask != nil {
@@ -299,6 +304,9 @@ final class LibraryIndexController {
                 && (indexPaused || status == .upToDate || completedIndexRunID == runID) && albumsComplete
         }
         guard !Task.isCancelled, scope == expectedScope, indexPaused || status == .upToDate else { return false }
+        if discoverIndex {
+            collections.start()
+        }
         if thumbnailWarmingEnabled || pendingThumbnailRequest?.manual == true, !thumbnailWarmingPaused, warmingTask == nil,
            thumbnailWarmingCachedCount < indexedAssetCount
         {
@@ -308,13 +316,14 @@ final class LibraryIndexController {
         await warmingTask?.value
         refreshPlaces()
         await placeTask?.value
+        let collectionsComplete = discoverIndex ? await collections.finish() : true
         guard !Task.isCancelled, scope == expectedScope else { return false }
         let ordinaryComplete = (!thumbnailWarmingEnabled && pendingThumbnailRequest == nil) || thumbnailWarmingPaused || thumbnailWarmingStatus == .upToDate
             || thumbnailWarmingCachedCount == indexedAssetCount
         let manualPlaceIntent = scope.map { hasManualPlaceCacheIntent(namespace: $0.cacheNamespace) } ?? false
         let placesComplete = !automaticPlacesAllowed || !(placeCachingEnabled || manualPlaceIntent) || placeCachingPaused
             || (placeProgress.pending == 0 && placeProgress.failed == 0 && placeStorageError == nil)
-        return ordinaryComplete && placesComplete && albumsComplete
+        return ordinaryComplete && placesComplete && albumsComplete && collectionsComplete
     }
 
     func setTimelinePublicationDeferred(_ deferred: Bool) {
@@ -907,6 +916,7 @@ final class LibraryIndexController {
         guard let scope else { return }
         suspend()
         albumIndex.removePreferences(namespace: scope.cacheNamespace)
+        collections.removePreferences(namespace: scope.cacheNamespace)
         albumIndex.clear()
         albumIndex.configure(scope: scope)
         preparedCacheGeneration = nil
@@ -944,6 +954,7 @@ final class LibraryIndexController {
     func deleteStoredAccount(namespace: String) async {
         guard !isDeletingStoredAccount else { return }
         albumIndex.removePreferences(namespace: namespace)
+        collections.removePreferences(namespace: namespace)
         preferences.removeObject(forKey: "library-index-last-success-\(namespace)")
         preferences.removeObject(forKey: "library-transfer-cache-intent-\(namespace)")
         preferences.removeObject(forKey: "library-transfer-place-intent-\(namespace)")
@@ -987,6 +998,7 @@ final class LibraryIndexController {
 
     private func suspend(cancelBootstrapCatalogs: Bool) {
         albumIndex.suspend()
+        collections.suspend()
         stopPlaceWork(preservingTransfers: true)
         if status == .indexing {
             indexContinuationPending = true
@@ -1041,6 +1053,7 @@ final class LibraryIndexController {
         sessionRevision &+= 1
         suspend()
         albumIndex.clear()
+        collections.clear()
         backgroundRefreshOnly = false
         completedIndexRunID = nil
         indexPaused = false
@@ -1100,6 +1113,7 @@ final class LibraryIndexController {
         backgroundRefreshOnly = refreshOnly
         scope = nextScope
         albumIndex.configure(scope: nextScope)
+        collections.configure(scope: nextScope)
         let settings = AccountCachePreferences.load(from: preferences, scope: nextScope)
         thumbnailWarmingEnabled = settings.enabled
         thumbnailWarmingPaused = settings.paused

@@ -97,6 +97,7 @@ final class LibraryDirectoryStore {
     fileprivate private(set) var entries: [LibraryDirectoryEntry] = []
     private(set) var error: String?
     private(set) var finished = false
+    private(set) var indexedPlaceCount: Int?
     fileprivate var selectedPlace: LibraryDirectoryEntry?
     fileprivate private(set) var placeLabels: [LibraryPlaceLabelRequest: TimelinePlace] = [:]
     @ObservationIgnored private var loadingPlaceLabels: Set<LibraryPlaceLabelRequest> = []
@@ -105,6 +106,44 @@ final class LibraryDirectoryStore {
     private var buckets: [TimelineBucketSummary]?
     private var nextBucket = 0
     private var places: Set<TimelinePlace> = []
+    private var indexedPlaceOffset = 0
+
+    func adoptIndexedPeople(_ people: [LibraryPerson]) {
+        guard loadTask == nil else { return }
+        entries = people.map(LibraryDirectoryEntry.person)
+        finished = true
+        error = nil
+    }
+
+    func adoptIndexedPartners(_ partners: [LibraryPartner]) {
+        guard loadTask == nil else { return }
+        entries = partners.map(LibraryDirectoryEntry.partner)
+        finished = true
+        error = nil
+    }
+
+    func refreshIndexedPlaces(source: ImmichTimelineRepository) async {
+        guard loadTask == nil else { return }
+        let loaded = entries.count
+        guard let page = try? await source.libraryPlaceCovers(offset: 0, limit: loaded),
+              !Task.isCancelled, loadTask == nil, entries.count == loaded else { return }
+        indexedPlaceCount = page.count
+        indexedPlaceOffset = page.covers.count
+        buckets = nil
+        nextBucket = 0
+        entries.removeAll(keepingCapacity: true)
+        places.removeAll(keepingCapacity: true)
+        appendIndexedPlaces(page.covers)
+        finished = indexedPlaceOffset >= page.count
+        error = nil
+    }
+
+    private func appendIndexedPlaces(_ covers: [TimelineAssetSummary]) {
+        entries.append(contentsOf: covers.compactMap { cover in
+            guard let place = cover.place, places.insert(place).inserted else { return nil }
+            return .place(place, cover: cover)
+        })
+    }
 
     @discardableResult
     func dismissSelectedPlace() -> Bool {
@@ -186,6 +225,19 @@ final class LibraryDirectoryStore {
                 entries = partners.map(LibraryDirectoryEntry.partner)
                 finished = true
             case .places:
+                if buckets == nil {
+                    let limit = max(1, openingLimit.map { $0 - entries.count } ?? 24)
+                    let page = try await source.libraryPlaceCovers(offset: indexedPlaceOffset, limit: limit)
+                    try Task.checkCancellation()
+                    if let page {
+                        indexedPlaceCount = page.count
+                        indexedPlaceOffset += page.covers.count
+                        appendIndexedPlaces(page.covers)
+                        finished = indexedPlaceOffset >= page.count || page.covers.count < limit
+                        error = nil
+                        return
+                    }
+                }
                 let reader = placeReader(source: source)
                 if buckets == nil {
                     buckets = try await reader.bucketSummaries(query: Self.placeQuery)
@@ -245,7 +297,7 @@ struct LibraryDirectoryCard: View {
             LibraryDirectoryView(directory: directory, store: store, source: source, media: media, assetDetails: assetDetails,
                                  context: context, placesMapSource: placesMapSource)
         } label: {
-            LibraryCollectionCard(title: directory.rawValue, count: store.finished ? store.entries.count : nil,
+            LibraryCollectionCard(title: directory.rawValue, count: store.indexedPlaceCount ?? (store.finished ? store.entries.count : nil),
                                   symbol: directory.symbol, appearance: hasCover ? .photographic : .glass)
             {
                 if directory != .places {
@@ -485,13 +537,12 @@ private struct LibraryDirectoryView: View {
             let day = TimelineCaptureDay(capturedAt: cover.captureLocalDate)
             newestBucket = .init(rawValue: String(format: "%04d-%02d-01", day.year, day.month))
         }
-        let sharedReads = place.map { _ in store.placeReader(source: source) }
-        let reader: any TimelineReading = if let sharedReads {
-            sharedReads
+        let sharedReads: LibraryOpeningBuckets = if place != nil {
+            store.placeReader(source: source)
         } else {
-            source
+            LibraryOpeningBuckets(source: source, query: query)
         }
-        let timelineReader = LibraryScopedTimelineReader(source: reader, query: query, media: nil, place: place, newestBucket: newestBucket)
+        let timelineReader = LibraryScopedTimelineReader(source: sharedReads, query: query, media: nil, place: place, newestBucket: newestBucket)
         return LibraryDirectoryTimeline(entry: entry, directory: directory, media: media, assetDetails: assetDetails, context: context,
                                         sharedReads: sharedReads, title: title(for: entry), showsHeader: showsHeader,
                                         store: PhotosTimelineStore(reader: timelineReader, hasUnfilteredBucketCounts: place != nil))

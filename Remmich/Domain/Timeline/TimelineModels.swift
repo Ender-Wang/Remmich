@@ -146,14 +146,14 @@ nonisolated struct TimelinePlace: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
-nonisolated struct LibraryFeaturePreferences: Sendable {
+nonisolated struct LibraryFeaturePreferences: Codable, Sendable {
     let foldersEnabled: Bool
     let sharedLinksEnabled: Bool
     let memoriesEnabled: Bool
     let peopleEnabled: Bool
 }
 
-nonisolated struct LibraryPerson: Identifiable, Hashable, Sendable {
+nonisolated struct LibraryPerson: Codable, Identifiable, Hashable, Sendable {
     let id: String
     let name: String
     let updatedAt: Date
@@ -163,7 +163,7 @@ nonisolated struct LibraryPerson: Identifiable, Hashable, Sendable {
     }
 }
 
-nonisolated struct LibraryPartner: Identifiable, Sendable {
+nonisolated struct LibraryPartner: Codable, Identifiable, Sendable {
     let id: String
     let name: String
     let hasProfileImage: Bool
@@ -183,7 +183,7 @@ nonisolated struct TimelineAssetSummary: Codable, Hashable, Identifiable, Sendab
     let isFavorite: Bool
     let visibility: TimelineVisibility
     let livePhotoVideoID: String?
-    let stack: TimelineStackSummary?
+    var stack: TimelineStackSummary?
     let projectionType: String?
     let thumbhash: String?
     let thumbnailRevision: Date
@@ -295,13 +295,13 @@ nonisolated struct TimelineDayGroup: Identifiable, Sendable {
     var assets: [TimelineAssetSummary]
 }
 
-nonisolated struct TimelineMemoryAssetSummary: Hashable, Identifiable, Sendable {
+nonisolated struct TimelineMemoryAssetSummary: Codable, Hashable, Identifiable, Sendable {
     let id: String
     let revision: Date
     let mediaKind: TimelineMediaKind
 }
 
-nonisolated struct TimelineMemorySummary: Hashable, Identifiable, Sendable {
+nonisolated struct TimelineMemorySummary: Codable, Hashable, Identifiable, Sendable {
     let id: String
     let memoryAt: Date
     let sourceYear: Int
