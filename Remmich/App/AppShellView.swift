@@ -108,10 +108,8 @@ struct AppShellView: View {
                 videosScrollRequest &+= 1
                 compactVideosTabs = false
             },
-            albumsRetapped: { albumsScrollRequest &+= 1 },
-            libraryRetapped: {
-                libraryDismissAccountRequest &+= 1
-            },
+            albumsRetapped: retapAlbums,
+            libraryRetapped: retapLibrary,
             groupedTabRetapped: { destination in
                 groupedScrollRequests[destination, default: 0] &+= 1
             },
@@ -529,6 +527,24 @@ struct AppShellView: View {
             viewerPresentations.removeAll()
         }
         .environment(\.assetLocations, sessionController?.locations)
+    }
+
+    private func retapAlbums() {
+        albumAfterPathRecovery = nil
+        if albumsPath.isEmpty {
+            albumsScrollRequest &+= 1
+        } else {
+            withAnimation { albumsPath.removeLast() }
+        }
+    }
+
+    private func retapLibrary() {
+        libraryCardAfterPathRecovery = nil
+        if libraryPath.isEmpty {
+            libraryDismissAccountRequest &+= 1
+        } else {
+            withAnimation { libraryPath.removeLast() }
+        }
     }
 
     private func openAlbum(_ album: AlbumSummary, listIsSettledRoot: Bool) {

@@ -623,13 +623,12 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
             {
                 outgoingView.endEditing(true)
             }
-            // Handle Albums reselection before UIKit's default pop-to-root.
-            // Its current destination owns the existing scroll-to-latest request.
+            // These stacks handle a retap one page at a time.
             if !isUpdatingTabs, pageInteractionController == nil,
-               !parent.isViewerPresented, tab === albumsTab,
-               tabBarController.selectedTab === tab
+               !parent.isViewerPresented, tabBarController.selectedTab === tab,
+               let destination = destination(for: tab), destination == .albums || destination == .library
             {
-                publishSelection(destination: .albums, selectedTab: tab, previousTab: tab)
+                publishSelection(destination: destination, selectedTab: tab, previousTab: tab, explicitRetap: true)
                 return false
             }
             guard !isUpdatingTabs,
@@ -824,11 +823,12 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
         private func publishSelection(
             destination: NativeTabDestination,
             selectedTab: UITab,
-            previousTab: UITab?
+            previousTab: UITab?,
+            explicitRetap: Bool = false
         ) {
             controller?.discardRotationVisualHandoff(reason: "tab-selection")
             let isReselection = selectedTab === previousTab
-            if isReselection,
+            if isReselection, !explicitRetap,
                let lastDestinationChange,
                lastDestinationChange.destination == destination,
                lastDestinationChange.instant.duration(to: .now) < .milliseconds(320)
