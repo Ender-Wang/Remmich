@@ -419,7 +419,6 @@ struct LibraryAssetCollectionCard: View {
 }
 
 struct LibraryCollectionTimeline: View {
-    @Environment(\.libraryHubCardAcceptsInput) private var acceptsInput
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let title: String
     let media: MediaLibraryController
@@ -428,6 +427,7 @@ struct LibraryCollectionTimeline: View {
     let viewerPresentations: AssetViewerPresentationStore?
     let opening: LibraryCollectionOpening?
     let libraryIndex: LibraryIndexController?
+    let shareURL: URL?
     @Binding var tabBarTop: CGFloat
     @State private var selected = SavedPhotosMedia.photos
     @State private var photos: PhotosTimelineStore
@@ -436,7 +436,7 @@ struct LibraryCollectionTimeline: View {
     init(title: String, source: any TimelineReading, query: TimelineQuery, separatesMedia: Bool = false,
          media: MediaLibraryController, assetDetails: any AssetDetailReading,
          tabSelectionState: NativeTabSelectionState?, viewerPresentations: AssetViewerPresentationStore?, tabBarTop: Binding<CGFloat>,
-         opening: LibraryCollectionOpening? = nil, libraryIndex: LibraryIndexController? = nil)
+         opening: LibraryCollectionOpening? = nil, libraryIndex: LibraryIndexController? = nil, shareURL: URL? = nil)
     {
         self.title = title
         self.media = media
@@ -445,6 +445,7 @@ struct LibraryCollectionTimeline: View {
         self.viewerPresentations = viewerPresentations
         self.opening = opening
         self.libraryIndex = libraryIndex
+        self.shareURL = shareURL
         _tabBarTop = tabBarTop
         _photos = State(initialValue: opening?.photos ?? PhotosTimelineStore(reader: LibraryScopedTimelineReader(
             source: source, query: query, media: separatesMedia ? .photos : nil
@@ -464,23 +465,37 @@ struct LibraryCollectionTimeline: View {
                 timeline(photos, name: title, active: true, clearance: clearance)
             }
         } header: {
-            if videos != nil {
-                Picker("Media", selection: $selected) {
-                    ForEach(SavedPhotosMedia.allCases) { Text($0.rawValue).tag($0) }
+            VStack(spacing: 0) {
+                LibraryPageHeader(title: title) {
+                    if let shareURL {
+                        ShareLink(item: shareURL) {
+                            Image(systemName: "square.and.arrow.up")
+                                .font(.title3)
+                                .frame(width: 44, height: 44)
+                        }
+                        .buttonStyle(.plain)
+                        .glassEffect(.regular.interactive(), in: .circle)
+                        .accessibilityLabel("Share Link")
+                    }
                 }
-                .pickerStyle(.segmented)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
-                if (selected == .photos ? opening?.photoCameraCoverage : opening?.videoCameraCoverage)?.hasMissingMetadata == true {
-                    Text("More items may appear after Asset Cache sync")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 6)
+                if videos != nil {
+                    Picker("Media", selection: $selected) {
+                        ForEach(SavedPhotosMedia.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    if (selected == .photos ? opening?.photoCameraCoverage : opening?.videoCameraCoverage)?.hasMissingMetadata == true {
+                        Text("More items may appear after Asset Cache sync")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 6)
+                    }
                 }
             }
         }
-        .libraryNavigationChrome(title)
+        .toolbar(.hidden, for: .navigationBar)
         .task(id: libraryIndex?.thumbnailWarmingLastUpdatedAt) {
             guard libraryIndex?.thumbnailWarmingLastUpdatedAt != nil, media.activeAPIURL != nil else { return }
             let lane = selected == .photos ? photos : videos
@@ -497,7 +512,7 @@ struct LibraryCollectionTimeline: View {
 
     private func timeline(_ store: PhotosTimelineStore, name: String, active: Bool, clearance: EdgeInsets) -> some View {
         let runtime = store === photos ? opening?.photoRuntime : opening?.videoRuntime
-        return LibraryTimelineLane(store: store, name: name, active: active && acceptsInput, media: media, assetDetails: assetDetails,
+        return LibraryTimelineLane(store: store, name: name, active: active, media: media, assetDetails: assetDetails,
                                    tabSelectionState: tabSelectionState, viewerPresentations: viewerPresentations, tabBarTop: $tabBarTop,
                                    clearance: clearance, openingRuntime: runtime, sharedReads: opening?.sharedReads)
     }

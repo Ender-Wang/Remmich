@@ -154,7 +154,7 @@ private struct LibrarySharedLinksView: View {
                 LoadingStateView(label: "Loading Shared Links")
             }
         }
-        .libraryNavigationChrome("Shared Links")
+        .libraryPageHeader("Shared Links")
         .task(id: media.activeAPIURL) {
             guard media.activeAPIURL != nil else { return }
             await store.load(source: source)
@@ -178,13 +178,6 @@ private struct LibrarySharedLinksView: View {
         let query = TimelineQuery(albumID: link.album?.id, includesStacks: true, includesPartners: false)
         return LibraryCollectionTimeline(title: link.title, source: reader, query: query, media: media, assetDetails: assetDetails,
                                          tabSelectionState: context.tabSelectionState, viewerPresentations: context.viewerPresentations,
-                                         tabBarTop: context.tabBarTop)
-            .toolbar {
-                if !link.isExpired, let url = link.publicURL {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        ShareLink(item: url) { Label("Share Link", systemImage: "square.and.arrow.up") }
-                    }
-                }
-            }
+                                         tabBarTop: context.tabBarTop, shareURL: link.isExpired ? nil : link.publicURL)
     }
 }

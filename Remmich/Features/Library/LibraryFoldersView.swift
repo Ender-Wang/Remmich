@@ -162,7 +162,7 @@ private struct LibraryFoldersView: View {
                 folderTimeline(folder, title: folder.name)
             } else {
                 folderListing
-                    .libraryNavigationChrome(folder?.name ?? "Folders")
+                    .libraryPageHeader(folder?.name ?? "Folders")
             }
         }
         .task(id: media.activeAPIURL) {

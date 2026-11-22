@@ -88,7 +88,7 @@ struct LibraryCollectionCard<Cover: View>: View {
 
     private var titleLabel: some View {
         Label {
-            LibraryCardTitle(title: title, color: appearance == .photographic ? .white : .label)
+            Text(title)
         } icon: {
             Image(systemName: symbol)
         }

@@ -121,6 +121,12 @@ struct DownloadsView: View {
                 .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
                     measuredHeaderHeight = ceil(size.height)
                 }
+            } else {
+                LibraryPageHeader(title: "Save History") {
+                    clearButton
+                        .buttonStyle(.glass)
+                        .buttonBorderShape(.circle)
+                }
             }
             ScrollView {
                 Group {
@@ -150,9 +156,7 @@ struct DownloadsView: View {
         .font(.body)
         .fontWeight(.regular)
         .buttonStyle(.automatic)
-        .navigationTitle("Save History")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar(backAction == nil ? .visible : .hidden, for: .navigationBar)
+        .toolbar(.hidden, for: .navigationBar)
         .nativeEdgeBackAction(active: backAction != nil,
                               canBegin: !clearConfirmation && uncertainJob == nil && removingJob == nil && errorJob == nil,
                               priority: 300, animatesContent: false) { backAction?() }
@@ -160,11 +164,6 @@ struct DownloadsView: View {
         .background(DownloadHistoryNavigationBoundary())
         .contentShape(Rectangle())
         .simultaneousGesture(TapGesture().onEnded { revealedJob = nil })
-        .toolbar {
-            if backAction == nil {
-                ToolbarItem(placement: .topBarTrailing) { clearButton }
-            }
-        }
         .confirmationDialog("Check the Remmich album in Photos first", isPresented: Binding(get: { uncertainJob != nil }, set: {
             if !$0 {
                 uncertainJob = nil

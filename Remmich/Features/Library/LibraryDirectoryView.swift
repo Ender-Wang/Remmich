@@ -224,7 +224,7 @@ struct LibraryDirectoryCard: View {
 
 private struct LibraryDirectoryView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.libraryHubCardAcceptsInput) private var acceptsInput
+    @Environment(\.dismiss) private var dismiss
     let directory: LibraryDirectory
     let store: LibraryDirectoryStore
     let source: ImmichTimelineRepository
@@ -233,7 +233,6 @@ private struct LibraryDirectoryView: View {
     let context: LibraryCollectionNavigation
     @Namespace private var headerNamespace
     @State private var selected: LibraryDirectoryEntry?
-    @State private var selectedTitleMotion: LibraryCardTitleMotion?
     @State private var timeline: PhotosTimelineStore?
 
     var body: some View {
@@ -244,7 +243,7 @@ private struct LibraryDirectoryView: View {
                 .accessibilityHidden(selected != nil)
             if let selected, let timeline {
                 LibraryTimelineViewport { clearance in
-                    LibraryTimelineLane(store: timeline, name: selected.name, active: acceptsInput, media: media, assetDetails: assetDetails,
+                    LibraryTimelineLane(store: timeline, name: selected.name, active: true, media: media, assetDetails: assetDetails,
                                         tabSelectionState: context.tabSelectionState, viewerPresentations: context.viewerPresentations,
                                         tabBarTop: context.tabBarTop, clearance: clearance,
                                         sharedReads: directory == .places ? store.placeReader(source: source) : nil)
@@ -261,17 +260,9 @@ private struct LibraryDirectoryView: View {
                 .transition(.identity)
             }
         }
-        .navigationBarBackButtonHidden(selected != nil)
-        .libraryNavigationChrome(selected?.name ?? directory.rawValue, selectedTitleMotion: selectedTitleMotion)
-        .toolbar {
-            if selected != nil {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button(action: close) { Image(systemName: "chevron.left") }
-                        .accessibilityLabel("Back to \(directory.rawValue)")
-                }
-            }
-        }
-        .nativeEdgeBackAction(active: acceptsInput && selected != nil && context.viewerPresentations?.activeID == nil,
+        .libraryPageHeader(selected?.name ?? directory.rawValue,
+                           backLabel: selected == nil ? "Back" : "Back to \(directory.rawValue)", back: goBack)
+        .nativeEdgeBackAction(active: selected != nil && context.viewerPresentations?.activeID == nil,
                               priority: 50, action: close)
         .task {
             if store.entries.isEmpty {
@@ -295,9 +286,10 @@ private struct LibraryDirectoryView: View {
                         ForEach(directory == .partners ? Array(rows.reversed()) : rows) { row in
                             HStack(alignment: .top, spacing: LibraryCollectionCardMetrics.spacing) {
                                 ForEach(row.items) { entry in
-                                    LibraryDirectoryEntryButton(open: { open(entry, titleMotion: $0) }) {
+                                    Button { open(entry) } label: {
                                         rowCard(entry, width: layout.itemWidth)
                                     }
+                                    .buttonStyle(.plain)
                                 }
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -327,7 +319,7 @@ private struct LibraryDirectoryView: View {
         case .person, .partner:
             VStack(spacing: 4) {
                 directoryPortrait(entry, width: width)
-                LibraryCardTitle(title: entry.name, textStyle: .caption1, centered: true, lineLimit: 2)
+                Text(entry.name)
                     .font(.caption)
                     .lineLimit(2)
                     .multilineTextAlignment(.center)
@@ -339,7 +331,7 @@ private struct LibraryDirectoryView: View {
                 LibraryAssetCover(assetID: cover.id, revision: cover.thumbnailRevision, media: media)
                 LinearGradient(colors: [.clear, .black.opacity(0.7)], startPoint: .center, endPoint: .bottom)
                 VStack(alignment: .leading, spacing: 2) {
-                    LibraryCardTitle(title: entry.name, color: .white)
+                    Text(entry.name)
                         .font(.headline)
                     if place.city != nil, let country = place.country {
                         Text(country).font(.caption)
@@ -365,7 +357,7 @@ private struct LibraryDirectoryView: View {
         }
     }
 
-    private func open(_ entry: LibraryDirectoryEntry, titleMotion: LibraryCardTitleMotion) {
+    private func open(_ entry: LibraryDirectoryEntry) {
         guard selected == nil else { return }
         var query = LibraryDirectoryStore.placeQuery
         var place: TimelinePlace?
@@ -389,35 +381,25 @@ private struct LibraryDirectoryView: View {
         let store = PhotosTimelineStore(reader: LibraryScopedTimelineReader(source: reader, query: query, media: nil,
                                                                             place: place, newestBucket: newestBucket),
                                         hasUnfilteredBucketCounts: place != nil)
-        titleMotion.prepareOpen()
         withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.35)) {
             timeline = store
             selected = entry
-            selectedTitleMotion = titleMotion
         }
     }
 
     private func close() {
-        selectedTitleMotion?.closeLocal()
         withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.35)) {
             selected = nil
-            selectedTitleMotion = nil
             timeline = nil
         }
     }
-}
 
-private struct LibraryDirectoryEntryButton<Label: View>: View {
-    let open: (LibraryCardTitleMotion) -> Void
-    @ViewBuilder let label: () -> Label
-    @State private var titleMotion = LibraryCardTitleMotion()
-
-    var body: some View {
-        Button { open(titleMotion) } label: {
-            label()
-                .environment(\.libraryCardTitleMotion, titleMotion)
+    private func goBack() {
+        if selected == nil {
+            dismiss()
+        } else {
+            close()
         }
-        .buttonStyle(.plain)
     }
 }
 

@@ -18,7 +18,7 @@ nonisolated enum SavedPhotosMedia: String, CaseIterable, Identifiable, Sendable 
 
 struct SavedPhotosView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.libraryHubCardAcceptsInput) private var acceptsInput
+    @Environment(\.dismiss) private var dismiss
     let library: SavedPhotosLibrary
     let tabSelectionState: NativeTabSelectionState?
     let viewerPresentations: AssetViewerPresentationStore?
@@ -45,18 +45,14 @@ struct SavedPhotosView: View {
                 }
             }
         }
-        .libraryNavigationChrome("On Device")
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button { Task { await library.refresh() } } label: { Image(systemName: "arrow.clockwise") }
-                    .accessibilityLabel("Refresh On Device")
-            }
-        }
+        .toolbar(.hidden, for: .navigationBar)
+        .accessibilityAction(.escape) { dismiss() }
         .accessibilityIdentifier("saved-photos-list")
     }
 
     private var downloadsHeader: some View {
         VStack(spacing: 0) {
+            navigationHeader
             VStack(spacing: 8) {
                 Picker("Saved media", selection: $media) {
                     ForEach(SavedPhotosMedia.allCases) { Text($0.rawValue).tag($0) }
@@ -85,11 +81,25 @@ struct SavedPhotosView: View {
         }
     }
 
+    /// The title and controls travel inside the page during the native card zoom.
+    private var navigationHeader: some View {
+        LibraryPageHeader(title: "On Device") {
+            Button { Task { await library.refresh() } } label: {
+                Image(systemName: "arrow.clockwise")
+                    .font(.title3)
+                    .frame(width: 44, height: 44)
+            }
+            .buttonStyle(.plain)
+            .glassEffect(.regular.interactive(), in: .circle)
+            .accessibilityLabel("Refresh On Device")
+        }
+    }
+
     private func timeline(_ kind: SavedPhotosMedia, clearance: EdgeInsets) -> AnyView {
         guard let state = preparedTimelines[kind] else { return AnyView(Color.clear) }
         return AnyView(SavedPhotosTimeline(library: library, kind: kind, state: state, selected: media == kind,
                                            tabBarTop: $tabBarTop, tabSelectionState: tabSelectionState,
-                                           viewerPresentations: viewerPresentations, clearance: clearance, acceptsInput: acceptsInput))
+                                           viewerPresentations: viewerPresentations, clearance: clearance))
     }
 
     @ViewBuilder private var status: some View {
@@ -159,7 +169,6 @@ private struct SavedPhotosTimeline: View {
     let tabSelectionState: NativeTabSelectionState?
     let viewerPresentations: AssetViewerPresentationStore?
     let clearance: EdgeInsets
-    let acceptsInput: Bool
     @State private var path: [PhotosRangeRoute] = []
 
     var body: some View {
@@ -169,7 +178,7 @@ private struct SavedPhotosTimeline: View {
                    rootAccessibilityID: "downloads-timeline-\(kind.rawValue.lowercased())",
                    compactChromeChanged: { _ in },
                    tabSelectionState: tabSelectionState, tabDestination: .library,
-                   isCollectionPageActive: selected && acceptsInput, libraryTimelineClearance: clearance, viewerPresentations: viewerPresentations,
+                   isCollectionPageActive: selected, libraryTimelineClearance: clearance, viewerPresentations: viewerPresentations,
                    refreshSource: { await library.refresh() })
             .task(id: selected ? library.catalogRevision : nil) {
                 guard selected else { return }

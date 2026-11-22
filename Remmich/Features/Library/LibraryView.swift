@@ -19,6 +19,10 @@ struct LibraryView: View {
     let signOut: (Bool) async -> Void
     @Binding var dismissAccountRequest: Int
     let accountPresentationChanged: (Bool) -> Void
+    @Binding var navigationPath: NavigationPath
+    let navigationRoot: CardNavigationRoot
+    let openLibraryCard: (LibraryHubDestination) -> Void
+    var reconcileNavigationRoot: () -> Void = {}
     var sessionController: AppSessionController?
     var tabSelectionState: NativeTabSelectionState?
     var viewerPresentations: AssetViewerPresentationStore?
@@ -30,7 +34,7 @@ struct LibraryView: View {
     @State private var accountPresented = false
     @State private var accountContentMounted = false
     @State private var accountExpansion: CGFloat = 0
-    @State private var cardPresentation = LibraryHubCardPresentation()
+    @Namespace private var libraryCardTransition
 
     private let avatarSize: CGFloat = 44
     private let avatarImageSize: CGFloat = 32
@@ -52,7 +56,6 @@ struct LibraryView: View {
                                 let newest = exports.latestCompletedDownload
                                 LibraryHubLink {
                                     DownloadsView(exports: exports)
-                                        .libraryNavigationChrome("Save History")
                                 } label: {
                                     LibraryCollectionCard(title: "Save History",
                                                           count: exports.ready ? exports.jobs.count : nil,
@@ -70,16 +73,7 @@ struct LibraryView: View {
                                 .buttonStyle(.plain)
                                 .accessibilityIdentifier("library-download-history")
                             }
-                            LibraryHubLink {
-                                SavedPhotosView(library: savedPhotos,
-                                                tabSelectionState: tabSelectionState, viewerPresentations: viewerPresentations,
-                                                tabBarTop: tabBarTop,
-                                                preparedTimelines: opening.downloadTimelines(library: savedPhotos, scope: MediaAccountScope(session: session)))
-                            } label: {
-                                onDeviceCard
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityIdentifier("library-downloads")
+                            onDeviceLink
                             if let collectionSource, let media, let assetDetails {
                                 collectionCard(.recentlyTaken, source: collectionSource, media: media, assetDetails: assetDetails)
                                 collectionCard(.recentlyAdded, source: collectionSource, media: media, assetDetails: assetDetails)
@@ -87,7 +81,7 @@ struct LibraryView: View {
                                 if preferences?.memoriesEnabled == true {
                                     LibraryMemoriesCard(source: collectionSource, media: media, assetDetails: assetDetails,
                                                         context: collectionNavigation, catalog: opening.memories,
-                                                        rotationEnabled: hubReadyForRotation && !accountContentMounted && cardPresentation.entry == nil
+                                                        rotationEnabled: hubReadyForRotation && !accountContentMounted && navigationPath.isEmpty
                                                             && (tabSelectionState?.canActivateContent(in: .library) ?? true))
                                 }
                                 if preferences?.peopleEnabled == true {
@@ -113,7 +107,7 @@ struct LibraryView: View {
                             ForEach(visibleFixtureCollections) { collection in
                                 LibraryHubLink {
                                     CollectionDetailView(collection: collection)
-                                        .libraryNavigationChrome(collection.title)
+                                        .libraryPageHeader(collection.title)
                                 } label: {
                                     LibraryCollectionCard(title: collection.title,
                                                           symbol: collection.kind.systemImage, appearance: .photographic)
@@ -130,7 +124,7 @@ struct LibraryView: View {
                     .padding(.top, geometry.safeAreaInsets.top + avatarTopPadding + avatarSize + 8)
                     .padding(.bottom, geometry.safeAreaInsets.bottom + 16)
                     .frame(width: geometry.size.width)
-                    .environment(\.libraryHubCardPresentation, cardPresentation)
+                    .environment(\.libraryHubNavigation, LibraryHubNavigation(namespace: libraryCardTransition, open: openLibraryCard))
                 }
                 .ignoresSafeArea(.container, edges: [.top, .bottom])
 
@@ -170,13 +164,6 @@ struct LibraryView: View {
                 accountButton(trailingPadding: interpolated(from: collapsedAvatarTrailingPadding, to: expandedAvatarTrailingPadding))
                     .zIndex(3)
             }
-            .allowsHitTesting(!cardPresentation.isActive)
-            .accessibilityHidden(cardPresentation.isActive)
-            .overlay {
-                LibraryHubCardOverlay(presentation: cardPresentation,
-                                      canDismiss: viewerPresentations?.activeID == nil
-                                          && (tabSelectionState?.canActivateContent(in: .library) ?? true))
-            }
         }
         .nativeEdgeBack(active: accountContentMounted, canBegin: accountPresented && accountExpansion == 1, priority: 200) { event in
             switch event.phase {
@@ -196,10 +183,43 @@ struct LibraryView: View {
         }
         .navigationTitle("Library")
         .toolbar(.hidden, for: .navigationBar)
+        .background {
+            CardNavigationRootAnchor(root: navigationRoot, didAppear: reconcileNavigationRoot)
+                .allowsHitTesting(false)
+        }
+        .navigationDestination(for: LibraryHubDestination.self) { card in
+            card.makeView()
+                .background {
+                    LibraryCardNavigation(didDisappear: reconcileNavigationRoot)
+                        .allowsHitTesting(false)
+                }
+                .nativeEdgeBack(canBegin: false, priority: 25) { _ in }
+                .cardNavigationDestination(id: card.id, in: libraryCardTransition)
+        }
+        .navigationDestination(for: LibraryNestedCardDestination.self) { destination in
+            destination.makeView()
+                .nativeEdgeBack(canBegin: false, priority: 25) { _ in }
+        }
+        .navigationDestination(for: FixtureAsset.self) { asset in
+            FixtureAssetDetailView(asset: asset)
+                .toolbar(.visible, for: .navigationBar)
+        }
         .onChange(of: dismissAccountRequest) {
             guard accountPresented || accountContentMounted else { return }
             setAccountPresented(false)
         }
+    }
+
+    private var onDeviceLink: some View {
+        LibraryHubLink {
+            SavedPhotosView(library: savedPhotos, tabSelectionState: tabSelectionState, viewerPresentations: viewerPresentations,
+                            tabBarTop: tabBarTop,
+                            preparedTimelines: opening.downloadTimelines(library: savedPhotos, scope: MediaAccountScope(session: session)))
+        } label: {
+            onDeviceCard
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("library-downloads")
     }
 
     private var onDeviceCard: some View {
@@ -362,61 +382,6 @@ struct LibraryTitleBackdrop: View {
     }
 }
 
-extension View {
-    func libraryNavigationChrome(_ title: String, selectedTitleMotion: LibraryCardTitleMotion? = nil) -> some View {
-        modifier(LibraryNavigationChrome(title: title, selectedTitleMotion: selectedTitleMotion))
-    }
-}
-
-private struct LibraryNavigationChrome: ViewModifier {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.libraryCardTitleMotion) private var titleMotion
-    @Environment(\.libraryHubCardPresentation) private var cardPresentation
-    @Environment(\.libraryHubCardRoot) private var hubCard
-    let title: String
-    let selectedTitleMotion: LibraryCardTitleMotion?
-
-    func body(content: Content) -> some View {
-        let activeTitleMotion = selectedTitleMotion ?? titleMotion
-        content
-            .navigationTitle(title)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar(.visible, for: .navigationBar)
-            .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
-            .toolbar {
-                if let cardPresentation, let hubCard, selectedTitleMotion == nil {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button {
-                            cardPresentation.dismiss(hubCard, reduceMotion: reduceMotion)
-                        } label: {
-                            Image(systemName: "chevron.backward")
-                        }
-                        .accessibilityLabel("Back")
-                    }
-                }
-                if let activeTitleMotion {
-                    ToolbarItem(placement: .principal) {
-                        LibraryCardTitle(title: title, endpoint: .header, centered: true, lineLimit: 1)
-                            .environment(\.libraryCardTitleMotion, activeTitleMotion)
-                            .accessibilityAddTraits(.isHeader)
-                    }
-                }
-            }
-            .overlay(alignment: .top) {
-                if hubCard == nil {
-                    Color.clear
-                        .frame(height: 32)
-                        .background {
-                            LibraryNavigationBackdrop(motion: titleMotion)
-                                .ignoresSafeArea(.container, edges: [.top, .horizontal])
-                        }
-                        .allowsHitTesting(false)
-                        .accessibilityHidden(true)
-                }
-            }
-    }
-}
-
 private struct AccountPanelReveal: AnimatableModifier {
     var progress: CGFloat
     let collapsedSize: CGFloat
@@ -460,7 +425,9 @@ private struct CollectionDetailView: View {
 
 #Preview {
     @Previewable @State var savedPhotos = SavedPhotosLibrary()
-    NavigationStack {
+    @Previewable @State var navigationPath = NavigationPath()
+    @Previewable @State var navigationRoot = CardNavigationRoot()
+    NavigationStack(path: $navigationPath) {
         LibraryView(
             collections: PreviewFixtures.collections,
             savedPhotos: savedPhotos,
@@ -472,7 +439,13 @@ private struct CollectionDetailView: View {
             saveProfile: { _ in .saved(profile: .init()) },
             signOut: { _ in },
             dismissAccountRequest: .constant(0),
-            accountPresentationChanged: { _ in }
+            accountPresentationChanged: { _ in },
+            navigationPath: $navigationPath,
+            navigationRoot: navigationRoot,
+            openLibraryCard: { card in
+                guard navigationPath.isEmpty else { return }
+                withAnimation { navigationPath.append(card) }
+            }
         )
     }
     .task {

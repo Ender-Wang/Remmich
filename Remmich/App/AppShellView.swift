@@ -62,6 +62,9 @@ struct AppShellView: View {
     @State private var albumsPath = NavigationPath()
     @State private var albumAfterPathRecovery: AlbumSummary?
     @State private var libraryPath = NavigationPath()
+    @State private var libraryNavigationRoot = CardNavigationRoot()
+    @State private var libraryPushGeneration = 0
+    @State private var libraryCardAfterPathRecovery: LibraryHubDestination?
     @State private var searchPath = NavigationPath()
     @State private var showsAccount = false
     @State private var legacyViewerPresented = false
@@ -236,6 +239,10 @@ struct AppShellView: View {
                             signOut: signOut,
                             dismissAccountRequest: $libraryDismissAccountRequest,
                             accountPresentationChanged: { libraryAccountPresented = $0 },
+                            navigationPath: $libraryPath,
+                            navigationRoot: libraryNavigationRoot,
+                            openLibraryCard: openLibraryCard,
+                            reconcileNavigationRoot: reconcileLibraryNavigationRoot,
                             sessionController: sessionController,
                             tabSelectionState: tabSelectionState,
                             viewerPresentations: viewerPresentations,
@@ -486,10 +493,24 @@ struct AppShellView: View {
             guard tabSelectionState.canActivateContent(in: .albums) else { return }
             pushAlbum(albumAfterPathRecovery)
         }
+        .task(id: libraryPath.count) {
+            guard libraryPath.isEmpty, let card = libraryCardAfterPathRecovery else { return }
+            await Task.yield()
+            guard !Task.isCancelled, libraryPath.isEmpty, libraryCardAfterPathRecovery == card else { return }
+            libraryCardAfterPathRecovery = nil
+            guard tabSelectionState.canActivateContent(in: .library) else { return }
+            pushLibraryCard(card)
+        }
         .onChange(of: tabSelectionState.selection) { previous, current in
             if previous == .albums, current != .albums {
                 albumAfterPathRecovery = nil
                 media.cancelPrefetching()
+            }
+            if previous == .library, current != .library {
+                libraryCardAfterPathRecovery = nil
+            }
+            if current == .library {
+                reconcileLibraryNavigationRoot()
             }
             if current != .photos, current != .videos {
                 media.resumeOpeningPhotosHydration()
@@ -523,6 +544,49 @@ struct AppShellView: View {
 
     private func pushAlbum(_ album: AlbumSummary) {
         withAnimation { albumsPath.append(album) }
+    }
+
+    private func openLibraryCard(_ card: LibraryHubDestination) {
+        guard tabSelectionState.canActivateContent(in: .library), libraryCardAfterPathRecovery == nil else { return }
+        if libraryPath.isEmpty {
+            pushLibraryCard(card)
+        } else if libraryNavigationRoot.isSettledRoot {
+            libraryCardAfterPathRecovery = card
+            clearLibraryNavigationPath()
+        }
+    }
+
+    private func pushLibraryCard(_ card: LibraryHubDestination) {
+        libraryPushGeneration &+= 1
+        withAnimation { libraryPath.append(card) }
+    }
+
+    private func reconcileLibraryNavigationRoot() {
+        guard !libraryPath.isEmpty, libraryCardAfterPathRecovery == nil else { return }
+        let generation = libraryPushGeneration
+        Task { @MainActor in
+            if let transition = libraryNavigationRoot.transitionCoordinator,
+               transition.animate(alongsideTransition: nil, completion: { _ in
+                   Task { @MainActor in clearStaleLibraryPath(generation: generation) }
+               })
+            {
+                return
+            }
+            clearStaleLibraryPath(generation: generation)
+        }
+    }
+
+    private func clearStaleLibraryPath(generation: Int) {
+        guard libraryPushGeneration == generation, tabSelectionState.selection == .library,
+              !libraryPath.isEmpty, libraryCardAfterPathRecovery == nil, libraryNavigationRoot.isSettledRoot
+        else { return }
+        clearLibraryNavigationPath()
+    }
+
+    private func clearLibraryNavigationPath() {
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { libraryPath = NavigationPath() }
     }
 
     private func prepareVideosOpening(using sessionController: AppSessionController) async {

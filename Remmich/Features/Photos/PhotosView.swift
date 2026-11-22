@@ -1308,8 +1308,20 @@ struct PhotosView: View {
         .environment(\.scopedAssetTransitionContext, ScopedAssetTransitionContext(runtime: scopedAssetTransitions, scope: route))
 
         if tabDestination == .library {
-            content.libraryNavigationChrome(route.navigationTitle)
-                .environment(\.libraryCardTitleMotion, nil)
+            content
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar(.visible, for: .navigationBar)
+                .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
+                .overlay(alignment: .top) {
+                    Color.clear
+                        .frame(height: 32)
+                        .background {
+                            LibraryNavigationBackdrop()
+                                .ignoresSafeArea(.container, edges: [.top, .horizontal])
+                        }
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
         } else {
             content
                 .navigationBarTitleDisplayMode(.inline)

@@ -128,21 +128,24 @@ struct LibraryHubCardVisibility: UIViewRepresentable {
     }
 }
 
-/// The hub's card content lives in its own hosting controller. Present from the hub overlay.
+/// The hub grid uses its own hosting controller. Open from the Library tab's navigation stack.
 struct LibraryHubLink<Destination: View, Label: View>: View {
-    @Environment(\.libraryHubCardPresentation) private var presentation
-    @State private var source = LibraryHubCardSource()
+    @Environment(\.libraryHubNavigation) private var navigation
+    @State private var id = UUID()
     @ViewBuilder let destination: () -> Destination
     @ViewBuilder let label: () -> Label
 
     var body: some View {
         Button {
-            presentation?.open(card: source, page: AnyView(destination()), cover: AnyView(label()))
+            navigation?.open(.init(id: id) { AnyView(destination()) })
         } label: {
-            label()
-                .opacity(presentation?.entry?.card === source ? 0 : 1)
-                .background { LibraryHubCardAnchor(source: source) }
-                .contentShape(.rect)
+            if let navigation {
+                label()
+                    .cardNavigationSource(id: id, in: navigation.namespace)
+                    .contentShape(.rect)
+            } else {
+                label()
+            }
         }
     }
 }
@@ -153,21 +156,16 @@ struct LibraryCardLink<ID: Hashable, Destination: View, Label: View>: View {
     let namespace: Namespace.ID
     @ViewBuilder let destination: () -> Destination
     @ViewBuilder let label: () -> Label
-    @State private var titleMotion = LibraryCardTitleMotion()
     @State private var routeID = UUID()
 
     var body: some View {
         NavigationLink(value: LibraryNestedCardDestination(id: routeID) {
-            AnyView(destination()
-                .environment(\.libraryCardTitleMotion, titleMotion)
-                .cardNavigationDestination(id: id, in: namespace))
+            AnyView(destination().cardNavigationDestination(id: id, in: namespace))
         }) {
             label()
-                .environment(\.libraryCardTitleMotion, titleMotion)
                 .cardNavigationSource(id: id, in: namespace)
         }
         .buttonStyle(.plain)
-        .simultaneousGesture(TapGesture().onEnded { titleMotion.prepareOpen() })
     }
 }
 

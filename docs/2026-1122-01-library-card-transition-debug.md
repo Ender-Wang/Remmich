@@ -1,5 +1,9 @@
 # Library card transition debugging
 
+All Library hub cards now use the iOS navigation zoom, with the title and controls inside each destination. UIKit handles return input. The app reconciles a stale navigation path when UIKit confirms the Library grid is visible again.
+
+The native rollout trace exercised 11 enabled cards. Each interrupted opening returned to path depth zero. On Device accepted the sampled grid drag after return, and two earlier drags began before the returns for Memories and Places had settled. The Recently Added sampler reached its deadline before UIKit reported the cancellation. Folders and Shared Links use the shared route when enabled. The temporary card probes were removed after the capture.
+
 The November 21 device run reproduced three separate symptoms. The rollout capture verified the scroll fix on the cards exercised. The temporary traces and touch probe were removed afterward. The trace names below describe the captures used during the investigation.
 
 ## 1. The first scroll after dismissal is ignored
@@ -30,7 +34,9 @@ The November 21 device run reproduced three separate symptoms. The rollout captu
 - All first-level Library cards now share the pilot's zoom and input handoff. Native navigation within a card handles deeper folder, shared-link, and fixture destinations. The rollout capture matched `hub card opening`, `hub card return committed`, and `hub return input` by presentation ID.
 - The rollout capture records 13 committed returns across 11 hub cards. Every first touch reached the hub. The 10 first touches that were vertical drags all started the scroll recognizer and changed the offset. The other three were taps on Partners and Archive returns. The earliest successful drag began 208 ms after commit, and the shortest open-to-commit interval was 435 ms. The nested Places timeline closed before the Places hub card. Folders and Shared Links were outside this capture.
 
-## 2. The title shifts after landing in the header
+## 2. Earlier title flight
+
+The card label stays in the card layout, and the detail page uses its own navigation title. The title flight described below was removed from Library cards and directory entries.
 
 - Open a Library card and watch the title as it finishes moving into the header. The reported glitch is a small shift after arrival. Repeat from a scrolled Library position and distinguish this from the earlier replay on dismissal.
 - The four completed opens in the latest capture end at the measured header rectangle. The three interrupted returns report `local return already at source` and skip replaying the return animation. Matching rectangles cannot establish that the flying text and the native header draw at the same baseline or that only one copy is visible through the handoff.

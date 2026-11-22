@@ -145,7 +145,6 @@ private struct LibraryMemoryCoverRotation: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.displayScale) private var displayScale
-    @Environment(\.libraryHubCardTransitionCover) private var isTransitionCover
     let catalog: LibraryMemoriesStore
     let source: ImmichTimelineRepository
     let media: MediaLibraryController
@@ -156,7 +155,7 @@ private struct LibraryMemoryCoverRotation: View {
     @State private var showsIncoming = false
 
     var body: some View {
-        let active = !isTransitionCover && enabled && visible && scenePhase == .active && !reduceMotion
+        let active = enabled && visible && scenePhase == .active && !reduceMotion
         let shouldRotate = active && (catalog.coversFinished || catalog.coverPagingFailed)
         GeometryReader { geometry in
             ZStack {
@@ -171,11 +170,7 @@ private struct LibraryMemoryCoverRotation: View {
                 }
             }
         }
-        .background {
-            if !isTransitionCover {
-                LibraryHubCardVisibility(visible: $visible)
-            }
-        }
+        .background { LibraryHubCardVisibility(visible: $visible) }
         .task(id: active) {
             if active {
                 await catalog.loadRemainingCovers(from: source)
@@ -253,7 +248,6 @@ private struct LibraryMemoryCoverRotation: View {
 }
 
 private struct LibraryMemoriesView: View {
-    @Environment(\.libraryHubCardAcceptsInput) private var acceptsInput
     let source: ImmichTimelineRepository
     let catalog: LibraryMemoriesStore
     let media: MediaLibraryController
@@ -281,7 +275,7 @@ private struct LibraryMemoriesView: View {
                            navigationPath: $path, tabBarTop: context.tabBarTop, contentName: "Memories",
                            rootAccessibilityID: "library-memories", compactChromeChanged: { _ in },
                            viewerVisibilityChanged: context.viewerVisibilityChanged, tabSelectionState: context.tabSelectionState,
-                           tabDestination: .library, isCollectionPageActive: acceptsInput,
+                           tabDestination: .library, isCollectionPageActive: true,
                            viewerPresentations: context.viewerPresentations, loadTimeline: {},
                            libraryMemories: catalog.memories, loadOlderMemories: { await catalog.loadNext(from: source) })
             } else if let error = catalog.error {
@@ -300,6 +294,6 @@ private struct LibraryMemoriesView: View {
                 await catalog.loadNext(from: source)
             }
         }
-        .libraryNavigationChrome("Memories")
+        .libraryPageHeader("Memories")
     }
 }
