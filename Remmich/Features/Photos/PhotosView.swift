@@ -23,7 +23,8 @@ struct TimelineMemoryGradientBackdrop: UIViewRepresentable {
 
 @MainActor
 final class TimelineMemoryGradientBackdropView: UIView {
-    private let effectView = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
+    private let blur = UIBlurEffect(style: .systemUltraThinMaterial)
+    private let effectView = UIVisualEffectView()
     private let gradientMask = CAGradientLayer()
     private var visibilityAnimator: UIViewPropertyAnimator?
     private var visible: Bool?
@@ -38,6 +39,7 @@ final class TimelineMemoryGradientBackdropView: UIView {
         isOpaque = false
         isUserInteractionEnabled = false
         effectView.isUserInteractionEnabled = false
+        effectView.effect = blur
         addSubview(effectView)
         gradientMask.colors = [
             UIColor.black.cgColor,
@@ -61,6 +63,10 @@ final class TimelineMemoryGradientBackdropView: UIView {
         super.layoutSubviews()
         effectView.frame = bounds
         gradientMask.frame = effectView.bounds
+    }
+
+    func setBlurVisible(_ visible: Bool) {
+        effectView.effect = visible ? blur : nil
     }
 
     func setVisible(_ visible: Bool, animated: Bool) {
@@ -1302,7 +1308,8 @@ struct PhotosView: View {
         .environment(\.scopedAssetTransitionContext, ScopedAssetTransitionContext(runtime: scopedAssetTransitions, scope: route))
 
         if tabDestination == .library {
-            content.libraryNavigationChrome()
+            content.libraryNavigationChrome(route.navigationTitle)
+                .environment(\.libraryCardTitleMotion, nil)
         } else {
             content
                 .navigationBarTitleDisplayMode(.inline)

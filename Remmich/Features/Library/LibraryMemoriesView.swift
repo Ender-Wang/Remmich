@@ -123,6 +123,7 @@ struct LibraryMemoriesCard: View {
     let context: LibraryCollectionNavigation
     let catalog: LibraryMemoriesStore
     let rotationEnabled: Bool
+    @State private var displayedCover: (cover: LibraryMemoryCover, image: UIImage)?
 
     var body: some View {
         LibraryHubLink {
@@ -132,7 +133,8 @@ struct LibraryMemoriesCard: View {
             LibraryCollectionCard(title: "Memories", count: catalog.finished ? catalog.memories.count : nil,
                                   symbol: "sparkles.rectangle.stack", appearance: covers.isEmpty ? .glass : .photographic)
             {
-                LibraryMemoryCoverRotation(catalog: catalog, source: source, media: media, enabled: rotationEnabled)
+                LibraryMemoryCoverRotation(catalog: catalog, source: source, media: media,
+                                           enabled: rotationEnabled, current: $displayedCover)
             }
         }
         .buttonStyle(.plain)
@@ -143,17 +145,18 @@ private struct LibraryMemoryCoverRotation: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.displayScale) private var displayScale
+    @Environment(\.libraryHubCardTransitionCover) private var isTransitionCover
     let catalog: LibraryMemoriesStore
     let source: ImmichTimelineRepository
     let media: MediaLibraryController
     let enabled: Bool
+    @Binding var current: (cover: LibraryMemoryCover, image: UIImage)?
     @State private var visible = false
-    @State private var current: (cover: LibraryMemoryCover, image: UIImage)?
     @State private var incoming: (cover: LibraryMemoryCover, image: UIImage)?
     @State private var showsIncoming = false
 
     var body: some View {
-        let active = enabled && visible && scenePhase == .active && !reduceMotion
+        let active = !isTransitionCover && enabled && visible && scenePhase == .active && !reduceMotion
         let shouldRotate = active && (catalog.coversFinished || catalog.coverPagingFailed)
         GeometryReader { geometry in
             ZStack {
@@ -168,7 +171,11 @@ private struct LibraryMemoryCoverRotation: View {
                 }
             }
         }
-        .background { LibraryHubCardVisibility(visible: $visible) }
+        .background {
+            if !isTransitionCover {
+                LibraryHubCardVisibility(visible: $visible)
+            }
+        }
         .task(id: active) {
             if active {
                 await catalog.loadRemainingCovers(from: source)
@@ -178,7 +185,6 @@ private struct LibraryMemoryCoverRotation: View {
             incoming = nil
             showsIncoming = false
             if shouldRotate {
-                current = nil
                 await rotate()
             }
         }
@@ -217,10 +223,15 @@ private struct LibraryMemoryCoverRotation: View {
     private func rotate() async {
         let covers = catalog.covers
         guard covers.count > 1, let first = covers.first else { return }
-        if let image = await load(first), !Task.isCancelled {
-            current = (first, image)
-        }
         var next = 1
+        if let current, let index = covers.firstIndex(of: current.cover) {
+            next = (index + 1) % covers.count
+        } else {
+            current = nil
+            if let image = await load(first), !Task.isCancelled {
+                current = (first, image)
+            }
+        }
         while !Task.isCancelled {
             do { try await Task.sleep(for: .seconds(TimelineCoverAnimation.initialHold)) } catch { return }
             let candidate = covers[next]
@@ -242,6 +253,7 @@ private struct LibraryMemoryCoverRotation: View {
 }
 
 private struct LibraryMemoriesView: View {
+    @Environment(\.libraryHubCardAcceptsInput) private var acceptsInput
     let source: ImmichTimelineRepository
     let catalog: LibraryMemoriesStore
     let media: MediaLibraryController
@@ -269,7 +281,8 @@ private struct LibraryMemoriesView: View {
                            navigationPath: $path, tabBarTop: context.tabBarTop, contentName: "Memories",
                            rootAccessibilityID: "library-memories", compactChromeChanged: { _ in },
                            viewerVisibilityChanged: context.viewerVisibilityChanged, tabSelectionState: context.tabSelectionState,
-                           tabDestination: .library, viewerPresentations: context.viewerPresentations, loadTimeline: {},
+                           tabDestination: .library, isCollectionPageActive: acceptsInput,
+                           viewerPresentations: context.viewerPresentations, loadTimeline: {},
                            libraryMemories: catalog.memories, loadOlderMemories: { await catalog.loadNext(from: source) })
             } else if let error = catalog.error {
                 ErrorStateView(title: "Couldn’t Load Memories") {
@@ -287,7 +300,6 @@ private struct LibraryMemoriesView: View {
                 await catalog.loadNext(from: source)
             }
         }
-        .navigationTitle("Memories")
-        .libraryNavigationChrome()
+        .libraryNavigationChrome("Memories")
     }
 }

@@ -143,6 +143,7 @@ struct LibraryFoldersCard: View {
 }
 
 private struct LibraryFoldersView: View {
+    @Namespace private var cardTransition
     let folder: LibraryFolder?
     let store: LibraryFoldersStore
     let source: ImmichTimelineRepository
@@ -157,55 +158,63 @@ private struct LibraryFoldersView: View {
 
     var body: some View {
         Group {
-            if let tree = store.tree {
-                let children = tree.children(of: folder)
-                if children.isEmpty, let folder, tree.assetPaths.contains(folder.path) {
-                    folderTimeline(folder)
-                } else if children.isEmpty {
-                    ContentUnavailableView("No Folders", systemImage: "folder",
-                                           description: Text("Folders containing photos and videos in Immich appear here."))
-                } else {
-                    ScrollView {
-                        LazyVGrid(columns: columns, spacing: LibraryCollectionCardMetrics.spacing) {
-                            if let folder, tree.assetPaths.contains(folder.path) {
-                                NavigationLink {
-                                    folderTimeline(folder)
-                                } label: {
-                                    folderCard(title: "Photos & Videos", symbol: "photo.on.rectangle", folder: folder)
-                                }
-                                .buttonStyle(.plain)
-                            }
-                            ForEach(children) { child in
-                                NavigationLink {
-                                    LibraryFoldersView(folder: child, store: store, source: source,
-                                                       media: media, assetDetails: assetDetails, context: context)
-                                } label: {
-                                    folderCard(title: child.name, symbol: "folder", folder: child, count: tree.children(of: child).count)
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                        .padding(16)
-                    }
-                    .refreshable {
-                        await store.load(source: source, refresh: true)
-                        await store.loadCovers(source: source)
-                    }
-                }
-            } else if media.activeAPIURL == nil {
-                ContentUnavailableView("Immich Is Unavailable", systemImage: "wifi.slash")
-            } else if store.didFail {
-                ErrorStateView(title: "Couldn’t Load Folders") { Task { await store.load(source: source) } }
+            if let folder, let tree = store.tree, tree.children(of: folder).isEmpty, tree.assetPaths.contains(folder.path) {
+                folderTimeline(folder, title: folder.name)
             } else {
-                LoadingStateView(label: "Loading Folders")
+                folderListing
+                    .libraryNavigationChrome(folder?.name ?? "Folders")
             }
         }
-        .navigationTitle(folder?.name ?? "Folders")
-        .libraryNavigationChrome()
         .task(id: media.activeAPIURL) {
             guard store.tree == nil, media.activeAPIURL != nil else { return }
             await store.load(source: source)
         }
+    }
+
+    @ViewBuilder private var folderListing: some View {
+        if let tree = store.tree {
+            let children = tree.children(of: folder)
+            if children.isEmpty {
+                ContentUnavailableView("No Folders", systemImage: "folder",
+                                       description: Text("Folders containing photos and videos in Immich appear here."))
+            } else {
+                ScrollView {
+                    LazyVGrid(columns: columns, spacing: LibraryCollectionCardMetrics.spacing) {
+                        if let folder, tree.assetPaths.contains(folder.path) {
+                            LibraryCardLink(id: CardSource.assets, namespace: cardTransition) {
+                                folderTimeline(folder, title: "Photos & Videos")
+                            } label: {
+                                folderCard(title: "Photos & Videos", symbol: "photo.on.rectangle", folder: folder)
+                            }
+                        }
+                        ForEach(children) { child in
+                            LibraryCardLink(id: CardSource.folder(child.id), namespace: cardTransition) {
+                                LibraryFoldersView(folder: child, store: store, source: source,
+                                                   media: media, assetDetails: assetDetails, context: context)
+                            } label: {
+                                folderCard(title: child.name, symbol: "folder", folder: child, count: tree.children(of: child).count)
+                            }
+                        }
+                    }
+                    .padding(16)
+                }
+                .refreshable {
+                    await store.load(source: source, refresh: true)
+                    await store.loadCovers(source: source)
+                }
+            }
+        } else if media.activeAPIURL == nil {
+            ContentUnavailableView("Immich Is Unavailable", systemImage: "wifi.slash")
+        } else if store.didFail {
+            ErrorStateView(title: "Couldn’t Load Folders") { Task { await store.load(source: source) } }
+        } else {
+            LoadingStateView(label: "Loading Folders")
+        }
+    }
+
+    private enum CardSource: Hashable {
+        case assets
+        case folder(LibraryFolder.ID)
     }
 
     private func folderCard(title: String, symbol: String, folder: LibraryFolder, count: Int? = nil) -> some View {
@@ -217,11 +226,11 @@ private struct LibraryFoldersView: View {
         }
     }
 
-    private func folderTimeline(_ folder: LibraryFolder) -> some View {
+    private func folderTimeline(_ folder: LibraryFolder, title: String) -> some View {
         let reader = LibrarySelectionTimelineReader { [source] in
             try await source.libraryFolderAssets(path: folder.path)
         }
-        return LibraryCollectionTimeline(title: folder.name, source: reader, query: .init(includesPartners: false),
+        return LibraryCollectionTimeline(title: title, source: reader, query: .init(includesPartners: false),
                                          media: media, assetDetails: assetDetails, tabSelectionState: context.tabSelectionState,
                                          viewerPresentations: context.viewerPresentations, tabBarTop: context.tabBarTop)
     }

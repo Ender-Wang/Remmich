@@ -128,28 +128,52 @@ struct LibraryHubCardVisibility: UIViewRepresentable {
     }
 }
 
-/// The card content has its own hosting controller. Push detail views from the Library stack.
+/// The hub's card content lives in its own hosting controller. Present from the hub overlay.
 struct LibraryHubLink<Destination: View, Label: View>: View {
-    @Environment(\.libraryHubDestination) private var cardDestination
+    @Environment(\.libraryHubCardPresentation) private var presentation
+    @State private var source = LibraryHubCardSource()
     @ViewBuilder let destination: () -> Destination
     @ViewBuilder let label: () -> Label
 
     var body: some View {
         Button {
-            cardDestination?.wrappedValue = LibraryHubDestination(view: AnyView(destination()))
+            presentation?.open(card: source, page: AnyView(destination()), cover: AnyView(label()))
         } label: {
             label()
+                .opacity(presentation?.entry?.card === source ? 0 : 1)
+                .background { LibraryHubCardAnchor(source: source) }
+                .contentShape(.rect)
         }
     }
 }
 
-extension EnvironmentValues {
-    @Entry var libraryHubDestination: Binding<LibraryHubDestination?>?
+/// Deeper card links use the nested navigation stack's native zoom.
+struct LibraryCardLink<ID: Hashable, Destination: View, Label: View>: View {
+    let id: ID
+    let namespace: Namespace.ID
+    @ViewBuilder let destination: () -> Destination
+    @ViewBuilder let label: () -> Label
+    @State private var titleMotion = LibraryCardTitleMotion()
+    @State private var routeID = UUID()
+
+    var body: some View {
+        NavigationLink(value: LibraryNestedCardDestination(id: routeID) {
+            AnyView(destination()
+                .environment(\.libraryCardTitleMotion, titleMotion)
+                .cardNavigationDestination(id: id, in: namespace))
+        }) {
+            label()
+                .environment(\.libraryCardTitleMotion, titleMotion)
+                .cardNavigationSource(id: id, in: namespace)
+        }
+        .buttonStyle(.plain)
+        .simultaneousGesture(TapGesture().onEnded { titleMotion.prepareOpen() })
+    }
 }
 
-nonisolated struct LibraryHubDestination: Hashable {
-    private let id = UUID()
-    let view: AnyView
+nonisolated struct LibraryNestedCardDestination: Hashable {
+    let id: UUID
+    let makeView: @MainActor () -> AnyView
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.id == rhs.id

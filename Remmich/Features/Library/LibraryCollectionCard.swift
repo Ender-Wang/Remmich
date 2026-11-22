@@ -42,12 +42,19 @@ struct LibraryCollectionCard<Cover: View>: View {
             Group {
                 if detail.isEmpty {
                     HStack(alignment: .center, spacing: 4) {
-                        Label(title, systemImage: symbol).font(.headline)
+                        titleLabel
                             .fixedSize(horizontal: false, vertical: true)
+                            .layoutPriority(1)
                         Spacer(minLength: 0)
                         if let count, count > 0 {
-                            Text(count.formatted()).font(.caption.monospacedDigit())
-                                .foregroundStyle(.secondary).fixedSize()
+                            LibraryCountBadgeLayout {
+                                Text(count.formatted()).font(.caption.monospacedDigit())
+                                    .foregroundStyle(appearance == .photographic ? Color.white : Color.primary)
+                                    .fixedSize()
+                                    .padding(.horizontal, count < 10 ? 0 : 6)
+                                    .padding(.vertical, 3)
+                            }
+                            .glassEffect(.regular, in: .capsule)
                         }
                     }
                 } else {
@@ -67,16 +74,25 @@ struct LibraryCollectionCard<Cover: View>: View {
     private var detailFooter: some View {
         ViewThatFits(in: .horizontal) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Label(title, systemImage: symbol).font(.headline).fixedSize()
+                titleLabel.fixedSize()
                 Spacer(minLength: 0)
                 Text(detail).font(.caption).foregroundStyle(.secondary).fixedSize()
             }
             VStack(alignment: .leading, spacing: 4) {
-                Label(title, systemImage: symbol).font(.headline)
+                titleLabel
                     .fixedSize(horizontal: false, vertical: true)
                 Text(detail).font(.caption).foregroundStyle(.secondary)
             }
         }
+    }
+
+    private var titleLabel: some View {
+        Label {
+            LibraryCardTitle(title: title, color: appearance == .photographic ? .white : .label)
+        } icon: {
+            Image(systemName: symbol)
+        }
+        .font(.headline)
     }
 
     private var accessibilityTitle: String {
@@ -84,6 +100,17 @@ struct LibraryCollectionCard<Cover: View>: View {
             return count == 0 ? "\(title), empty" : "\(title), \(count.formatted())"
         }
         return detail.isEmpty ? title : "\(title), \(detail)"
+    }
+}
+
+private struct LibraryCountBadgeLayout: Layout {
+    func sizeThatFits(proposal _: ProposedViewSize, subviews: Subviews, cache _: inout ()) -> CGSize {
+        let size = subviews.first?.sizeThatFits(.unspecified) ?? .zero
+        return CGSize(width: max(size.width, size.height), height: size.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal _: ProposedViewSize, subviews: Subviews, cache _: inout ()) {
+        subviews.first?.place(at: CGPoint(x: bounds.midX, y: bounds.midY), anchor: .center, proposal: .unspecified)
     }
 }
 

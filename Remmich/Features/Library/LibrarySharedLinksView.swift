@@ -109,6 +109,7 @@ struct LibrarySharedLinksCard: View {
 }
 
 private struct LibrarySharedLinksView: View {
+    @Namespace private var cardTransition
     let store: LibrarySharedLinksStore
     let source: ImmichTimelineRepository
     let media: MediaLibraryController
@@ -125,12 +126,11 @@ private struct LibrarySharedLinksView: View {
                             ForEach(layout.identifiedRows(links)) { row in
                                 HStack(spacing: LibraryCollectionCardMetrics.spacing) {
                                     ForEach(row.items) { link in
-                                        NavigationLink {
+                                        LibraryCardLink(id: link.id, namespace: cardTransition) {
                                             timeline(for: link)
                                         } label: {
                                             card(for: link).frame(width: layout.itemWidth)
                                         }
-                                        .buttonStyle(.plain)
                                     }
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -154,8 +154,7 @@ private struct LibrarySharedLinksView: View {
                 LoadingStateView(label: "Loading Shared Links")
             }
         }
-        .navigationTitle("Shared Links")
-        .libraryNavigationChrome()
+        .libraryNavigationChrome("Shared Links")
         .task(id: media.activeAPIURL) {
             guard media.activeAPIURL != nil else { return }
             await store.load(source: source)

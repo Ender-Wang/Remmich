@@ -419,6 +419,7 @@ struct LibraryAssetCollectionCard: View {
 }
 
 struct LibraryCollectionTimeline: View {
+    @Environment(\.libraryHubCardAcceptsInput) private var acceptsInput
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let title: String
     let media: MediaLibraryController
@@ -479,8 +480,7 @@ struct LibraryCollectionTimeline: View {
                 }
             }
         }
-        .navigationTitle(title)
-        .libraryNavigationChrome()
+        .libraryNavigationChrome(title)
         .task(id: libraryIndex?.thumbnailWarmingLastUpdatedAt) {
             guard libraryIndex?.thumbnailWarmingLastUpdatedAt != nil, media.activeAPIURL != nil else { return }
             let lane = selected == .photos ? photos : videos
@@ -497,7 +497,7 @@ struct LibraryCollectionTimeline: View {
 
     private func timeline(_ store: PhotosTimelineStore, name: String, active: Bool, clearance: EdgeInsets) -> some View {
         let runtime = store === photos ? opening?.photoRuntime : opening?.videoRuntime
-        return LibraryTimelineLane(store: store, name: name, active: active, media: media, assetDetails: assetDetails,
+        return LibraryTimelineLane(store: store, name: name, active: active && acceptsInput, media: media, assetDetails: assetDetails,
                                    tabSelectionState: tabSelectionState, viewerPresentations: viewerPresentations, tabBarTop: $tabBarTop,
                                    clearance: clearance, openingRuntime: runtime, sharedReads: opening?.sharedReads)
     }

@@ -30,7 +30,7 @@ struct LibraryView: View {
     @State private var accountPresented = false
     @State private var accountContentMounted = false
     @State private var accountExpansion: CGFloat = 0
-    @State private var cardDestination: LibraryHubDestination?
+    @State private var cardPresentation = LibraryHubCardPresentation()
 
     private let avatarSize: CGFloat = 44
     private let avatarImageSize: CGFloat = 32
@@ -52,7 +52,7 @@ struct LibraryView: View {
                                 let newest = exports.latestCompletedDownload
                                 LibraryHubLink {
                                     DownloadsView(exports: exports)
-                                        .libraryNavigationChrome()
+                                        .libraryNavigationChrome("Save History")
                                 } label: {
                                     LibraryCollectionCard(title: "Save History",
                                                           count: exports.ready ? exports.jobs.count : nil,
@@ -71,19 +71,12 @@ struct LibraryView: View {
                                 .accessibilityIdentifier("library-download-history")
                             }
                             LibraryHubLink {
-                                let scope = MediaAccountScope(session: session)
                                 SavedPhotosView(library: savedPhotos,
                                                 tabSelectionState: tabSelectionState, viewerPresentations: viewerPresentations,
                                                 tabBarTop: tabBarTop,
-                                                preparedTimelines: opening.downloadTimelines(library: savedPhotos, scope: scope))
+                                                preparedTimelines: opening.downloadTimelines(library: savedPhotos, scope: MediaAccountScope(session: session)))
                             } label: {
-                                LibraryCollectionCard(title: "On Device", count: savedPhotos.state == .ready ? savedPhotos.items.count : nil,
-                                                      symbol: "arrow.down.circle", appearance: savedPhotos.items.isEmpty ? .glass : .photographic)
-                                {
-                                    if let photo = savedPhotos.items.first {
-                                        SavedPhotoThumbnail(library: savedPhotos, item: photo)
-                                    }
-                                }
+                                onDeviceCard
                             }
                             .buttonStyle(.plain)
                             .accessibilityIdentifier("library-downloads")
@@ -94,7 +87,7 @@ struct LibraryView: View {
                                 if preferences?.memoriesEnabled == true {
                                     LibraryMemoriesCard(source: collectionSource, media: media, assetDetails: assetDetails,
                                                         context: collectionNavigation, catalog: opening.memories,
-                                                        rotationEnabled: hubReadyForRotation && cardDestination == nil && !accountContentMounted
+                                                        rotationEnabled: hubReadyForRotation && !accountContentMounted && cardPresentation.entry == nil
                                                             && (tabSelectionState?.canActivateContent(in: .library) ?? true))
                                 }
                                 if preferences?.peopleEnabled == true {
@@ -120,7 +113,7 @@ struct LibraryView: View {
                             ForEach(visibleFixtureCollections) { collection in
                                 LibraryHubLink {
                                     CollectionDetailView(collection: collection)
-                                        .libraryNavigationChrome()
+                                        .libraryNavigationChrome(collection.title)
                                 } label: {
                                     LibraryCollectionCard(title: collection.title,
                                                           symbol: collection.kind.systemImage, appearance: .photographic)
@@ -137,7 +130,7 @@ struct LibraryView: View {
                     .padding(.top, geometry.safeAreaInsets.top + avatarTopPadding + avatarSize + 8)
                     .padding(.bottom, geometry.safeAreaInsets.bottom + 16)
                     .frame(width: geometry.size.width)
-                    .environment(\.libraryHubDestination, $cardDestination)
+                    .environment(\.libraryHubCardPresentation, cardPresentation)
                 }
                 .ignoresSafeArea(.container, edges: [.top, .bottom])
 
@@ -177,6 +170,13 @@ struct LibraryView: View {
                 accountButton(trailingPadding: interpolated(from: collapsedAvatarTrailingPadding, to: expandedAvatarTrailingPadding))
                     .zIndex(3)
             }
+            .allowsHitTesting(!cardPresentation.isActive)
+            .accessibilityHidden(cardPresentation.isActive)
+            .overlay {
+                LibraryHubCardOverlay(presentation: cardPresentation,
+                                      canDismiss: viewerPresentations?.activeID == nil
+                                          && (tabSelectionState?.canActivateContent(in: .library) ?? true))
+            }
         }
         .nativeEdgeBack(active: accountContentMounted, canBegin: accountPresented && accountExpansion == 1, priority: 200) { event in
             switch event.phase {
@@ -196,15 +196,19 @@ struct LibraryView: View {
         }
         .navigationTitle("Library")
         .toolbar(.hidden, for: .navigationBar)
-        .navigationDestination(item: $cardDestination) { destination in
-            destination.view
-        }
-        .navigationDestination(for: FixtureAsset.self) { asset in
-            FixtureAssetDetailView(asset: asset)
-        }
         .onChange(of: dismissAccountRequest) {
             guard accountPresented || accountContentMounted else { return }
             setAccountPresented(false)
+        }
+    }
+
+    private var onDeviceCard: some View {
+        LibraryCollectionCard(title: "On Device", count: savedPhotos.state == .ready ? savedPhotos.items.count : nil,
+                              symbol: "arrow.down.circle", appearance: savedPhotos.items.isEmpty ? .glass : .photographic)
+        {
+            if let photo = savedPhotos.items.first {
+                SavedPhotoThumbnail(library: savedPhotos, item: photo)
+            }
         }
     }
 
@@ -359,22 +363,56 @@ struct LibraryTitleBackdrop: View {
 }
 
 extension View {
-    func libraryNavigationChrome() -> some View {
-        navigationBarTitleDisplayMode(.inline)
+    func libraryNavigationChrome(_ title: String, selectedTitleMotion: LibraryCardTitleMotion? = nil) -> some View {
+        modifier(LibraryNavigationChrome(title: title, selectedTitleMotion: selectedTitleMotion))
+    }
+}
+
+private struct LibraryNavigationChrome: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.libraryCardTitleMotion) private var titleMotion
+    @Environment(\.libraryHubCardPresentation) private var cardPresentation
+    @Environment(\.libraryHubCardRoot) private var hubCard
+    let title: String
+    let selectedTitleMotion: LibraryCardTitleMotion?
+
+    func body(content: Content) -> some View {
+        let activeTitleMotion = selectedTitleMotion ?? titleMotion
+        content
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar(.visible, for: .navigationBar)
             .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
-            .overlay(alignment: .top) {
-                GeometryReader { safe in
-                    let safeTop = safe.frame(in: .global).minY
-                    GeometryReader { full in
-                        let topInset = max(0, safeTop - full.frame(in: .global).minY)
-                        LibraryTitleBackdrop()
-                            .frame(height: topInset + 32)
+            .toolbar {
+                if let cardPresentation, let hubCard, selectedTitleMotion == nil {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button {
+                            cardPresentation.dismiss(hubCard, reduceMotion: reduceMotion)
+                        } label: {
+                            Image(systemName: "chevron.backward")
+                        }
+                        .accessibilityLabel("Back")
                     }
-                    .ignoresSafeArea(.container, edges: [.top, .horizontal])
                 }
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
+                if let activeTitleMotion {
+                    ToolbarItem(placement: .principal) {
+                        LibraryCardTitle(title: title, endpoint: .header, centered: true, lineLimit: 1)
+                            .environment(\.libraryCardTitleMotion, activeTitleMotion)
+                            .accessibilityAddTraits(.isHeader)
+                    }
+                }
+            }
+            .overlay(alignment: .top) {
+                if hubCard == nil {
+                    Color.clear
+                        .frame(height: 32)
+                        .background {
+                            LibraryNavigationBackdrop(motion: titleMotion)
+                                .ignoresSafeArea(.container, edges: [.top, .horizontal])
+                        }
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
             }
     }
 }
@@ -417,7 +455,6 @@ private struct CollectionDetailView: View {
         ScrollView {
             AssetGrid(assets: collection.assets)
         }
-        .navigationTitle(collection.title)
     }
 }
 

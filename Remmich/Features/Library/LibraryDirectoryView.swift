@@ -224,6 +224,7 @@ struct LibraryDirectoryCard: View {
 
 private struct LibraryDirectoryView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.libraryHubCardAcceptsInput) private var acceptsInput
     let directory: LibraryDirectory
     let store: LibraryDirectoryStore
     let source: ImmichTimelineRepository
@@ -232,6 +233,7 @@ private struct LibraryDirectoryView: View {
     let context: LibraryCollectionNavigation
     @Namespace private var headerNamespace
     @State private var selected: LibraryDirectoryEntry?
+    @State private var selectedTitleMotion: LibraryCardTitleMotion?
     @State private var timeline: PhotosTimelineStore?
 
     var body: some View {
@@ -242,27 +244,25 @@ private struct LibraryDirectoryView: View {
                 .accessibilityHidden(selected != nil)
             if let selected, let timeline {
                 LibraryTimelineViewport { clearance in
-                    LibraryTimelineLane(store: timeline, name: selected.name, active: true, media: media, assetDetails: assetDetails,
+                    LibraryTimelineLane(store: timeline, name: selected.name, active: acceptsInput, media: media, assetDetails: assetDetails,
                                         tabSelectionState: context.tabSelectionState, viewerPresentations: context.viewerPresentations,
                                         tabBarTop: context.tabBarTop, clearance: clearance,
                                         sharedReads: directory == .places ? store.placeReader(source: source) : nil)
                         .id(selected.id)
                 } header: {
-                    header(selected, portraitWidth: 72)
-                        .matchedGeometryEffect(id: selected.id, in: headerNamespace, isSource: false)
-                        .padding(.top, 4)
-                        .padding(.bottom, 8)
-                        .frame(maxWidth: .infinity)
-                        .background {
-                            LibraryTitleBackdrop()
-                                .ignoresSafeArea(.container, edges: .horizontal)
-                        }
+                    if directory != .places {
+                        LibraryDirectoryPortrait(entry: selected, media: media, size: 72)
+                            .matchedGeometryEffect(id: selected.id, in: headerNamespace)
+                            .padding(.top, 4)
+                            .padding(.bottom, 8)
+                            .frame(maxWidth: .infinity)
+                    }
                 }
+                .transition(.identity)
             }
         }
-        .navigationTitle(directory.rawValue)
         .navigationBarBackButtonHidden(selected != nil)
-        .libraryNavigationChrome()
+        .libraryNavigationChrome(selected?.name ?? directory.rawValue, selectedTitleMotion: selectedTitleMotion)
         .toolbar {
             if selected != nil {
                 ToolbarItem(placement: .topBarLeading) {
@@ -271,7 +271,7 @@ private struct LibraryDirectoryView: View {
                 }
             }
         }
-        .nativeEdgeBackAction(active: selected != nil && context.viewerPresentations?.activeID == nil,
+        .nativeEdgeBackAction(active: acceptsInput && selected != nil && context.viewerPresentations?.activeID == nil,
                               priority: 50, action: close)
         .task {
             if store.entries.isEmpty {
@@ -295,10 +295,9 @@ private struct LibraryDirectoryView: View {
                         ForEach(directory == .partners ? Array(rows.reversed()) : rows) { row in
                             HStack(alignment: .top, spacing: LibraryCollectionCardMetrics.spacing) {
                                 ForEach(row.items) { entry in
-                                    Button { open(entry) } label: {
+                                    LibraryDirectoryEntryButton(open: { open(entry, titleMotion: $0) }) {
                                         rowCard(entry, width: layout.itemWidth)
                                     }
-                                    .buttonStyle(.plain)
                                 }
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -326,16 +325,22 @@ private struct LibraryDirectoryView: View {
     @ViewBuilder private func rowCard(_ entry: LibraryDirectoryEntry, width: CGFloat) -> some View {
         switch entry {
         case .person, .partner:
-            header(entry, portraitWidth: width)
-                .matchedGeometryEffect(id: entry.id, in: headerNamespace)
-                .frame(width: width)
+            VStack(spacing: 4) {
+                directoryPortrait(entry, width: width)
+                LibraryCardTitle(title: entry.name, textStyle: .caption1, centered: true, lineLimit: 2)
+                    .font(.caption)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+            }
+            .frame(width: width)
+            .accessibilityElement(children: .combine)
         case let .place(place, cover):
             ZStack(alignment: .bottomLeading) {
                 LibraryAssetCover(assetID: cover.id, revision: cover.thumbnailRevision, media: media)
                 LinearGradient(colors: [.clear, .black.opacity(0.7)], startPoint: .center, endPoint: .bottom)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(entry.name).font(.headline)
-                        .matchedGeometryEffect(id: entry.id, in: headerNamespace)
+                    LibraryCardTitle(title: entry.name, color: .white)
+                        .font(.headline)
                     if place.city != nil, let country = place.country {
                         Text(country).font(.caption)
                     }
@@ -348,19 +353,20 @@ private struct LibraryDirectoryView: View {
         }
     }
 
-    @ViewBuilder private func header(_ entry: LibraryDirectoryEntry, portraitWidth: CGFloat) -> some View {
-        if directory != .places {
-            VStack(spacing: 4) {
-                LibraryDirectoryPortrait(entry: entry, media: media, size: portraitWidth)
-                Text(entry.name).font(.caption).lineLimit(2).multilineTextAlignment(.center)
-            }
-            .accessibilityElement(children: .combine)
+    @ViewBuilder private func directoryPortrait(_ entry: LibraryDirectoryEntry, width: CGFloat) -> some View {
+        if selected?.id == entry.id {
+            Color.clear
+                .frame(width: width, height: width)
+                .transition(.identity)
         } else {
-            Text(entry.name).font(.headline)
+            LibraryDirectoryPortrait(entry: entry, media: media, size: width)
+                .matchedGeometryEffect(id: entry.id, in: headerNamespace)
+                .transition(.identity)
         }
     }
 
-    private func open(_ entry: LibraryDirectoryEntry) {
+    private func open(_ entry: LibraryDirectoryEntry, titleMotion: LibraryCardTitleMotion) {
+        guard selected == nil else { return }
         var query = LibraryDirectoryStore.placeQuery
         var place: TimelinePlace?
         var newestBucket: TimelineBucketID?
@@ -383,17 +389,35 @@ private struct LibraryDirectoryView: View {
         let store = PhotosTimelineStore(reader: LibraryScopedTimelineReader(source: reader, query: query, media: nil,
                                                                             place: place, newestBucket: newestBucket),
                                         hasUnfilteredBucketCounts: place != nil)
-        withAnimation(reduceMotion ? nil : .smooth(duration: 0.35)) {
+        titleMotion.prepareOpen()
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.35)) {
             timeline = store
             selected = entry
+            selectedTitleMotion = titleMotion
         }
     }
 
     private func close() {
-        withAnimation(reduceMotion ? nil : .smooth(duration: 0.35)) {
+        selectedTitleMotion?.closeLocal()
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.35)) {
             selected = nil
+            selectedTitleMotion = nil
             timeline = nil
         }
+    }
+}
+
+private struct LibraryDirectoryEntryButton<Label: View>: View {
+    let open: (LibraryCardTitleMotion) -> Void
+    @ViewBuilder let label: () -> Label
+    @State private var titleMotion = LibraryCardTitleMotion()
+
+    var body: some View {
+        Button { open(titleMotion) } label: {
+            label()
+                .environment(\.libraryCardTitleMotion, titleMotion)
+        }
+        .buttonStyle(.plain)
     }
 }
 

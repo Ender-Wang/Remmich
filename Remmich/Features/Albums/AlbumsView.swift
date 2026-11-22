@@ -196,7 +196,7 @@ struct AlbumsView: View {
                             timelineRuntime: timelineSessions.runtime(albumID: album.id, namespace: accountScope?.cacheNamespace ?? "unscoped"),
                             viewerPresentations: viewerPresentations,
                             tabSelectionState: tabSelectionState, tabBarTop: $tabBarTop, showAccount: showAccount)
-                .navigationTransition(.zoom(sourceID: album.id, in: albumTransition))
+                .cardNavigationDestination(id: album.id, in: albumTransition)
         }
         .accessibilityIdentifier("albums-root")
     }
@@ -1022,18 +1022,17 @@ private struct AlbumCard: View {
     }
 
     private var cover: some View {
-        AlbumCover(album: album, media: media, persistence: persistence, scope: scope,
-                   requestWidth: coverWidth, cachedRevision: coverRevision)
+        let cornerRadius = DesignMetrics.defaultCornerRadius + (12 - DesignMetrics.defaultCornerRadius) * progress
+        return AlbumCover(album: album, media: media, persistence: persistence, scope: scope,
+                          requestWidth: coverWidth, cachedRevision: coverRevision)
         {
             coverLoaded = true
             if visibility.visible {
                 coverVisible()
             }
         }
-        .clipShape(.rect(cornerRadius: DesignMetrics.defaultCornerRadius + (12 - DesignMetrics.defaultCornerRadius) * progress))
-        .matchedTransitionSource(id: album.id, in: transitionNamespace) { source in
-            source.clipShape(.rect(cornerRadius: DesignMetrics.defaultCornerRadius + (12 - DesignMetrics.defaultCornerRadius) * progress))
-        }
+        .clipShape(.rect(cornerRadius: cornerRadius))
+        .cardNavigationSource(id: album.id, in: transitionNamespace, cornerRadius: cornerRadius)
     }
 }
 
