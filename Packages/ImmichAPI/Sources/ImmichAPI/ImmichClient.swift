@@ -411,7 +411,7 @@ public actor ImmichClient {
             case let .ok(response):
                 let links = try response.body.json
                 guard !links.isEmpty else { return [] }
-                let webBase = await Self.shareWebBase(externalDomain: config?.server.externalDomain, serverURL: serverURL)
+                let webBase = await Self.shareWebBase(externalDomain: config?.server?.externalDomain, serverURL: serverURL)
                 return try links.map { link in
                     let album = try link.album.map(Self.album(from:))
                     return ImmichSharedLink(id: link.id, description: link.description, createdAt: link.createdAt,

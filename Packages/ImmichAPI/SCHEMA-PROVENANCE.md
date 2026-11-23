@@ -5,9 +5,9 @@
 - Upstream describe: `v3.1.0-447-g520a70891`
 - OpenAPI document version: `3.2.0`
 - Upstream SHA-256: `4e15b58113426d59ffb991a82875308b3eeb64e6c916395e5c923a0632fcc67f`
-- Prepared SHA-256: `4ea300b7aa7e5305a6decd8a096e51c5739e6a96a469c6ace2fc8e15f1fcfbd7`
+- Prepared SHA-256: `ceaf70807a32549461939df11f367479da739cd3ca8f5bca118ef5a8eafe3f2f`
 - Copied: 2026-09-27
-- Transformations: `Scripts/prepare-immich-schema.py` removes the deprecated optional flat fields from `MetadataSearchDto` and the unused legacy `SearchAssetResponseDto.nextPage` response field (including its required entry). Remmich uses `filter`, `orderBy`, and cursor pagination instead. Other schema definitions and endpoint deprecations remain intact.
+- Transformations: `Scripts/prepare-immich-schema.py` removes deprecated flat search fields and the unused `SearchAssetResponseDto.nextPage`. It also limits the authenticated user config decoder to map settings and the optional external domain used for shared links. This lets Remmich load maps from server responses that omit unrelated fields such as `theme`.
 
 The generator configuration includes only operations used by the wrapper and their dependencies. This avoids generating unused legacy search DTOs and operations whose initializers reference deprecated properties. The preparation step removes the equivalent unused aliases from the search DTO that Remmich does use; it does not suppress compiler diagnostics or edit generated Swift files.
 

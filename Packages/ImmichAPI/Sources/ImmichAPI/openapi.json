@@ -31562,52 +31562,15 @@
       "UserConfigDto": {
         "description": "Configuration properties that are visible to a logged user",
         "properties": {
-          "ffmpeg": {
-            "$ref": "#/components/schemas/UserConfigFFmpegDto"
-          },
-          "image": {
-            "$ref": "#/components/schemas/UserConfigImageDto"
-          },
-          "machineLearning": {
-            "$ref": "#/components/schemas/UserConfigMachineLearningDto"
-          },
           "map": {
             "$ref": "#/components/schemas/UserConfigMapDto"
           },
-          "oauth": {
-            "$ref": "#/components/schemas/UserConfigOAuthDto"
-          },
-          "passwordLogin": {
-            "$ref": "#/components/schemas/UserConfigPasswordLoginDto"
-          },
-          "reverseGeocoding": {
-            "$ref": "#/components/schemas/UserConfigReverseGeocodingDto"
-          },
           "server": {
             "$ref": "#/components/schemas/UserConfigServerDto"
-          },
-          "theme": {
-            "$ref": "#/components/schemas/UserConfigThemeDto"
-          },
-          "trash": {
-            "$ref": "#/components/schemas/UserConfigTrashDto"
-          },
-          "user": {
-            "$ref": "#/components/schemas/UserConfigUserDto"
           }
         },
         "required": [
-          "ffmpeg",
-          "image",
-          "machineLearning",
-          "map",
-          "oauth",
-          "passwordLogin",
-          "reverseGeocoding",
-          "server",
-          "theme",
-          "trash",
-          "user"
+          "map"
         ],
         "type": "object"
       },
@@ -31841,21 +31804,8 @@
           "externalDomain": {
             "description": "External domain",
             "type": "string"
-          },
-          "loginPageMessage": {
-            "description": "Login page message",
-            "type": "string"
-          },
-          "publicUsers": {
-            "description": "Public users",
-            "type": "boolean"
           }
         },
-        "required": [
-          "externalDomain",
-          "loginPageMessage",
-          "publicUsers"
-        ],
         "type": "object"
       },
       "UserConfigThemeDto": {

@@ -358,17 +358,33 @@ struct MapConfigurationTests {
         let client = try ImmichClient(
             apiURL: #require(URL(string: "https://photos.example.com/api")),
             credential: .bearer("secret"),
-            transport: MapConfigurationTransport(enabled: enabled)
+            transport: MapConfigurationTransport(config: userConfigFixture(mapEnabled: enabled))
         )
         let styles = try await client.mapStyles()
         #expect(styles.light.absoluteString == "https://maps.example.com/light.json")
         #expect(styles.dark.absoluteString == "https://maps.example.com/dark.json")
         #expect(styles.enabled == enabled)
     }
+
+    @Test(arguments: ["", #", "server":{"loginPageMessage":"Demo"}"#])
+    func readsMapSettingsWhenUnrelatedConfigIsMissing(serverConfig: String) async throws {
+        let config = #"""
+        {"map":{"enabled":true,"lightStyle":"https://maps.example.com/light.json","darkStyle":"https://maps.example.com/dark.json"}\#(serverConfig)}
+        """#
+        let client = try ImmichClient(
+            apiURL: #require(URL(string: "https://photos.example.com/api")),
+            credential: .bearer("secret"),
+            transport: MapConfigurationTransport(config: config)
+        )
+        let styles = try await client.mapStyles()
+        #expect(styles.light.absoluteString == "https://maps.example.com/light.json")
+        #expect(styles.dark.absoluteString == "https://maps.example.com/dark.json")
+        #expect(styles.enabled)
+    }
 }
 
 private struct MapConfigurationTransport: ClientTransport {
-    let enabled: Bool
+    let config: String
 
     func send(
         _ request: HTTPRequest,
@@ -381,7 +397,7 @@ private struct MapConfigurationTransport: ClientTransport {
         #expect(request.headerFields[.authorization] == "Bearer secret")
         var response = HTTPResponse(status: .ok)
         response.headerFields[.contentType] = "application/json"
-        return (response, HTTPBody(userConfigFixture(mapEnabled: enabled)))
+        return (response, HTTPBody(config))
     }
 }
 

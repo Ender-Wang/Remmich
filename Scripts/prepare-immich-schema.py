@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Remove unused legacy search aliases before Swift client generation."""
+"""Prepare the schema used by Remmich's generated Swift client."""
 
 import json
 import sys
@@ -21,6 +21,15 @@ def prepare(document):
     if response["properties"].get("nextPage", {}).get("deprecated"):
         del response["properties"]["nextPage"]
         response["required"] = [name for name in response["required"] if name != "nextPage"]
+    # Decode the settings the app consumes, independent of unrelated config
+    # fields that vary between Immich server versions.
+    schemas = document["components"]["schemas"]
+    config = schemas["UserConfigDto"]
+    config["properties"] = {name: config["properties"][name] for name in ("map", "server")}
+    config["required"] = ["map"]
+    server = schemas["UserConfigServerDto"]
+    server["properties"] = {"externalDomain": server["properties"]["externalDomain"]}
+    server.pop("required", None)
     return document
 
 
