@@ -147,7 +147,14 @@ struct LibraryMemoriesCard: View {
             LibraryMemoriesView(source: source, catalog: catalog, media: media, assetDetails: assetDetails, context: context)
         } label: {
             let covers = catalog.covers
-            LibraryCollectionCard(title: "Memories", count: catalog.finished ? catalog.memories.count : nil,
+            let count: Int? = if catalog.coversFinished {
+                covers.count
+            } else if catalog.finished {
+                catalog.memories.count
+            } else {
+                nil
+            }
+            LibraryCollectionCard(title: "Memories", count: count,
                                   symbol: "sparkles.rectangle.stack", appearance: covers.isEmpty ? .glass : .photographic)
             {
                 LibraryMemoryCoverRotation(catalog: catalog, source: source, media: media,
