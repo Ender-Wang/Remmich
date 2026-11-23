@@ -236,34 +236,43 @@ private struct NativeLibraryPlacesMap: UIViewRepresentable {
         }
 
         private static func camera(for points: some Sequence<PlaceCoordinate>, in view: MLNMapView, minimumSpan: Double) -> MLNMapCamera? {
-            var south = Double.infinity
-            var north = -Double.infinity
-            var west = Double.infinity
-            var east = -Double.infinity
-            var shiftedWest = Double.infinity
-            var shiftedEast = -Double.infinity
-            for point in points {
-                south = min(south, point.latitude)
-                north = max(north, point.latitude)
-                west = min(west, point.longitude)
-                east = max(east, point.longitude)
-                let shifted = point.longitude < 0 ? point.longitude + 360 : point.longitude
-                shiftedWest = min(shiftedWest, shifted)
-                shiftedEast = max(shiftedEast, shifted)
-            }
-            guard south.isFinite else { return nil }
-            if shiftedEast - shiftedWest < east - west {
-                west = shiftedWest
-                east = shiftedEast
-            }
-            let latitudePadding = max(0, minimumSpan - (north - south)) / 2
-            let longitudePadding = max(0, minimumSpan - (east - west)) / 2
-            let bounds = MLNCoordinateBounds(
-                sw: .init(latitude: south - latitudePadding, longitude: west - longitudePadding),
-                ne: .init(latitude: north + latitudePadding, longitude: east + longitudePadding)
-            )
+            guard let bounds = LibraryPlacesMapBounds.fitting(points, minimumSpan: minimumSpan) else { return nil }
             return view.cameraThatFitsCoordinateBounds(bounds, edgePadding: .init(top: min(view.bounds.height * 0.4, 100),
                                                                                   left: 26, bottom: 24, right: 26))
         }
+    }
+}
+
+nonisolated enum LibraryPlacesMapBounds {
+    static func fitting(_ points: some Sequence<PlaceCoordinate>, minimumSpan: Double, paddingFraction: Double = 0) -> MLNCoordinateBounds? {
+        var south = Double.infinity
+        var north = -Double.infinity
+        var west = Double.infinity
+        var east = -Double.infinity
+        var shiftedWest = Double.infinity
+        var shiftedEast = -Double.infinity
+        for point in points {
+            south = min(south, point.latitude)
+            north = max(north, point.latitude)
+            west = min(west, point.longitude)
+            east = max(east, point.longitude)
+            let shifted = point.longitude < 0 ? point.longitude + 360 : point.longitude
+            shiftedWest = min(shiftedWest, shifted)
+            shiftedEast = max(shiftedEast, shifted)
+        }
+        guard south.isFinite else { return nil }
+        if shiftedEast - shiftedWest < east - west {
+            west = shiftedWest
+            east = shiftedEast
+        }
+        let latitudeSpan = north - south
+        let longitudeSpan = east - west
+        let latitudePadding = max((minimumSpan - latitudeSpan) / 2, latitudeSpan * paddingFraction)
+        let longitudePadding = min(max((minimumSpan - longitudeSpan) / 2, longitudeSpan * paddingFraction), (360 - longitudeSpan) / 2)
+        let mercatorLatitudeLimit = 85.05112878
+        return MLNCoordinateBounds(
+            sw: .init(latitude: max(-mercatorLatitudeLimit, south - latitudePadding), longitude: west - longitudePadding),
+            ne: .init(latitude: min(mercatorLatitudeLimit, north + latitudePadding), longitude: east + longitudePadding)
+        )
     }
 }

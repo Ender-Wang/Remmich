@@ -497,6 +497,7 @@ struct LibraryIndexStoreTests {
         let generation = try await store.beginGeneration(scope: scope)
         let assets = [
             Self.asset(id: "near", captureTime: 110),
+            Self.asset(id: "distant", captureTime: 115),
             Self.asset(id: "focus", captureTime: 120, kind: .video),
             Self.asset(id: "archive", captureTime: 130, visibility: "archive"),
             Self.asset(id: "partner", captureTime: 140, ownerID: "partner"),
@@ -507,8 +508,8 @@ struct LibraryIndexStoreTests {
         try await store.upsert(assets: [Self.asset(id: "staging", captureTime: 150)], generation: staging, scope: scope)
 
         for (id, owner, longitude, model) in [
-            ("focus", scope, 179.8, "Z f"), ("near", scope, -179.9, " \n"), ("archive", scope, 45.0, "Cam"),
-            ("partner", scope, 46.0, "Cam"), ("staging", scope, 47.0, "Cam"), ("missing", other, 48.0, "Cam"),
+            ("focus", scope, 179.8, "Z f"), ("near", scope, -179.9, " \n"), ("distant", scope, 12.0, "Cam"),
+            ("archive", scope, 45.0, "Cam"), ("partner", scope, 46.0, "Cam"), ("staging", scope, 47.0, "Cam"), ("missing", other, 48.0, "Cam"),
         ] {
             try await store.upsert(assetDetail: .init(
                 id: id, capturedAt: .now, originalFileName: "fixture.jpg", originalMimeType: nil,
@@ -521,7 +522,7 @@ struct LibraryIndexStoreTests {
         let flags = try await store.libraryCameraMetadata(assetIDs: ["near", "focus", "missing"], scope: scope)
         #expect(flags == ["near": false, "focus": true])
         let places = try await store.libraryPlacesCoverCoordinates(scope: scope)
-        #expect(places.map(\.longitude) == [179.8, -179.9])
+        #expect(places.map(\.longitude).sorted() == [-179.9, 12.0, 179.8])
         #expect(try await store.libraryPlacesCoverCoordinates(scope: other).isEmpty)
     }
 

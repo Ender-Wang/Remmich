@@ -27,7 +27,7 @@ final class LibraryPlacesCover {
             return
         }
         guard let coordinates = try? await store.libraryPlacesCoverCoordinates(scope: scope), !Task.isCancelled else { return }
-        guard let focus = coordinates.first else {
+        guard !coordinates.isEmpty else {
             stop()
             rendered = nil
             image = nil
@@ -36,15 +36,15 @@ final class LibraryPlacesCover {
         let request = Request(scope: scope, coordinates: coordinates, style: dark ? styles.dark : styles.light, scale: scale)
         guard request != pending else { return }
         stop()
-        guard request != rendered else { return }
+        guard request != rendered, let bounds = LibraryPlacesMapBounds.fitting(coordinates, minimumSpan: 0.12, paddingFraction: 0.14) else { return }
 
-        let width = LibraryCollectionCardMetrics.maximumWidth
+        // A zoom-zero world is 512 points tall. Fit it inside the cover's 4:3 viewport.
+        let width: CGFloat = 704
         let size = CGSize(width: width, height: width / LibraryCollectionCardMetrics.aspectRatio)
-        let camera = MLNMapCamera(lookingAtCenter: CLLocationCoordinate2D(latitude: focus.latitude, longitude: focus.longitude),
-                                  altitude: 1, pitch: 0, heading: 0)
+        let camera = MLNMapCamera(lookingAtCenter: CLLocationCoordinate2D(latitude: 0, longitude: 0), altitude: 1, pitch: 0, heading: 0)
         let options = MLNMapSnapshotOptions(styleURL: request.style, camera: camera, size: size)
-        options.zoomLevel = 10
-        options.scale = scale
+        options.coordinateBounds = bounds
+        options.scale = max(1, LibraryCollectionCardMetrics.maximumWidth * scale / width)
         options.showsLogo = false
         let renderer = MLNMapSnapshotter(options: options)
         let id = UUID()
@@ -82,40 +82,34 @@ final class LibraryPlacesCover {
 
     private nonisolated static func drawHeatmap(_ coordinates: [PlaceCoordinate], on overlay: MLNMapSnapshotOverlay, size: CGSize) {
         let context = overlay.context
-        let bounds = CGRect(origin: .zero, size: size).insetBy(dx: -18, dy: -18)
+        let coverToMapScale = size.width / LibraryCollectionCardMetrics.maximumWidth
+        let coverSize = CGSize(width: size.width / coverToMapScale, height: size.height / coverToMapScale)
+        let bounds = CGRect(origin: .zero, size: coverSize).insetBy(dx: -18, dy: -18)
         let cell: CGFloat = 8
-        let columns = Int(ceil(size.width / cell)) + 6
+        let columns = Int(ceil(coverSize.width / cell)) + 6
         var counts: [Int: Int] = [:]
-        var focus: CGPoint?
-        for (index, coordinate) in coordinates.enumerated() {
-            let point = overlay.point(for: CLLocationCoordinate2D(latitude: coordinate.latitude, longitude: coordinate.longitude))
+        for coordinate in coordinates {
+            let mapped = overlay.point(for: CLLocationCoordinate2D(latitude: coordinate.latitude, longitude: coordinate.longitude))
+            let point = CGPoint(x: mapped.x / coverToMapScale, y: mapped.y / coverToMapScale)
             guard bounds.contains(point) else { continue }
-            if index == 0 {
-                focus = point
-            }
             let x = Int(floor(point.x / cell)) + 3
             let y = Int(floor(point.y / cell)) + 3
             counts[y * columns + x, default: 0] += 1
         }
-        if counts.values.reduce(0, +) > 1 {
-            let maximum = Double(counts.values.max() ?? 1)
-            for (key, count) in counts.sorted(by: { $0.value == $1.value ? $0.key < $1.key : $0.value < $1.value }) {
-                let point = CGPoint(x: (CGFloat(key % columns - 3) + 0.5) * cell, y: (CGFloat(key / columns - 3) + 0.5) * cell)
-                let strength = log1p(Double(count)) / log1p(maximum)
-                let colors = [CGColor(red: 1, green: 0.7 - 0.52 * strength, blue: 0.13, alpha: 0.35 + 0.4 * strength),
-                              CGColor(red: 1, green: 0.56, blue: 0.04, alpha: 0.22),
-                              CGColor(red: 1, green: 0.56, blue: 0.04, alpha: 0)]
-                guard let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors as CFArray,
-                                                locations: [0, 0.55, 1]) else { continue }
-                context.drawRadialGradient(gradient, startCenter: point, startRadius: 0, endCenter: point,
-                                           endRadius: 12 + 9 * strength, options: [])
-            }
-        }
-        if let focus {
-            context.setFillColor(CGColor(gray: 1, alpha: 0.95))
-            context.fillEllipse(in: CGRect(x: focus.x - 3, y: focus.y - 3, width: 6, height: 6))
-            context.setFillColor(CGColor(red: 0.92, green: 0.24, blue: 0.16, alpha: 1))
-            context.fillEllipse(in: CGRect(x: focus.x - 2, y: focus.y - 2, width: 4, height: 4))
+        context.saveGState()
+        defer { context.restoreGState() }
+        context.scaleBy(x: coverToMapScale, y: coverToMapScale)
+        let maximum = Double(counts.values.max() ?? 1)
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        for (key, count) in counts.sorted(by: { $0.value == $1.value ? $0.key < $1.key : $0.value < $1.value }) {
+            let point = CGPoint(x: (CGFloat(key % columns - 3) + 0.5) * cell, y: (CGFloat(key / columns - 3) + 0.5) * cell)
+            let strength = log1p(Double(count)) / log1p(maximum)
+            let colors = [CGColor(red: 1, green: 0.7 - 0.52 * strength, blue: 0.13, alpha: 0.35 + 0.4 * strength),
+                          CGColor(red: 1, green: 0.56, blue: 0.04, alpha: 0.22),
+                          CGColor(red: 1, green: 0.56, blue: 0.04, alpha: 0)]
+            guard let gradient = CGGradient(colorsSpace: colorSpace, colors: colors as CFArray, locations: [0, 0.55, 1]) else { continue }
+            context.drawRadialGradient(gradient, startCenter: point, startRadius: 0, endCenter: point,
+                                       endRadius: 12 + 9 * strength, options: [])
         }
     }
 }
