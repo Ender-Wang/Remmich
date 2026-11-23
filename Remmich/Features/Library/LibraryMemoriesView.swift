@@ -31,19 +31,13 @@ final class LibraryMemoriesStore {
         }
     }
 
-    func adoptIndexedCovers(_ entries: [TimelineMemorySummary], from source: ImmichTimelineRepository) async {
-        guard coverPageTask == nil else { return }
-        previewCovers = Self.coverChoices(entries)
+    func adoptIndexedMemories(_ entries: [TimelineMemorySummary]) {
+        memories = entries.filter { !$0.assets.isEmpty }.sorted(by: Self.isNewer)
+        previewCovers = Self.coverChoices(memories)
         usesIndexedCovers = true
         coversFinished = true
         coverPagingFailed = false
-        guard page > 1, !loading else { return }
-        let readPage = page
-        let loadedCount = (readPage - 1) * pageSize
-        guard let latest = try? await source.libraryMemories(page: 1, size: loadedCount),
-              !Task.isCancelled, !loading, page == readPage else { return }
-        memories = latest.filter { !$0.assets.isEmpty }.sorted(by: Self.isNewer)
-        finished = latest.count < loadedCount
+        finished = true
         error = nil
     }
 
@@ -75,6 +69,7 @@ final class LibraryMemoriesStore {
             defer { coverPageTask = nil }
             guard let values = try? await source.libraryMemories(page: coverPage, size: coverPageSize, includeTimelineAssets: false),
                   !Task.isCancelled else { return false }
+            guard !usesIndexedCovers else { return true }
             let unique = values.filter { seenCoverMemories.insert($0.id).inserted }
             previewCovers.append(contentsOf: Self.coverChoices(unique))
             coversFinished = values.count < coverPageSize || unique.isEmpty
@@ -115,8 +110,20 @@ final class LibraryMemoriesStore {
         defer { loading = false }
         let size = pageSize
         do {
+            if page == 1,
+               let indexed = try? await source.indexedLibraryValue([TimelineMemorySummary].self, key: LibraryIndexCard.memories.rawValue)
+            {
+                try Task.checkCancellation()
+                if !usesIndexedCovers {
+                    adoptIndexedMemories(indexed)
+                }
+                return
+            }
+            guard !usesIndexedCovers else { return }
+            try Task.checkCancellation()
             let values = try await source.libraryMemories(page: page, size: size)
             try Task.checkCancellation()
+            guard !usesIndexedCovers else { return }
             var seen = Set(memories.map(\.id))
             let unique = values.filter { seen.insert($0.id).inserted && !$0.assets.isEmpty }
             memories.append(contentsOf: unique)
@@ -125,7 +132,7 @@ final class LibraryMemoriesStore {
             page += 1
             error = nil
         } catch {
-            guard !Task.isCancelled, !(error is CancellationError) else { return }
+            guard !usesIndexedCovers, !Task.isCancelled, !(error is CancellationError) else { return }
             self.error = error.localizedDescription
         }
     }
@@ -305,7 +312,8 @@ private struct LibraryMemoriesView: View {
                            viewerVisibilityChanged: context.viewerVisibilityChanged, tabSelectionState: context.tabSelectionState,
                            tabDestination: .library, isCollectionPageActive: true,
                            viewerPresentations: context.viewerPresentations, loadTimeline: {},
-                           libraryMemories: catalog.memories, loadOlderMemories: { await catalog.loadNext(from: source) })
+                           libraryMemories: catalog.memories,
+                           loadOlderMemories: catalog.finished ? nil : { await catalog.loadNext(from: source) })
             } else if let error = catalog.error {
                 ErrorStateView(title: "Couldn’t Load Memories") {
                     Task { await catalog.loadNext(from: source) }

@@ -187,6 +187,26 @@ struct TimelineCaptureDateFormattingTests {
             #expect(empty.cover == nil)
             #expect(await emptySource.requestedBuckets.isEmpty)
         }
+
+        @MainActor @Test func indexedMemoriesPublishTheCompleteBrowsableListOrAConfirmedEmptyList() {
+            let catalog = LibraryMemoriesStore()
+            let entries = (1 ... 30).map { index in
+                let date = Date(timeIntervalSince1970: Double(index))
+                let id = String(index)
+                return TimelineMemorySummary(id: id, memoryAt: date, sourceYear: 2025,
+                                             assets: [.init(id: id, revision: date, mediaKind: .image)])
+            }
+
+            #expect(!catalog.isConfirmedEmpty)
+            catalog.adoptIndexedMemories(entries)
+            #expect(catalog.finished && catalog.coversFinished)
+            #expect(catalog.memories.map(\.id) == entries.reversed().map(\.id))
+            #expect(catalog.covers.count == 30)
+
+            catalog.adoptIndexedMemories([])
+            #expect(catalog.isConfirmedEmpty)
+            #expect(catalog.memories.isEmpty && catalog.covers.isEmpty)
+        }
     #endif
 
     @Test(arguments: [

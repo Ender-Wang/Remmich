@@ -119,12 +119,16 @@ struct LibraryCardScroll<Content: View>: View {
             LibraryCardOpeningGeometry(geometry)
         } action: { _, _ in
             if alignment == .bottom {
-                openingEdge.keepLatestVisible()
+                openingEdge.scheduleLatestAlignment()
             }
         }
         .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.15) { ids in
-            visibleRows = Set(ids)
-            if visibleRows.contains(initialRowID) {
+            guard loadOlder != nil else { return }
+            let rows = Set(ids)
+            if visibleRows != rows {
+                visibleRows = rows
+            }
+            if !reachedInitialRow, rows.contains(initialRowID) {
                 reachedInitialRow = true
             }
         }
@@ -170,7 +174,7 @@ private final class LibraryCardScrollAnchorView: UIView {
     override func didMoveToWindow() {
         super.didMoveToWindow()
         if window != nil {
-            openingEdge?.keepLatestVisible()
+            openingEdge?.scheduleLatestAlignment()
         }
     }
 }
@@ -185,8 +189,19 @@ nonisolated enum LibraryCardScrollOffset {
 private final class LibraryCardOpeningEdge {
     weak var anchor: UIView?
     private var released = false
+    private var alignmentScheduled = false
 
-    func keepLatestVisible() {
+    func scheduleLatestAlignment() {
+        guard !released, !alignmentScheduled else { return }
+        alignmentScheduled = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            alignmentScheduled = false
+            keepLatestVisible()
+        }
+    }
+
+    private func keepLatestVisible() {
         guard !released, let anchor, anchor.window != nil else { return }
         var ancestor = anchor.superview
         while let view = ancestor, !(view is UIScrollView) {
@@ -211,8 +226,6 @@ private final class LibraryCardOpeningEdge {
 }
 
 private nonisolated struct LibraryCardOpeningGeometry: Equatable {
-    let offset: CGFloat
-    let viewportBottom: CGFloat
     let contentHeight: CGFloat
     let width: CGFloat
     let height: CGFloat
@@ -220,8 +233,6 @@ private nonisolated struct LibraryCardOpeningGeometry: Equatable {
     let bottomInset: CGFloat
 
     init(_ geometry: ScrollGeometry) {
-        offset = geometry.contentOffset.y.rounded()
-        viewportBottom = geometry.visibleRect.maxY.rounded()
         contentHeight = geometry.contentSize.height.rounded()
         width = geometry.containerSize.width.rounded()
         height = geometry.containerSize.height.rounded()

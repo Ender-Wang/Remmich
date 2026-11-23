@@ -106,7 +106,6 @@ final class LibraryDirectoryStore {
     private var buckets: [TimelineBucketSummary]?
     private var nextBucket = 0
     private var places: Set<TimelinePlace> = []
-    private var indexedPlaceOffset = 0
 
     var isConfirmedEmpty: Bool {
         indexedPlaceCount.map { $0 == 0 } ?? (finished && entries.isEmpty)
@@ -127,18 +126,21 @@ final class LibraryDirectoryStore {
     }
 
     func refreshIndexedPlaces(source: ImmichTimelineRepository) async {
-        guard loadTask == nil else { return }
-        let loaded = entries.count
-        guard let page = try? await source.libraryPlaceCovers(offset: 0, limit: loaded),
-              !Task.isCancelled, loadTask == nil, entries.count == loaded else { return }
-        indexedPlaceCount = page.count
-        indexedPlaceOffset = page.covers.count
+        guard !Task.isCancelled,
+              let indexed = try? await source.libraryPlaceCovers(offset: 0, limit: .max) else { return }
+        await loadTask?.value
+        guard !Task.isCancelled, loadTask == nil else { return }
+        adoptIndexedPlaces(indexed)
+    }
+
+    private func adoptIndexedPlaces(_ indexed: LibraryIndexedPlaces) {
+        indexedPlaceCount = indexed.count
         buckets = nil
         nextBucket = 0
         entries.removeAll(keepingCapacity: true)
         places.removeAll(keepingCapacity: true)
-        appendIndexedPlaces(page.covers)
-        finished = indexedPlaceOffset >= page.count
+        appendIndexedPlaces(indexed.covers)
+        finished = true
         error = nil
     }
 
@@ -230,15 +232,10 @@ final class LibraryDirectoryStore {
                 finished = true
             case .places:
                 if buckets == nil {
-                    let limit = max(1, openingLimit.map { $0 - entries.count } ?? 24)
-                    let page = try await source.libraryPlaceCovers(offset: indexedPlaceOffset, limit: limit)
+                    let indexed = try await source.libraryPlaceCovers(offset: 0, limit: .max)
                     try Task.checkCancellation()
-                    if let page {
-                        indexedPlaceCount = page.count
-                        indexedPlaceOffset += page.covers.count
-                        appendIndexedPlaces(page.covers)
-                        finished = indexedPlaceOffset >= page.count || page.covers.count < limit
-                        error = nil
+                    if let indexed {
+                        adoptIndexedPlaces(indexed)
                         return
                     }
                 }
@@ -425,10 +422,12 @@ private struct LibraryDirectoryView: View {
                 let peopleColumns = directory != .places ? max(4, Int(geometry.size.width / 98)) : nil
                 let layout = LibraryCardRows(width: geometry.size.width, preferredColumns: peopleColumns)
                 let rows = layout.identifiedRows(store.entries)
+                let canPage = directory == .places && !store.finished
                 LibraryCardScroll(initialRowID: store.entries.first?.id ?? "", viewportHeight: geometry.size.height,
                                   alignment: directory == .partners ? .top : .bottom,
-                                  oldestRowID: directory == .places ? rows.first?.id : nil,
-                                  oldestItemID: store.entries.last?.id, loadOlder: { await store.loadNext(directory, source: source) })
+                                  oldestRowID: canPage ? rows.first?.id : nil,
+                                  oldestItemID: canPage ? store.entries.last?.id : nil,
+                                  loadOlder: canPage ? { await store.loadNext(directory, source: source) } : nil)
                 {
                     LazyVStack(spacing: LibraryCollectionCardMetrics.spacing) {
                         ForEach(directory == .partners ? Array(rows.reversed()) : rows) { row in
@@ -438,12 +437,13 @@ private struct LibraryDirectoryView: View {
                                 }
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(directory == .partners ? .top : .bottom, row.id == store.entries.first?.id ? 16 : 0)
+                            .padding(.top, directory == .partners && row.id == store.entries.first?.id ? 16 : 0)
                         }
                     }
                     .scrollTargetLayout()
                     .padding(.horizontal, 16)
-                    .padding(directory == .partners ? .bottom : .top, 16)
+                    .padding(.top, directory == .partners ? 0 : 16)
+                    .padding(.bottom, 16)
                 }
             }
         } else if let error = store.error {
@@ -500,7 +500,7 @@ private struct LibraryDirectoryView: View {
                 LibraryDirectoryPortrait(entry: entry, media: media, size: width)
                 Text(entry.name)
                     .font(.caption)
-                    .lineLimit(2)
+                    .lineLimit(2, reservesSpace: true)
                     .multilineTextAlignment(.center)
             }
             .frame(width: width)

@@ -140,12 +140,11 @@ private struct LibrarySharedLinksView: View {
                                     }
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.bottom, row.id == links.first?.id ? 16 : 0)
                             }
                         }
                         .scrollTargetLayout()
                         .padding(.horizontal, 16)
-                        .padding(.top, 16)
+                        .padding(.vertical, 16)
                     }
                     .refreshable { await store.load(source: source, refresh: true) }
                 }

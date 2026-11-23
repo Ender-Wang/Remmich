@@ -212,17 +212,21 @@ struct LibraryIndexStoreTests {
         var asset = record.timelineAssetSummary
         asset.stack = .init(id: "stack", assetCount: 2)
         asset.place = .init(city: "Shanghai", country: "China")
-        try await store.saveCollectionTimeline(.init(summaries: [.init(id: bucket, assetCount: 1)], olderCursor: 0),
-                                               key: key, scope: scope, replacing: [bucket: [asset]], removing: [])
+        var otherPlace = Self.asset(id: "other-place").timelineAssetSummary
+        otherPlace.place = .init(city: "Paris", country: "France")
+        try await store.saveCollectionTimeline(.init(summaries: [.init(id: bucket, assetCount: 2)], olderCursor: 0),
+                                               key: key, scope: scope, replacing: [bucket: [asset, otherPlace]], removing: [])
 
         let generation = try await store.beginGeneration(scope: scope)
         try await store.upsert(assets: [record], generation: generation, scope: scope)
         _ = try await store.acceptGeneration(generation, watermark: nil, historicalCursor: nil, expectedAssetCount: 1, scope: scope)
         let saved = try await store.collectionAssets(key, bucket: bucket, scope: scope)
-        #expect(saved == [asset])
+        #expect(saved == [asset, otherPlace])
         #expect(try await store.collectionAssets(key, bucket: bucket, scope: other) == nil)
         let places = try await store.collectionPlaceCovers(scope: scope, offset: 0, limit: 1)
-        #expect(places?.count == 1 && places?.covers == [asset])
+        #expect(places?.count == 2 && places?.covers == [asset])
+        let allPlaces = try await store.collectionPlaceCovers(scope: scope, offset: 0, limit: .max)
+        #expect(allPlaces?.count == 2 && allPlaces?.covers == [asset, otherPlace])
 
         try await store.saveCollectionTimeline(.init(summaries: [], olderCursor: 0), key: key,
                                                scope: scope, replacing: [:], removing: [bucket])

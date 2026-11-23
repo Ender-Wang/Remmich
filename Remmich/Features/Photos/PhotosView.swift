@@ -1186,12 +1186,11 @@ struct PhotosView: View {
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.bottom, row.id == memories.first?.id ? 16 : 0)
                     }
                 }
                 .scrollTargetLayout()
                 .padding(.horizontal, 16)
-                .padding(.top, 16)
+                .padding(.vertical, 16)
                 .background {
                     Color.clear.onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { updateMemoryLaneFrame($0) }
                 }

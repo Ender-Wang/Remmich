@@ -226,20 +226,31 @@ final class LibraryOpeningState {
                               viewport: LibraryOpeningViewport, camera: LibraryCameraMetadata?) async
     {
         guard revision != adoptedIndexRevision else { return }
-        if let indexed = try? await source.indexedLibraryValue([LibraryPerson].self, key: LibraryIndexCard.people.rawValue) {
+        await refreshIndexedPreferences(source: source)
+        guard !Task.isCancelled else { return }
+        if preferences?.peopleEnabled == true,
+           let indexed = try? await source.indexedLibraryValue([LibraryPerson].self, key: LibraryIndexCard.people.rawValue)
+        {
             people.adoptIndexedPeople(indexed)
         }
         if let indexed = try? await source.indexedLibraryValue([LibraryPartner].self, key: LibraryIndexCard.partners.rawValue) {
             partners.adoptIndexedPartners(indexed)
         }
-        if let indexed = try? await source.indexedLibraryValue([LibrarySharedLink].self, key: LibraryIndexCard.sharedLinks.rawValue) {
+        if preferences?.sharedLinksEnabled == true,
+           let indexed = try? await source.indexedLibraryValue([LibrarySharedLink].self, key: LibraryIndexCard.sharedLinks.rawValue)
+        {
             links.adoptIndexedLinks(indexed)
         }
-        if let indexed = try? await source.indexedLibraryValue(LibraryFolderTree.self, key: LibraryIndexCard.folders.rawValue) {
+        if preferences?.foldersEnabled == true,
+           let indexed = try? await source.indexedLibraryValue(LibraryFolderTree.self, key: LibraryIndexCard.folders.rawValue)
+        {
             folders.adoptIndexedTree(indexed)
         }
-        if let indexed = try? await source.indexedLibraryValue([TimelineMemorySummary].self, key: "memoryCovers") {
-            await memories.adoptIndexedCovers(indexed, from: source)
+        if preferences?.memoriesEnabled == true,
+           let indexed = try? await source.indexedLibraryValue([TimelineMemorySummary].self, key: LibraryIndexCard.memories.rawValue),
+           !Task.isCancelled
+        {
+            memories.adoptIndexedMemories(indexed)
         }
         guard !Task.isCancelled else { return }
         await places.refreshIndexedPlaces(source: source)
