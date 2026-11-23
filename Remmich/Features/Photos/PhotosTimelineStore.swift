@@ -1151,22 +1151,6 @@ final class PhotosTimelineStore {
                 let referenceDate = now()
                 let calendar = Calendar.autoupdatingCurrent
                 memories = TimelineMemoryCatalog.nearestUpcoming(loaded, relativeTo: referenceDate, calendar: calendar)
-                let groupCount = memories.count
-                #if DEBUG
-                    let reference = calendar.dateComponents([.year, .month, .day], from: referenceDate)
-                    let candidates = loaded.prefix(20).map { memory in
-                        let day = calendar.dateComponents([.month, .day], from: memory.memoryAt)
-                        return "\(memory.memoryAt.ISO8601Format()) local=\(day.month ?? 0)-\(day.day ?? 0) sourceYear=\(memory.sourceYear) assets=\(memory.assets.count)"
-                    }.joined(separator: "; ")
-                    Self.logger.debug(
-                        "Memory lane filter generation=\(requestGeneration) reference=\(reference.year ?? 0)-\(reference.month ?? 0)-\(reference.day ?? 0) timezone=\(calendar.timeZone.identifier, privacy: .public) calendar=\(String(describing: calendar.identifier), privacy: .public) raw=\(loaded.count) shown=\(groupCount) sampleLimit=20 candidates=[\(candidates, privacy: .public)]"
-                    )
-                #endif
-                let stackedCount = memories.count(where: { $0.assets.count > 1 })
-                let assetCount = memories.reduce(into: 0) { $0 += $1.assets.count }
-                Self.logger.info(
-                    "Memory lane published generation=\(requestGeneration) raw=\(loaded.count) groups=\(groupCount) stackedGroups=\(stackedCount) assets=\(assetCount)"
-                )
                 memoryLaneState = memories.isEmpty ? .hidden : .loaded
             } catch {
                 guard !Task.isCancelled, requestGeneration == generation else { return }

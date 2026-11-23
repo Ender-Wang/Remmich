@@ -212,13 +212,9 @@ actor ImmichTimelineRepository: TimelineReading, VideoReading, AssetDetailReadin
     func bucketSummaries(query: TimelineQuery) async throws -> [TimelineBucketSummary] {
         let (client, requestGeneration) = try requestContext()
         let startedAt = Date()
-        Self.logger.info("Bucket summaries started generation=\(requestGeneration)")
         do {
             let buckets = try await client.timelineBuckets(query: Self.map(query))
             try requireCurrent(requestGeneration)
-            Self.logger.info(
-                "Bucket summaries finished generation=\(requestGeneration) count=\(buckets.count) elapsedMs=\(Self.elapsedMilliseconds(since: startedAt))"
-            )
             return buckets.map {
                 TimelineBucketSummary(
                     id: .init(rawValue: $0.id),
@@ -240,22 +236,13 @@ actor ImmichTimelineRepository: TimelineReading, VideoReading, AssetDetailReadin
     ) async throws -> [TimelineAssetSummary] {
         let (client, requestGeneration) = try requestContext()
         let startedAt = Date()
-        Self.logger.info(
-            "Bucket assets started generation=\(requestGeneration) bucket=\(bucketID.rawValue, privacy: .public)"
-        )
         do {
             let assets = try await client.timelineAssets(
                 in: bucketID.rawValue,
                 query: Self.map(query)
             )
             try requireCurrent(requestGeneration)
-            let mappingStartedAt = Date()
-            let mapped = assets.map(Self.map)
-            let mappingFinishedAt = Date()
-            Self.logger.info(
-                "Bucket assets finished generation=\(requestGeneration) bucket=\(bucketID.rawValue, privacy: .public) count=\(assets.count) fetchMs=\(Self.elapsedMilliseconds(since: startedAt, to: mappingStartedAt)) mapMs=\(Self.elapsedMilliseconds(since: mappingStartedAt, to: mappingFinishedAt)) totalMs=\(Self.elapsedMilliseconds(since: startedAt, to: mappingFinishedAt))"
-            )
-            return mapped
+            return assets.map(Self.map)
         } catch {
             Self.logger.error(
                 "Bucket assets failed generation=\(requestGeneration) bucket=\(bucketID.rawValue, privacy: .public) elapsedMs=\(Self.elapsedMilliseconds(since: startedAt)) error=\(Self.errorSummary(error), privacy: .public)"
@@ -415,13 +402,10 @@ actor ImmichTimelineRepository: TimelineReading, VideoReading, AssetDetailReadin
         let startedAt = Date()
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = .autoupdatingCurrent
-        let lane = kind == .video ? "Videos" : "Photos"
-        Self.logger.info("Memories started generation=\(requestGeneration) lane=\(lane, privacy: .public)")
         do {
             let memories = try await MemoryDaySearch.load(relativeTo: startedAt, calendar: calendar) { day in
                 try self.requireCurrent(requestGeneration)
                 let queryDate = MemoryQueryDate.string(for: day, timeZone: calendar.timeZone)
-                Self.logger.info("Memories request generation=\(requestGeneration) lane=\(lane, privacy: .public) for=\(queryDate, privacy: .public)")
                 // Keep only the first twenty records for each candidate day.
                 let loaded = try await client.memories(query: .init(date: queryDate))
                 try self.requireCurrent(requestGeneration)
@@ -436,21 +420,9 @@ actor ImmichTimelineRepository: TimelineReading, VideoReading, AssetDetailReadin
                         }
                     )
                 }
-                let filtered = kind.map { kind in mapped.compactMap { $0.filteringAssets(of: kind) } } ?? mapped
-                #if DEBUG
-                    let candidates = mapped.prefix(20).map { memory in
-                        "\(memory.memoryAt.ISO8601Format()) year=\(memory.sourceYear) assets=\(memory.assets.count)"
-                    }.joined(separator: "; ")
-                    Self.logger.debug(
-                        "Memories response generation=\(requestGeneration) lane=\(lane, privacy: .public) for=\(queryDate, privacy: .public) serverRecords=\(loaded.count) onThisDayRecords=\(mapped.count) matchingRecords=\(filtered.count) candidates=[\(candidates, privacy: .public)]"
-                    )
-                #endif
-                return filtered
+                return kind.map { kind in mapped.compactMap { $0.filteringAssets(of: kind) } } ?? mapped
             }
             try requireCurrent(requestGeneration)
-            Self.logger.info(
-                "Memories finished generation=\(requestGeneration) lane=\(lane, privacy: .public) count=\(memories.count) elapsedMs=\(Self.elapsedMilliseconds(since: startedAt))"
-            )
             return memories
         } catch {
             Self.logger.error(
