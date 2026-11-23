@@ -1010,6 +1010,7 @@ struct PhotosView: View {
                         runtime: semanticRuntime,
                         latestRequest: semanticLatestRequest,
                         isActive: isTabContentActivated && navigationPath.isEmpty && viewerRoute == nil,
+                        includesDateCardsInPinch: tabDestination != .albums && tabDestination != .library,
                         isOpeningWindow: semanticCatalogIsOpeningWindow,
                         tracksStartupPhotos: tabDestination == .photos,
                         openingStore: store,

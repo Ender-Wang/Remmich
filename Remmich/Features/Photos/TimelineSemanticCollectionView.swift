@@ -55,6 +55,7 @@ struct TimelineSemanticCollectionView: UIViewControllerRepresentable {
     let runtime: TimelineSemanticRuntime
     let latestRequest: Int
     let isActive: Bool
+    var includesDateCardsInPinch = true
     var isOpeningWindow = false
     var tracksStartupPhotos = false
     var openingStore: PhotosTimelineStore?
@@ -1320,7 +1321,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         case .changed:
             guard gesture != nil else { return }
             gesture?.update(magnification: recognizer.scale)
-            if target == nil, let coarser = gesture?.coarser, let next = scale.adjacent(coarser: coarser) {
+            if target == nil, let coarser = gesture?.coarser, let next = nextPinchScale(coarser: coarser) {
                 prepareTransition(to: next)
             }
             renderProgress(gesture?.progress ?? 0)
@@ -1331,6 +1332,10 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             cancelTracking()
         default: break
         }
+    }
+
+    private func nextPinchScale(coarser: Bool) -> TimelineSemanticScale? {
+        scale.adjacent(coarser: coarser, includesDateCards: input?.includesDateCardsInPinch ?? true)
     }
 
     private func prepareTransition(to nextScale: TimelineSemanticScale) {
@@ -2090,7 +2095,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
     }
 
     func changeScale(coarser: Bool) {
-        guard gesture == nil, let next = scale.adjacent(coarser: coarser),
+        guard gesture == nil, let next = nextPinchScale(coarser: coarser),
               let focused = focusedItem(at: CGPoint(x: collection.bounds.midX, y: collection.bounds.midY)) else { return }
         finishPresentation()
         focusAssetIndex = representativeIndex(focused)
@@ -2286,7 +2291,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         }
         let adjacentDirections = scale.isAssets ? [true, false] : [false, true]
         for coarser in adjacentDirections {
-            guard let nextScale = scale.adjacent(coarser: coarser) else { continue }
+            guard let nextScale = nextPinchScale(coarser: coarser) else { continue }
             let focus = representativeIndex(focused)
             let next = makeProjection(scale: nextScale, focus: focus)
             let y = offset(for: next, focus: focus, viewportY: focused.frame.midY - collection.contentOffset.y, latest: false)

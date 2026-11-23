@@ -8,8 +8,10 @@ nonisolated enum TimelineSemanticScale: Int, CaseIterable, Sendable {
         rawValue < Self.day.rawValue
     }
 
-    func adjacent(coarser: Bool) -> Self? {
-        Self(rawValue: rawValue + (coarser ? 1 : -1))
+    func adjacent(coarser: Bool, includesDateCards: Bool = true) -> Self? {
+        guard let next = Self(rawValue: rawValue + (coarser ? 1 : -1)),
+              includesDateCards || !coarser || next.isAssets else { return nil }
+        return next
     }
 }
 

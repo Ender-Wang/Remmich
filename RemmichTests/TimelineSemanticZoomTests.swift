@@ -511,6 +511,13 @@ struct TimelineSemanticZoomTests {
         #expect(TimelineSemanticScale.year.adjacent(coarser: true) == nil)
     }
 
+    @Test func collectionPinchStaysInTheAssetLayouts() {
+        #expect(TimelineSemanticScale.square.adjacent(coarser: true, includesDateCards: false) == .natural)
+        #expect(TimelineSemanticScale.natural.adjacent(coarser: false, includesDateCards: false) == .square)
+        #expect(TimelineSemanticScale.natural.adjacent(coarser: true, includesDateCards: false) == nil)
+        #expect(TimelineSemanticScale.natural.adjacent(coarser: true) == .day)
+    }
+
     @Test func localProjectionIncludesFocusAndLeavesContinuationAtBothEnds() {
         let start = date("2020-01-01T12:00:00Z")
         let assets = (0 ..< 1200).map { i in
