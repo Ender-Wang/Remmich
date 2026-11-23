@@ -116,17 +116,6 @@ struct AlbumsTests {
         #expect(AlbumSort.itemCount.sorted(values).last?.id == "c")
     }
 
-    @Test func chronologicalGridKeepsNewerAlbumsLeftWithinEachRow() {
-        let values = (1 ... 5).map { album(String($0), name: "Album \($0)", end: TimeInterval($0)) }
-        for sort in AlbumSort.allCases {
-            #expect(sort.gridOrder(values, columns: 2).map(\.id) == ["2", "1", "4", "3", "5"])
-            #expect(sort.gridOrder(values, columns: 3).map(\.id) == ["3", "2", "1", "5", "4"])
-            #expect(sort.gridOrder(values, columns: 1) == values)
-            #expect(sort.gridOrder([], columns: 2).isEmpty)
-        }
-        #expect(AlbumSort.mostRecentPhoto.sorted(values) == values)
-    }
-
     @Test func albumAndPhotoDateSortsUseDistinctFieldsAndKeepNewestAtBottom() {
         let values = [album("a", name: "A", created: 30, modified: 10, start: 20, end: 50),
                       album("b", name: "B", created: 10, modified: 30, start: 10, end: 40),
@@ -156,13 +145,6 @@ struct AlbumsTests {
             let descending = sort.sorted(values, direction: .descending)
             #expect(ascending.last?.id == bottomIDs[sort])
             #expect(descending == Array(ascending.reversed()))
-            for columns in [1, 2, 3] {
-                let grid = sort.gridOrder(ascending, columns: columns)
-                let rows = stride(from: 0, to: grid.count, by: columns).map {
-                    Array(grid[$0 ..< min($0 + columns, grid.count)])
-                }
-                #expect(rows.reversed().flatMap(\.self) == descending)
-            }
         }
         #expect(AlbumSortDirection.allCases.map(\.rawValue) == ["Ascending", "Descending"])
     }

@@ -140,14 +140,6 @@ nonisolated enum AlbumSort: String, CaseIterable, Identifiable, Sendable {
         return direction == .ascending ? Array(firstToLast.reversed()) : firstToLast
     }
 
-    /// Read each row left-to-right while advancing from the bottom upward.
-    func gridOrder(_ sortedAlbums: [AlbumSummary], columns: Int) -> [AlbumSummary] {
-        let width = max(1, columns)
-        return stride(from: 0, to: sortedAlbums.count, by: width).flatMap { start in
-            sortedAlbums[start ..< min(start + width, sortedAlbums.count)].reversed()
-        }
-    }
-
     func date(in album: AlbumSummary) -> Date? {
         switch self {
         case .dateModified: album.updatedAt

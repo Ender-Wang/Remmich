@@ -50,7 +50,7 @@ final class AlbumsStore {
               viewport.width > 0, viewport.height > 0, scale > 0 else { return }
         let metrics = AlbumReflowMetrics.overview(availableWidth: viewport.width)
         let rows = Int(ceil(viewport.height * CGFloat(TimelineGridOrder.openingScreenCount) / (metrics.cardHeight + 20)))
-        let count = (max(1, rows) - 1) * metrics.columns + (albums.count - 1) % metrics.columns + 1
+        let count = rows * metrics.columns
         let newest = AlbumSort.mostRecentPhoto.sorted(albums, direction: .ascending).suffix(count).reversed()
         let descriptors = newest.compactMap { album -> MediaRequestDescriptor? in
             guard let id = album.thumbnailAssetID else { return nil }

@@ -25,13 +25,31 @@ struct AlbumReflowLayoutTests {
         #expect(metrics.progress(for: CGSize(width: 177, height: CGFloat.nan)) == nil)
     }
 
-    @Test func oddFinalRowRetainsAcceptedReverseWithinRowPlacement() {
+    @Test func oddCardCountFillsTheBottomRowFromTheLeft() {
         let metrics = AlbumReflowMetrics(width: 216, columns: 2, coverWidth: 100, labelHeight: 50)
-        #expect(metrics.frame(at: 0, count: 5, list: false) == CGRect(x: 116, y: 0, width: 100, height: 133))
-        #expect(metrics.frame(at: 1, count: 5, list: false) == CGRect(x: 0, y: 0, width: 100, height: 133))
+        #expect(metrics.frame(at: 0, count: 5, list: false) == CGRect(x: 0, y: 0, width: 100, height: 133))
+        #expect(metrics.frame(at: 1, count: 5, list: false) == CGRect(x: 116, y: 153, width: 100, height: 133))
+        #expect(metrics.frame(at: 2, count: 5, list: false) == CGRect(x: 0, y: 153, width: 100, height: 133))
+        #expect(metrics.frame(at: 3, count: 5, list: false) == CGRect(x: 116, y: 306, width: 100, height: 133))
         #expect(metrics.frame(at: 4, count: 5, list: false) == CGRect(x: 0, y: 306, width: 100, height: 133))
         #expect(metrics.frame(at: 4, count: 5, list: true) == CGRect(x: 0, y: 336, width: 216, height: 72))
         #expect(metrics.frame(at: 4, count: 5, progress: 0.5) == CGRect(x: 0, y: 321, width: 158, height: 102.5))
+    }
+
+    @Test func cardTraversalFromTheBottomMatchesListOrder() {
+        for columns in 1 ... 3 {
+            let metrics = AlbumReflowMetrics(width: 497, columns: columns, coverWidth: 155, labelHeight: 58)
+            for count in [1, 2, 3, 5, 6, 237] {
+                let frames = (0 ..< count).map { metrics.frame(at: $0, count: count, list: false) }
+                let readingOrder = frames.indices.sorted { lhs, rhs in
+                    let left = frames[lhs]
+                    let right = frames[rhs]
+                    return left.minY == right.minY ? left.minX < right.minX : left.minY > right.minY
+                }
+                #expect(readingOrder == Array((0 ..< count).reversed()))
+                #expect(frames.filter { $0.maxY == metrics.height(count: count, list: false) }.count == min(columns, count))
+            }
+        }
     }
 
     @Test func singleColumnStillChangesHeightAndAccessibilityLabelsFit() {

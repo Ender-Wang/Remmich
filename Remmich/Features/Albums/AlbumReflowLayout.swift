@@ -53,10 +53,10 @@ nonisolated struct AlbumReflowMetrics: Equatable {
         if list {
             return CGRect(x: 0, y: CGFloat(index) * (listHeight + 12), width: width, height: listHeight)
         }
-        let row = index / columns
-        let rowCount = min(columns, count - row * columns)
-        // Match gridOrder without changing the ForEach order between modes.
-        let column = rowCount - 1 - index % columns
+        // Fill each row from the bottom up while keeping List order and identities.
+        let offsetFromBottom = count - 1 - index
+        let row = (count - 1) / columns - offsetFromBottom / columns
+        let column = offsetFromBottom % columns
         return CGRect(x: CGFloat(column) * (coverWidth + 16), y: CGFloat(row) * (cardHeight + 20),
                       width: coverWidth, height: cardHeight)
     }
