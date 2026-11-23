@@ -53,7 +53,7 @@ You can also follow [Build and run](CONTRIBUTING.md#build-and-run) to build from
 - **📚 Library collections** — Browse Recently taken, Recently added, Favorites, Memories, People, Places, Shared Links, Partners, Folders, Archive, and Trash. Recently taken and Recently added show their newest eligible covers and open full timelines ordered by capture or upload date. Optional cards follow the Immich account's feature settings. After Photos appears, Library warms its card covers. Switching to Library prepares up to two screenfuls of each enabled destination.
 - **📤 Sharing:** Share the viewed quality from the viewer or preview, retaining supported metadata and cached image compression.
 - **🗂️ Albums:** Browse owned and shared albums with inline search and six sorting options in a fixed top bar. Pinch between Cards and List around the album under your fingers, reopen album timelines at their saved positions, and browse indexed album metadata offline using the common timeline and viewer. Tap the active Albums or Library tab again to go back one page from an open card.
-- **📊 Index controls:** Switch between Timeline Index and Album Index by tapping or swiping, and scroll from the status area as well as the statistics. Sync/Pause/Resume and **Rebuild index** sit directly below each section's statistics. Cache & Storage uses the same section layout and swiping. Per-10K storage estimates use current data and update during sync.
+- **📊 Index controls.** Switch between **Timelines**, **Albums**, and **Library** by tapping or swiping. Each section places sync, pause, resume, and rebuild controls beneath its statistics. The Library Index reuses unchanged months and lets you reopen indexed cards offline. The profile Index card shows the status of all three indexes. Cache & Storage uses the same section layout, and available per-10K storage estimates update during sync.
 - **🔐 Accounts and connections:** Saved-account switching, separate account caches and Primary/Fallback server addresses.
 - **✨ Native appearance:** Adaptive iPhone/iPad layouts, Liquid Glass, swipe navigation and alternate app icons.
 
@@ -68,7 +68,7 @@ You can also follow [Build and run](CONTRIBUTING.md#build-and-run) to build from
 
 ## Milestones
 
-**M6 Albums is complete. M7 Library collections is in device verification.** The [Roadmap](#roadmap) shows planned work and dated achievements.
+**M7 Library collections is complete. M8 Search and Filters is in progress.** The [Roadmap](#roadmap) shows planned work and dated achievements.
 
 | Milestone | Status | Scope and expectations |
 | --- | --- | --- |
@@ -79,8 +79,8 @@ You can also follow [Build and run](CONTRIBUTING.md#build-and-run) to build from
 | M4 | ✅ Done | Real server-backed Photos timeline |
 | M5 | ✅ Done | Timelines, viewers, preview, places/maps, Sharing and Download/Save to Photos with Pause/Resume |
 | M6 | ✅ Done | Albums, automatic Album Index, interactive Card/List transitions and navigation refinements |
-| M7 | In verification | Read-only Library collections, Save History, and the interactive Places heatmap |
-| M8 | Planned | Server-backed Search with native filters |
+| M7 | ✅ Done | Read-only Library collections, Library Index, Save History, and the interactive Places heatmap |
+| M8 | In progress | Server-backed Search with native filters |
 | M9 | Planned | Further improvements and verification for iPad, accessibility, resilience, and performance |
 | M10 | Planned | Broader real-device release verification and additional distribution options |
 
@@ -88,18 +88,15 @@ You can also follow [Build and run](CONTRIBUTING.md#build-and-run) to build from
 
 The timeline places upcoming milestones above **Now** and completed work below it. Future milestones have no promised delivery dates.
 
-![Remmich zigzag timeline: future milestones M10 through M8, Now at M7 Library collections, completed M6 Albums on November 14, then M5 and earlier achievements. Icons mark the joints of the central line.](.github/assets/roadmap-timeline.svg)
+![Remmich roadmap showing M8 Search and Filters in progress, M7 Library collections completed on November 23, and earlier milestones.](.github/assets/roadmap-timeline.svg)
 
 ### Now and next
 
 | Priority | Feature | Status | Intended outcome |
 | --- | --- | --- | --- |
-| M7 | Library collections | In verification | Browse read-only Immich collections and local Downloads. Available destinations reflect the active account and server settings. |
-| M8 | Search and filters | Planned | Server-backed search with supported people, place, date, media and camera filters. Search currently uses demo data. |
+| M8 | Search and filters | In progress | Server-backed search with supported people, place, date, media and camera filters. Search currently uses demo data. |
 | M9 | Wider native polish and resilience | Planned | Broader iPad, accessibility, interruption, offline and performance coverage across the completed workflows. |
 | M10 | Release verification and distribution | Planned | Broader real-device verification and sideloading distribution; AltStore remains under consideration. |
-
-A persistent Library Index is planned alongside Timeline Index and Album Index.
 
 ## Read-only by design
 
