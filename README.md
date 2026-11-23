@@ -22,7 +22,7 @@ Browse Photos, Videos, Albums, and Library collections from your Immich account,
 See the **[Roadmap](#roadmap)** for current and planned work.
 
 <p align="center">
-  <img src=".github/assets/screenshots/gallery-desktop.svg" alt="Remmich onboarding, timeline, asset viewer, Info, map, date cards and profile, each with its own caption" width="100%" />
+  <img src=".github/assets/screenshots/gallery-desktop.svg" alt="Remmich onboarding, timeline, asset viewer, Info, map, date cards, Profile, Albums, and Library collections" width="100%" />
 </p>
 
 ## Install
