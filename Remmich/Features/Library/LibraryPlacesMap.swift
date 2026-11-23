@@ -137,8 +137,8 @@ private struct NativeLibraryPlacesMap: UIViewRepresentable {
 
         func mapView(_ view: MLNMapView, didFinishLoading style: MLNStyle) {
             let source = MLNShapeSource(identifier: "remmich-places", shape: nil, options: nil)
-            let overview = Self.heatmap("remmich-places-overview", source: source)
-            let detail = Self.heatmap("remmich-places-detail", source: source)
+            let overview = Self.heatmap("remmich-places-overview", source: source, radiusStops: [0, 8, 22, 52])
+            let detail = Self.heatmap("remmich-places-detail", source: source, radiusStops: [0, 2, 4, 4, 8, 7, 12, 12, 16, 18])
             detail.heatmapOpacity = NSExpression(forConstantValue: 0)
             style.addSource(source)
             for layer in [overview, detail] {
@@ -220,11 +220,10 @@ private struct NativeLibraryPlacesMap: UIViewRepresentable {
             }
         }
 
-        private static func heatmap(_ id: String, source: MLNShapeSource) -> MLNHeatmapStyleLayer {
+        private static func heatmap(_ id: String, source: MLNShapeSource, radiusStops: [Int]) -> MLNHeatmapStyleLayer {
             let layer = MLNHeatmapStyleLayer(identifier: id, source: source)
-            layer.heatmapRadius = NSExpression(mglJSONObject: [
-                "interpolate", ["linear"], ["zoom"], 0, 2, 4, 4, 8, 7, 12, 12, 16, 18,
-            ] as [Any])
+            let radiusExpression: [Any] = ["interpolate", ["linear"], ["zoom"]]
+            layer.heatmapRadius = NSExpression(mglJSONObject: radiusExpression + radiusStops)
             layer.heatmapIntensity = NSExpression(mglJSONObject: [
                 "interpolate", ["linear"], ["zoom"], 0, 0.12, 5, 0.20, 9, 0.45, 14, 0.75,
             ] as [Any])
