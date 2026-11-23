@@ -51,9 +51,13 @@ nonisolated enum LibraryAssetCollection: String, CaseIterable, Identifiable {
 }
 
 nonisolated struct LibraryCollectionPreview: Sendable {
-    let count: Int?
+    let count: Int
     let cover: TimelineAssetSummary?
     let hasMissingMetadata: Bool
+
+    var isEmpty: Bool {
+        count == 0
+    }
 }
 
 nonisolated struct LibraryCameraMetadata: Sendable {
@@ -259,11 +263,11 @@ final class LibraryCollectionOpening {
             ? Self.store(opening: opening, query: query, lane: .videos, camera: camera, coverage: videoCameraCoverage) : nil
     }
 
-    func preview(for collection: LibraryAssetCollection) async throws -> LibraryCollectionPreview {
+    func preview() async throws -> LibraryCollectionPreview {
         if let coverTask {
             return try await coverTask.value
         }
-        let task = Task(priority: .utility) { try await coverReader.preview(for: collection) }
+        let task = Task(priority: .utility) { try await coverReader.preview() }
         coverTask = task
         defer { coverTask = nil }
         return try await task.value
@@ -409,19 +413,16 @@ actor LibraryScopedTimelineReader: TimelineReading {
         []
     }
 
-    func preview(for collection: LibraryAssetCollection) async throws -> LibraryCollectionPreview {
-        let summaries = try await bucketSummaries(query: query)
-        let count = collection.showsCardCount ? summaries.reduce(0) { $0 + $1.assetCount } : nil
-        if collection == .trash {
-            return .init(count: count, cover: nil, hasMissingMetadata: false)
-        }
+    func preview() async throws -> LibraryCollectionPreview {
+        let summaries = try await bucketSummaries(query: query).sorted { $0.id.rawValue > $1.id.rawValue }
+        let count = summaries.reduce(0) { $0 + $1.assetCount }
         let buckets = camera == nil ? summaries[...] : summaries.prefix(LibraryOpeningBuckets.monthLimit)
         var hasMissingMetadata = false
-        for bucket in buckets {
+        for bucket in buckets where bucket.assetCount > 0 {
             try Task.checkCancellation()
             let result = try await matchingAssets(in: bucket.id)
             hasMissingMetadata = hasMissingMetadata || !result.unknown.isEmpty
-            if let cover = result.assets.first {
+            if let cover = result.assets.max(by: { $0.isOrdered(before: $1) }) {
                 return .init(count: count, cover: cover, hasMissingMetadata: hasMissingMetadata)
             }
         }
@@ -439,7 +440,7 @@ struct LibraryAssetCollectionCard: View {
     }
 
     var body: some View {
-        LibraryCollectionCard(title: collection.rawValue, count: preview?.count, symbol: collection.symbol,
+        LibraryCollectionCard(title: collection.rawValue, count: collection.showsCardCount ? preview?.count : nil, symbol: collection.symbol,
                               appearance: preview?.cover == nil ? .glass : .photographic)
         {
             if let asset = preview?.cover {

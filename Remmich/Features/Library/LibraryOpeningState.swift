@@ -100,7 +100,7 @@ final class LibraryOpeningState {
         configureCollections(source: source, camera: camera)
         await loadPreferences(source: source)
         let scale = viewport.scale
-        var jobs: [@MainActor @Sendable () async -> Void] = LibraryAssetCollection.allCases.filter { $0 != .trash }.map { collection in
+        var jobs: [@MainActor @Sendable () async -> Void] = LibraryAssetCollection.allCases.map { collection in
             { await self.prepareCollectionCover(collection, media: media, scale: scale) }
         }
         if preferences?.memoriesEnabled == true {
@@ -132,7 +132,7 @@ final class LibraryOpeningState {
     }
 
     func prepareDownloads(library: SavedPhotosLibrary, scope: MediaAccountScope, viewport: LibraryOpeningViewport) async {
-        guard library.state == .ready, !Task.isCancelled else { return }
+        guard library.state == .ready, !library.items.isEmpty, !Task.isCancelled else { return }
         let downloads = downloadTimelines(library: library, scope: scope)
         for kind in SavedPhotosMedia.allCases {
             guard let state = downloads[kind], !Task.isCancelled else { return }
@@ -159,7 +159,7 @@ final class LibraryOpeningState {
         let layout = PhotosPresentationState().preferences.assetLayout
         var jobs: [@MainActor @Sendable () async -> Void] = LibraryAssetCollection.allCases.map { collection in
             {
-                guard let opening = self.collections[collection] else { return }
+                guard self.previews[collection]?.isEmpty != true, let opening = self.collections[collection] else { return }
                 await self.prepareTimeline(opening.photos, runtime: opening.photoRuntime, media: media, viewport: viewport, layout: layout)
                 if let videos = opening.videos {
                     await self.prepareTimeline(videos, runtime: opening.videoRuntime, media: media, viewport: viewport, layout: layout)
@@ -167,7 +167,7 @@ final class LibraryOpeningState {
                 await self.prepareCollectionCover(collection, media: media, scale: scale)
             }
         }
-        if preferences?.memoriesEnabled == true {
+        if preferences?.memoriesEnabled == true, !memories.isConfirmedEmpty {
             jobs.append {
                 await self.memories.prepareOpening(from: source, limit: limit)
                 let width = viewport.cards.itemWidth
@@ -181,19 +181,23 @@ final class LibraryOpeningState {
                 self.prefetch(requests, media: media, forHub: false)
             }
         }
-        if preferences?.peopleEnabled == true {
+        if preferences?.peopleEnabled == true, !people.isConfirmedEmpty {
             jobs.append { await self.prepareDirectory(.people, store: self.people, source: source, media: media, viewport: viewport) }
         }
-        jobs.append { await self.prepareDirectory(.places, store: self.places, source: source, media: media, viewport: viewport) }
-        if preferences?.sharedLinksEnabled == true {
+        if !places.isConfirmedEmpty {
+            jobs.append { await self.prepareDirectory(.places, store: self.places, source: source, media: media, viewport: viewport) }
+        }
+        if preferences?.sharedLinksEnabled == true, links.links?.isEmpty != true {
             jobs.append {
                 await self.links.load(source: source)
                 let covers = self.links.links?.prefix(limit).compactMap(\.cover) ?? []
                 self.prefetchDestinationCovers(covers, media: media, scale: scale)
             }
         }
-        jobs.append { await self.prepareDirectory(.partners, store: self.partners, source: source, media: media, viewport: viewport) }
-        if preferences?.foldersEnabled == true {
+        if !partners.isConfirmedEmpty {
+            jobs.append { await self.prepareDirectory(.partners, store: self.partners, source: source, media: media, viewport: viewport) }
+        }
+        if preferences?.foldersEnabled == true, folders.tree?.children(of: nil).isEmpty != true {
             jobs.append {
                 await self.folders.load(source: source)
                 guard let tree = self.folders.tree else { return }
@@ -241,7 +245,6 @@ final class LibraryOpeningState {
         await places.refreshIndexedPlaces(source: source)
         previewDates.removeAll()
         await prepareCovers(source: source, media: media, viewport: viewport, camera: camera)
-        await prepareCollectionCover(.trash, media: media, scale: viewport.scale)
         if !Task.isCancelled {
             adoptedIndexRevision = revision
         }
@@ -278,7 +281,7 @@ final class LibraryOpeningState {
         if let date = previewDates[collection], Date.now.timeIntervalSince(date) < 5 {
             return
         }
-        guard let preview = try? await opening.preview(for: collection),
+        guard let preview = try? await opening.preview(),
               !Task.isCancelled else { return }
         previewDates[collection] = .now
         previews[collection] = preview

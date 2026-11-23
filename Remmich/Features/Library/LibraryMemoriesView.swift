@@ -19,6 +19,10 @@ final class LibraryMemoriesStore {
     private var page = 1
     private var pageSize = 24
 
+    var isConfirmedEmpty: Bool {
+        coversFinished && previewCovers.isEmpty && memories.isEmpty
+    }
+
     var covers: [LibraryMemoryCover] {
         let loaded = usesIndexedCovers ? [] : Self.coverChoices(memories)
         var seen = Set<String>()

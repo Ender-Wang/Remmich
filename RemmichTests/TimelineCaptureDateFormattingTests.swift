@@ -161,6 +161,32 @@ struct TimelineCaptureDateFormattingTests {
             #expect(await source.requestedSummaryQueries == [taken, added, taken])
             #expect(await source.requestedAssetQueries == [taken, added, taken])
         }
+
+        @Test func trashPreviewUsesNewestCaptureAndReportsAnEmptyTimeline() async throws {
+            let newest = try Self.asset(instant: "2026-11-20T00:00:00Z", offset: 0, id: "newest")
+            let earlier = try Self.asset(instant: "2026-11-15T00:00:00Z", offset: 0, id: "earlier")
+            let oldest = try Self.asset(instant: "2026-10-15T00:00:00Z", offset: 0, id: "oldest")
+            let november = TimelineBucketID(rawValue: "2026-11-01")
+            let october = TimelineBucketID(rawValue: "2026-10-01")
+            let source = OpeningTimelineTestReader(summaries: [
+                .init(id: october, assetCount: 1), .init(id: november, assetCount: 2),
+            ], assets: [october: [oldest], november: [earlier, newest]])
+            let query = LibraryAssetCollection.trash.query
+            let reader = LibraryScopedTimelineReader(source: source, query: query, media: nil)
+
+            let preview = try await reader.preview()
+            #expect(preview.count == 3)
+            #expect(preview.cover?.id == newest.id)
+            #expect(await source.requestedBuckets == [november])
+            #expect(await source.requestedAssetQueries == [query])
+
+            let emptySource = OpeningTimelineTestReader(summaries: [], assets: [:])
+            let emptyReader = LibraryScopedTimelineReader(source: emptySource, query: query, media: nil)
+            let empty = try await emptyReader.preview()
+            #expect(empty.isEmpty)
+            #expect(empty.cover == nil)
+            #expect(await emptySource.requestedBuckets.isEmpty)
+        }
     #endif
 
     @Test(arguments: [

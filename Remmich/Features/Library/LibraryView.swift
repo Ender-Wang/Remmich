@@ -52,7 +52,7 @@ struct LibraryView: View {
                 LibraryHubScrollView {
                     VStack(alignment: .leading, spacing: 16) {
                         LibraryHubCardLayout {
-                            if let exports {
+                            if let exports, !exports.ready || !exports.jobs.isEmpty {
                                 let newest = exports.latestCompletedDownload
                                 LibraryHubLink {
                                     DownloadsView(exports: exports)
@@ -73,34 +73,40 @@ struct LibraryView: View {
                                 .buttonStyle(.plain)
                                 .accessibilityIdentifier("library-download-history")
                             }
-                            onDeviceLink
+                            if showsOnDeviceCard {
+                                onDeviceLink
+                            }
                             if let collectionSource, let media, let assetDetails {
                                 collectionCard(.recentlyTaken, source: collectionSource, media: media, assetDetails: assetDetails)
                                 collectionCard(.recentlyAdded, source: collectionSource, media: media, assetDetails: assetDetails)
                                 collectionCard(.favorites, source: collectionSource, media: media, assetDetails: assetDetails)
-                                if preferences?.memoriesEnabled == true {
+                                if preferences?.memoriesEnabled == true, !opening.memories.isConfirmedEmpty {
                                     LibraryMemoriesCard(source: collectionSource, media: media, assetDetails: assetDetails,
                                                         context: collectionNavigation, catalog: opening.memories,
                                                         rotationEnabled: hubReadyForRotation && !accountContentMounted && navigationPath.isEmpty
                                                             && (tabSelectionState?.canActivateContent(in: .library) ?? true))
                                 }
-                                if preferences?.peopleEnabled == true {
+                                if preferences?.peopleEnabled == true, !opening.people.isConfirmedEmpty {
                                     LibraryDirectoryCard(directory: .people, source: collectionSource, media: media,
                                                          assetDetails: assetDetails, context: collectionNavigation, store: opening.people)
                                 }
-                                LibraryDirectoryCard(directory: .places, source: collectionSource, media: media,
-                                                     assetDetails: assetDetails, context: collectionNavigation, store: opening.places,
-                                                     heatmap: opening.placesCover.image, placesMapSource: sessionController.map {
-                                                         LibraryPlacesMapSource(store: $0.libraryIndexStore,
-                                                                                scope: MediaAccountScope(session: session), index: libraryIndex)
-                                                     })
-                                if preferences?.sharedLinksEnabled == true {
+                                if !opening.places.isConfirmedEmpty || opening.placesCover.hasGeotags != false {
+                                    LibraryDirectoryCard(directory: .places, source: collectionSource, media: media,
+                                                         assetDetails: assetDetails, context: collectionNavigation, store: opening.places,
+                                                         heatmap: opening.placesCover.image, placesMapSource: sessionController.map {
+                                                             LibraryPlacesMapSource(store: $0.libraryIndexStore,
+                                                                                    scope: MediaAccountScope(session: session), index: libraryIndex)
+                                                         })
+                                }
+                                if preferences?.sharedLinksEnabled == true, opening.links.links?.isEmpty != true {
                                     LibrarySharedLinksCard(source: collectionSource, media: media, assetDetails: assetDetails,
                                                            context: collectionNavigation, store: opening.links)
                                 }
-                                LibraryDirectoryCard(directory: .partners, source: collectionSource, media: media,
-                                                     assetDetails: assetDetails, context: collectionNavigation, store: opening.partners)
-                                if preferences?.foldersEnabled == true {
+                                if !opening.partners.isConfirmedEmpty {
+                                    LibraryDirectoryCard(directory: .partners, source: collectionSource, media: media,
+                                                         assetDetails: assetDetails, context: collectionNavigation, store: opening.partners)
+                                }
+                                if preferences?.foldersEnabled == true, opening.folders.tree?.children(of: nil).isEmpty != true {
                                     LibraryFoldersCard(source: collectionSource, media: media, assetDetails: assetDetails,
                                                        context: collectionNavigation, store: opening.folders)
                                 }
@@ -213,6 +219,14 @@ struct LibraryView: View {
         }
     }
 
+    private var showsOnDeviceCard: Bool {
+        switch savedPhotos.state {
+        case .missing: false
+        case .ready: savedPhotos.limited || !savedPhotos.items.isEmpty
+        default: true
+        }
+    }
+
     private var onDeviceLink: some View {
         LibraryHubLink {
             SavedPhotosView(library: savedPhotos, tabSelectionState: tabSelectionState, viewerPresentations: viewerPresentations,
@@ -236,7 +250,7 @@ struct LibraryView: View {
     }
 
     private var visibleFixtureCollections: [FixtureCollection] {
-        collectionSource == nil ? collections : []
+        collectionSource == nil ? collections.filter { !$0.assets.isEmpty } : []
     }
 
     private var collectionNavigation: LibraryCollectionNavigation {
@@ -244,22 +258,24 @@ struct LibraryView: View {
               viewerVisibilityChanged: viewerVisibilityChanged)
     }
 
-    private func collectionCard(_ collection: LibraryAssetCollection, source: ImmichTimelineRepository,
-                                media: MediaLibraryController, assetDetails: any AssetDetailReading) -> some View
+    @ViewBuilder private func collectionCard(_ collection: LibraryAssetCollection, source: ImmichTimelineRepository,
+                                             media: MediaLibraryController, assetDetails: any AssetDetailReading) -> some View
     {
-        LibraryHubLink {
-            let camera = sessionController.map {
-                LibraryCameraMetadata(store: $0.libraryIndexStore, scope: MediaAccountScope(session: session), details: $0.persistentAssetDetails)
+        if opening.previews[collection]?.isEmpty != true {
+            LibraryHubLink {
+                let camera = sessionController.map {
+                    LibraryCameraMetadata(store: $0.libraryIndexStore, scope: MediaAccountScope(session: session), details: $0.persistentAssetDetails)
+                }
+                let prepared = opening.collection(collection, source: source, camera: camera)
+                LibraryCollectionTimeline(title: collection.rawValue, source: source, query: collection.query,
+                                          separatesMedia: collection.separatesMedia, media: media, assetDetails: assetDetails,
+                                          tabSelectionState: tabSelectionState, viewerPresentations: viewerPresentations,
+                                          tabBarTop: tabBarTop, opening: prepared, libraryIndex: collection == .recentlyTaken ? libraryIndex : nil)
+            } label: {
+                LibraryAssetCollectionCard(collection: collection, media: media, opening: opening)
             }
-            let prepared = opening.collection(collection, source: source, camera: camera)
-            LibraryCollectionTimeline(title: collection.rawValue, source: source, query: collection.query,
-                                      separatesMedia: collection.separatesMedia, media: media, assetDetails: assetDetails,
-                                      tabSelectionState: tabSelectionState, viewerPresentations: viewerPresentations,
-                                      tabBarTop: tabBarTop, opening: prepared, libraryIndex: collection == .recentlyTaken ? libraryIndex : nil)
-        } label: {
-            LibraryAssetCollectionCard(collection: collection, media: media, opening: opening)
+            .buttonStyle(.plain)
         }
-        .buttonStyle(.plain)
     }
 
     private func accountButton(trailingPadding: CGFloat) -> some View {

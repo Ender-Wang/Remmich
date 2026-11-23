@@ -108,6 +108,10 @@ final class LibraryDirectoryStore {
     private var places: Set<TimelinePlace> = []
     private var indexedPlaceOffset = 0
 
+    var isConfirmedEmpty: Bool {
+        indexedPlaceCount.map { $0 == 0 } ?? (finished && entries.isEmpty)
+    }
+
     func adoptIndexedPeople(_ people: [LibraryPerson]) {
         guard loadTask == nil else { return }
         entries = people.map(LibraryDirectoryEntry.person)

@@ -5,6 +5,7 @@ import UIKit
 @MainActor @Observable
 final class LibraryPlacesCover {
     private(set) var image: UIImage?
+    private(set) var hasGeotags: Bool?
     @ObservationIgnored private var snapshotter: MLNMapSnapshotter?
     @ObservationIgnored private var pending: Request?
     @ObservationIgnored private var rendered: Request?
@@ -18,16 +19,17 @@ final class LibraryPlacesCover {
     }
 
     func prepare(store: SQLiteLibraryIndexStore, scope: MediaAccountScope, locations: AssetLocationStore, dark: Bool, scale: CGFloat) async {
-        try? await locations.loadMapStyles()
-        guard !Task.isCancelled, let styles = locations.mapStyles else { return }
-        guard styles.enabled else {
+        guard let coordinates = try? await store.libraryPlacesCoverCoordinates(scope: scope), !Task.isCancelled else { return }
+        hasGeotags = !coordinates.isEmpty
+        guard !coordinates.isEmpty else {
             stop()
             rendered = nil
             image = nil
             return
         }
-        guard let coordinates = try? await store.libraryPlacesCoverCoordinates(scope: scope), !Task.isCancelled else { return }
-        guard !coordinates.isEmpty else {
+        try? await locations.loadMapStyles()
+        guard !Task.isCancelled, let styles = locations.mapStyles else { return }
+        guard styles.enabled else {
             stop()
             rendered = nil
             image = nil
