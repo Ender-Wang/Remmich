@@ -137,8 +137,17 @@ struct LibraryView: View {
                 }
                 .ignoresSafeArea(.container, edges: [.top, .bottom])
 
-                HStack {
-                    Text("Library").font(.largeTitle.bold())
+                HStack(spacing: 8) {
+                    RemmichLogoView(
+                        icon: AppIconController.shared.selectedIcon ?? .spiral,
+                        isAnimating: navigationPath.isEmpty && (tabSelectionState?.selection ?? .library) == .library,
+                        preservesAnimationPoseWhenPaused: true
+                    )
+                    .frame(width: headerLogoCanvasSize, height: headerLogoCanvasSize)
+                    .frame(width: avatarSize, height: avatarSize)
+                    .accessibilityHidden(true)
+                    Text("Remmich").font(.largeTitle.bold())
+                        .accessibilityAddTraits(.isHeader)
                     Spacer(minLength: avatarSize + 16)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -190,7 +199,7 @@ struct LibraryView: View {
                 }
             }
         }
-        .navigationTitle("Library")
+        .navigationTitle("Remmich")
         .toolbar(.hidden, for: .navigationBar)
         .background {
             CardNavigationRootAnchor(root: navigationRoot, didAppear: reconcileNavigationRoot)
@@ -356,6 +365,10 @@ struct LibraryView: View {
 
     private var avatarTopPadding: CGFloat {
         verticalPadding + panelAvatarInset
+    }
+
+    private var headerLogoCanvasSize: CGFloat {
+        avatarSize * DesignMetrics.brandLogoCanvasSize / DesignMetrics.brandLogoSlotSize
     }
 
     private var expandedAvatarTrailingPadding: CGFloat {
