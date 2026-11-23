@@ -80,6 +80,15 @@
       ],
       "versions": [
         {
+          "version": "0.7.0",
+          "buildVersion": "4",
+          "date": "2026-11-23T16:22:52Z",
+          "localizedDescription": "**Your read-only Immich library, native on iPhone and iPad.**\n\nYour Immich collections now appear in Remmich’s Library tab. Revisit memories, find photos on an interactive map, and reopen indexed collections offline.\n\n### 🎯 What this release focuses on\n\nVersion 0.7.0 completes M7, Library collections. The Library tab brings together your Immich collections, media saved to Apple Photos, and save history. The new Library Index keeps collection data available between launches and gives Library its own sync controls.\n\n### 🧭 Current status\n\nPhotos, Videos, Albums, Library collections, and account settings use your Immich account. Search still shows demo data. Remmich keeps your Immich library read-only.\n\n### ✨ Highlights\n\n#### 📚 Library collections\n\n- 🗓️ **Recently taken and Recently added** let you browse camera captures by capture date or browse media by upload date. Favorites, Archive, and Trash open their own timelines. Trash uses its newest capture as its cover.\n- 🖼️ The **Memories** cover rotates through dated previews. **People** opens a timeline of photos and videos for each person.\n- 📂 **Shared Links, Partners, and Folders** let you revisit share links, browse libraries shared with you, and navigate media by folder.\n- 📥 **Save History and On Device** show your transfer history and the contents of the Remmich album in Apple Photos. Save History previews the latest completed save when its cover is available.\n- 👁️ **Card visibility** follows your Immich feature settings for Memories, People, Shared Links, and Folders. Library hides cards once their contents are confirmed empty, including Save History and On Device. On Device stays visible when you need to grant or manage Photos access.\n\n#### 🗺️ Places & offline browsing\n\n- 🌍 **Places** previews your library’s geographic footprint on a heatmap. Open the card to pan or zoom the map, or tap a locality to zoom in and browse its media. Cached Photon names follow your language preferences where available.\n- 💾 **Library Index** adds a third section under **Profile → Index**, alongside Timelines and Albums. It shows progress and offers Sync, Pause, Resume, and Rebuild. Incremental sync reuses indexed months where possible. Indexed collections can reopen offline with the data and thumbnails available on your device.\n- 🖼️ **Indexed Memories and Places** load their full grids on opening while thumbnails load as needed.\n\n#### 🗂️ Albums & navigation\n\n- 🔎 **Albums** combines inline search, All and Shared, and sorting controls in one header.\n- 👆 **Albums and Library** go back one page when you tap the active tab again.\n\n### 🚧 Known limitations\n\n- 🗺️ **Places and maps** need valid GPS and an enabled map source. With default Photon, place names are fetched as you view assets. Automatic bulk place caching requires a custom Photon instance, and iOS controls background execution.\n- 💾 **Offline media** uses cached thumbnails and accessible Apple Photos resources. Originals and video playback depend on accessible saved media or a reachable server.\n- 📤 **Sharing** handles one asset at a time. Shared files retain available GPS metadata. Live Photo sharing uses the displayed still, and Save to Photos preserves the Live Photo pair.\n- 🔄 **Download recovery** can restart a transfer when iOS or the server cannot resume it.\n- 🔄 **Upgrading from 0.5.0** leaves the old shared database on the device. Reindexing restores server-derived indexes. Older save history, Photos receipts, and place results stay in the old database.\n\n### 📦 Installation\n\n- 📱 **Requires iOS or iPadOS 26.6 or later.** Connect to your Immich server or use the built-in demo sign-in to try the official Immich demo server.\n- 📦 **Install the optimized unsigned IPA** by signing it with your own Apple ID using SideStore, AltStore Classic, or another compatible sideloading tool.\n\n",
+          "downloadURL": "https://github.com/Ender-Wang/Remmich/releases/download/v0.7.0/Remmich-v0.7.0-unsigned.ipa",
+          "size": 25449036,
+          "minOSVersion": "26.6"
+        },
+        {
           "version": "0.6.1",
           "buildVersion": "3",
           "date": "2026-11-18T09:59:27Z",
@@ -111,7 +120,7 @@
         "entitlements": [],
         "privacy": {
           "NSLocalNetworkUsageDescription": "Remmich connects to your Immich server on your local network.",
-          "NSPhotoLibraryUsageDescription": "Remmich needs access to create and reuse the Remmich album, save selected media, and verify which items you saved."
+          "NSPhotoLibraryUsageDescription": "Remmich needs access to create and reuse the Remmich album, save selected media, and browse and verify your saved photos and videos."
         }
       }
     }
