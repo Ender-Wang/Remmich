@@ -16,6 +16,68 @@
       "iconURL": "https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/sidestore-icon.png",
       "tintColor": "6366F1",
       "category": "photo-video",
+      "screenshots": [
+        {
+          "imageURL": "https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/onboarding.webp",
+          "width": 660,
+          "height": 1348
+        },
+        {
+          "imageURL": "https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/photos-timeline.webp",
+          "width": 660,
+          "height": 1348
+        },
+        {
+          "imageURL": "https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/photo-viewer.webp",
+          "width": 660,
+          "height": 1348
+        },
+        {
+          "imageURL": "https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/info-panel.webp",
+          "width": 660,
+          "height": 1348
+        },
+        {
+          "imageURL": "https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/map-view.webp",
+          "width": 660,
+          "height": 1348
+        },
+        {
+          "imageURL": "https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/date-cards.webp",
+          "width": 660,
+          "height": 1348
+        },
+        {
+          "imageURL": "https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/profile.webp",
+          "width": 660,
+          "height": 1348
+        },
+        {
+          "imageURL": "https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/albums.webp",
+          "width": 660,
+          "height": 1348
+        },
+        {
+          "imageURL": "https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/library.webp",
+          "width": 660,
+          "height": 1348
+        },
+        {
+          "imageURL": "https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/library-recently-added.webp",
+          "width": 660,
+          "height": 1348
+        },
+        {
+          "imageURL": "https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/library-memories.webp",
+          "width": 660,
+          "height": 1348
+        },
+        {
+          "imageURL": "https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/library-places.webp",
+          "width": 660,
+          "height": 1348
+        }
+      ],
       "versions": [
         {
           "version": "0.6.1",
