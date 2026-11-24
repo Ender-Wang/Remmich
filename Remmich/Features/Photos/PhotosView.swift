@@ -1107,7 +1107,7 @@ struct PhotosView: View {
                 windowTopInset = inset
             }
         }
-        .ignoresSafeArea(.container, edges: libraryTimelineClearance == nil ? .all : [])
+        .ignoresSafeArea(.container, edges: libraryTimelineClearance == nil ? [.top, .bottom] : [])
         .safeAreaInset(edge: .top, spacing: 0) {
             if case let .failed(message) = store.refreshState {
                 TimelineRefreshError(message: message) {
@@ -1155,7 +1155,7 @@ struct PhotosView: View {
                 reduceMotion: reduceMotion
             )
             .frame(height: topInset + TimelineMemoryLaneSafeArea.laneHeight)
-            .ignoresSafeArea(.container, edges: .top)
+            .ignoresSafeArea(.container, edges: [.top, .horizontal])
 
             if memoryLaneVisible {
                 TimelineMemoryLane(
@@ -2146,7 +2146,6 @@ private struct TimelineMemoryLane: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .ignoresSafeArea(.container, edges: .horizontal)
         .accessibilityIdentifier("memory-lane")
         .onGeometryChange(for: CGRect.self) { proxy in
             proxy.frame(in: .global)

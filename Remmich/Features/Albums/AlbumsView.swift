@@ -54,8 +54,7 @@ struct AlbumsOpeningSkeleton: View {
 
     var body: some View {
         GeometryReader { geometry in
-            let width = geometry.size.width + geometry.safeAreaInsets.leading + geometry.safeAreaInsets.trailing
-            let metrics = AlbumReflowMetrics.overview(availableWidth: width)
+            let metrics = AlbumReflowMetrics.overview(availableWidth: geometry.size.width)
             let top = topClearance ?? (geometry.safeAreaInsets.top + 60)
             let rows = max(1, min(6, Int(ceil(max(0, geometry.size.height - top) / (metrics.cardHeight + 20)))))
             AlbumReflowLayout(progress: 0, metrics: metrics) {
@@ -184,23 +183,23 @@ struct AlbumsView: View {
     var body: some View {
         GeometryReader { geometry in
             let viewportWidth = geometry.size.width
-            let width = viewportWidth + geometry.safeAreaInsets.leading + geometry.safeAreaInsets.trailing
             let viewportHeight = geometry.size.height
             Group {
                 // The initial bottom anchor needs the complete padded extent,
                 // including the measured label height, at the first layout.
                 if let albumLabelHeight, !store.isWaitingForInitialContent {
-                    albumContent(availableWidth: width, viewportHeight: viewportHeight, labelHeight: albumLabelHeight)
+                    albumContent(availableWidth: viewportWidth, viewportHeight: viewportHeight, labelHeight: albumLabelHeight)
                 } else {
                     AlbumsOpeningSkeleton(topClearance: topClearance)
                 }
             }
+            .frame(width: viewportWidth)
             .overlay(alignment: .top) {
-                albumHeader(metrics: AlbumReflowMetrics.overview(availableWidth: width, labelHeight: albumLabelHeight ?? 58))
+                albumHeader(metrics: AlbumReflowMetrics.overview(availableWidth: viewportWidth, labelHeight: albumLabelHeight ?? 58))
             }
             .overlay(alignment: .topLeading) {
                 AlbumLabelMeasurement()
-                    .frame(width: AlbumReflowMetrics.overview(availableWidth: width).coverWidth)
+                    .frame(width: AlbumReflowMetrics.overview(availableWidth: viewportWidth).coverWidth)
                     .hidden()
                     .onGeometryChange(for: CGFloat.self) {
                         viewportWidth > 0 && viewportHeight > 0 ? $0.size.height : 0
@@ -320,7 +319,6 @@ struct AlbumsView: View {
                 // This stable target installs no content-resize anchoring.
                 .id(AlbumDiscoveryScrollTarget.content)
             }
-            .ignoresSafeArea(.container, edges: .horizontal)
             .scrollDisabled(pinchInteraction.isActive)
             .contentMargins(.top, topClearance, for: .scrollIndicators)
             .defaultScrollAnchor(.bottom, for: .initialOffset)
@@ -415,7 +413,7 @@ struct AlbumsView: View {
             .overlay {
                 AlbumScopeSlideHost(slide: scopeSlide)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .ignoresSafeArea(.container, edges: [.top, .horizontal])
+                    .ignoresSafeArea(.container, edges: .top)
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
             }
@@ -450,7 +448,7 @@ struct AlbumsView: View {
         .background {
             ZStack {
                 TimelineMemoryGradientBackdrop(visible: true, extended: true, reduceMotion: reduceMotion)
-                    .ignoresSafeArea(edges: .top)
+                    .ignoresSafeArea(.container, edges: [.top, .horizontal])
                 // Fill the gaps between controls so taps cannot open albums underneath.
                 Color.clear
                     .contentShape(.rect)
@@ -458,7 +456,6 @@ struct AlbumsView: View {
                     .accessibilityHidden(true)
             }
         }
-        .ignoresSafeArea(.container, edges: .horizontal)
     }
 
     private func searchControl(width: CGFloat) -> some View {

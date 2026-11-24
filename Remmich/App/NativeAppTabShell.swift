@@ -335,13 +335,11 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
 
         private lazy var photosController = tabHostingController(
             rootView: parent.photos,
-            destination: .photos,
-            ignoresContainerSafeArea: true
+            destination: .photos
         )
         private lazy var videosController = tabHostingController(
             rootView: parent.videos,
-            destination: .videos,
-            ignoresContainerSafeArea: true
+            destination: .videos
         )
         private lazy var albumsController = {
             self.didResolveAlbums = true
@@ -354,18 +352,15 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
         )
         private lazy var yearsController = tabHostingController(
             rootView: parent.years,
-            destination: .years,
-            ignoresContainerSafeArea: true
+            destination: .years
         )
         private lazy var monthsController = tabHostingController(
             rootView: parent.months,
-            destination: .months,
-            ignoresContainerSafeArea: true
+            destination: .months
         )
         private lazy var weeksController = tabHostingController(
             rootView: parent.weeks,
-            destination: .weeks,
-            ignoresContainerSafeArea: true
+            destination: .weeks
         )
         private lazy var searchController = tabHostingController(
             rootView: parent.search,
@@ -374,13 +369,9 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
 
         private func tabHostingController(
             rootView: AnyView,
-            destination: NativeTabDestination,
-            ignoresContainerSafeArea: Bool = false
+            destination: NativeTabDestination
         ) -> TabContentHostingController {
             let controller = TabContentHostingController(rootView: hostedRoot(rootView))
-            if ignoresContainerSafeArea {
-                controller.safeAreaRegions = .keyboard
-            }
             controller.didAppear = { [weak self] in
                 self?.scheduleContentActivation(destination)
             }

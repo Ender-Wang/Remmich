@@ -558,7 +558,6 @@ private struct PhotosLibraryGroupedCatalogView: View {
                     proxy.scrollTo(PhotosRangeScrollAnchor.bottom, anchor: .bottom)
                 }
                 .scrollEdgeEffectHidden(for: .bottom)
-                .ignoresSafeArea(.container, edges: [.top, .horizontal, .bottom])
                 .task(id: PhotosRangeViewportKey(
                     viewport: geometry.size,
                     navigationTop: globalFrame.maxY - bottomContentInset
@@ -573,6 +572,7 @@ private struct PhotosLibraryGroupedCatalogView: View {
                 .photosRangePinchGesture(interaction: pinchInteraction, onPinch: onPinch)
             }
         }
+        .ignoresSafeArea(.container, edges: [.top, .bottom])
         .task(id: store.bucketSummaries.first?.id) {
             await store.prepareGroupedCatalog(level, owner: rangeBrowseOwner)
         }
@@ -838,7 +838,6 @@ struct PhotosRangeAssetsView: View {
                     guard let gesture = PhotosPinchGesture(magnification: magnification) else { return }
                     handlePinch(gesture)
                 }
-                .ignoresSafeArea(.container, edges: libraryTimelineClearance == nil ? [.horizontal, .bottom] : [])
                 .onChange(of: assetLayout) {
                     guard let layoutAnchorID else { return }
                     layoutRestoreTask?.cancel()
@@ -857,6 +856,7 @@ struct PhotosRangeAssetsView: View {
                 .accessibilityIdentifier(route.assetGridAccessibilityID)
             }
         }
+        .ignoresSafeArea(.container, edges: libraryTimelineClearance == nil ? .bottom : [])
     }
 
     @ViewBuilder
@@ -1636,7 +1636,6 @@ private struct PhotosRangeCardGrid<Item: Identifiable, Content: View>: View wher
                     }
                 }
                 .scrollEdgeEffectHidden(for: .bottom)
-                .ignoresSafeArea(.container, edges: [.top, .horizontal, .bottom])
                 .photosRangePinchGesture(interaction: pinchInteraction, onPinch: onPinch)
                 .task(id: items.last?.id) {
                     guard !didPositionInitially, !blocks.isEmpty else { return }
@@ -1667,6 +1666,7 @@ private struct PhotosRangeCardGrid<Item: Identifiable, Content: View>: View wher
 
             scrollView
         }
+        .ignoresSafeArea(.container, edges: [.top, .bottom])
     }
 }
 

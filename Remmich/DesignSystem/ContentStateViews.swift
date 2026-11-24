@@ -67,6 +67,7 @@ struct TimelineOpeningSkeleton: View {
             .frame(width: size.width, height: size.height, alignment: .bottomLeading)
             .clipped()
         }
+        .ignoresSafeArea(.container, edges: [.top, .bottom])
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }

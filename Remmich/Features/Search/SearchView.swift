@@ -199,20 +199,20 @@ struct SearchView: View {
                                               bottom: 0, trailing: geometry.safeAreaInsets.trailing)
             let liveResults = currentResults
             let topPadding = TimelineMemoryLaneSafeArea.topInset(proposed: geometry.safeAreaInsets.top, window: windowTopInset)
-            ZStack(alignment: .top) {
-                searchPage(liveResults: liveResults, width: geometry.size.width, horizontalInsets: horizontalInsets,
-                           safeBottom: geometry.safeAreaInsets.bottom)
-                searchHeader(width: geometry.size.width, topPadding: topPadding,
-                             maximumControlsHeight: geometry.size.height * 0.32, liveResults: liveResults)
-                    .zIndex(1)
-            }
-            .sheet(item: compactPanel) { panel in
-                filters(panel, maximumHeight: maximumPanelHeight(in: geometry), isSheet: true)
-            }
-            .popover(item: regularPanel, arrowEdge: .top) { panel in
-                filters(panel, maximumHeight: maximumPanelHeight(in: geometry), isSheet: false)
-                    .frame(width: 400)
-            }
+            searchPage(liveResults: liveResults, width: geometry.size.width, horizontalInsets: horizontalInsets,
+                       safeBottom: geometry.safeAreaInsets.bottom)
+                .frame(width: geometry.size.width)
+                .overlay(alignment: .top) {
+                    searchHeader(width: geometry.size.width, topPadding: topPadding,
+                                 maximumControlsHeight: geometry.size.height * 0.32, liveResults: liveResults)
+                }
+                .sheet(item: compactPanel) { panel in
+                    filters(panel, maximumHeight: maximumPanelHeight(in: geometry), isSheet: true)
+                }
+                .popover(item: regularPanel, arrowEdge: .top) { panel in
+                    filters(panel, maximumHeight: maximumPanelHeight(in: geometry), isSheet: false)
+                        .frame(width: 400)
+                }
         }
         .ignoresSafeArea(.container, edges: .top)
         .background {
@@ -450,6 +450,7 @@ struct SearchView: View {
                     .transition(contentTransition)
             }
         }
+        .frame(width: width)
         .fixedSize(horizontal: false, vertical: true)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { headerHeight = $0 }
         .background {
