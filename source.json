@@ -63,17 +63,17 @@
           "height": 1348
         },
         {
-          "imageURL": "https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/library-recently-added.webp",
-          "width": 660,
-          "height": 1348
-        },
-        {
           "imageURL": "https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/library-memories.webp",
           "width": 660,
           "height": 1348
         },
         {
           "imageURL": "https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/library-places.webp",
+          "width": 660,
+          "height": 1348
+        },
+        {
+          "imageURL": "https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/search.webp",
           "width": 660,
           "height": 1348
         }
