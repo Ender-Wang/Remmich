@@ -219,7 +219,7 @@ jobs:
           test "$(/usr/libexec/PlistBuddy -c 'Print :DTPlatformName' "$app/Info.plist")" = "iphoneos"
           xcrun lipo -archs "$app/Remmich" | grep -w arm64
           mkdir -p "$RUNNER_TEMP/RemmichIPA/Payload" "$RUNNER_TEMP/RemmichRelease"
-          git log -1 --format=%b > "$RUNNER_TEMP/RemmichRelease/release-notes.md"
+          git log -1 --pretty=format:%b > "$RUNNER_TEMP/RemmichRelease/release-notes.md"
           ditto "$app" "$RUNNER_TEMP/RemmichIPA/Payload/Remmich.app"
           ditto -c -k --keepParent "$RUNNER_TEMP/RemmichIPA/Payload" \
             "$RUNNER_TEMP/RemmichRelease/Remmich-${RELEASE_TAG}-unsigned.ipa"
