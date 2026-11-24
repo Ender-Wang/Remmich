@@ -1,7 +1,7 @@
 import Observation
 import SwiftUI
 
-nonisolated enum LibraryAssetCollection: String, CaseIterable, Identifiable {
+nonisolated enum LibraryAssetCollection: String, CaseIterable, Identifiable, Sendable {
     case recentlyTaken = "Recently taken"
     case recentlyAdded = "Recently added"
     case favorites = "Favorites"
@@ -273,6 +273,11 @@ final class LibraryCollectionOpening {
         return try await task.value
     }
 
+    func browseAssets(limit: Int) async throws -> [TimelineAssetSummary] {
+        guard let window = try await coverReader.openingWindow(limit: limit) else { return [] }
+        return window.summaries.flatMap { window.assetsByBucket[$0.id] ?? [] }
+    }
+
     func refreshIndexedTimelines(revision: Int) async {
         guard revision > appliedIndexRevision else { return }
         for store in [photos, videos].compactMap(\.self) where store.loadState != .idle && store.loadState != .loading {
@@ -456,6 +461,7 @@ struct LibraryCollectionTimeline: View {
     let media: MediaLibraryController
     let assetDetails: any AssetDetailReading
     let tabSelectionState: NativeTabSelectionState?
+    let tabDestination: NativeTabDestination
     let viewerPresentations: AssetViewerPresentationStore?
     let opening: LibraryCollectionOpening?
     let libraryIndex: LibraryIndexController?
@@ -468,12 +474,14 @@ struct LibraryCollectionTimeline: View {
     init(title: String, source: any TimelineReading, query: TimelineQuery, separatesMedia: Bool = false,
          media: MediaLibraryController, assetDetails: any AssetDetailReading,
          tabSelectionState: NativeTabSelectionState?, viewerPresentations: AssetViewerPresentationStore?, tabBarTop: Binding<CGFloat>,
-         opening: LibraryCollectionOpening? = nil, libraryIndex: LibraryIndexController? = nil, shareURL: URL? = nil)
+         opening: LibraryCollectionOpening? = nil, libraryIndex: LibraryIndexController? = nil, shareURL: URL? = nil,
+         tabDestination: NativeTabDestination = .library)
     {
         self.title = title
         self.media = media
         self.assetDetails = assetDetails
         self.tabSelectionState = tabSelectionState
+        self.tabDestination = tabDestination
         self.viewerPresentations = viewerPresentations
         self.opening = opening
         self.libraryIndex = libraryIndex
@@ -550,7 +558,7 @@ struct LibraryCollectionTimeline: View {
         let runtime = store === photos ? opening?.photoRuntime : opening?.videoRuntime
         return LibraryTimelineLane(store: store, name: name, active: active, media: media, assetDetails: assetDetails,
                                    tabSelectionState: tabSelectionState, viewerPresentations: viewerPresentations, tabBarTop: $tabBarTop,
-                                   clearance: clearance, openingRuntime: runtime, sharedReads: opening?.sharedReads)
+                                   clearance: clearance, openingRuntime: runtime, sharedReads: opening?.sharedReads, tabDestination: tabDestination)
     }
 }
 
@@ -566,12 +574,13 @@ struct LibraryTimelineLane: View {
     let clearance: EdgeInsets
     var openingRuntime: TimelineSemanticRuntime?
     var sharedReads: LibraryOpeningBuckets?
+    var tabDestination: NativeTabDestination = .library
     @State private var path: [PhotosRangeRoute] = []
     @State private var presentation = PhotosPresentationState()
 
     var body: some View {
         timeline.onChange(of: media.activeAPIURL) { _, endpoint in
-            store.routeDidChange(isReachable: endpoint != nil && active && (tabSelectionState?.selection == .library || tabSelectionState == nil))
+            store.routeDidChange(isReachable: endpoint != nil && active && (tabSelectionState?.selection == tabDestination || tabSelectionState == nil))
         }
     }
 
@@ -580,7 +589,7 @@ struct LibraryTimelineLane: View {
                    navigationPath: $path, tabBarTop: $tabBarTop,
                    timelineRuntime: store.isOpeningWindow ? openingRuntime : nil, contentName: name,
                    rootAccessibilityID: "library-collection-timeline", compactChromeChanged: { _ in },
-                   tabSelectionState: tabSelectionState, tabDestination: .library, isCollectionPageActive: active,
+                   tabSelectionState: tabSelectionState, tabDestination: tabDestination, isCollectionPageActive: active,
                    libraryTimelineClearance: clearance,
                    viewerPresentations: viewerPresentations, refreshSource: {
                        await sharedReads?.invalidateCompletedReads()

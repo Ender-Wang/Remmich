@@ -1305,7 +1305,7 @@ struct PhotosView: View {
             }
         )
         .navigationTitle(route.navigationTitle)
-        .environment(\.scopedAssetTransitionContext, ScopedAssetTransitionContext(runtime: scopedAssetTransitions, scope: route))
+        .environment(\.scopedAssetTransitionContext, ScopedAssetTransitionContext(runtime: scopedAssetTransitions, scope: .range(route)))
 
         if tabDestination == .library {
             content
@@ -1377,8 +1377,8 @@ struct PhotosView: View {
             let route = AssetViewerRoute(selectedAsset: asset, initialAssets: assets, origin: origin)
             if let scope = navigationPath.last {
                 assetPreview = TimelineAssetPreviewSession(
-                    asset: asset, image: scopedAssetTransitions.transitionImage(for: asset, scope: scope) ?? image,
-                    target: scopedAssetTransitions.target(assetID: asset.id, scope: scope), viewerRoute: route
+                    asset: asset, image: scopedAssetTransitions.transitionImage(for: asset, scope: .range(scope)) ?? image,
+                    target: scopedAssetTransitions.target(assetID: asset.id, scope: .range(scope)), viewerRoute: route
                 )
             } else {
                 let source = semanticRuntime.openingSource(for: asset)
@@ -1390,7 +1390,7 @@ struct PhotosView: View {
 
     private func previewTarget(for asset: TimelineAssetSummary) -> AssetViewerDismissalTarget? {
         if let scope = navigationPath.last {
-            return scopedAssetTransitions.target(assetID: asset.id, scope: scope)
+            return scopedAssetTransitions.target(assetID: asset.id, scope: .range(scope))
         }
         return semanticRuntime.dismissalTarget(assetID: asset.id, aspectRatio: asset.aspectRatio)
     }
@@ -1839,13 +1839,13 @@ struct PhotosView: View {
         retireDismissedPreview()
         switch route.origin {
         case let .scoped(scope, _):
-            viewerSourceTarget = scopedAssetTransitions.target(assetID: route.selectedAsset.id, scope: scope)
-            viewerSourceImage = scopedAssetTransitions.transitionImage(for: route.selectedAsset, scope: scope)
+            viewerSourceTarget = scopedAssetTransitions.target(assetID: route.selectedAsset.id, scope: .range(scope))
+            viewerSourceImage = scopedAssetTransitions.transitionImage(for: route.selectedAsset, scope: .range(scope))
         case .timeline:
             let source = semanticRuntime.openingSource(for: route.selectedAsset)
             viewerSourceTarget = source?.target
             viewerSourceImage = source?.image
-        case .memory:
+        case .memory, .search:
             viewerSourceTarget = nil
             viewerSourceImage = nil
         }
@@ -1977,7 +1977,7 @@ struct PhotosView: View {
             )
         }
         if case let .scoped(scope, _) = route.origin {
-            return scopedAssetTransitions.target(assetID: assetID, scope: scope)
+            return scopedAssetTransitions.target(assetID: assetID, scope: .range(scope))
         }
         guard showsMainTimeline,
               let target = semanticRuntime.dismissalTarget(assetID: assetID, aspectRatio: aspectRatio)

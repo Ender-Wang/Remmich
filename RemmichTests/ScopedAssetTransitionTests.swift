@@ -21,16 +21,16 @@ struct ScopedAssetTransitionTests {
         scroll.addSubview(other)
         scroll.contentOffset.y = 600
         let runtime = ScopedAssetTransitionRuntime()
-        runtime.register(source, scope: .year(2026), assetID: "first", aspectRatio: 1.5, naturalAspectProgress: 1)
-        runtime.register(other, scope: .year(2026), assetID: "second", aspectRatio: 0.5, naturalAspectProgress: 1)
+        runtime.register(source, scope: .range(.year(2026)), assetID: "first", aspectRatio: 1.5, naturalAspectProgress: 1)
+        runtime.register(other, scope: .range(.year(2026)), assetID: "second", aspectRatio: 0.5, naturalAspectProgress: 1)
 
-        let initial = try #require(runtime.target(assetID: "first", scope: .year(2026)))
+        let initial = try #require(runtime.target(assetID: "first", scope: .range(.year(2026))))
         #expect(initial.imageFrame == source.convert(CGRect(x: 0, y: 30, width: 90, height: 60), to: nil))
         #expect(!initial.fillsFrame)
         scroll.contentOffset.y = 650
-        let moved = try #require(runtime.target(assetID: "first", scope: .year(2026)))
+        let moved = try #require(runtime.target(assetID: "first", scope: .range(.year(2026))))
         #expect(abs(moved.imageFrame.minY - initial.imageFrame.minY + 50) < 0.01)
-        let selected = try #require(runtime.target(assetID: "second", scope: .year(2026)))
+        let selected = try #require(runtime.target(assetID: "second", scope: .range(.year(2026))))
         #expect(selected.imageFrame == other.convert(CGRect(x: 15, y: 0, width: 60, height: 120), to: nil))
     }
 
@@ -44,15 +44,15 @@ struct ScopedAssetTransitionTests {
         let source = UIView(frame: CGRect(x: 20, y: 600, width: 90, height: 90))
         scroll.addSubview(source)
         let runtime = ScopedAssetTransitionRuntime()
-        runtime.register(source, scope: .year(2026), assetID: "same", aspectRatio: 0.5, naturalAspectProgress: 0)
-        #expect(runtime.target(assetID: "same", scope: .year(2026)) == nil)
+        runtime.register(source, scope: .range(.year(2026)), assetID: "same", aspectRatio: 0.5, naturalAspectProgress: 0)
+        #expect(runtime.target(assetID: "same", scope: .range(.year(2026))) == nil)
         scroll.contentOffset.y = 500
-        let visible = try #require(runtime.target(assetID: "same", scope: .year(2026)))
+        let visible = try #require(runtime.target(assetID: "same", scope: .range(.year(2026))))
         #expect(visible.fillsFrame)
         #expect(visible.imageFrame.size == source.bounds.size)
-        #expect(runtime.target(assetID: "same", scope: .year(2025)) == nil)
+        #expect(runtime.target(assetID: "same", scope: .range(.year(2025))) == nil)
         source.removeFromSuperview()
-        #expect(runtime.target(assetID: "same", scope: .year(2026)) == nil)
+        #expect(runtime.target(assetID: "same", scope: .range(.year(2026))) == nil)
     }
 
     @Test func unregisteringOldCellDoesNotRemoveItsReplacementAndOpacityDoesNotLoseTheTarget() async throws {
@@ -64,15 +64,15 @@ struct ScopedAssetTransitionTests {
         root.view.addSubview(old)
         root.view.addSubview(replacement)
         let runtime = ScopedAssetTransitionRuntime()
-        runtime.register(old, scope: .year(2026), assetID: "asset", aspectRatio: 1, naturalAspectProgress: 0)
-        runtime.register(replacement, scope: .year(2026), assetID: "asset", aspectRatio: 1, naturalAspectProgress: 0)
+        runtime.register(old, scope: .range(.year(2026)), assetID: "asset", aspectRatio: 1, naturalAspectProgress: 0)
+        runtime.register(replacement, scope: .range(.year(2026)), assetID: "asset", aspectRatio: 1, naturalAspectProgress: 0)
         runtime.unregister(old)
         replacement.alpha = 0
 
-        let target = try #require(runtime.target(assetID: "asset", scope: .year(2026)))
+        let target = try #require(runtime.target(assetID: "asset", scope: .range(.year(2026))))
         #expect(target.imageFrame == replacement.convert(replacement.bounds, to: nil))
         runtime.unregister(replacement)
-        #expect(runtime.target(assetID: "asset", scope: .year(2026)) == nil)
+        #expect(runtime.target(assetID: "asset", scope: .range(.year(2026))) == nil)
     }
 
     @Test func swiftUICellProbeRemainsUsableWhileTransparentFullScreenViewerIsPresented() async throws {
@@ -85,14 +85,14 @@ struct ScopedAssetTransitionTests {
         window.rootViewController = host
         host.view.layoutIfNeeded()
         try await Task.sleep(for: .milliseconds(120))
-        let initial = try #require(runtime.target(assetID: "fixture", scope: .year(2026)))
+        let initial = try #require(runtime.target(assetID: "fixture", scope: .range(.year(2026))))
 
         var transaction = Transaction(animation: nil)
         transaction.disablesAnimations = true
         withTransaction(transaction) { state.presented = true }
         try await Task.sleep(for: .milliseconds(120))
         _ = try #require(host.presentedViewController)
-        let covered = try #require(runtime.target(assetID: "fixture", scope: .year(2026)))
+        let covered = try #require(runtime.target(assetID: "fixture", scope: .range(.year(2026))))
         #expect(covered.imageFrame == initial.imageFrame)
         state.presented = false
     }
@@ -104,18 +104,18 @@ struct ScopedAssetTransitionTests {
         window.rootViewController?.view.addSubview(view)
         let runtime = ScopedAssetTransitionRuntime()
         let asset = sourceAsset()
-        runtime.register(view, scope: .year(2026), assetID: asset.id, aspectRatio: 1, naturalAspectProgress: 0)
+        runtime.register(view, scope: .range(.year(2026)), assetID: asset.id, aspectRatio: 1, naturalAspectProgress: 0)
         autoreleasepool {
             let image = UIGraphicsImageRenderer(size: CGSize(width: 40, height: 40)).image { context in
                 UIColor.red.setFill()
                 context.fill(CGRect(x: 0, y: 0, width: 40, height: 40))
             }
-            runtime.imageLoaded(image, asset: asset, scope: .year(2026))
-            #expect(runtime.transitionImage(for: asset, scope: .year(2026)) === image)
-            #expect(runtime.transitionImage(for: asset, scope: .year(2025)) == nil)
-            #expect(runtime.transitionImage(for: sourceAsset(revision: .distantFuture), scope: .year(2026)) == nil)
+            runtime.imageLoaded(image, asset: asset, scope: .range(.year(2026)))
+            #expect(runtime.transitionImage(for: asset, scope: .range(.year(2026))) === image)
+            #expect(runtime.transitionImage(for: asset, scope: .range(.year(2025))) == nil)
+            #expect(runtime.transitionImage(for: sourceAsset(revision: .distantFuture), scope: .range(.year(2026))) == nil)
         }
-        #expect(runtime.transitionImage(for: asset, scope: .year(2026)) == nil)
+        #expect(runtime.transitionImage(for: asset, scope: .range(.year(2026))) == nil)
     }
 
     @Test func stillViewerDisplaysSourcePixelsWithoutWaitingForAnImagePipeline() async throws {
@@ -191,7 +191,7 @@ private struct ScopedSourceFixture: View {
                 .padding(.top, 100)
             Color.clear.frame(height: 1000)
         }
-        .environment(\.scopedAssetTransitionContext, ScopedAssetTransitionContext(runtime: runtime, scope: .year(2026)))
+        .environment(\.scopedAssetTransitionContext, ScopedAssetTransitionContext(runtime: runtime, scope: .range(.year(2026))))
         .fullScreenCover(isPresented: $state.presented) {
             Color.black.ignoresSafeArea().presentationBackground(.clear)
         }

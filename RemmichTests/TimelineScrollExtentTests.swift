@@ -131,6 +131,70 @@ struct TimelineScrollExtentTests {
         #expect(appeared.count < assets.count / 2)
     }
 
+    @Test func searchPinchProjectionsKeepRankAndShareThumbnailSize() throws {
+        let assets = makeCatalog(count: 250, separateDays: true).assets
+        let ranked = Array(assets[25...]) + Array(assets[..<25])
+        let catalog = TimelineSemanticCatalog(searchResults: ranked + [ranked[0]])
+
+        for (width, isPhone, expectedSide) in [(402.0, true, 398.0 / 3), (736.0, false, 128.0)] {
+            let size = CGSize(width: width, height: 874)
+            let side = TimelineSemanticProjection.searchThumbnailSide(width: width, isPhone: isPhone)
+            #expect(abs(side - expectedSide) < 0.001)
+            for scale in [TimelineSemanticScale.square, .natural] {
+                let full = TimelineSemanticProjection.complete(catalog: catalog, scale: scale, size: size, isPhone: isPhone, dark: true)
+                let window = full.window(catalog: catalog, focusAssetIndex: 225, size: size, isPhone: isPhone)
+                #expect(full.items.map(\.id) == ranked.map(\.id))
+                #expect(full.items.allSatisfy { !$0.isHeader && $0.frame.width <= side })
+                #expect(window.height == full.height)
+                #expect(window.items.map(\.id) == ranked[window.nodeRange].map(\.id))
+                let firstItem = try #require(window.items.first)
+                #expect(firstItem.frame.minX == 0)
+            }
+        }
+    }
+
+    @Test(arguments: [1, 80])
+    @MainActor func searchScrollInsetsKeepResultsClearOfBothBars(count: Int) throws {
+        let assets = makeCatalog(count: count, separateDays: false).assets
+        let catalog = TimelineSemanticCatalog(searchResults: assets)
+        let controller = TimelineSemanticCollectionController()
+        defer { controller.stop() }
+        let media = MediaLibraryController()
+        let runtime = TimelineSemanticRuntime()
+        let bottom: CGFloat = 80
+        let pagingClearance: CGFloat = 56
+        func input(top: CGFloat) -> TimelineSemanticCollectionView {
+            .init(catalog: catalog, revision: 1, scale: .square, media: media, namespace: nil,
+                  bottomClearance: bottom + pagingClearance, topClearance: top, runtime: runtime, latestRequest: 0, isActive: true,
+                  includesDateCardsInPinch: false, hiddenThumbnailID: nil, hiddenLivePhotoID: nil,
+                  selectAsset: { _, _ in }, selectGroup: { _, _ in }, scaleChanged: { _ in },
+                  scrolled: { _, _, _ in }, visibleAssetsChanged: { _, _, _ in }, refresh: {},
+                  viewerBottomClearance: bottom)
+        }
+
+        controller.update(input(top: 160))
+        controller.view.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        controller.view.setNeedsLayout()
+        controller.view.layoutIfNeeded()
+        let collection = try #require(controller.view.subviews.compactMap { $0 as? UICollectionView }.first)
+        #expect(abs(collection.contentOffset.y + 160) < 0.01)
+
+        controller.update(input(top: 200))
+        collection.layoutIfNeeded()
+        #expect(abs(collection.contentOffset.y + 200) < 0.01)
+        let bottomOffset = collection.contentSize.height - collection.bounds.height + collection.contentInset.bottom
+        if count == 1 {
+            #expect(abs(bottomOffset + 200) < 0.01)
+        } else {
+            #expect(bottomOffset > 0)
+            let last = try #require(collection.layoutAttributesForItem(at: IndexPath(item: count - 1, section: 0)))
+            collection.contentOffset.y = last.frame.minY - collection.bounds.height + bottom + 10
+            #expect(controller.dismissalTarget(assetID: assets[count - 1].id, aspectRatio: 1) != nil)
+            collection.contentOffset.y = bottomOffset
+        }
+        #expect(controller.dismissalTarget(assetID: assets[count - 1].id, aspectRatio: 1) != nil)
+    }
+
     @MainActor private func findScrollView(in view: UIView) -> UIScrollView? {
         if let scroll = view as? UIScrollView {
             return scroll

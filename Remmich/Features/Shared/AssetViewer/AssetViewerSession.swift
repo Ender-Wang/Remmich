@@ -5,6 +5,7 @@ nonisolated enum AssetViewerOrigin: Hashable, Sendable {
     case timeline(bucketID: TimelineBucketID, contentName: String)
     case scoped(route: PhotosRangeRoute, contentName: String)
     case memory(AssetViewerMemoryContext)
+    case search
 }
 
 nonisolated struct AssetViewerMemoryContext: Hashable, Sendable {
@@ -39,6 +40,8 @@ private extension AssetViewerOrigin {
             "scoped|\(contentName)|\(String(describing: route))"
         case let .memory(context):
             "memory|\(context.id)"
+        case .search:
+            "search"
         }
     }
 }
@@ -76,12 +79,17 @@ final class AssetViewerSession {
     ) {
         origin = route.origin
         selectedAssetID = route.selectedAsset.id
-        let sourceAssets = Self.orderedUnique(route.initialAssets + [route.selectedAsset])
+        let sourceAssets = if route.origin == .search {
+            Self.unique(route.initialAssets + [route.selectedAsset])
+        } else {
+            Self.orderedUnique(route.initialAssets + [route.selectedAsset])
+        }
         self.sourceAssets = sourceAssets
-        assets = Self.viewerProjection(
-            sourceAssets: sourceAssets,
-            selectedAsset: route.selectedAsset
-        )
+        if route.origin == .search, route.selectedAsset.mediaKind != .video {
+            assets = sourceAssets.filter { $0.mediaKind != .video }
+        } else {
+            assets = Self.viewerProjection(sourceAssets: sourceAssets, selectedAsset: route.selectedAsset)
+        }
         self.bucketIDs = bucketIDs
         self.loadBucket = loadBucket
 
@@ -202,11 +210,11 @@ final class AssetViewerSession {
     nonisolated static func orderedUnique(
         _ values: [TimelineAssetSummary]
     ) -> [TimelineAssetSummary] {
+        unique(values.sorted { $1.isOrdered(before: $0) })
+    }
+
+    private nonisolated static func unique(_ values: [TimelineAssetSummary]) -> [TimelineAssetSummary] {
         var seen = Set<String>()
-        return values
-            .sorted {
-                $1.isOrdered(before: $0)
-            }
-            .filter { seen.insert($0.id).inserted }
+        return values.filter { seen.insert($0.id).inserted }
     }
 }

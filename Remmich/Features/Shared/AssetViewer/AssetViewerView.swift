@@ -134,7 +134,7 @@ struct AssetViewerView: View {
 
     init(
         route: AssetViewerRoute,
-        store: PhotosTimelineStore,
+        store: PhotosTimelineStore? = nil,
         media: MediaLibraryController,
         assetDetails: any AssetDetailReading,
         tabBarTop: CGFloat = 0,
@@ -175,9 +175,9 @@ struct AssetViewerView: View {
         self.dismissalTarget = dismissalTarget
         _session = State(initialValue: AssetViewerSession(
             route: route,
-            bucketIDs: store.bucketSummaries.map(\.id),
+            bucketIDs: store?.bucketSummaries.map(\.id) ?? [],
             loadBucket: { bucketID in
-                await store.rangeCoverAssets(in: bucketID)
+                await store?.rangeCoverAssets(in: bucketID) ?? []
             }
         ))
         _pagerPosition = State(initialValue: route.selectedAsset.id)

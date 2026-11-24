@@ -74,6 +74,8 @@ struct TimelineSemanticCollectionView: UIViewControllerRepresentable {
     let refresh: () async -> Void
     var loadOlder: () async -> Void = {}
     var focusChanged: (TimelineAssetSummary) -> Void = { _ in }
+    var nearingEnd: (() -> Void)?
+    var viewerBottomClearance: CGFloat?
 
     func makeUIViewController(context _: Context) -> TimelineSemanticCollectionController {
         let controller = TimelineSemanticCollectionController()
@@ -631,6 +633,10 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
     private var localTransitionTasks: [Task<Void, Never>] = []
     private var isPresentationCrossfading = false
 
+    private var showsRankedResults: Bool {
+        catalog?.preservesSearchRanking == true
+    }
+
     private struct TransitionItem {
         let view: UIView
         let start: CGRect
@@ -732,10 +738,11 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             pendingRootReturn = nil
             return
         }
-        let asset = focus.map(representativeIndex) ?? max(0, catalog.assets.count - 1)
+        let asset = focus.map(representativeIndex) ?? (showsRankedResults ? 0 : max(0, catalog.assets.count - 1))
         let next = makeProjection(scale: scale, focus: asset)
         install(next, focusing: asset, viewportY: focusY.map { $0 / sourceHeight * view.bounds.height },
-                latest: focus == nil || wasAtLatest, alignTop: wasAtTop && !wasAtLatest)
+                latest: !showsRankedResults && (focus == nil || wasAtLatest),
+                alignTop: showsRankedResults ? focus == nil || wasAtTop : wasAtTop && !wasAtLatest)
         if catalog.assets.isEmpty {
             loadOlderIfNeeded()
         }
@@ -746,11 +753,11 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         completeProjections.removeAll()
         interrupted()
         let focus = focusedItem(at: CGPoint(x: collection.bounds.midX, y: collection.bounds.midY))
-        let asset = focus.map(representativeIndex) ?? max(0, catalog!.assets.count - 1)
+        let asset = focus.map(representativeIndex) ?? (showsRankedResults ? 0 : max(0, catalog!.assets.count - 1))
         let wasAtTop = collection.contentOffset.y <= -collection.contentInset.top + 1
         install(makeProjection(scale: scale, focus: asset), focusing: asset,
                 viewportY: focus.map { $0.frame.midY - collection.contentOffset.y },
-                latest: isAtLatest, alignTop: wasAtTop && !isAtLatest)
+                latest: !showsRankedResults && isAtLatest, alignTop: wasAtTop && (showsRankedResults || !isAtLatest))
     }
 
     func updateFromSwiftUI(_ value: TimelineSemanticCollectionView) {
@@ -779,7 +786,12 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         }
         input = value
         if previous == nil, pendingRootReturn == nil {
-            pendingRootReturn = value.runtime.browsingAnchor
+            if value.catalog.preservesSearchRanking {
+                collection.keyboardDismissMode = .onDrag
+                collection.refreshControl = nil
+            } else {
+                pendingRootReturn = value.runtime.browsingAnchor
+            }
         }
         if pendingRootReturn == nil, let previous, revision == value.revision, scale == value.scale,
            previous.isOpeningWindow == value.isOpeningWindow,
@@ -793,6 +805,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
                - (value.pinnedHeaderTopClearance ?? value.topClearance)) < 0.5,
            previous.media === value.media
         {
+            publishNearingEnd()
             return
         }
         collection.isUserInteractionEnabled = value.isActive
@@ -800,7 +813,8 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         let oldFocus = focusedItem(at: CGPoint(x: collection.bounds.midX, y: collection.bounds.midY))
         let oldFocusID = oldFocus.flatMap { item in catalog.map { $0.assets[representativeIndex(item)].id } }
         let focusY = oldFocus.map { $0.frame.midY - collection.contentOffset.y }
-        let latest = projection == nil || isAtLatest
+        let ranked = value.catalog.preservesSearchRanking
+        let latest = !ranked && (projection == nil || isAtLatest)
         let wasAtTop = collection.contentOffset.y <= -collection.contentInset.top + 1
         let needsCatalog = revision != value.revision || completesOpeningWindow
         if needsCatalog {
@@ -835,7 +849,11 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             right: 0
         )
         if (topInsetChanged || pinnedInsetChanged) && !bottomInsetChanged {
-            collection.contentOffset.y = wasAtTop && !latest ? -value.topClearance : oldOffsetY
+            if ranked, let projection {
+                layout.height = contentHeight(for: projection.height)
+            }
+            let preservedOffset = ranked ? min(max(oldOffsetY, -value.topClearance), maximumOffset(for: layout.height)) : oldOffsetY
+            collection.contentOffset.y = wasAtTop && !latest ? -value.topClearance : preservedOffset
             lastOffset = collection.contentOffset.y
             layout.invalidateLayout()
         }
@@ -882,7 +900,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
                 }
             }
         } else if needsCatalog || needsScale || projectionMissing || bottomInsetChanged {
-            let focus = oldFocusID.flatMap { value.catalog.assetIndexes[$0] } ?? max(0, value.catalog.assets.count - 1)
+            let focus = oldFocusID.flatMap { value.catalog.assetIndexes[$0] } ?? (ranked ? 0 : max(0, value.catalog.assets.count - 1))
             if lastSize.width > 0 {
                 install(makeProjection(scale: scale, focus: focus, range: needsCatalog || needsScale || projectionMissing ? nil : projection?.nodeRange),
                         focusing: focus, viewportY: focusY, latest: latest && !needsScale,
@@ -911,6 +929,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         if topInsetChanged, !bottomInsetChanged {
             publishViewport()
         }
+        publishNearingEnd()
     }
 
     private var isAtLatest: Bool {
@@ -991,11 +1010,13 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         if let cached = completeProjections[scale] {
             return cached.projection
         }
-        let complete = TimelineSemanticProjection.complete(
+        let projection = TimelineSemanticProjection.complete(
             catalog: catalog!, scale: scale, size: lastSize,
             isPhone: traitCollection.userInterfaceIdiom == .phone,
             dark: traitCollection.userInterfaceStyle == .dark
-        ).bottomAligned(minimumHeight: max(0, collection.bounds.height - collection.contentInset.bottom))
+        )
+        let complete = showsRankedResults ? projection
+            : projection.bottomAligned(minimumHeight: max(0, collection.bounds.height - collection.contentInset.bottom))
         // Keep the active and neighboring scales warm without retaining every
         // full-library asset layout after traversing the zoom ladder.
         if completeProjections.count >= 3,
@@ -1009,9 +1030,18 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         return complete
     }
 
+    private func contentHeight(for projectionHeight: CGFloat) -> CGFloat {
+        let top = showsRankedResults ? collection.contentInset.top : 0
+        return max(projectionHeight, collection.bounds.height - top - collection.contentInset.bottom)
+    }
+
+    private func maximumOffset(for contentHeight: CGFloat) -> CGFloat {
+        let minimum = showsRankedResults ? -collection.contentInset.top : 0
+        return max(minimum, contentHeight - collection.bounds.height + collection.contentInset.bottom)
+    }
+
     private func offset(for next: TimelineSemanticProjection, focus: Int, viewportY: CGFloat?, latest: Bool) -> CGFloat {
-        let height = max(next.height, collection.bounds.height - collection.contentInset.bottom)
-        let maximum = max(0, height - collection.bounds.height + collection.contentInset.bottom)
+        let maximum = maximumOffset(for: contentHeight(for: next.height))
         guard !latest, let item = next.items.first(where: { !$0.isHeader && $0.assetRange.contains(focus) }) else { return maximum }
         return min(maximum, max(-collection.contentInset.top, item.frame.midY - (viewportY ?? collection.bounds.height / 2)))
     }
@@ -1038,7 +1068,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         scale = next.scale
         layout.frames = next.items.map(\.frame)
         layout.headerIndices = next.scale.isAssets ? next.items.indices.filter { next.items[$0].isHeader } : []
-        layout.height = max(next.height, collection.bounds.height - collection.contentInset.bottom)
+        layout.height = contentHeight(for: next.height)
         let y = alignTop ? -collection.contentInset.top : offset(for: next, focus: focus, viewportY: viewportY, latest: latest)
         UIView.performWithoutAnimation {
             var snapshot = NSDiffableDataSourceSnapshot<Int, String>()
@@ -1124,12 +1154,16 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             cell.setHostedContent(
                 TimelineAssetThumbnail(asset: asset, media: input.media,
                                        assetLayout: projection.scale == .square ? .square : .naturalAspect,
-                                       requestSide: max(item.frame.width, item.frame.height),
+                                       requestSide: thumbnailSide(in: item.frame),
                                        visibilityChanged: { _, _ in }, viewportChanged: { _, _ in },
                                        transitionNamespace: input.namespace,
                                        assetSelected: { [weak self] selected in
                                            guard self?.gesture == nil, self?.animator == nil else { return }
-                                           input.selectAsset(selected, Array(catalog.assets[max(0, assetIndex - 80) ..< min(catalog.assets.count, assetIndex + 81)].reversed()))
+                                           if catalog.preservesSearchRanking {
+                                               input.selectAsset(selected, catalog.assets)
+                                           } else {
+                                               input.selectAsset(selected, Array(catalog.assets[max(0, assetIndex - 80) ..< min(catalog.assets.count, assetIndex + 81)].reversed()))
+                                           }
                                        },
                                        placeholderImage: handoffImages[item.id],
                                        imageLoaded: { [weak self, weak cell] image in
@@ -1627,7 +1661,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
 
     private func cachedImage(asset: TimelineAssetSummary, frame: CGRect) -> UIImage? {
         guard let media = input?.media else { return nil }
-        let side = min(2048, max(1, Int((max(frame.width, frame.height) * traitCollection.displayScale).rounded(.up))))
+        let side = thumbnailDescriptor(asset: asset, frame: frame, scale: .square).targetPixels?.width ?? 1
         for pixels in [side, 900] {
             let descriptor = MediaRequestDescriptor(assetID: asset.id, updatedAt: asset.thumbnailRevision,
                                                     derivative: .thumbnail, targetPixels: .init(width: pixels, height: pixels))
@@ -2213,7 +2247,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
     }
 
     private func loadOlderIfNeeded() {
-        guard loadOlderTask == nil, gesture == nil, animator == nil,
+        guard !showsRankedResults, loadOlderTask == nil, gesture == nil, animator == nil,
               projection?.nodeRange.lowerBound == 0,
               collection.contentOffset.y < collection.bounds.height,
               let input, input.isActive else { return }
@@ -2226,6 +2260,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
     private func publishViewport() {
         guard let input, input.isActive, let catalog, let projection, collection != nil,
               gesture == nil, animator == nil, transitionSurface == nil, !isInstalling else { return }
+        publishNearingEnd()
         let visibleItems = collection.indexPathsForVisibleItems.compactMap { path -> TimelineSemanticProjection.Item? in
             guard projection.items.indices.contains(path.item) else { return nil }
             let item = projection.items[path.item]
@@ -2251,6 +2286,13 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         lastPublishedTarget = target
         lastPublishedScale = scale
         input.visibleAssetsChanged(assets, target, scale)
+    }
+
+    private func publishNearingEnd() {
+        guard let input, input.isActive, let nearingEnd = input.nearingEnd, projection != nil,
+              gesture == nil, animator == nil, transitionSurface == nil, !isInstalling,
+              layout.height - collection.bounds.maxY + collection.contentInset.bottom <= 56 else { return }
+        nearingEnd()
     }
 
     private func scheduleTransitionWarmup() {
@@ -2386,8 +2428,14 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         transitionHostingControllerCursor = 0
     }
 
+    private func thumbnailSide(in frame: CGRect) -> CGFloat {
+        showsRankedResults
+            ? TimelineSemanticProjection.searchThumbnailSide(width: lastSize.width, isPhone: traitCollection.userInterfaceIdiom == .phone)
+            : max(frame.width, frame.height)
+    }
+
     private func thumbnailDescriptor(asset: TimelineAssetSummary, frame: CGRect, scale: TimelineSemanticScale) -> MediaRequestDescriptor {
-        let side = scale.isAssets ? min(2048, max(1, Int((max(frame.width, frame.height) * traitCollection.displayScale).rounded(.up)))) : 900
+        let side = scale.isAssets ? min(2048, max(1, Int((thumbnailSide(in: frame) * traitCollection.displayScale).rounded(.up)))) : 900
         return MediaRequestDescriptor(assetID: asset.id, updatedAt: asset.thumbnailRevision, derivative: .thumbnail,
                                       targetPixels: .init(width: side, height: side))
     }
@@ -2423,7 +2471,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         // Native indicator dragging can jump beyond the materialized window.
         // Rebuild around the destination using metadata, preserving that offset.
         if !cells.contains(where: { $0.frame.intersects(viewport) }) {
-            let maximum = max(0, layout.height - viewport.height + collection.contentInset.bottom)
+            let maximum = maximumOffset(for: layout.height)
             guard viewport.minY >= -collection.contentInset.top, viewport.minY <= maximum else { return }
             _ = completeProjection(at: scale)
             guard let focus = completeProjections[scale]?.nearest(to: viewport.midY) else { return }
@@ -2482,8 +2530,12 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
     }
 
     func dismissalTarget(assetID: String, aspectRatio: Double) -> AssetViewerDismissalTarget? {
-        guard scale.isAssets, let projection, let item = projection.items.first(where: { $0.id == assetID }),
-              item.frame.intersects(collection.bounds) else { return nil }
+        guard scale.isAssets, let projection, let item = projection.items.first(where: { $0.id == assetID }) else { return nil }
+        let viewport = showsRankedResults
+            ? collection.bounds.inset(by: UIEdgeInsets(top: collection.contentInset.top, left: 0,
+                                                       bottom: input?.viewerBottomClearance ?? collection.contentInset.bottom, right: 0))
+            : collection.bounds
+        guard item.frame.intersects(viewport) else { return nil }
         let fitted = scale == .natural
             ? TimelineThumbnailGeometry.renderedImageRect(in: item.frame.size, aspectRatio: aspectRatio, naturalAspectProgress: 1)
             : CGRect(origin: .zero, size: item.frame.size)

@@ -59,20 +59,20 @@ struct ScopedDayTransitionTests {
         tabs.view.layoutIfNeeded()
         try await Task.sleep(for: .milliseconds(500))
         // IDs are deliberately not chronological; timestamps identify the latest asset.
-        let initial = try #require(runtime.target(assetID: "day-0", scope: scope))
+        let initial = try #require(runtime.target(assetID: "day-0", scope: .range(scope)))
         if assetCount == 80 {
-            #expect(runtime.target(assetID: "day-79", scope: scope) == nil)
+            #expect(runtime.target(assetID: "day-79", scope: .range(scope)) == nil)
         }
         var transaction = Transaction(animation: nil)
         transaction.disablesAnimations = true
         withTransaction(transaction) { state.presented = true }
         try await Task.sleep(for: .milliseconds(500))
         _ = try #require(host.presentedViewController)
-        let covered = try #require(runtime.target(assetID: "day-0", scope: scope))
+        let covered = try #require(runtime.target(assetID: "day-0", scope: .range(scope)))
         #expect(covered.imageFrame == initial.imageFrame)
         state.presented = false
         try await Task.sleep(for: .milliseconds(500))
-        let returned = try #require(runtime.target(assetID: "day-0", scope: scope))
+        let returned = try #require(runtime.target(assetID: "day-0", scope: .range(scope)))
         #expect(returned.imageFrame == initial.imageFrame)
     }
 }
@@ -98,7 +98,7 @@ private struct DayCoverFixture: View {
                         .navigationTitle(route.navigationTitle)
                         .navigationBarTitleDisplayMode(.inline)
                         .toolbarBackground(.visible, for: .navigationBar)
-                        .environment(\.scopedAssetTransitionContext, .init(runtime: runtime, scope: scope))
+                        .environment(\.scopedAssetTransitionContext, .init(runtime: runtime, scope: .range(scope)))
                 }
                 .fullScreenCover(isPresented: $state.presented) {
                     Color.black.ignoresSafeArea().presentationBackground(.clear)

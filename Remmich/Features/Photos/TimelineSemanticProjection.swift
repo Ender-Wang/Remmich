@@ -30,8 +30,20 @@ final nonisolated class TimelineSemanticCatalog: Sendable {
     let groups: [TimelineSemanticScale: [Group]]
     let standardMosaicBlocks: [TimelineSemanticScale: [TimelineRangeMosaicBlockPlan]]
     let landscapeMosaicBlocks: [TimelineSemanticScale: [TimelineRangeMosaicBlockPlan]]
+    let preservesSearchRanking: Bool
+
+    init(searchResults: [TimelineAssetSummary]) {
+        var seen = Set<String>()
+        assets = searchResults.filter { seen.insert($0.id).inserted }
+        assetIndexes = Dictionary(uniqueKeysWithValues: assets.enumerated().map { ($0.element.id, $0.offset) })
+        groups = [:]
+        standardMosaicBlocks = [:]
+        landscapeMosaicBlocks = [:]
+        preservesSearchRanking = true
+    }
 
     init(assets source: [TimelineAssetSummary]) {
+        preservesSearchRanking = false
         var seen = Set<String>()
         assets = source.filter { seen.insert($0.id).inserted }.sorted {
             $0.isOrdered(before: $1)
@@ -191,7 +203,12 @@ nonisolated struct TimelineSemanticProjection: Sendable {
         let requested = requestedRange ?? max(0, focus - radius) ..< min(count, focus + radius + 1)
         let lower = max(0, min(count - 1, requested.lowerBound))
         var range = lower ..< min(count, max(lower + 1, requested.upperBound))
-        if scale.isAssets {
+        if catalog.preservesSearchRanking {
+            let columns = Self.searchGridMetrics(width: size.width, isPhone: isPhone, scale: scale).columns
+            let alignedLower = range.lowerBound / columns * columns
+            let alignedUpper = (range.upperBound + columns - 1) / columns * columns
+            range = alignedLower ..< min(count, alignedUpper)
+        } else if scale.isAssets {
             let spacing: CGFloat = scale == .natural ? 8 : 2
             let columns = TimelineGridOrder.timelineColumnCount(
                 availableSize: size, minimumLandscapeColumnWidth: isPhone ? 88 : 120, spacing: spacing
@@ -224,6 +241,20 @@ nonisolated struct TimelineSemanticProjection: Sendable {
             return Self(scale: scale, nodeRange: 0 ..< 0, items: [], height: 0)
         }
         let range = 0 ..< count
+        if catalog.preservesSearchRanking {
+            let grid = searchGridMetrics(width: size.width, isPhone: isPhone, scale: scale)
+            let stride = grid.side + grid.spacing
+            let items = range.map { index in
+                Item(id: catalog.assets[index].id, nodeIndex: index, assetRange: index ..< index + 1,
+                     frame: CGRect(x: CGFloat(index % grid.columns) * stride,
+                                   y: topPadding + CGFloat(index / grid.columns) * stride,
+                                   width: grid.side, height: grid.side),
+                     isHeader: false, isFeatured: false)
+            }
+            let rows = (count + grid.columns - 1) / grid.columns
+            return Self(scale: scale, nodeRange: range, items: items,
+                        height: topPadding + CGFloat(rows) * stride - grid.spacing + bottomPadding)
+        }
         var items: [Item] = []
         items.reserveCapacity(count + (scale.isAssets ? catalog.count(at: .day) : 0))
         var y = topPadding
@@ -287,6 +318,20 @@ nonisolated struct TimelineSemanticProjection: Sendable {
             return Self(scale: scale, nodeRange: range, items: items, height: y + bottomPadding - spacing)
         }
         return Self(scale: scale, nodeRange: range, items: items, height: y + bottomPadding - assetSpacing)
+    }
+
+    private static func searchGridMetrics(width: CGFloat, isPhone: Bool, scale: TimelineSemanticScale)
+        -> (columns: Int, spacing: CGFloat, side: CGFloat)
+    {
+        let spacing: CGFloat = scale == .square ? 2 : isPhone ? 12 : 24
+        let columns = isPhone ? 3 : TimelineGridOrder.columnCount(availableWidth: width, minimumColumnWidth: 120, spacing: spacing)
+        let side = max(0, (width - CGFloat(columns - 1) * spacing) / CGFloat(columns))
+        return (columns, spacing, side)
+    }
+
+    static func searchThumbnailSide(width: CGFloat, isPhone: Bool) -> CGFloat {
+        max(searchGridMetrics(width: width, isPhone: isPhone, scale: .square).side,
+            searchGridMetrics(width: width, isPhone: isPhone, scale: .natural).side)
     }
 }
 

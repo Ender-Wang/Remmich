@@ -1,12 +1,18 @@
 import SwiftUI
 import UIKit
 
+nonisolated enum AssetTransitionScope: Hashable, Sendable {
+    case range(PhotosRangeRoute)
+    case search
+    case searchRecent(LibraryAssetCollection)
+}
+
 /// Read geometry at the transition boundary. Weak UIKit probes avoid publishing
 /// every cell frame through SwiftUI while a scoped grid scrolls or lays out.
 @MainActor
 final class ScopedAssetTransitionRuntime {
     private nonisolated struct Key: Hashable {
-        let scope: PhotosRangeRoute
+        let scope: AssetTransitionScope
         let assetID: String
     }
 
@@ -32,7 +38,7 @@ final class ScopedAssetTransitionRuntime {
     private var images: [Key: ImageReference] = [:]
     private var revision = 0
 
-    func register(_ view: UIView, scope: PhotosRangeRoute, assetID: String,
+    func register(_ view: UIView, scope: AssetTransitionScope, assetID: String,
                   aspectRatio: Double, naturalAspectProgress: CGFloat)
     {
         let identity = ObjectIdentifier(view)
@@ -58,18 +64,18 @@ final class ScopedAssetTransitionRuntime {
         }
     }
 
-    func imageLoaded(_ image: UIImage, asset: TimelineAssetSummary, scope: PhotosRangeRoute) {
+    func imageLoaded(_ image: UIImage, asset: TimelineAssetSummary, scope: AssetTransitionScope) {
         images[Key(scope: scope, assetID: asset.id)] = ImageReference(image: image, revision: asset.thumbnailRevision)
     }
 
-    func transitionImage(for asset: TimelineAssetSummary, scope: PhotosRangeRoute) -> UIImage? {
+    func transitionImage(for asset: TimelineAssetSummary, scope: AssetTransitionScope) -> UIImage? {
         guard target(assetID: asset.id, scope: scope) != nil,
               let entry = images[Key(scope: scope, assetID: asset.id)], entry.revision == asset.thumbnailRevision
         else { return nil }
         return entry.image
     }
 
-    func target(assetID: String, scope: PhotosRangeRoute) -> AssetViewerDismissalTarget? {
+    func target(assetID: String, scope: AssetTransitionScope) -> AssetViewerDismissalTarget? {
         let candidates = sources[Key(scope: scope, assetID: assetID), default: [:]].values.sorted {
             $0.revision > $1.revision
         }
@@ -107,7 +113,7 @@ final class ScopedAssetTransitionRuntime {
 
 nonisolated struct ScopedAssetTransitionContext: Sendable {
     let runtime: ScopedAssetTransitionRuntime
-    let scope: PhotosRangeRoute
+    let scope: AssetTransitionScope
 }
 
 extension EnvironmentValues {
