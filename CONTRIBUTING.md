@@ -50,6 +50,7 @@ flowchart TD
     API --> Index[Per-account catalog and Timeline Index]
     API --> Albums[Album discovery and Album Index]
     API --> Collections[Library collection reads and Library Index]
+    API --> Search[Account-scoped Search and filters]
     Albums --> Index
     Collections --> Index
     Index --> Timeline[Photos, Videos and album timelines]
@@ -58,6 +59,7 @@ flowchart TD
     Timeline --> Browsing[Semantic zoom and date cards]
     Browsing --> Viewer[Photo, Live Photo, and memory viewer]
     Cache --> Viewer
+    Search --> Browsing
     Browsing --> Stream[Authenticated video byte-range stream]
     Routing --> Stream
     Stream --> AVKit[AVPlayer and AVKit playback]
@@ -65,6 +67,10 @@ flowchart TD
 ```
 
 The generated API client is wrapped by [ImmichServiceAdapter](Remmich/Infrastructure/Immich/ImmichServiceAdapter.swift) and the feature-facing [read-only service protocols](Remmich/Domain/Protocols/ReadOnlyServices.swift). Account restoration and route changes are coordinated from [AppSessionController](Remmich/App/AppSessionController.swift).
+
+### Search
+
+[SearchStore](Remmich/Features/Search/SearchStore.swift) owns account-scoped history, drafts, applied filters, and result paging. [ImmichTimelineRepository](Remmich/Infrastructure/Timeline/ImmichTimelineRepository.swift) maps the domain query to the active Immich route and rejects stale responses after route changes. Metadata requests follow the server cursor. Context requests expand the ranked window up to 1,000 results and append unseen IDs in order. The shared timeline grid and viewer load thumbnails through the account media cache.
 
 ### Local storage and 0.5.0 upgrades
 
@@ -144,7 +150,7 @@ New index writes persist capture-local day/week/month/year keys, including the I
 
 ### Cached timeline startup
 
-On launch, the accepted local index supplies about two screenfuls of Photos and their cached thumbnails. After the opening tiles appear, older Photos load and the native tab shell prepares Videos, Albums, Library, and Search. Search prepares its demo grid and search field through the same tab path. If the cached Photos data is unavailable, the loading logo stays visible until content or an empty or error state is ready.
+On launch, the accepted local index supplies about two screenfuls of Photos and their cached thumbnails. The signed-in shell prepares Library and the Search Browse layout and warms recent searches, indexed People, and a small indexed Places preview from local data. Search checks capabilities and fills its Browse rows when selected. After the opening Photos tiles appear, older Photos load while Videos and Albums prepare their opening views. If the cached Photos data is unavailable, the loading logo stays visible until content or an empty or error state is ready.
 
 Videos and individual album timelines also use a small opening window. The timeline keeps the currently visible asset in place when the full history arrives and waits for active scrolling to settle before replacing the opening window. The Albums overview starts at the bottom with its header clearance measured from the window safe area, so attaching the prepared tab does not rebase the scroll offset.
 
