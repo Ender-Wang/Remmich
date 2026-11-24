@@ -48,6 +48,7 @@ final class AppSessionController {
     let albums: any AlbumReading & TimelineReading
     let photos: PhotosTimelineStore
     let videos: PhotosTimelineStore
+    private(set) var search: SearchStore?
     let libraryIndex: LibraryIndexController
     private let librarySyncSource: ImmichTimelineRepository
     private let libraryTransfers: LibraryTransferQueue?
@@ -512,6 +513,11 @@ final class AppSessionController {
         media.clearAll()
         photos.reset()
         videos.reset()
+        search?.cancel()
+        if deleteLocalData {
+            search?.clearHistory()
+        }
+        search = nil
         await libraryTransfers?.invalidate()
         guard generation == preparationGeneration else { return generation }
         if deleteLocalData {
@@ -900,6 +906,9 @@ final class AppSessionController {
         let generation = preparationGeneration
         let changed = await timeline.configure(session: session, activeEndpoint: endpoint, collectionStore: libraryIndexStore)
         guard preparationIsCurrent(generation) else { return false }
+        if search == nil {
+            search = SearchStore(source: timeline, scope: MediaAccountScope(session: session))
+        }
         locations.configureMap(session: session, endpoint: endpoint)
         await librarySyncSource.configure(session: session, activeEndpoint: endpoint)
         guard preparationIsCurrent(generation) else { return false }

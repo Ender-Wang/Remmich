@@ -34,6 +34,7 @@ struct AppShellView: View {
     var sessionController: AppSessionController?
 
     @State private var tabSelectionState = NativeTabSelectionState()
+    @State private var searchPath: [LibraryAssetCollection] = []
     @State private var tabContentActivationState = NativeTabContentActivationState()
     @State private var timelineRotationState = TimelineRotationState()
     @State private var photosTimelineRuntime = TimelineSemanticRuntime()
@@ -65,7 +66,7 @@ struct AppShellView: View {
     @State private var libraryNavigationRoot = CardNavigationRoot()
     @State private var libraryPushGeneration = 0
     @State private var libraryCardAfterPathRecovery: LibraryHubDestination?
-    @State private var searchPath = NavigationPath()
+    @State private var searchBlocksPageSwipe = false
     @State private var showsAccount = false
     @State private var legacyViewerPresented = false
     @State private var viewerPresentations = AssetViewerPresentationStore()
@@ -89,6 +90,10 @@ struct AppShellView: View {
             pageSwipeEnabled: pageSwipeEnabled,
             albumSearchExpanded: { tabSelectionState.isAlbumSearchExpanded },
             pageInteractionChanged: { tabSelectionState.isPageInteractionActive = $0 },
+            searchTapped: {
+                searchPath.removeAll()
+                tabSelectionState.searchFocusRequest = UUID()
+            },
             photosScrollRequest: photosScrollRequest,
             videosScrollRequest: videosScrollRequest,
             albumsScrollRequest: albumsScrollRequest,
@@ -336,7 +341,22 @@ struct AppShellView: View {
                     activationState: tabContentActivationState
                 ) {
                     NavigationStack(path: $searchPath) {
-                        SearchView(assets: PreviewFixtures.assets, showAccount: showAccount)
+                        if let sessionController, let store = sessionController.search {
+                            SearchView(
+                                sessionController: sessionController,
+                                store: store,
+                                media: media,
+                                assetDetails: assetDetails,
+                                viewerPresentations: viewerPresentations,
+                                tabBarTop: $tabBarTop,
+                                tabSelection: tabSelectionState,
+                                libraryOpening: libraryOpening,
+                                libraryCamera: libraryCameraMetadata,
+                                editingChanged: { searchBlocksPageSwipe = $0 }
+                            )
+                        } else {
+                            ContentUnavailableView("Search unavailable", systemImage: "magnifyingglass")
+                        }
                     }
                 }
             ),
@@ -522,6 +542,9 @@ struct AppShellView: View {
             pushLibraryCard(card)
         }
         .onChange(of: tabSelectionState.selection) { previous, current in
+            if current != .search {
+                tabSelectionState.searchFocusRequest = nil
+            }
             if previous == .albums, current != .albums {
                 albumAfterPathRecovery = nil
                 media.cancelPrefetching()
@@ -805,6 +828,9 @@ struct AppShellView: View {
     }
 
     private var pageSwipeEnabled: Bool {
+        if tabSelectionState.selection == .search, searchBlocksPageSwipe {
+            return false
+        }
         let hasNavigationDestination: Bool = switch tabSelectionState.selection {
         case .photos: !photosPath.isEmpty
         case .videos: !videosPath.isEmpty

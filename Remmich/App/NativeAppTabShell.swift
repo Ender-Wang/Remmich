@@ -8,6 +8,7 @@ import UIKit
 final class NativeTabSelectionState {
     var selection: NativeTabDestination = .photos
     var isAlbumSearchExpanded = false
+    var searchFocusRequest: UUID?
     @ObservationIgnored var isPageInteractionActive = false
 
     func canActivateContent(in destination: NativeTabDestination) -> Bool {
@@ -205,6 +206,9 @@ enum NativeTabPageGesturePolicy {
         }
         var candidate = touchedView
         while let view = candidate {
+            if view is UITextField || view is UITextView {
+                return true
+            }
             if let scrollView = view as? UIScrollView,
                scrollView.alwaysBounceHorizontal
                || scrollView.contentSize.width > scrollView.bounds.width + 1
@@ -242,6 +246,7 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
     let pageSwipeEnabled: Bool
     var albumSearchExpanded: () -> Bool = { false }
     var pageInteractionChanged: (Bool) -> Void = { _ in }
+    var searchTapped: () -> Void = {}
     let photosScrollRequest: Int
     let videosScrollRequest: Int
     var albumsScrollRequest: Int = 0
@@ -623,6 +628,12 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
             {
                 outgoingView.endEditing(true)
             }
+            if !isUpdatingTabs, pageInteractionController == nil, !parent.isViewerPresented,
+               tab === searchTab, tabBarController.selectedTab === tab
+            {
+                focusSearchAfterTransition(in: tabBarController)
+                return false
+            }
             // These stacks handle a retap one page at a time.
             if !isUpdatingTabs, pageInteractionController == nil,
                !parent.isViewerPresented, tabBarController.selectedTab === tab,
@@ -647,6 +658,24 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
                 compactOwner: parent.compactOwner
             )
             return true
+        }
+
+        private func focusSearchAfterTransition(in tabBarController: UITabBarController) {
+            let focus: () -> Void = { [weak self, weak tabBarController] in
+                guard let self, tabBarController?.selectedTab === searchTab,
+                      parent.selection == .search, !parent.isViewerPresented else { return }
+                parent.searchTapped()
+            }
+            if let transition = tabBarController.transitionCoordinator,
+               transition.animate(alongsideTransition: nil, completion: { context in
+                   if !context.isCancelled {
+                       focus()
+                   }
+               })
+            {
+                return
+            }
+            focus()
         }
 
         @objc private func primaryPagePanned(_ recognizer: UIPanGestureRecognizer) {
