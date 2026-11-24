@@ -59,17 +59,144 @@ struct SearchQueryTests {
         store.submit()
         try await source.waitFor("newer query")
 
-        await source.complete("newer query", cursor: "newer cursor")
+        await source.complete("newer query", nextCursor: "newer cursor")
         for _ in 0 ..< 200 where store.nextCursor != "newer cursor" {
             try await Task.sleep(for: .milliseconds(10))
         }
         #expect(store.state == .results)
         #expect(store.applied?.text == "newer query")
-        await source.complete("older query", cursor: "stale cursor")
+        await source.complete("older query", nextCursor: "stale cursor")
         for _ in 0 ..< 10 {
             await Task.yield()
         }
         #expect(store.nextCursor == "newer cursor")
+    }
+
+    @MainActor
+    @Test func expandedSearchWindowAppendsUniqueResultsInRankOrder() async throws {
+        let source = PausedSearchReader()
+        let suite = "SearchPagingTests.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = try Self.makeStore(source: source, defaults: defaults)
+        let query = "birds"
+        let firstPage = (0 ..< 100).map { Self.asset("bird-\($0)", capturedAt: .distantFuture) }
+        let nextAsset = Self.asset("extra-bird", capturedAt: .distantPast)
+        store.text = query
+        store.submit()
+        try await source.waitFor(query)
+        await source.complete(query, assets: firstPage, nextCursor: "200")
+        try await Self.waitUntil { store.state == .results }
+        let resultSetID = store.resultSetID
+        let initialRevision = store.resultRevision
+
+        store.nextPage()
+        #expect(store.isPaging)
+        #expect(store.assets.map(\.id) == firstPage.map(\.id))
+        try await source.waitFor(query, cursor: "200")
+        await source.complete(query, cursor: "200", assets: Array(firstPage.reversed()) + [nextAsset])
+        try await Self.waitUntil { !store.isPaging }
+
+        #expect(store.assets.map(\.id) == firstPage.map(\.id) + [nextAsset.id])
+        #expect(store.resultSetID == resultSetID)
+        #expect(store.resultRevision == initialRevision + 1)
+        #expect(store.nextCursor == nil)
+        store.nextPage()
+        #expect(!store.isPaging)
+    }
+
+    @MainActor
+    @Test func failedPageKeepsResultsAndCanRetryTheSameCursor() async throws {
+        let source = PausedSearchReader()
+        let suite = "SearchPageRetryTests.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = try Self.makeStore(source: source, defaults: defaults)
+        let query = "vacation"
+        let cursor = "next-page"
+        let first = Self.asset("first")
+        let second = Self.asset("second")
+        store.selectMode(.filename, editing: true)
+        store.text = query
+        store.submit()
+        try await source.waitFor(query)
+        await source.complete(query, assets: [first], nextCursor: cursor)
+        try await Self.waitUntil { store.state == .results }
+
+        store.nextPage()
+        try await source.waitFor(query, cursor: cursor)
+        await source.fail(query, cursor: cursor)
+        try await Self.waitUntil { store.pageError != nil && !store.isPaging }
+        #expect(store.state == .results)
+        #expect(store.nextCursor == cursor)
+        #expect(store.assets.map(\.id) == [first.id])
+
+        store.nextPage()
+        #expect(store.pageError == nil)
+        try await source.waitFor(query, cursor: cursor)
+        await source.complete(query, cursor: cursor, assets: [second], nextCursor: cursor)
+        try await Self.waitUntil { !store.isPaging }
+        #expect(store.assets.map(\.id) == [first.id, second.id])
+        #expect(store.nextCursor == nil)
+    }
+
+    @MainActor
+    @Test func offlineSearchHistoryRestoresAndClearsOnlyForItsAccount() async throws {
+        let source = PausedSearchReader()
+        let suite = "SearchHistoryTests.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        for account in ["first", "second"] {
+            let store = try Self.makeStore(source: source, defaults: defaults, userID: account)
+            store.selectMode(.filename, editing: true)
+            store.text = " \(account) "
+            store.submit()
+            try await source.waitFor(account)
+            await source.complete(account)
+            try await Self.waitUntil { store.state == .results }
+        }
+        let first = try Self.makeStore(source: source, defaults: defaults, userID: "first")
+        await first.prepare(endpoint: nil)
+        #expect(first.recents == [.init(text: "first", mode: .filename)])
+        first.clearHistory()
+
+        let reopened = try Self.makeStore(source: source, defaults: defaults, userID: "first")
+        let second = try Self.makeStore(source: source, defaults: defaults, userID: "second")
+        await reopened.prepare(endpoint: nil)
+        await second.prepare(endpoint: nil)
+        #expect(reopened.recents.isEmpty)
+        #expect(second.recents == [.init(text: "second", mode: .filename)])
+        #expect(await source.remoteReads == 2)
+    }
+
+    @MainActor
+    @Test(arguments: [true, false])
+    func unavailableContextFallsBackToFileNamesWhenSearchIsEnabled(searchEnabled: Bool) async throws {
+        let source = PausedSearchReader(capabilities: .init(search: searchEnabled, context: false, ocr: false, people: false))
+        let suite = "SearchCapabilityTests.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = try Self.makeStore(source: source, defaults: defaults)
+        let endpoint = try #require(URL(string: "https://example.com/api"))
+        await store.prepare(endpoint: endpoint)
+
+        let query = "birds"
+        store.text = query
+        store.submit()
+        if searchEnabled {
+            #expect(store.availabilityError == nil)
+            #expect(store.mode == .filename)
+            let requestedMode = try await source.waitFor(query)
+            #expect(requestedMode == .filename)
+            await source.complete(query)
+            try await Self.waitUntil { store.state == .results }
+            #expect(await source.remoteReads == 2)
+        } else {
+            let message = SearchReadError.disabled.localizedDescription
+            #expect(store.availabilityError == message)
+            #expect(store.state == .failure(message))
+            #expect(await source.remoteReads == 1)
+        }
     }
 
     @MainActor
@@ -86,6 +213,29 @@ struct SearchQueryTests {
         #expect(await source.remoteReads == 0)
         #expect(store.state == .landing)
         #expect(store.applied == nil)
+    }
+
+    @MainActor
+    @Test func reopeningAfterFullPlaceLoadKeepsTheCompleteDirectory() async throws {
+        let covers = (0 ..< 12).map { Self.asset("place-cover-\($0)") }
+        let source = PausedSearchReader(placeCovers: covers)
+        let suite = "SearchPlacesTests.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = try Self.makeStore(source: source, defaults: defaults)
+
+        await store.preloadLanding()
+        #expect(store.places.map(\.id) == covers.prefix(8).map(\.id))
+        #expect(!store.hasFullPlaceDirectory)
+
+        await store.loadPlaces()
+        #expect(store.hasFullPlaceDirectory)
+        #expect(store.places.map(\.id) == covers.map(\.id))
+
+        await store.preloadLanding()
+        #expect(store.hasFullPlaceDirectory)
+        #expect(store.places.map(\.id) == covers.map(\.id))
+        #expect(await source.remoteReads == 0)
     }
 
     @MainActor
@@ -113,10 +263,28 @@ struct SearchQueryTests {
     }
 
     @MainActor
-    private static func makeStore(source: PausedSearchReader, defaults: UserDefaults) throws -> SearchStore {
+    private static func waitUntil(_ condition: () -> Bool) async throws {
+        for _ in 0 ..< 200 {
+            if condition() {
+                return
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try #require(condition(), "Search state did not settle")
+    }
+
+    private static func asset(_ id: String, capturedAt: Date = .distantPast) -> TimelineAssetSummary {
+        .init(id: id, ownerID: "user", capturedAt: capturedAt, uploadedAt: capturedAt, localOffsetHours: 0,
+              mediaKind: .image, durationMilliseconds: nil, aspectRatio: 1, isFavorite: false,
+              visibility: .timeline, livePhotoVideoID: nil, stack: nil, projectionType: nil,
+              thumbhash: nil, thumbnailRevision: capturedAt)
+    }
+
+    @MainActor
+    private static func makeStore(source: PausedSearchReader, defaults: UserDefaults, userID: String = "user") throws -> SearchStore {
         let account = try AccountSession(
             apiURL: #require(URL(string: "https://example.com/api")),
-            accessToken: "test", userID: "user", userEmail: "", name: "",
+            accessToken: "test", userID: userID, userEmail: "", name: "",
             isAdmin: false, serverVersion: .init(major: 3, minor: 2, patch: 0, prerelease: nil)
         )
         return SearchStore(source: source, scope: .init(session: account), defaults: defaults)
@@ -124,26 +292,41 @@ struct SearchQueryTests {
 }
 
 private actor PausedSearchReader: SearchReading {
-    private var requests: [String: CheckedContinuation<SearchResultPage, Never>] = [:]
+    private struct Request: Hashable {
+        let text: String
+        let cursor: String?
+    }
+
+    private var requests: [Request: (mode: SearchMode, continuation: CheckedContinuation<SearchResultPage, any Error>)] = [:]
     private let indexedPeople: [LibraryPerson]?
     private let remotePeople: [LibraryPerson]
+    private let capabilities: SearchCapabilities
+    private let placeCovers: [TimelineAssetSummary]?
     private(set) var localReads = 0
     private(set) var remoteReads = 0
     private(set) var peopleRefreshes: [Bool] = []
 
-    init(indexedPeople: [LibraryPerson]? = nil, remotePeople: [LibraryPerson] = []) {
+    init(
+        indexedPeople: [LibraryPerson]? = nil,
+        remotePeople: [LibraryPerson] = [],
+        capabilities: SearchCapabilities = .init(search: true, context: true, ocr: true, people: true),
+        placeCovers: [TimelineAssetSummary]? = nil
+    ) {
         self.indexedPeople = indexedPeople
         self.remotePeople = remotePeople
+        self.capabilities = capabilities
+        self.placeCovers = placeCovers
     }
 
-    func searchAssets(_ query: SearchQuery, cursor _: String?) async throws -> SearchResultPage {
+    func searchAssets(_ query: SearchQuery, cursor: String?) async throws -> SearchResultPage {
         remoteReads += 1
-        return await withCheckedContinuation { requests[query.text] = $0 }
+        let request = Request(text: query.text, cursor: cursor)
+        return try await withCheckedThrowingContinuation { requests[request] = (query.mode, $0) }
     }
 
     func searchCapabilities() async throws -> SearchCapabilities {
         remoteReads += 1
-        return .init(search: true, context: true, ocr: true, people: true)
+        return capabilities
     }
 
     func searchOptions(_: SearchOption, filters _: SearchFilters) async throws -> [String] {
@@ -162,23 +345,31 @@ private actor PausedSearchReader: SearchReading {
         return remotePeople
     }
 
-    func libraryPlaceCovers(offset _: Int, limit _: Int) async throws -> LibraryIndexedPlaces? {
+    func libraryPlaceCovers(offset: Int, limit: Int) async throws -> LibraryIndexedPlaces? {
         localReads += 1
-        return nil
+        return placeCovers.map { .init(count: $0.count, covers: Array($0.dropFirst(offset).prefix(limit))) }
     }
 
-    func waitFor(_ text: String) async throws {
+    @discardableResult
+    func waitFor(_ text: String, cursor: String? = nil) async throws -> SearchMode {
+        let request = Request(text: text, cursor: cursor)
         for _ in 0 ..< 200 {
-            if requests[text] != nil {
-                return
+            if let pending = requests[request] {
+                return pending.mode
             }
             try await Task.sleep(for: .milliseconds(10))
         }
         throw WaitError.missingRequest
     }
 
-    func complete(_ text: String, cursor: String) {
-        requests.removeValue(forKey: text)?.resume(returning: .init(assets: [], nextCursor: cursor))
+    func complete(_ text: String, cursor: String? = nil, assets: [TimelineAssetSummary] = [], nextCursor: String? = nil) {
+        requests.removeValue(forKey: .init(text: text, cursor: cursor))?.continuation
+            .resume(returning: .init(assets: assets, nextCursor: nextCursor))
+    }
+
+    func fail(_ text: String, cursor: String) {
+        requests.removeValue(forKey: .init(text: text, cursor: cursor))?.continuation
+            .resume(throwing: URLError(.networkConnectionLost))
     }
 
     private enum WaitError: Error { case missingRequest }
