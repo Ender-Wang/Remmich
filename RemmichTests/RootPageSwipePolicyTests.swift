@@ -3,17 +3,15 @@ import Testing
 
 struct RootPageSwipePolicyTests {
     @Test @MainActor func preparingOpeningTabsLeavesPhotosActive() {
-        let state = NativeTabContentActivationState()
+        let state = NativeTabContentActivationState(preparedDestinations: [.library, .search])
+        #expect(state.isHydrated(.library))
+        #expect(state.isHydrated(.search))
         state.prepare(.videos)
         state.prepare(.albums)
-        state.prepare(.library)
-        state.prepare(.search)
 
         #expect(state.activeDestination == .photos)
         #expect(state.isHydrated(.videos))
         #expect(state.isHydrated(.albums))
-        #expect(state.isHydrated(.library))
-        #expect(state.isHydrated(.search))
     }
 
     @Test func expandedProfileBlocksDraggingButRetainsAnimatedTabTaps() {

@@ -514,6 +514,13 @@ struct PhotosView: View {
             }
         }
         .overlay {
+            if showsOpeningSkeleton {
+                TimelineOpeningSkeleton(layout: presentation.preferences.assetLayout)
+                    .transition(.opacity)
+            }
+        }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: showsOpeningSkeleton)
+        .overlay {
             if loadingVisibilityChanged == nil, libraryMemories == nil {
                 LoadingStateView(isLoading: isTimelineContentLoading)
             }
@@ -677,6 +684,12 @@ struct PhotosView: View {
                 }
             }
         }
+    }
+
+    private var showsOpeningSkeleton: Bool {
+        (tabDestination == .photos || tabDestination == .videos)
+            && navigationPath.isEmpty && libraryMemories == nil && isTimelineContentLoading
+            && semanticCatalog?.assets.isEmpty != false
     }
 
     @ViewBuilder private var timelineWithNavigationBar: some View {

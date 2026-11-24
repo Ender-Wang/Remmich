@@ -49,6 +49,36 @@ private struct AlbumScopeCaptureKey: Equatable {
     let viewport: CGSize
 }
 
+struct AlbumsOpeningSkeleton: View {
+    var topClearance: CGFloat?
+
+    var body: some View {
+        GeometryReader { geometry in
+            let width = geometry.size.width + geometry.safeAreaInsets.leading + geometry.safeAreaInsets.trailing
+            let metrics = AlbumReflowMetrics.overview(availableWidth: width)
+            let top = topClearance ?? (geometry.safeAreaInsets.top + 60)
+            let rows = max(1, min(6, Int(ceil(max(0, geometry.size.height - top) / (metrics.cardHeight + 20)))))
+            AlbumReflowLayout(progress: 0, metrics: metrics) {
+                ForEach(0 ..< rows * metrics.columns, id: \.self) { _ in
+                    VStack(alignment: .leading, spacing: 8) {
+                        RoundedRectangle(cornerRadius: 12).fill(.quaternary)
+                            .frame(width: metrics.coverWidth, height: metrics.coverWidth * 0.75)
+                        Capsule().fill(.quaternary).frame(width: metrics.coverWidth * 0.55, height: 12)
+                        Capsule().fill(.quaternary).frame(width: metrics.coverWidth * 0.33, height: 8)
+                    }
+                    .frame(maxHeight: .infinity, alignment: .top)
+                }
+            }
+            .padding(.top, top + 16)
+            .padding(.bottom, 16)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            .clipped()
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
 struct AlbumsView: View {
     private struct LoadRequest: Equatable {
         let endpoint: URL?
@@ -162,8 +192,11 @@ struct AlbumsView: View {
                 if let albumLabelHeight, !store.isWaitingForInitialContent {
                     albumContent(availableWidth: width, viewportHeight: viewportHeight, labelHeight: albumLabelHeight)
                 } else {
-                    Color.clear
+                    AlbumsOpeningSkeleton(topClearance: topClearance)
                 }
+            }
+            .overlay(alignment: .top) {
+                albumHeader(metrics: AlbumReflowMetrics.overview(availableWidth: width, labelHeight: albumLabelHeight ?? 58))
             }
             .overlay(alignment: .topLeading) {
                 AlbumLabelMeasurement()
@@ -189,6 +222,7 @@ struct AlbumsView: View {
         // The navigation container can change its top safe area as a prepared
         // tab attaches. Use the window inset for this overview's layout.
         .ignoresSafeArea(.container, edges: .top)
+        .scrollDismissesKeyboard(.interactively)
         .overlay {
             if showsLoadingOverlay {
                 LoadingStateView(isLoading: store.isWaitingForInitialContent || albumLabelHeight == nil, label: "Loading albums")
@@ -386,10 +420,6 @@ struct AlbumsView: View {
                     .accessibilityHidden(true)
             }
             .animation(nil, value: isSearchExpanded)
-            .overlay(alignment: .top) {
-                albumHeader(metrics: metrics)
-            }
-            .scrollDismissesKeyboard(.interactively)
         }
     }
 

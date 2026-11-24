@@ -692,7 +692,7 @@ struct SearchView: View {
                     if store.capabilities?.people == false {
                         browseEmpty("People search is unavailable", height: 83, insets: insets)
                     } else {
-                        browseEmptyAfterLoading(height: 83, insets: insets)
+                        browsePlaceholder(width: 68, height: 83, isPeople: true, insets: insets)
                     }
                 } else {
                     browseRail(insets: insets) {
@@ -722,9 +722,29 @@ struct SearchView: View {
     }
 
     @ViewBuilder
-    private func browseEmptyAfterLoading(height: CGFloat, insets: EdgeInsets) -> some View {
+    private func browsePlaceholder(width: CGFloat, height: CGFloat, isPeople: Bool = false, insets: EdgeInsets) -> some View {
         if completedBrowseRead == peopleRead {
             browseEmpty(endpoint == nil ? "No cached items" : "No items to show", height: height, insets: insets)
+        } else {
+            browseRail(insets: insets) {
+                HStack(alignment: .top, spacing: isPeople ? 12 : 8) {
+                    ForEach(0 ..< (isPeople ? 6 : 4), id: \.self) { _ in
+                        if isPeople {
+                            VStack(spacing: 8) {
+                                Circle().fill(.quaternary).frame(width: 64, height: 64)
+                                Capsule().fill(.quaternary).frame(width: 42, height: 8)
+                            }
+                            .frame(width: width, height: height, alignment: .top)
+                        } else {
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(.quaternary)
+                                .frame(width: width, height: height)
+                        }
+                    }
+                }
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
         }
     }
 
@@ -742,7 +762,7 @@ struct SearchView: View {
             labeledRow("Places", symbol: "map", isHeader: true) { showFilters(.location) }
                 .padding(insets)
             if covers.isEmpty, !(canLoadMorePlaces && completedBrowseRead == peopleRead) {
-                browseEmptyAfterLoading(height: 104, insets: insets)
+                browsePlaceholder(width: 152, height: 104, insets: insets)
             } else {
                 placeRail(covers, insets: insets)
             }
@@ -858,7 +878,7 @@ struct SearchView: View {
             .accessibilityAddTraits(.isHeader)
             .padding(insets)
             if assets.isEmpty {
-                browseEmptyAfterLoading(height: 104, insets: insets)
+                browsePlaceholder(width: 104, height: 104, insets: insets)
             } else {
                 browseRail(insets: insets) {
                     LazyHStack(spacing: 8) {

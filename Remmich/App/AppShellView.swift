@@ -35,7 +35,7 @@ struct AppShellView: View {
 
     @State private var tabSelectionState = NativeTabSelectionState()
     @State private var searchPath: [LibraryAssetCollection] = []
-    @State private var tabContentActivationState = NativeTabContentActivationState()
+    @State private var tabContentActivationState = NativeTabContentActivationState(preparedDestinations: [.library, .search])
     @State private var timelineRotationState = TimelineRotationState()
     @State private var photosTimelineRuntime = TimelineSemanticRuntime()
     @State private var videosTimelineRuntime = TimelineSemanticRuntime()
@@ -157,7 +157,10 @@ struct AppShellView: View {
                 NativeTabContentGate(
                     destination: .videos,
                     title: "Videos",
-                    activationState: tabContentActivationState
+                    activationState: tabContentActivationState,
+                    openingPlaceholder: AnyView(
+                        TimelineOpeningSkeleton(layout: videoPresentation.preferences.assetLayout)
+                    )
                 ) {
                     NavigationStack {
                         PhotosView(
@@ -201,7 +204,8 @@ struct AppShellView: View {
                 NativeTabContentGate(
                     destination: .albums,
                     title: "Albums",
-                    activationState: tabContentActivationState
+                    activationState: tabContentActivationState,
+                    openingPlaceholder: AnyView(AlbumsOpeningSkeleton())
                 ) {
                     if let store = overviewState.store, let windowTopInset = overviewState.windowTopInset {
                         NavigationStack(path: $albumsPath) {
@@ -218,6 +222,8 @@ struct AppShellView: View {
                                        openAlbum: openAlbum,
                                        showAccount: showAccount)
                         }
+                    } else {
+                        AlbumsOpeningSkeleton()
                     }
                 }
             ),
@@ -430,15 +436,12 @@ struct AppShellView: View {
         .onChange(of: viewerPresented || !viewerPresentations.entries.isEmpty) { _, presented in
             libraryIndex.setTimelinePublicationDeferred(presented)
         }
+        .task(id: sessionController?.search.map(ObjectIdentifier.init), priority: .utility) {
+            await sessionController?.search?.preloadLanding()
+        }
         .task(id: media.hasShownStartupPhoto || photos.loadState == .empty) {
             guard let sessionController, media.hasShownStartupPhoto || photos.loadState == .empty else { return }
-            if !tabContentActivationState.isHydrated(.search) {
-                tabContentActivationState.prepare(.search)
-            }
             async let videoOpening: Void = prepareVideosOpening(using: sessionController)
-            if !tabContentActivationState.isHydrated(.library) {
-                tabContentActivationState.prepare(.library)
-            }
             await prepareAlbumsOpening(in: overviewState, preloading: true)
             await videoOpening
         }
@@ -690,10 +693,10 @@ struct AppShellView: View {
         if overviewState.store == nil {
             overviewState.store = overview
         }
-        await overview.prepareOpening()
-        if preloading, overview.hasLoaded, !Task.isCancelled, !tabContentActivationState.isHydrated(.albums) {
+        if preloading, !Task.isCancelled, !tabContentActivationState.isHydrated(.albums) {
             tabContentActivationState.prepare(.albums)
         }
+        await overview.prepareOpening()
         guard !Task.isCancelled, preloading || tabSelectionState.selection == .albums,
               let window = openingWindow else { return }
         await overview.warmOpeningCovers(media: media, viewport: window.bounds.size, scale: window.traitCollection.displayScale)
@@ -877,6 +880,7 @@ private struct NativeTabContentGate<Content: View>: View {
     let destination: NativeTabDestination
     let title: String
     let activationState: NativeTabContentActivationState
+    var openingPlaceholder: AnyView?
     @ViewBuilder let content: () -> Content
 
     var body: some View {
@@ -885,6 +889,7 @@ private struct NativeTabContentGate<Content: View>: View {
         } else {
             Color(uiColor: .systemBackground)
                 .ignoresSafeArea()
+                .overlay { openingPlaceholder }
                 .accessibilityLabel("Loading \(title)")
         }
     }

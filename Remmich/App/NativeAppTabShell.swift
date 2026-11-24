@@ -21,7 +21,11 @@ final class NativeTabSelectionState {
 final class NativeTabContentActivationState {
     private(set) var activeDestination: NativeTabDestination = .photos
     private(set) var hydratedDestinations: Set<NativeTabDestination> = [.photos]
-    private(set) var preparedDestinations: Set<NativeTabDestination> = []
+    private(set) var preparedDestinations: Set<NativeTabDestination>
+
+    init(preparedDestinations: Set<NativeTabDestination> = []) {
+        self.preparedDestinations = preparedDestinations
+    }
 
     func prepare(_ destination: NativeTabDestination) {
         preparedDestinations.insert(destination)
