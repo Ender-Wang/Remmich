@@ -8,13 +8,14 @@ import sys
 def prepare(document):
     # Remmich uses filter/orderBy/cursor, not the deprecated flat search fields.
     # Swift OpenAPI Generator otherwise warns inside its own memberwise init.
-    schema = document["components"]["schemas"]["MetadataSearchDto"]
-    properties = schema["properties"]
-    for name in list(properties):
-        if properties[name].get("deprecated"):
-            if name in schema.get("required", []):
-                raise ValueError(f"Cannot remove required search property: {name}")
-            del properties[name]
+    for schema_name in ("MetadataSearchDto", "SmartSearchDto"):
+        schema = document["components"]["schemas"][schema_name]
+        properties = schema["properties"]
+        for name in list(properties):
+            if properties[name].get("deprecated"):
+                if name in schema.get("required", []):
+                    raise ValueError(f"Cannot remove required search property: {name}")
+                del properties[name]
     # Responses use nextCursor. The server's legacy nextPage key may still be
     # present on the wire; generated decoders can safely ignore that extra key.
     response = document["components"]["schemas"]["SearchAssetResponseDto"]

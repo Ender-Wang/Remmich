@@ -82,7 +82,7 @@ public actor ImmichClient {
             async let pingOutput = client.pingServer(.init())
             async let versionOutput = client.getServerVersion(.init())
             async let configOutput = client.getServerConfig(.init())
-            async let featuresOutput = client.getServerFeatures(.init())
+            async let featuresOutput = Self.readFeatures(client)
 
             let ping = try await Self.ping(from: pingOutput)
             guard ping.lowercased() == "pong" else {
@@ -90,7 +90,7 @@ public actor ImmichClient {
             }
             let version = try await Self.version(from: versionOutput)
             let config = try await Self.config(from: configOutput)
-            let features = try await Self.features(from: featuresOutput)
+            let features = try await featuresOutput
 
             return ImmichServerInfo(
                 apiURL: apiURL,
@@ -347,6 +347,74 @@ public actor ImmichClient {
         } catch {
             throw Self.map(error)
         }
+    }
+
+    public func searchCapabilities() async throws -> ImmichSearchCapabilities {
+        do {
+            let features = try await Self.readFeatures(makeClient())
+            return .init(search: features.search, context: features.smartSearch, ocr: features.ocr, people: features.facialRecognition)
+        } catch { throw Self.map(error) }
+    }
+
+    public func search(_ request: ImmichSearchRequest, cursor: String? = nil) async throws -> ImmichSearchPage {
+        guard credential != nil else { throw ImmichAPIError.unauthorized }
+        do {
+            let client = makeClient()
+            let page: Components.Schemas.SearchAssetResponseDto
+            let nextCursor: String?
+            if request.mode == .context, !request.text.isEmpty {
+                let limit = try Self.contextSearchLimit(cursor: cursor)
+                switch try await client.searchSmart(.init(body: .json(.init(
+                    filter: request.filter, query: request.text, size: limit, withExif: true
+                )))) {
+                case let .ok(response): page = try response.body.json.assets
+                case let .undocumented(statusCode, _): throw Self.map(status: statusCode)
+                }
+                // Ranked search has no server cursor. Request a larger ranked
+                // window on demand and let Search append only previously unseen IDs.
+                nextCursor = page.items.count >= limit && limit < 1000 ? String(min(limit * 2, 1000)) : nil
+            } else {
+                switch try await client.searchAssets(.init(body: .json(.init(
+                    cursor: cursor,
+                    filter: request.filter,
+                    orderBy: .init(direction: .desc, field: .fileCreatedAt),
+                    size: 100,
+                    withExif: true
+                )))) {
+                case let .ok(response): page = try response.body.json.assets
+                case let .undocumented(statusCode, _): throw Self.map(status: statusCode)
+                }
+                nextCursor = page.nextCursor
+            }
+            return .init(assets: Self.browsableAssets(page.items), nextCursor: nextCursor)
+        } catch { throw Self.map(error) }
+    }
+
+    private static func contextSearchLimit(cursor: String?) throws -> Int {
+        guard let cursor else { return 100 }
+        guard let limit = Int(cursor), (200 ... 1000).contains(limit) else { throw ImmichAPIError.invalidResponse }
+        return limit
+    }
+
+    public func searchSuggestions(
+        _ kind: ImmichSearchSuggestion,
+        country: String? = nil,
+        state: String? = nil,
+        make: String? = nil,
+        model: String? = nil
+    ) async throws -> [String] {
+        guard credential != nil else { throw ImmichAPIError.unauthorized }
+        guard let type = Components.Schemas.SearchSuggestionType(rawValue: kind.rawValue) else {
+            throw ImmichAPIError.invalidResponse
+        }
+        do {
+            switch try await makeClient().getSearchSuggestions(.init(query: .init(
+                country: country, includeNull: false, make: make, model: model, state: state, _type: type
+            ))) {
+            case let .ok(response): return try response.body.json
+            case let .undocumented(statusCode, _): throw Self.map(status: statusCode)
+            }
+        } catch { throw Self.map(error) }
     }
 
     public func assetInfo(id: String) async throws -> ImmichAssetDetail {
@@ -853,6 +921,10 @@ public actor ImmichClient {
         case let .ok(response): try response.body.json
         case let .undocumented(statusCode, _): throw map(status: statusCode)
         }
+    }
+
+    private static func readFeatures(_ client: Client) async throws -> Components.Schemas.ServerFeaturesDto {
+        try await features(from: client.getServerFeatures(.init()))
     }
 
     private static func features(

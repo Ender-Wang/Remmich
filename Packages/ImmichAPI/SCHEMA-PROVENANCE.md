@@ -5,11 +5,11 @@
 - Upstream describe: `v3.1.0-447-g520a70891`
 - OpenAPI document version: `3.2.0`
 - Upstream SHA-256: `4e15b58113426d59ffb991a82875308b3eeb64e6c916395e5c923a0632fcc67f`
-- Prepared SHA-256: `ceaf70807a32549461939df11f367479da739cd3ca8f5bca118ef5a8eafe3f2f`
+- Prepared SHA-256: `e76f6f1f02a5a5820183e50d21342b97dbcd5b301a59afd10511082f9b1ed2cc`
 - Copied: 2026-09-27
-- Transformations: `Scripts/prepare-immich-schema.py` removes deprecated flat search fields and the unused `SearchAssetResponseDto.nextPage`. It also limits the authenticated user config decoder to map settings and the optional external domain used for shared links. This lets Remmich load maps from server responses that omit unrelated fields such as `theme`.
+- Transformations: `Scripts/prepare-immich-schema.py` removes deprecated flat fields from metadata and smart search and removes the unused `SearchAssetResponseDto.nextPage`. It also limits the authenticated user config decoder to map settings and the optional external domain used for shared links. This lets Remmich load maps from server responses that omit unrelated fields such as `theme`.
 
-The generator configuration includes only operations used by the wrapper and their dependencies. This avoids generating unused legacy search DTOs and operations whose initializers reference deprecated properties. The preparation step removes the equivalent unused aliases from the search DTO that Remmich does use; it does not suppress compiler diagnostics or edit generated Swift files.
+The generator configuration includes operations used by the wrapper and their dependencies. The metadata and smart search wrappers both use the nested Immich 3.2 filter. Metadata uses cursor pagination and smart search returns a ranked set. The preparation script strips legacy aliases before generation from the same upstream snapshot.
 
 Album reads were enabled on 2026-11-11 using the same pinned snapshot: `getAllAlbums` and `getAlbumInfo` are in the operation filter, and the wrapper forwards `albumId` to `getTimeBuckets`/`getTimeBucket`. Album-scoped queries include stacked members and omit the root timeline visibility filter so archived album members remain readable. No album create/edit/delete or membership mutation operation is enabled. This expands the generated read surface; it does not refresh the schema snapshot or change the provenance hashes above. Regression coverage is in [AlbumReadTests](Tests/ImmichAPITests/AlbumReadTests.swift).
 

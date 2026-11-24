@@ -2,7 +2,7 @@ import Foundation
 import ImmichAPI
 import OSLog
 
-actor ImmichTimelineRepository: TimelineReading, VideoReading, AssetDetailReading, AlbumReading {
+actor ImmichTimelineRepository: TimelineReading, VideoReading, AssetDetailReading, AlbumReading, SearchReading {
     private nonisolated static let logger = Logger(
         subsystem: "io.github.ender-wang.Remmich",
         category: "TimelineRepository"
@@ -533,6 +533,78 @@ actor ImmichTimelineRepository: TimelineReading, VideoReading, AssetDetailReadin
 
     func timelineReadGeneration() throws -> UInt64 {
         try requestContext().1
+    }
+
+    func searchCapabilities() async throws -> SearchCapabilities {
+        let (client, owner) = try searchContext()
+        let value = try await client.searchCapabilities()
+        try requireCurrent(owner)
+        return .init(search: value.search, context: value.context, ocr: value.ocr, people: value.people)
+    }
+
+    func indexedSearchPeople() async throws -> [LibraryPerson]? {
+        try await indexedLibraryValue([LibraryPerson].self, key: LibraryIndexCard.people.rawValue)
+    }
+
+    func searchAssets(_ query: SearchQuery, cursor: String?) async throws -> SearchResultPage {
+        let (client, owner) = try searchContext()
+        guard let mode = ImmichSearchMode(rawValue: query.mode.rawValue) else { throw TimelineReadError.invalidResponse }
+        let filters = query.filters
+        var request = ImmichSearchRequest(mode: mode, text: query.text)
+        request.personIDs = filters.personIDs.sorted()
+        request.country = filters.options[.country]
+        request.state = filters.options[.state]
+        request.city = filters.options[.city]
+        request.make = filters.options[.make]
+        request.model = filters.options[.model]
+        request.lens = filters.options[.lens]
+        request.taken = query.takenInterval
+        request.media = switch filters.media {
+        case .all: nil
+        case .photos: .image
+        case .videos: .video
+        }
+        request.favorites = filters.favorites
+        request.archive = filters.archive
+        request.notInAlbum = filters.notInAlbum
+        do {
+            let result = try await client.search(request, cursor: cursor)
+            try requireCurrent(owner)
+            return .init(assets: result.assets.map(Self.map), nextCursor: result.nextCursor)
+        } catch {
+            try requireCurrent(owner)
+            throw Self.map(error)
+        }
+    }
+
+    func searchOptions(_ option: SearchOption, filters: SearchFilters) async throws -> [String] {
+        let (client, owner) = try searchContext()
+        let kind: ImmichSearchSuggestion = switch option {
+        case .country: .country
+        case .state: .state
+        case .city: .city
+        case .make: .make
+        case .model: .model
+        case .lens: .lens
+        }
+        let location = option == .state || option == .city
+        let camera = option == .model || option == .lens
+        let values = try await client.searchSuggestions(
+            kind,
+            country: location ? filters.options[.country] : nil,
+            state: option == .city ? filters.options[.state] : nil,
+            make: camera ? filters.options[.make] : nil,
+            model: option == .lens ? filters.options[.model] : nil
+        )
+        try requireCurrent(owner)
+        return Set(values.filter { !$0.isEmpty }).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+
+    private func searchContext() throws -> (ImmichClient, UInt64) {
+        guard let version = session?.serverVersion, version.major == 3, version.minor >= 2 else {
+            throw SearchReadError.incompatibleServer
+        }
+        return try requestContext()
     }
 
     private func requireCurrent(_ requestGeneration: UInt64) throws {

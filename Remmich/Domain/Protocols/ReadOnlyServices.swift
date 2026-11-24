@@ -84,5 +84,10 @@ nonisolated protocol LibraryReading: Sendable {
 }
 
 nonisolated protocol SearchReading: Sendable {
-    func searchAssets(text: String) async throws -> [ReadAsset]
+    func searchCapabilities() async throws -> SearchCapabilities
+    func searchAssets(_ query: SearchQuery, cursor: String?) async throws -> SearchResultPage
+    func searchOptions(_ option: SearchOption, filters: SearchFilters) async throws -> [String]
+    func indexedSearchPeople() async throws -> [LibraryPerson]?
+    func libraryPeople(refresh: Bool) async throws -> [LibraryPerson]
+    func libraryPlaceCovers(offset: Int, limit: Int) async throws -> LibraryIndexedPlaces?
 }
