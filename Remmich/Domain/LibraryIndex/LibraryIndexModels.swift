@@ -305,6 +305,7 @@ nonisolated protocol LibraryIndexStoring: Sendable {
     func deactivatePlaces(scope: MediaAccountScope, sessionID: String) async throws
     func desiredPlace(assetID: String, scope: MediaAccountScope) async throws -> CachedPlaceLookup?
     func cachedPlace(_ key: PlaceCacheKey, scope: MediaAccountScope) async throws -> CachedPlaceLookup?
+    func libraryLocalPlaceLabelAssets(_ place: TimelinePlace, scope: MediaAccountScope) async throws -> [String]
     func beginPlace(_ key: PlaceCacheKey, scope: MediaAccountScope, sessionID: String, automatic: Bool, now: Date) async throws -> String?
     func finishPlace(_ key: PlaceCacheKey, scope: MediaAccountScope, sessionID: String, lease: String, location: PlaceLocation?, error: String?, onDemandOnly: Bool, retryDelay: TimeInterval?, now: Date) async throws -> Bool
     func cancelPlace(_ key: PlaceCacheKey, scope: MediaAccountScope, lease: String) async throws

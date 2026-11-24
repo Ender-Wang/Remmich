@@ -173,7 +173,34 @@ import SwiftUI
         return try await store.cachedAssetMetadata(id: assetID, scope: scope)?.cachedPlace
     }
 
-    func libraryPlaceLabel(assetID: String, place: TimelinePlace) async throws -> TimelinePlace? {
+    func directoryPlaceLabel(assetID: String, place: TimelinePlace, includeLocalFallback: Bool = true) async throws -> TimelinePlace? {
+        let token = sessionID
+        let settingsRevision = revision
+        if let localized = try await libraryPlaceLabel(assetID: assetID, place: place) {
+            return localized
+        }
+        guard includeLocalFallback, token == sessionID, settingsRevision == revision,
+              let scope, usesLocalPlaceNames(place) else { return nil }
+        let candidates = try await store.libraryLocalPlaceLabelAssets(place, scope: scope)
+        for candidate in candidates where candidate != assetID {
+            try Task.checkCancellation()
+            guard token == sessionID, settingsRevision == revision else { return nil }
+            if let label = try await libraryPlaceLabel(assetID: candidate, place: place) {
+                return label
+            }
+        }
+        return nil
+    }
+
+    private func usesLocalPlaceNames(_ place: TimelinePlace) -> Bool {
+        guard let country = place.country else { return !preferences.localCountries.isEmpty }
+        let english = Locale(identifier: "en_US")
+        return preferences.localCountries.contains {
+            english.localizedString(forRegionCode: $0)?.caseInsensitiveCompare(country) == .orderedSame
+        }
+    }
+
+    private func libraryPlaceLabel(assetID: String, place: TimelinePlace) async throws -> TimelinePlace? {
         try await configuration?.value
         let token = sessionID
         let settingsRevision = revision

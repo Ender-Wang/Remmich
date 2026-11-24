@@ -1,26 +1,36 @@
 import SwiftUI
 import UIKit
 
-/// Observe the dimmed area without enabling UIKit's sheet drag dismissal.
-struct MediaExportOutsideTap: UIViewRepresentable {
+/// Dismiss a native sheet from its dimmed backdrop without passing the tap through.
+struct SheetOutsideTap: UIViewRepresentable {
     let dismiss: () -> Void
+    var fittedHeight: CGFloat?
+    var animatesHeight = true
 
-    func makeUIView(context _: Context) -> MediaExportOutsideTapView {
-        MediaExportOutsideTapView(dismiss: dismiss)
+    func makeUIView(context _: Context) -> SheetOutsideTapView {
+        let view = SheetOutsideTapView(dismiss: dismiss)
+        view.updateHeight(fittedHeight, animated: animatesHeight)
+        return view
     }
 
-    func updateUIView(_ view: MediaExportOutsideTapView, context _: Context) {
+    func updateUIView(_ view: SheetOutsideTapView, context _: Context) {
         view.dismiss = dismiss
+        view.updateHeight(fittedHeight, animated: animatesHeight)
     }
 
-    static func dismantleUIView(_ view: MediaExportOutsideTapView, coordinator _: ()) {
+    static func dismantleUIView(_ view: SheetOutsideTapView, coordinator _: ()) {
         view.detach()
     }
 }
 
-final class MediaExportOutsideTapView: UIView, UIGestureRecognizerDelegate {
+final class SheetOutsideTapView: UIView, UIGestureRecognizerDelegate {
     var dismiss: () -> Void
     private weak var attachedWindow: UIWindow?
+    private weak var sizedSheet: UISheetPresentationController?
+    private var requestedHeight: CGFloat?
+    private var resolvedHeight: CGFloat = 0
+    private var animatesHeight = true
+    private static let fittedDetent = UISheetPresentationController.Detent.Identifier("fitted-content")
     private lazy var tap: UITapGestureRecognizer = {
         let gesture = UITapGestureRecognizer(target: self, action: #selector(tappedOutside))
         gesture.delegate = self
@@ -45,6 +55,43 @@ final class MediaExportOutsideTapView: UIView, UIGestureRecognizerDelegate {
         guard let window else { return }
         attachedWindow = window
         window.addGestureRecognizer(tap)
+        applyHeight()
+        applyHeightWhenAttached()
+    }
+
+    func updateHeight(_ height: CGFloat?, animated: Bool) {
+        requestedHeight = height
+        animatesHeight = animated
+        applyHeightWhenAttached()
+    }
+
+    private func applyHeightWhenAttached() {
+        guard window != nil, requestedHeight != nil else { return }
+        Task { @MainActor [weak self] in
+            self?.applyHeight()
+        }
+    }
+
+    private func applyHeight() {
+        guard attachedWindow != nil, let height = requestedHeight, let controller = sheet, !controller.isBeingDismissed,
+              let presentation = controller.sheetPresentationController
+        else { return }
+
+        if sizedSheet !== presentation || presentation.detents.first?.identifier != Self.fittedDetent {
+            sizedSheet = presentation
+            resolvedHeight = height
+            presentation.detents = [.custom(identifier: Self.fittedDetent) { [weak self] context in
+                min(self?.resolvedHeight ?? height, context.maximumDetentValue)
+            }]
+            presentation.selectedDetentIdentifier = Self.fittedDetent
+        } else if resolvedHeight != height {
+            resolvedHeight = height
+            if animatesHeight {
+                presentation.animateChanges { presentation.invalidateDetents() }
+            } else {
+                UIView.performWithoutAnimation { presentation.invalidateDetents() }
+            }
+        }
     }
 
     func detach() {

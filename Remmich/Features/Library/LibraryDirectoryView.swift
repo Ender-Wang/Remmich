@@ -111,6 +111,16 @@ final class LibraryDirectoryStore {
         indexedPlaceCount.map { $0 == 0 } ?? (finished && entries.isEmpty)
     }
 
+    var placeCovers: [TimelineAssetSummary] {
+        entries.compactMap { entry in
+            if case let .place(_, cover) = entry {
+                cover
+            } else {
+                nil
+            }
+        }
+    }
+
     func adoptIndexedPeople(_ people: [LibraryPerson]) {
         guard loadTask == nil else { return }
         entries = people.map(LibraryDirectoryEntry.person)
@@ -163,31 +173,13 @@ final class LibraryDirectoryStore {
     {
         guard placeLabels[request] == nil, loadingPlaceLabels.insert(request).inserted else { return }
         defer { loadingPlaceLabels.remove(request) }
-        let place = request.place
         do {
-            var label = try await locations.libraryPlaceLabel(assetID: assetID, place: place)
-            if label == nil, let mapSource, usesLocalPlaceNames(place, preferences: locations.preferences) {
-                let candidates = try await mapSource.store.libraryLocalPlaceLabelAssets(place, scope: mapSource.scope)
-                for candidate in candidates where candidate != assetID {
-                    try Task.checkCancellation()
-                    label = try await locations.libraryPlaceLabel(assetID: candidate, place: place)
-                    if label != nil {
-                        break
-                    }
-                }
-            }
+            let label = try await locations.directoryPlaceLabel(assetID: assetID, place: request.place,
+                                                                includeLocalFallback: mapSource != nil)
             guard !Task.isCancelled, locations.revision == request.revision else { return }
             placeLabels[request] = label
         } catch {
             // An unavailable place cache leaves the Immich label usable.
-        }
-    }
-
-    private func usesLocalPlaceNames(_ place: TimelinePlace, preferences: MapsPlacesPreferences) -> Bool {
-        guard let country = place.country else { return !preferences.localCountries.isEmpty }
-        let english = Locale(identifier: "en_US")
-        return preferences.localCountries.contains {
-            english.localizedString(forRegionCode: $0)?.caseInsensitiveCompare(country) == .orderedSame
         }
     }
 

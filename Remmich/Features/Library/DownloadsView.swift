@@ -430,7 +430,7 @@ struct MediaDownloadButton<Content: View>: View {
                 }
                 .frame(width: container.size.width, height: container.size.height)
             }
-            .background(MediaExportOutsideTap { presentation = nil })
+            .background(SheetOutsideTap { presentation = nil })
             .nativeEdgeBackAction(active: !showsHistory, priority: 300, animatesContent: false) {
                 presentation = nil
             }
@@ -705,7 +705,7 @@ struct MediaExportProgressBadge: View {
                               })
                               .frame(width: container.size.width, height: container.size.height)
             }
-            .background(MediaExportOutsideTap { showDownloads = false })
+            .background(SheetOutsideTap { showDownloads = false })
             .font(.body)
             .fontWeight(.regular)
             .buttonStyle(.automatic)
