@@ -45,6 +45,7 @@ struct SavedPhotosView: View {
                 }
             }
         }
+        .task { await library.refresh() }
         .toolbar(.hidden, for: .navigationBar)
         .accessibilityAction(.escape) { dismiss() }
         .accessibilityIdentifier("saved-photos-list")
@@ -52,7 +53,7 @@ struct SavedPhotosView: View {
 
     private var downloadsHeader: some View {
         VStack(spacing: 0) {
-            navigationHeader
+            LibraryPageHeader(title: "On Device") { EmptyView() }
             VStack(spacing: 8) {
                 Picker("Saved media", selection: $media) {
                     ForEach(SavedPhotosMedia.allCases) { Text($0.rawValue).tag($0) }
@@ -78,20 +79,6 @@ struct SavedPhotosView: View {
                 }
                 .padding(.horizontal, 16).padding(.bottom, 8)
             }
-        }
-    }
-
-    /// The title and controls travel inside the page during the native card zoom.
-    private var navigationHeader: some View {
-        LibraryPageHeader(title: "On Device") {
-            Button { Task { await library.refresh() } } label: {
-                Image(systemName: "arrow.clockwise")
-                    .font(.title3)
-                    .frame(width: 44, height: 44)
-            }
-            .buttonStyle(.plain)
-            .glassEffect(.regular.interactive(), in: .circle)
-            .accessibilityLabel("Refresh On Device")
         }
     }
 
@@ -122,7 +109,7 @@ struct SavedPhotosView: View {
             } actions: { photosSettingsButton }
         case .ambiguous:
             ContentUnavailableView("Multiple Remmich Albums", systemImage: "rectangle.stack",
-                                   description: Text("Rename the extra Remmich albums in Apple Photos, then refresh."))
+                                   description: Text("Rename the extra Remmich albums in Apple Photos, then reopen On Device."))
         case .missing, .ready:
             ContentUnavailableView(library.limited ? "No Visible Saved Items" : "No Saved Items", systemImage: "arrow.down.circle",
                                    description: Text("Items saved to Photos → Remmich will appear here. Check Save History for transfer activity."))
