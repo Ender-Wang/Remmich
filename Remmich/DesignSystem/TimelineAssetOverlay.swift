@@ -10,20 +10,30 @@ struct TimelineAssetOverlay: View {
     var isDownloading = false
 
     static func isVisible(for asset: TimelineAssetSummary, savedToPhotos: Bool = false, isDownloading: Bool = false) -> Bool {
-        savedToPhotos || isDownloading || asset.isFavorite || TimelineAssetBadgeOverlay.isVisible(for: asset) || asset.mediaKind == .video
+        savedToPhotos || isDownloading || asset.isFavorite || (asset.stack?.assetCount ?? 0) > 1
+            || TimelineAssetBadgeOverlay.isVisible(for: asset) || asset.mediaKind == .video
     }
 
     var body: some View {
         ZStack {
             TimelineAssetBadgeOverlay(asset: asset, hiddenLivePhotoBadgeAssetID: hiddenLivePhotoBadgeAssetID)
-            if asset.isFavorite {
-                Image(systemName: "heart")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .padding([.top, .trailing], 3)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                    .shadow(radius: 3)
+            HStack(spacing: 5) {
+                if asset.isFavorite {
+                    Image(systemName: "heart")
+                }
+                if let stack = asset.stack, stack.assetCount > 1 {
+                    HStack(spacing: 4) {
+                        Text(stack.assetCount.formatted())
+                        Image(systemName: "square.stack.3d.up.fill")
+                            .accessibilityHidden(true)
+                    }
+                }
             }
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.white)
+            .padding([.top, .trailing], 3)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            .shadow(radius: 3)
             if asset.mediaKind == .video {
                 Text(Self.duration(asset.durationMilliseconds))
                     .font(.caption2.weight(.semibold))
@@ -99,7 +109,6 @@ struct TimelineAssetBadgeOverlay: View {
     static func isVisible(for asset: TimelineAssetSummary) -> Bool {
         asset.livePhotoVideoID != nil
             || asset.projectionType != nil
-            || (asset.stack?.assetCount ?? 0) > 1
     }
 
     var body: some View {
@@ -110,9 +119,6 @@ struct TimelineAssetBadgeOverlay: View {
             }
             if asset.projectionType != nil {
                 Image(systemName: "view.360")
-            }
-            if let stack = asset.stack, stack.assetCount > 1 {
-                Label("\(stack.assetCount)", systemImage: "square.stack.3d.up.fill")
             }
         }
         .font(.caption2.weight(.semibold))

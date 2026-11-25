@@ -119,6 +119,13 @@ nonisolated enum TimelineMediaKind: Codable, Hashable, Sendable {
 nonisolated struct TimelineStackSummary: Codable, Hashable, Sendable {
     let id: String
     let assetCount: Int
+    var primaryAssetID: String? = nil
+}
+
+nonisolated struct TimelineStackMembership: Sendable {
+    let id: String
+    let primaryAssetID: String
+    let assetIDs: [String]
 }
 
 nonisolated struct TimelinePlace: Codable, Hashable, Identifiable, Sendable {
@@ -247,6 +254,7 @@ nonisolated struct AssetDetail: Hashable, Identifiable, Sendable {
     let state: String?
     let country: String?
     var cachedPlace: PlaceLocation?
+    var stackID: String?
 
     static func hasCameraMetadata(make: String?, model: String?) -> Bool {
         [make, model].contains { $0?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false }

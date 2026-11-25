@@ -21,13 +21,14 @@ nonisolated enum LibraryTimelineBootstrapBuilder {
             !$0.isTrashed && $0.visibility == "timeline"
         }
         let filteredAt = ContinuousClock.now
-        let photos = buildTimeline(
-            from: visible,
-            groups: snapshot.groups,
+        var photos = buildTimeline(
+            from: visible.filter { !$0.isHiddenStackMember },
+            groups: visible.contains { $0.kind == .video && $0.isHiddenStackMember } ? [] : snapshot.groups,
             generation: snapshot.generation,
             isComplete: snapshot.syncState.historicalCursor == nil,
             scope: nil
         )
+        photos.hiddenStackMemberIDs = Set(visible.lazy.filter(\.isHiddenStackMember).map(\.id))
         let photosBuiltAt = ContinuousClock.now
         let videos = buildTimeline(
             from: visible.filter { $0.kind == .video },
@@ -215,7 +216,8 @@ nonisolated enum LibraryTimelineBootstrapBuilder {
             summaries: initial.summaries,
             assetsByBucket: initial.assetsByBucket,
             groupedCatalogs: catalogs,
-            isComplete: initial.isComplete
+            isComplete: initial.isComplete,
+            hiddenStackMemberIDs: initial.hiddenStackMemberIDs
         )
     }
 
@@ -244,7 +246,7 @@ extension LibraryIndexAssetRecord {
             visibility: TimelineVisibility(libraryIndexValue: visibility),
             livePhotoVideoID: livePhotoVideoID,
             stack: stackID.map {
-                TimelineStackSummary(id: $0, assetCount: max(1, stackAssetCount ?? 1))
+                TimelineStackSummary(id: $0, assetCount: max(1, stackAssetCount ?? 1), primaryAssetID: stackPrimaryAssetID)
             },
             projectionType: projectionType,
             thumbhash: thumbhash,

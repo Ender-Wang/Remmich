@@ -147,6 +147,7 @@ public struct ImmichAssetDetail: Hashable, Sendable {
     public let city: String?
     public let state: String?
     public let country: String?
+    public let stackID: String?
 
     public init(
         id: String,
@@ -168,7 +169,8 @@ public struct ImmichAssetDetail: Hashable, Sendable {
         longitude: Double?,
         city: String?,
         state: String?,
-        country: String?
+        country: String?,
+        stackID: String? = nil
     ) {
         self.id = id
         self.capturedAt = capturedAt
@@ -190,6 +192,7 @@ public struct ImmichAssetDetail: Hashable, Sendable {
         self.city = city
         self.state = state
         self.country = country
+        self.stackID = stackID
     }
 }
 
@@ -250,11 +253,19 @@ public enum ImmichTimelineMediaKind: String, Codable, Hashable, Sendable {
 public struct ImmichTimelineStack: Codable, Hashable, Sendable {
     public let id: String
     public let assetCount: Int
+    public let primaryAssetID: String?
 
-    public init(id: String, assetCount: Int) {
+    public init(id: String, assetCount: Int, primaryAssetID: String? = nil) {
         self.id = id
         self.assetCount = assetCount
+        self.primaryAssetID = primaryAssetID
     }
+}
+
+public struct ImmichStackMembership: Sendable {
+    public let id: String
+    public let primaryAssetID: String
+    public let assetIDs: [String]
 }
 
 public struct ImmichTimelineAsset: Codable, Hashable, Identifiable, Sendable {

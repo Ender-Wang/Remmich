@@ -155,7 +155,8 @@ final class AppSessionController {
         }
         photos = PhotosTimelineStore(
             reader: photosReader,
-            persistentRefreshPolicy: .acceptedIndexPublication
+            persistentRefreshPolicy: .acceptedIndexPublication,
+            query: .init(includesStacks: true)
         )
         videos = PhotosTimelineStore(
             reader: VideoTimelineReader(source: videosReader),

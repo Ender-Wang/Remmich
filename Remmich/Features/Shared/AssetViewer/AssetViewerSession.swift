@@ -6,6 +6,15 @@ nonisolated enum AssetViewerOrigin: Hashable, Sendable {
     case scoped(route: PhotosRangeRoute, contentName: String)
     case memory(AssetViewerMemoryContext)
     case search
+
+    var isTrash: Bool {
+        switch self {
+        case let .timeline(_, name), let .scoped(_, name):
+            name == LibraryAssetCollection.trash.rawValue
+        case .memory, .search:
+            false
+        }
+    }
 }
 
 nonisolated struct AssetViewerMemoryContext: Hashable, Sendable {
@@ -56,6 +65,7 @@ final class AssetViewerSession {
     private(set) var isLoadingNeighbor = false
     private(set) var unavailableMessage: String?
     var selectedAssetID: String
+    private(set) var stackSourceAssetIDs: [String: String] = [:]
 
     private(set) var origin: AssetViewerOrigin
 
@@ -125,6 +135,7 @@ final class AssetViewerSession {
         else { return }
         origin = route.origin
         sourceAssets = Self.orderedUnique(route.initialAssets + [route.selectedAsset])
+        stackSourceAssetIDs.removeAll()
         assets = Self.viewerProjection(
             sourceAssets: sourceAssets,
             selectedAsset: route.selectedAsset
@@ -141,6 +152,18 @@ final class AssetViewerSession {
         guard allowsHorizontalPaging || assetID == selectedAssetID, assets.contains(where: { $0.id == assetID }) else { return false }
         selectedAssetID = assetID
         return true
+    }
+
+    func selectStackMember(_ member: TimelineAssetSummary) {
+        let sourceID = stackSourceAssetIDs[selectedAssetID] ?? selectedAssetID
+        if !sourceAssets.contains(where: { $0.id == member.id }),
+           let sourceIndex = sourceAssets.firstIndex(where: { $0.id == sourceID })
+        {
+            sourceAssets.insert(member, at: sourceIndex + 1)
+            stackSourceAssetIDs[member.id] = sourceID
+        }
+        assets = member.mediaKind == .video ? [member] : sourceAssets.filter { $0.mediaKind != .video }
+        selectedAssetID = member.id
     }
 
     func loadNeighborsIfNeeded() async {

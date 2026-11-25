@@ -137,6 +137,24 @@ struct AssetViewerSessionTests {
         #expect(session.selectedAssetID == older.id)
     }
 
+    @Test @MainActor func stackSelectionPreservesSearchRankAndTheOriginalSource() {
+        let first = asset("first", at: "2026-09-01T10:00:00Z")
+        let cover = asset("cover", at: "2026-10-01T10:00:00Z")
+        let video = asset("video", at: "2026-10-02T10:00:00Z", mediaKind: .video)
+        let photo = asset("photo", at: "2026-10-03T10:00:00Z")
+        let session = AssetViewerSession(route: .init(selectedAsset: cover, initialAssets: [first, cover], origin: .search))
+
+        session.selectStackMember(video)
+        #expect(session.assets.map(\.id) == ["video"])
+        #expect(session.stackSourceAssetIDs[video.id] == cover.id)
+
+        session.selectStackMember(photo)
+        #expect(session.assets.map(\.id) == ["first", "cover", "photo"])
+        #expect(session.selectedAssetID == photo.id)
+        #expect(session.stackSourceAssetIDs[photo.id] == cover.id)
+        #expect(session.selectImmediately(first.id))
+    }
+
     @Test func contextPresentationUsesCachedCaptureTimeAndNormalizesLocation() {
         let summary = asset("photo", at: "2026-10-02T10:00:00Z")
         let cached = detail(

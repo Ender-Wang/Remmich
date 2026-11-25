@@ -29,9 +29,14 @@ nonisolated protocol TimelineReading: Sendable {
     func assets(in bucketID: TimelineBucketID, query: TimelineQuery) async throws -> [TimelineAssetSummary]
     func memories() async throws -> [TimelineMemorySummary]
     func memories(matching kind: TimelineMediaKind) async throws -> [TimelineMemorySummary]
+    func timelineStackMemberships() async throws -> [TimelineStackMembership]?
 }
 
 extension TimelineReading {
+    nonisolated func timelineStackMemberships() async throws -> [TimelineStackMembership]? {
+        nil
+    }
+
     func memories(matching kind: TimelineMediaKind) async throws -> [TimelineMemorySummary] {
         try await memories().compactMap { $0.filteringAssets(of: kind) }
     }
@@ -53,9 +58,14 @@ extension CompleteTimelineCatalogReading {
 nonisolated protocol AssetDetailReading: Sendable {
     func cachedAssetDetail(id: String) async -> AssetDetail?
     func assetDetail(id: String) async throws -> AssetDetail
+    func stackMembers(assetID: String, stackID: String) async throws -> [TimelineAssetSummary]
 }
 
 extension AssetDetailReading {
+    nonisolated func stackMembers(assetID _: String, stackID _: String) async throws -> [TimelineAssetSummary] {
+        []
+    }
+
     nonisolated func cachedAssetDetail(id _: String) async -> AssetDetail? {
         nil
     }

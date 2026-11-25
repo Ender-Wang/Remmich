@@ -450,8 +450,43 @@ public actor ImmichClient {
                 longitude: exif?.longitude,
                 city: exif?.city,
                 state: exif?.state,
-                country: exif?.country
+                country: exif?.country,
+                stackID: response.stack?.value1.id
             )
+        } catch {
+            throw Self.map(error)
+        }
+    }
+
+    public func stackMemberships() async throws -> [ImmichStackMembership] {
+        guard credential != nil else { throw ImmichAPIError.unauthorized }
+        do {
+            switch try await makeClient().searchStacks(.init()) {
+            case let .ok(response):
+                return try response.body.json.map { stack in
+                    ImmichStackMembership(id: stack.id, primaryAssetID: stack.primaryAssetId,
+                                          assetIDs: stack.assets.filter { !$0.isTrashed && $0.visibility == .timeline }.map(\.id))
+                }
+            case let .undocumented(statusCode, _):
+                throw Self.map(status: statusCode)
+            }
+        } catch {
+            throw Self.map(error)
+        }
+    }
+
+    public func stackAssets(for assetID: String, stackID: String) async throws -> [ImmichTimelineAsset] {
+        guard credential != nil else { throw ImmichAPIError.unauthorized }
+        do {
+            switch try await makeClient().getStack(.init(path: .init(id: stackID))) {
+            case let .ok(response):
+                let stack = try response.body.json
+                let assets = Self.browsableAssets(stack.assets, stackID: stack.id, primaryAssetID: stack.primaryAssetId)
+                guard assets.contains(where: { $0.id == assetID }) else { return [] }
+                return assets
+            case let .undocumented(statusCode, _):
+                throw Self.map(status: statusCode)
+            }
         } catch {
             throw Self.map(error)
         }
@@ -570,9 +605,12 @@ public actor ImmichClient {
         return webBase?.appending(path: "share").appending(component: key)
     }
 
-    private static func browsableAssets(_ assets: [Components.Schemas.AssetResponseDto]) -> [ImmichTimelineAsset] {
-        assets.filter { !$0.isTrashed && $0.visibility != .locked && ($0._type == .IMAGE || $0._type == .VIDEO) }
-            .map(timelineAsset)
+    private static func browsableAssets(
+        _ assets: [Components.Schemas.AssetResponseDto], stackID: String? = nil, primaryAssetID: String? = nil
+    ) -> [ImmichTimelineAsset] {
+        let visible = assets.filter { !$0.isTrashed && $0.visibility != .locked && ($0._type == .IMAGE || $0._type == .VIDEO) }
+        let stack = stackID.map { ImmichTimelineStack(id: $0, assetCount: visible.count, primaryAssetID: primaryAssetID) }
+        return visible.map { timelineAsset($0, stack: stack) }
     }
 
     public func memories(query: ImmichMemoryQuery = .init(), includeTimelineAssets: Bool = false) async throws -> [ImmichMemory] {
@@ -805,11 +843,13 @@ public actor ImmichClient {
                     mediaKind: mediaKind
                 )
             },
-            timelineAssets: includeTimelineAssets ? response.assets.map(Self.timelineAsset) : nil
+            timelineAssets: includeTimelineAssets ? response.assets.map { Self.timelineAsset($0) } : nil
         )
     }
 
-    private static func timelineAsset(_ asset: Components.Schemas.AssetResponseDto) -> ImmichTimelineAsset {
+    private static func timelineAsset(
+        _ asset: Components.Schemas.AssetResponseDto, stack: ImmichTimelineStack? = nil
+    ) -> ImmichTimelineAsset {
         let kind: ImmichTimelineMediaKind = switch asset._type {
         case .IMAGE: .image
         case .VIDEO: .video
@@ -823,7 +863,10 @@ public actor ImmichClient {
                                    aspectRatio: Double(max(1, asset.width ?? 1)) / Double(max(1, asset.height ?? 1)),
                                    isFavorite: asset.isFavorite, isTrashed: asset.isTrashed,
                                    visibility: .init(serverValue: asset.visibility.rawValue), livePhotoVideoID: asset.livePhotoVideoId,
-                                   stack: nil, projectionType: nil, thumbhash: asset.thumbhash,
+                                   stack: stack ?? asset.stack.map {
+                                       .init(id: $0.value1.id, assetCount: $0.value1.assetCount, primaryAssetID: $0.value1.primaryAssetId)
+                                   },
+                                   projectionType: nil, thumbhash: asset.thumbhash,
                                    city: asset.exifInfo?.city, country: asset.exifInfo?.country,
                                    latitude: asset.exifInfo?.latitude, longitude: asset.exifInfo?.longitude,
                                    thumbnailRevision: thumbnailRevision(createdAt: asset.createdAt, fileCreatedAt: asset.fileCreatedAt))

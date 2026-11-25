@@ -501,8 +501,33 @@ actor ImmichTimelineRepository: TimelineReading, VideoReading, AssetDetailReadin
                 longitude: detail.longitude,
                 city: detail.city,
                 state: detail.state,
-                country: detail.country
+                country: detail.country,
+                stackID: detail.stackID
             )
+        } catch {
+            try requireCurrent(requestGeneration)
+            throw Self.map(error)
+        }
+    }
+
+    func stackMembers(assetID: String, stackID: String) async throws -> [TimelineAssetSummary] {
+        let (client, requestGeneration) = try requestContext()
+        do {
+            let assets = try await client.stackAssets(for: assetID, stackID: stackID)
+            try requireCurrent(requestGeneration)
+            return assets.map(Self.map)
+        } catch {
+            try requireCurrent(requestGeneration)
+            throw Self.map(error)
+        }
+    }
+
+    func timelineStackMemberships() async throws -> [TimelineStackMembership]? {
+        let (client, requestGeneration) = try requestContext()
+        do {
+            let memberships = try await client.stackMemberships()
+            try requireCurrent(requestGeneration)
+            return memberships.map { .init(id: $0.id, primaryAssetID: $0.primaryAssetID, assetIDs: $0.assetIDs) }
         } catch {
             try requireCurrent(requestGeneration)
             throw Self.map(error)
@@ -680,7 +705,7 @@ actor ImmichTimelineRepository: TimelineReading, VideoReading, AssetDetailReadin
             isFavorite: asset.isFavorite,
             visibility: map(asset.visibility),
             livePhotoVideoID: asset.livePhotoVideoID,
-            stack: asset.stack.map { .init(id: $0.id, assetCount: $0.assetCount) },
+            stack: asset.stack.map { .init(id: $0.id, assetCount: $0.assetCount, primaryAssetID: $0.primaryAssetID) },
             projectionType: asset.projectionType,
             thumbhash: asset.thumbhash,
             thumbnailRevision: asset.thumbnailRevision,

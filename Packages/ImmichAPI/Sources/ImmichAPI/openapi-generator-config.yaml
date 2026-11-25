@@ -19,6 +19,8 @@ filter:
     - searchSmart
     - getSearchSuggestions
     - getAssetInfo
+    - getStack
+    - searchStacks
     - searchMemories
     - getAllAlbums
     - getAlbumInfo

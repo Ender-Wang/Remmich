@@ -165,6 +165,7 @@ final class PhotosTimelineStore {
     /// Accepted metadata survives decoded/visible residency eviction. Keeping
     /// these arrays does not retain images or create a second media cache.
     private var semanticAssetsByBucket: [TimelineBucketID: [TimelineAssetSummary]] = [:]
+    private(set) var hiddenStackMemberIDs: Set<String> = []
     private var residencyAssetsByID: [String: TimelineAssetSummary] = [:]
     private var residencyPages: [TimelineLogicalPage] = []
     private var residencyPageIndexByAssetID: [String: Int] = [:]
@@ -228,6 +229,7 @@ final class PhotosTimelineStore {
         bucketSummaries = snapshot.summaries
         rawAssetsByID = snapshot.assetsByBucket
         semanticAssetsByBucket = snapshot.assetsByBucket
+        hiddenStackMemberIDs = snapshot.hiddenStackMemberIDs
         semanticContentRevision &+= 1
         sectionsByID = Dictionary(uniqueKeysWithValues: snapshot.summaries.map { summary in
             let assets = snapshot.assetsByBucket[summary.id, default: []]
@@ -856,6 +858,7 @@ final class PhotosTimelineStore {
         bucketRequestRevisions = [:]
         rawAssetsByID = [:]
         semanticAssetsByBucket = [:]
+        hiddenStackMemberIDs = []
         semanticContentRevision &+= 1
         semanticHistoryState = .idle
         residencyAssetsByID = [:]

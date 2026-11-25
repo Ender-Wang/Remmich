@@ -81,6 +81,37 @@ struct LibraryReadTests {
         #expect(try await client.folderAssets(path: "/photos/Trip_%").map(\.id) == ["exact"])
     }
 
+    @Test func stackLookupUsesAssetDetailsAndReadsMembersWithoutMutation() async throws {
+        let stack = #"{"id":"stack-1","assetCount":2,"primaryAssetId":"cover"}"#
+        let cover = Self.assetJSON(id: "cover", path: "/photos/cover.jpg")
+        let member = Self.assetJSON(id: "member", path: "/photos/member.jpg")
+        let trashed = Self.assetJSON(id: "trash", path: "/photos/trash.jpg")
+            .replacingOccurrences(of: #""isTrashed":false"#, with: #""isTrashed":true"#)
+        let stackResponse = #"{"id":"stack-1","primaryAssetId":"cover","assets":["# + [cover, member, trashed].joined(separator: ",") + "]}"
+        let client = try Self.client { request, operation in
+            if operation == "getAssetInfo" {
+                #expect(request.url?.path == "/api/assets/cover")
+                return String(cover.dropLast()) + #","stack":"# + stack + "}"
+            }
+            if operation == "searchStacks" {
+                #expect(request.url?.path == "/api/stacks")
+                return "[" + stackResponse + "]"
+            }
+            #expect(operation == "getStack")
+            #expect(request.url?.path == "/api/stacks/stack-1")
+            return stackResponse
+        }
+        let memberships = try await client.stackMemberships()
+        #expect(memberships.first?.primaryAssetID == "cover")
+        #expect(memberships.first?.assetIDs == ["cover", "member"])
+        let detail = try await client.assetInfo(id: "cover")
+        let stackID = try #require(detail.stackID)
+        let members = try await client.stackAssets(for: detail.id, stackID: stackID)
+        #expect(members.map(\.id) == ["cover", "member"])
+        #expect(members.allSatisfy { $0.stack == ImmichTimelineStack(id: "stack-1", assetCount: 2, primaryAssetID: "cover") })
+        #expect(try await client.stackAssets(for: "unrelated", stackID: stackID).isEmpty)
+    }
+
     @Test(arguments: [(true, false), (false, true)])
     func libraryAvailabilityUsesFeaturePreferences(enabled: Bool, sidebarWeb: Bool) async throws {
         let client = try Self.client { request, operation in

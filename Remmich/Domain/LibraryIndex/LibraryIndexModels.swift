@@ -53,13 +53,18 @@ nonisolated struct LibraryIndexAssetRecord: Codable, Hashable, Identifiable, Sen
     let yearKey: String
 
     let localOffsetHours: Double
-    let stackID: String?
-    let stackAssetCount: Int?
+    var stackID: String?
+    var stackAssetCount: Int?
+    var stackPrimaryAssetID: String?
     let projectionType: String?
     let thumbhash: String?
 
     var captureLocalDate: Date {
         capturedAt.addingTimeInterval((localOffsetHours * 3600).rounded())
+    }
+
+    var isHiddenStackMember: Bool {
+        stackPrimaryAssetID.map { $0 != id } ?? false
     }
 
     init(
@@ -87,6 +92,7 @@ nonisolated struct LibraryIndexAssetRecord: Codable, Hashable, Identifiable, Sen
         localOffsetHours: Double = 0,
         stackID: String? = nil,
         stackAssetCount: Int? = nil,
+        stackPrimaryAssetID: String? = nil,
         projectionType: String? = nil,
         thumbhash: String? = nil
     ) {
@@ -114,6 +120,7 @@ nonisolated struct LibraryIndexAssetRecord: Codable, Hashable, Identifiable, Sen
         self.localOffsetHours = localOffsetHours
         self.stackID = stackID
         self.stackAssetCount = stackAssetCount
+        self.stackPrimaryAssetID = stackPrimaryAssetID
         self.projectionType = projectionType
         self.thumbhash = thumbhash
     }
@@ -125,6 +132,7 @@ nonisolated struct TimelineBootstrapSnapshot: Sendable {
     let assetsByBucket: [TimelineBucketID: [TimelineAssetSummary]]
     let groupedCatalogs: TimelineGroupedCatalogCache
     let isComplete: Bool
+    var hiddenStackMemberIDs: Set<String> = []
 }
 
 nonisolated struct LibraryTimelineBootstrap: Sendable {

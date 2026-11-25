@@ -36,6 +36,7 @@ actor LibraryIndexSynchronizer {
     private let source: any TimelineReading
     private let store: any LibraryIndexStoring
     private let batchSize: Int
+    private var stackRead: (scope: MediaAccountScope, memberships: [TimelineStackMembership]?)?
 
     init(source: any TimelineReading, store: any LibraryIndexStoring, batchSize: Int = 2) {
         self.source = source
@@ -110,6 +111,7 @@ actor LibraryIndexSynchronizer {
         }
 
         do {
+            async let stackMemberships = readStacks(scope: scope, mode: mode)
             let summaries = try await source.bucketSummaries(query: .init())
                 .sorted { $0.id.rawValue > $1.id.rawValue }
             let expectedCount = summaries.reduce(0) { $0 + $1.assetCount }
@@ -145,6 +147,15 @@ actor LibraryIndexSynchronizer {
                 await progress?(progressCounts)
             }
 
+            var stagedAssets = mergedAssets(
+                previous: fullReconciliation ? nil : previous,
+                replacing: replacements
+            )
+            let memberships = try await stackMemberships
+            let stackChanges = Self.reconcileStacks(
+                memberships, assets: &stagedAssets, priorAssets: previous?.assets ?? [], ownerID: scope.userID
+            )
+
             // Durable transfers may be replayed after suspension. Do not copy an
             // accepted generation until every selected response is available.
             try Task.checkCancellation()
@@ -161,10 +172,9 @@ actor LibraryIndexSynchronizer {
             for records in replacements.values {
                 try await store.upsert(assets: records, generation: generation, scope: scope)
             }
-            let stagedAssets = mergedAssets(
-                previous: fullReconciliation ? nil : previous,
-                replacing: replacements
-            )
+            if !stackChanges.isEmpty {
+                try await store.upsert(assets: stackChanges, generation: generation, scope: scope)
+            }
             let stagedCounts = Dictionary(grouping: stagedAssets, by: \.bucketKey).mapValues(\.count)
             let hasPendingBucketChanges = recentOnly && summaries.contains {
                 stagedCounts[$0.id.rawValue, default: 0] != $0.assetCount
@@ -205,6 +215,55 @@ actor LibraryIndexSynchronizer {
             }
             throw error
         }
+    }
+
+    private func readStacks(scope: MediaAccountScope, mode: LibraryIndexSyncMode) async throws -> [TimelineStackMembership]? {
+        if case .historical = mode, let stackRead, stackRead.scope == scope {
+            return stackRead.memberships
+        }
+        let memberships: [TimelineStackMembership]?
+        do {
+            memberships = try await source.timelineStackMemberships()
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            memberships = nil
+        }
+        try Task.checkCancellation()
+        stackRead = (scope, memberships)
+        return memberships
+    }
+
+    private nonisolated static func reconcileStacks(
+        _ memberships: [TimelineStackMembership]?, assets: inout [LibraryIndexAssetRecord],
+        priorAssets: [LibraryIndexAssetRecord], ownerID: String
+    ) -> [LibraryIndexAssetRecord] {
+        var byAssetID: [String: TimelineStackSummary] = [:]
+        if let memberships {
+            for stack in memberships where stack.assetIDs.count > 1 && stack.assetIDs.contains(stack.primaryAssetID) {
+                let summary = TimelineStackSummary(id: stack.id, assetCount: stack.assetIDs.count, primaryAssetID: stack.primaryAssetID)
+                for id in stack.assetIDs {
+                    byAssetID[id] = summary
+                }
+            }
+        } else {
+            for asset in priorAssets {
+                byAssetID[asset.id] = asset.timelineAssetSummary.stack
+            }
+        }
+        var changed: [LibraryIndexAssetRecord] = []
+        for index in assets.indices where assets[index].ownerID == ownerID {
+            let original = assets[index]
+            let stack = byAssetID[original.id]
+            guard original.stackID != stack?.id || original.stackAssetCount != stack?.assetCount
+                || original.stackPrimaryAssetID != stack?.primaryAssetID
+            else { continue }
+            assets[index].stackID = stack?.id
+            assets[index].stackAssetCount = stack?.assetCount
+            assets[index].stackPrimaryAssetID = stack?.primaryAssetID
+            changed.append(assets[index])
+        }
+        return changed
     }
 
     private func bucketsToFetch(
@@ -285,7 +344,7 @@ private extension LibraryIndexProgress {
 private nonisolated enum LibraryIndexCatalogBuilder {
     static func build(from assets: [LibraryIndexAssetRecord]) -> [LibraryIndexGroupRecord] {
         LibraryIndexMediaScope.allCases.flatMap { scope in
-            let scopedAssets = assets.filter { scope == .videos ? $0.kind == .video : $0.kind != .video }
+            let scopedAssets = assets.filter { scope == .videos ? $0.kind == .video : $0.kind != .video && !$0.isHiddenStackMember }
             return ["day", "week", "month", "year"].flatMap { level in
                 build(level: level, assets: scopedAssets, mediaScope: scope)
             }
@@ -366,6 +425,7 @@ private extension LibraryIndexAssetRecord {
             localOffsetHours: asset.localOffsetHours,
             stackID: asset.stack?.id,
             stackAssetCount: asset.stack?.assetCount,
+            stackPrimaryAssetID: asset.stack?.primaryAssetID,
             projectionType: asset.projectionType,
             thumbhash: asset.thumbhash
         )

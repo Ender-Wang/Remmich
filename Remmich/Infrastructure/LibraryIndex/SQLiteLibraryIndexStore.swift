@@ -3,7 +3,7 @@ import OSLog
 import SQLite3
 
 actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
-    static let currentSchemaVersion = 2
+    static let currentSchemaVersion = 3
     static let currentCacheSchemaVersion = 1
     private static let logger = Logger(subsystem: "io.github.ender-wang.Remmich", category: "AccountStorage")
 
@@ -479,14 +479,14 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
                         captured_at, uploaded_at, updated_at, checksum, width, height,
                         aspect_ratio, duration_ms, is_favorite, visibility, is_trashed,
                         is_offline, bucket_key, day_key, week_key, month_key, year_key,
-                        local_offset_hours, stack_id, stack_asset_count, projection_type, thumbhash,
+                        local_offset_hours, stack_id, stack_asset_count, stack_primary_asset_id, projection_type, thumbhash,
                         generation, tombstone
                     )
                     SELECT scope, asset_id, owner_id, kind, live_photo_video_id,
                            captured_at, uploaded_at, updated_at, checksum, width, height,
                            aspect_ratio, duration_ms, is_favorite, visibility, is_trashed,
                            is_offline, bucket_key, day_key, week_key, month_key, year_key,
-                           local_offset_hours, stack_id, stack_asset_count, projection_type, thumbhash,
+                           local_offset_hours, stack_id, stack_asset_count, stack_primary_asset_id, projection_type, thumbhash,
                            ?, tombstone
                     FROM assets WHERE scope = ? AND generation = ?
                     """,
@@ -528,9 +528,9 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
                         captured_at, uploaded_at, updated_at, checksum, width, height,
                         aspect_ratio, duration_ms, is_favorite, visibility, is_trashed,
                         is_offline, bucket_key, day_key, week_key, month_key, year_key,
-                        local_offset_hours, stack_id, stack_asset_count, projection_type, thumbhash,
+                        local_offset_hours, stack_id, stack_asset_count, stack_primary_asset_id, projection_type, thumbhash,
                         generation, tombstone
-                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
                     ON CONFLICT(scope, generation, asset_id) DO UPDATE SET
                         owner_id = excluded.owner_id,
                         kind = excluded.kind,
@@ -555,6 +555,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
                         local_offset_hours = excluded.local_offset_hours,
                         stack_id = excluded.stack_id,
                         stack_asset_count = excluded.stack_asset_count,
+                        stack_primary_asset_id = excluded.stack_primary_asset_id,
                         projection_type = excluded.projection_type,
                         thumbhash = excluded.thumbhash,
                         tombstone = 0
@@ -569,7 +570,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
                         .bool(asset.isOffline), .text(asset.bucketKey), .text(asset.dayKey),
                         .text(asset.weekKey), .text(asset.monthKey), .text(asset.yearKey),
                         .double(asset.localOffsetHours), .optionalText(asset.stackID),
-                        .optionalInt(asset.stackAssetCount), .optionalText(asset.projectionType),
+                        .optionalInt(asset.stackAssetCount), .optionalText(asset.stackPrimaryAssetID), .optionalText(asset.projectionType),
                         .optionalText(asset.thumbhash),
                         .int64(generation),
                     ]
@@ -1861,9 +1862,12 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
         if version == Self.currentSchemaVersion {
             return
         }
-        if version == 1 {
+        if version == 1 || version == 2 {
             try database.transaction {
-                try createLibraryCollectionSchema(database)
+                if version == 1 {
+                    try createLibraryCollectionSchema(database)
+                }
+                try database.execute("ALTER TABLE assets ADD COLUMN stack_primary_asset_id TEXT")
                 try database.execute("PRAGMA user_version = \(Self.currentSchemaVersion)")
             }
             return
@@ -1919,6 +1923,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
                 local_offset_hours REAL NOT NULL DEFAULT 0,
                 stack_id TEXT,
                 stack_asset_count INTEGER,
+                stack_primary_asset_id TEXT,
                 projection_type TEXT,
                 thumbhash TEXT,
                 generation INTEGER NOT NULL,
@@ -2286,7 +2291,9 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
         videosOnly: Bool = false
     ) throws -> [LibraryIndexAssetRecord] {
         let source = openingLimit == nil ? "assets" : "assets INDEXED BY assets_scope_day"
-        let kindFilter = videosOnly ? "AND kind = 'video'" : ""
+        let kindFilter = videosOnly
+            ? "AND kind = 'video'"
+            : "AND (stack_primary_asset_id IS NULL OR stack_primary_asset_id = asset_id)"
         let order = openingLimit == nil
             ? "ORDER BY captured_at ASC, asset_id ASC"
             : "AND visibility = 'timeline' AND is_trashed = 0 \(kindFilter) ORDER BY day_key DESC, captured_at DESC, asset_id DESC LIMIT ?"
@@ -2297,7 +2304,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
                    uploaded_at, updated_at, checksum, width, height, aspect_ratio,
                    duration_ms, is_favorite, visibility, is_trashed, is_offline,
                    bucket_key, day_key, week_key, month_key, year_key,
-                   local_offset_hours, stack_id, stack_asset_count, projection_type, thumbhash
+                   local_offset_hours, stack_id, stack_asset_count, stack_primary_asset_id, projection_type, thumbhash
             FROM \(source)
             WHERE scope = ? AND generation = ? AND tombstone = 0
             \(order)
@@ -2315,8 +2322,8 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
                 bucketKey: row.text(16), dayKey: row.text(17), weekKey: row.text(18),
                 monthKey: row.text(19), yearKey: row.text(20),
                 localOffsetHours: row.double(21), stackID: row.optionalText(22),
-                stackAssetCount: row.optionalInt(23), projectionType: row.optionalText(24),
-                thumbhash: row.optionalText(25)
+                stackAssetCount: row.optionalInt(23), stackPrimaryAssetID: row.optionalText(24),
+                projectionType: row.optionalText(25), thumbhash: row.optionalText(26)
             )
         }
     }

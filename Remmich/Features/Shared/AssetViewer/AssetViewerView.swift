@@ -52,6 +52,8 @@ struct AssetViewerView: View {
     @State private var mediaViewerID = UUID()
     @State private var zoomedAssetID: String?
     @State private var chromeVisible = true
+    @State private var stackMembersByAssetID: [String: [TimelineAssetSummary]] = [:]
+    @State private var keepChromeHiddenForStackSelection = false
     @State private var showsInfo = false
     @State private var detailStates: [String: AssetViewerDetailState] = [:]
     @State private var selectedPlace: PlaceLocation?
@@ -495,6 +497,18 @@ struct AssetViewerView: View {
                     .modifier(AssetViewerTransitionOpacity(value: isOpening ? dismissalBackdropOpacity : 1))
                     .allowsHitTesting(!isolatesDismissalAsset && (chromeVisible || showsInfo))
                     .accessibilityHidden(isolatesDismissalAsset || (!chromeVisible && !showsInfo))
+
+                    if !openingIsActive, !isolatesDismissalAsset, !showsInfo,
+                       zoomedAssetID == nil, !isMemoryViewer,
+                       let members = stackMembersByAssetID[session.selectedAssetID], members.count > 1
+                    {
+                        stackFilmstrip(members)
+                            .frame(width: safeRect.width)
+                            .position(x: safeRect.midX, y: safeRect.maxY - stackStripBottomOffset)
+                            .zIndex(1)
+                            .transition(.opacity)
+                            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: chromeVisible)
+                    }
                 }
                 .contentShape(isMemoryViewer
                     ? AssetViewerMemoryInteractionShape(
@@ -555,6 +569,10 @@ struct AssetViewerView: View {
             seedVideoNowPlayingArtwork()
             await videoPlaybackSession.prepare(using: media)
         }
+        .task(id: stackLoadRequest) {
+            guard let request = stackLoadRequest else { return }
+            await loadStackMembers(assetID: request.assetID, stackID: request.stackID)
+        }
         .onChange(of: selectedAssetDetail) {
             updateVideoNowPlayingTitle()
         }
@@ -609,7 +627,10 @@ struct AssetViewerView: View {
             infoScrollDismissalBlocked = false
             logMemoryPlayback("selection")
             videoFirstFrameReady = false
-            chromeVisible = true
+            if !keepChromeHiddenForStackSelection {
+                chromeVisible = true
+            }
+            keepChromeHiddenForStackSelection = false
             syncVideoPlaybackSession()
             nativeDismissalController.reset()
             nativeDismissalTransitionActive = false
@@ -1313,9 +1334,10 @@ struct AssetViewerView: View {
 
             VStack(spacing: 16) {
                 if showsFilmstrip {
+                    let filmstrip = regularFilmstrip
                     AssetViewerFilmstrip(
-                        assets: session.assets,
-                        selectedAssetID: session.selectedAssetID,
+                        assets: filmstrip.assets,
+                        selectedAssetID: filmstrip.selection,
                         media: media,
                         select: { assetID in
                             selectPagerAsset(assetID)
@@ -1331,6 +1353,86 @@ struct AssetViewerView: View {
             }
             .frame(width: actionColumnWidth)
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var regularFilmstrip: (assets: [TimelineAssetSummary], selection: String) {
+        let assets = session.assets.filter { session.stackSourceAssetIDs[$0.id] == nil }
+        let assetIDs = Set(assets.map(\.id))
+        func stack(for asset: TimelineAssetSummary) -> TimelineStackSummary? {
+            stackMembersByAssetID[asset.id]?.first?.stack ?? asset.stack
+        }
+        var representativeIDs: [String: String] = [:]
+        for asset in assets {
+            guard let stack = stack(for: asset) else { continue }
+            if let primaryID = stack.primaryAssetID, assetIDs.contains(primaryID) {
+                representativeIDs[stack.id] = primaryID
+            } else if representativeIDs[stack.id] == nil {
+                representativeIDs[stack.id] = asset.id
+            }
+        }
+        let visible = assets.filter { asset in
+            let representativeID = stack(for: asset).flatMap { representativeIDs[$0.id] }
+            return (representativeID ?? asset.id) == asset.id
+        }
+        let selectedID = session.selectedAssetID
+        let representative = session.selectedAsset.flatMap(stack(for:)).flatMap { representativeIDs[$0.id] }
+        return (visible, representative ?? session.stackSourceAssetIDs[selectedID] ?? selectedID)
+    }
+
+    private var stackStripBottomOffset: CGFloat {
+        if session.isVideoPlayback {
+            return videoControlsVisible ? 178 : 34
+        }
+        guard chromeVisible else { return 34 }
+        return 142
+    }
+
+    private func stackFilmstrip(_ members: [TimelineAssetSummary]) -> some View {
+        AssetViewerFilmstrip(
+            assets: members, selectedAssetID: session.selectedAssetID, media: media,
+            accessibilityIDPrefix: "asset-viewer-stack-member"
+        ) { assetID in
+            guard assetID != session.selectedAssetID,
+                  let member = members.first(where: { $0.id == assetID })
+            else { return }
+            keepChromeHiddenForStackSelection = !chromeVisible
+            session.selectStackMember(member)
+            recenterPagerWindowIfNeeded(on: assetID)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Stack")
+    }
+
+    private var stackLoadRequest: StackLoadRequest? {
+        guard !openingIsActive, !isMemoryViewer, !isDismissing, !session.origin.isTrash, media.savedPhotosLibrary == nil,
+              let asset = session.selectedAsset,
+              let stackID = asset.stack?.id ?? selectedAssetDetail?.stackID
+        else { return nil }
+        return StackLoadRequest(assetID: asset.id, stackID: stackID)
+    }
+
+    private struct StackLoadRequest: Equatable {
+        let assetID: String
+        let stackID: String
+    }
+
+    private func loadStackMembers(assetID: String, stackID: String) async {
+        guard stackMembersByAssetID[assetID] == nil else { return }
+        do {
+            // A short dwell keeps paging from starting lookups for intermediate items.
+            try await Task.sleep(for: .milliseconds(220))
+            let scope = media.scope
+            let members = try await assetDetails.stackMembers(assetID: assetID, stackID: stackID)
+            guard !Task.isCancelled, scope == media.scope, session.selectedAssetID == assetID else { return }
+            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
+                stackMembersByAssetID[assetID] = members
+                for member in members {
+                    stackMembersByAssetID[member.id] = members
+                }
+            }
+        } catch {
+            // Keep the current asset visible when stack members cannot be loaded.
         }
     }
 
@@ -2096,10 +2198,17 @@ struct AssetViewerView: View {
 
     private func beginReturningTimelineTransition(for asset: TimelineAssetSummary) {
         dismissalThumbnailRevealTask?.cancel()
-        returningTimelineThumbnailChanged(asset.id)
+        let id = returnSourceAssetID(for: asset.id)
+        returningTimelineThumbnailChanged(id)
         if TimelineAssetOverlay.isVisible(for: asset, savedToPhotos: media.exports.saved(asset), isDownloading: media.exports.isDownloading(asset)) {
-            returningLivePhotoBadgeChanged(asset.id)
+            returningLivePhotoBadgeChanged(id)
         }
+    }
+
+    private func returnSourceAssetID(for assetID: String) -> String {
+        guard let stackSourceID = session.stackSourceAssetIDs[assetID],
+              dismissalTarget(assetID) == nil else { return assetID }
+        return stackSourceID
     }
 
     private func updateNativeDismissal(
@@ -2297,14 +2406,15 @@ struct AssetViewerView: View {
             closeWithoutAnimation()
             return
         }
+        let sourceAssetID = returnSourceAssetID(for: asset.id)
         beginReturningTimelineTransition(for: asset)
         guard !reduceMotion else {
             closeWithoutAnimation()
             return
         }
-        let destination = dismissalTarget(asset.id)
+        let destination = dismissalTarget(sourceAssetID)
         if !isMemoryViewer {
-            beginReturnSourceTracking(assetID: asset.id, target: destination)
+            beginReturnSourceTracking(assetID: sourceAssetID, target: destination)
         }
         let target = destination?.imageFrame.offsetBy(
             dx: -viewportOrigin.x,
@@ -4031,12 +4141,14 @@ private struct AssetViewerFitPage: View {
 struct AssetViewerFilmstrip: View {
     @Environment(\.displayScale) private var displayScale
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var hasPositionedSelection = false
 
     let assets: [TimelineAssetSummary]
     let selectedAssetID: String
     let media: MediaLibraryController
+    var accessibilityIDPrefix = "asset-viewer-filmstrip"
     let select: (String) -> Void
 
     var body: some View {
@@ -4078,7 +4190,7 @@ struct AssetViewerFilmstrip: View {
                                 timeStyle: .short
                             ))
                             .accessibilityAddTraits(asset.id == selectedAssetID ? .isSelected : [])
-                            .accessibilityIdentifier("asset-viewer-filmstrip-\(asset.id)")
+                            .accessibilityIdentifier("\(accessibilityIDPrefix)-\(asset.id)")
                             .id(asset.id)
                         }
                     }
@@ -4095,7 +4207,7 @@ struct AssetViewerFilmstrip: View {
                           assets.contains(where: { $0.id == selectedAssetID })
                     else { return }
 
-                    if hasPositionedSelection {
+                    if hasPositionedSelection, !reduceMotion {
                         withAnimation(.snappy(duration: 0.2)) {
                             proxy.scrollTo(selectedAssetID, anchor: .center)
                         }

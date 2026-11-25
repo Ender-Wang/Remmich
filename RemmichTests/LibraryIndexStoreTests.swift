@@ -51,6 +51,28 @@ struct LibraryIndexStoreTests {
         #expect(try String(cString: #require(sqlite3_column_text(statement, 1))) == "kept")
     }
 
+    @Test func versionTwoCatalogRetainsAcceptedRowsWhenAddingStackMembership() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let scope = Self.scope(userID: "stack-migration")
+        let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        let generation = try await store.beginGeneration(scope: scope)
+        try await store.upsert(assets: [Self.asset(id: "existing")], generation: generation, scope: scope)
+        _ = try await store.acceptGeneration(generation, watermark: nil, historicalCursor: nil, expectedAssetCount: 1, scope: scope)
+        let files = await store.databaseFiles(scope: scope)
+        var handle: OpaquePointer?
+        try #require(sqlite3_open(files.catalog.path, &handle) == SQLITE_OK)
+        defer { sqlite3_close(handle) }
+        try #require(sqlite3_exec(handle, "ALTER TABLE assets DROP COLUMN stack_primary_asset_id; PRAGMA user_version = 2", nil, nil, nil) == SQLITE_OK)
+
+        let reopened = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        let snapshot = try #require(await reopened.snapshot(scope: scope))
+        #expect(try await reopened.schemaVersion() == SQLiteLibraryIndexStore.currentSchemaVersion)
+        #expect(snapshot.generation == generation)
+        #expect(snapshot.assets.map(\.id) == ["existing"])
+        #expect(snapshot.assets.first?.stackPrimaryAssetID == nil)
+    }
+
     @Test func accountSummariesUseAcceptedAssetsAndVerifiedThumbnailMetadataPairs() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }

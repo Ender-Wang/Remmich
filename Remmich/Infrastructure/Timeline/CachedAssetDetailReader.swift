@@ -56,6 +56,14 @@ actor CachedAssetDetailReader: AssetDetailReading {
         return try await assetDetail(id: id, scope: scope)
     }
 
+    func stackMembers(assetID: String, stackID: String) async throws -> [TimelineAssetSummary] {
+        guard scope != nil else { throw CancellationError() }
+        let requestGeneration = generation
+        let members = try await source.stackMembers(assetID: assetID, stackID: stackID)
+        guard requestGeneration == generation, !Task.isCancelled else { throw CancellationError() }
+        return members
+    }
+
     func assetDetail(id: String, scope: MediaAccountScope) async throws -> AssetDetail {
         guard self.scope == scope, !Task.isCancelled else { throw CancellationError() }
         let requestGeneration = generation
@@ -88,8 +96,9 @@ actor CachedAssetDetailReader: AssetDetailReading {
             )
         }
         guard !Task.isCancelled, requestGeneration == generation, self.scope == scope else { throw CancellationError() }
-        let composed = try? await store.cachedAssetMetadata(id: id, scope: scope)
+        var composed = try? await store.cachedAssetMetadata(id: id, scope: scope)
         guard !Task.isCancelled, requestGeneration == generation, self.scope == scope else { throw CancellationError() }
+        composed?.stackID = detail.stackID
         return composed ?? detail
     }
 }

@@ -4,6 +4,47 @@ import Testing
 
 @Suite(.serialized)
 struct LibraryIndexSynchronizationTests {
+    @Test func stackChangesInOlderMonthsUpdatePhotosWithoutRemovingCachedAssets() async throws {
+        let fixture = try IndexFixture()
+        defer { fixture.cleanup() }
+        let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        let month = "2026-08-01"
+        let olderMonth = "2026-07-01"
+        let source = IndexSource(buckets: [
+            "2026-10-01": [Self.asset(id: "recent", bucket: "2026-10-01")],
+            "2026-09-01": [Self.asset(id: "previous", bucket: "2026-09-01")],
+            month: [
+                Self.asset(id: "second", bucket: month, ownerID: Self.scope.userID),
+            ],
+            olderMonth: [
+                Self.asset(id: "first", bucket: olderMonth, ownerID: Self.scope.userID),
+                Self.asset(id: "video", bucket: olderMonth, mediaKind: .video, ownerID: Self.scope.userID),
+            ],
+        ])
+        let synchronizer = LibraryIndexSynchronizer(source: source, store: store)
+        _ = try await synchronizer.fullSyncAndVerify(scope: Self.scope)
+        await source.replaceStacks([.init(id: "stack", primaryAssetID: "second", assetIDs: ["first", "second", "video"])])
+        let result = try await synchronizer.synchronizeRecent(scope: Self.scope)
+        let snapshot = try #require(await store.snapshot(scope: Self.scope))
+        let bootstrap = LibraryTimelineBootstrapBuilder.build(from: snapshot)
+        let bucket = TimelineBucketID(rawValue: month)
+        let olderBucket = TimelineBucketID(rawValue: olderMonth)
+        #expect(result.indexedAssetCount == 5)
+        #expect(result.expectedAssetCount == 5)
+        #expect(bootstrap.photos.assetsByBucket[bucket]?.map(\.id) == ["second"])
+        #expect(bootstrap.photos.assetsByBucket[bucket]?.first?.stack?.assetCount == 3)
+        #expect(bootstrap.photos.assetsByBucket[olderBucket] == nil)
+        #expect(bootstrap.photos.hiddenStackMemberIDs == ["first", "video"])
+        #expect(bootstrap.videos.assetsByBucket[olderBucket]?.map(\.id) == ["video"])
+        let opening = try #require(await store.openingTimelineWindow(scope: Self.scope, limit: 10))
+        #expect(opening.assets.count == 3)
+
+        await source.replaceStacks([])
+        _ = try await synchronizer.synchronizeRecent(scope: Self.scope)
+        let unstacked = try #require(await store.snapshot(scope: Self.scope))
+        #expect(unstacked.assets.allSatisfy { !$0.isHiddenStackMember && $0.stackID == nil })
+    }
+
     @Test @MainActor func invalidatedIndexRunCannotRestoreOldAccountThumbnailRegistrations() async throws {
         let fixture = try IndexFixture()
         let suite = "BackgroundSync-\(UUID().uuidString)"
@@ -1187,11 +1228,12 @@ struct LibraryIndexSynchronizationTests {
         id: String,
         bucket _: String,
         livePhotoVideoID: String? = nil,
-        mediaKind: TimelineMediaKind = .image
+        mediaKind: TimelineMediaKind = .image,
+        ownerID: String = "owner"
     ) -> TimelineAssetSummary {
         .init(
             id: id,
-            ownerID: "owner",
+            ownerID: ownerID,
             capturedAt: Date(timeIntervalSince1970: 1_760_000_000),
             uploadedAt: Date(timeIntervalSince1970: 1_760_000_010),
             localOffsetHours: 0,
@@ -1320,6 +1362,7 @@ private actor AssetDetailFixtureSource: AssetDetailReading {
 
 private actor IndexSource: TimelineReading {
     private var buckets: [String: [TimelineAssetSummary]]
+    private var stacks: [TimelineStackMembership]?
     private(set) var summaryRequestCount = 0
 
     init(buckets: [String: [TimelineAssetSummary]]) {
@@ -1328,6 +1371,14 @@ private actor IndexSource: TimelineReading {
 
     func replaceBuckets(with buckets: [String: [TimelineAssetSummary]]) {
         self.buckets = buckets
+    }
+
+    func replaceStacks(_ stacks: [TimelineStackMembership]) {
+        self.stacks = stacks
+    }
+
+    func timelineStackMemberships() -> [TimelineStackMembership]? {
+        stacks
     }
 
     func bucketSummaries(query _: TimelineQuery) -> [TimelineBucketSummary] {
