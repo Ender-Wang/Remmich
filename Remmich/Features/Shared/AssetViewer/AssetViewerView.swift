@@ -27,6 +27,7 @@ struct AssetViewerView: View {
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.assetLocations) private var locations
+    @Environment(\.assetViewerTimelineLocator) private var timelineLocator
 
     let route: AssetViewerRoute
     let media: MediaLibraryController
@@ -54,6 +55,10 @@ struct AssetViewerView: View {
     @State private var chromeVisible = true
     @State private var stackMembersByAssetID: [String: [TimelineAssetSummary]] = [:]
     @State private var keepChromeHiddenForStackSelection = false
+    @State private var timelineLocationTask: Task<Void, Never>?
+    @State private var isRevealingLocatedTimeline = false
+    @State private var locatedTimelineTarget: (() -> AssetViewerDismissalTarget?)?
+    @State private var timelineLocationFailed = false
     @State private var showsInfo = false
     @State private var detailStates: [String: AssetViewerDetailState] = [:]
     @State private var selectedPlace: PlaceLocation?
@@ -531,7 +536,15 @@ struct AssetViewerView: View {
                         mediaRect: selectedMediaRect
                     )
                 )
-                .nativeEdgeBack(active: !isDismissing, canBegin: !openingIsActive && !isDismissalInteractionActive
+                .overlay {
+                    if isRevealingLocatedTimeline || locatedTimelineTarget != nil {
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .onTapGesture {}
+                            .accessibilityHidden(true)
+                    }
+                }
+                .nativeEdgeBack(active: !isDismissing && !isRevealingLocatedTimeline, canBegin: !openingIsActive && !isDismissalInteractionActive
                     && zoomedAssetID == nil && !videoRoutePickerPresented, priority: 400)
                 { event in
                     viewerEdgeBack(event, viewportSize: fullRect.size, viewportOrigin: fullFrame.origin,
@@ -544,6 +557,12 @@ struct AssetViewerView: View {
                         viewportOrigin: fullFrame.origin,
                         mediaRect: selectedMediaRect
                     )
+                }
+                .onChange(of: locatedTimelineTarget != nil) {
+                    guard let target = locatedTimelineTarget else { return }
+                    locatedTimelineTarget = nil
+                    completeDragDismissal(viewportSize: fullRect.size, viewportOrigin: fullFrame.origin,
+                                          mediaRect: selectedMediaRect, locatedTarget: target)
                 }
                 .task(id: previewTargetPixels) {
                     viewerPreviewTargetPixels = previewTargetPixels
@@ -558,6 +577,11 @@ struct AssetViewerView: View {
         .interactiveDismissDisabled(true)
         .toolbar(.hidden, for: .navigationBar)
         .navigationBarBackButtonHidden(true)
+        .alert("Couldn’t Show in Photos", isPresented: $timelineLocationFailed) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("This item couldn’t be found in the Photos timeline.")
+        }
         .task {
             await session.start()
             updateViewerPrefetch()
@@ -623,6 +647,7 @@ struct AssetViewerView: View {
             await preloadCachedAssetDetails(pagerWindowAssets.map(\.id))
         }
         .onChange(of: session.selectedAssetID) { _, newAssetID in
+            timelineLocationTask?.cancel()
             interactiveMapFrame = nil
             infoScrollDismissalBlocked = false
             logMemoryPlayback("selection")
@@ -682,6 +707,7 @@ struct AssetViewerView: View {
             }
             neighborLoadTask?.cancel()
             pagerSelectionTask?.cancel()
+            timelineLocationTask?.cancel()
             memoryAutoAdvanceTask?.cancel()
             memoryWrapTask?.cancel()
             memoryAutoStartedAt = nil
@@ -832,6 +858,8 @@ struct AssetViewerView: View {
                                     - (pageSize.width - safeAreaInsets.trailing)
                             )
                         ),
+                        locate: videoLocateAction,
+                        isLocating: timelineLocationTask != nil,
                         close: {
                             pauseVideoForDismissalIfNeeded()
                             completeDragDismissal(
@@ -1787,42 +1815,72 @@ struct AssetViewerView: View {
 
                 Spacer(minLength: 12)
 
-                HStack(spacing: 0) {
-                    Button {
-                        setInfoVisible(!showsInfo)
-                    } label: {
-                        Image(systemName: showsInfo ? "info.circle.fill" : "info.circle")
+                if canLocateSelectedAsset || timelineLocationTask != nil {
+                    HStack(spacing: 0) {
+                        infoAction(standalone: false)
+                        downloadAction(standalone: false)
+                    }
+                    .frame(height: controlVisualSize)
+                    .glassEffect(.regular, in: Capsule())
+
+                    Spacer(minLength: 12)
+
+                    if timelineLocationTask != nil {
+                        ProgressView()
                             .frame(width: controlHitSize, height: controlHitSize)
+                            .accessibilityLabel("Finding in Photos")
+                    } else {
+                        glassCircleButton(
+                            systemImage: "square.grid.2x2",
+                            label: "Show in Photos",
+                            identifier: "asset-viewer-locate",
+                            action: locateSelectedAsset
+                        )
                     }
-                    .accessibilityLabel(showsInfo ? "Hide Info" : "Show Info")
-                    .accessibilityValue(showsInfo ? "Shown" : "Hidden")
-                    .accessibilityIdentifier("asset-viewer-info")
-
-                    if media.canDownloadAssets, let asset = session.selectedAsset {
-                        MediaDownloadButton(asset: asset, media: media) { saved in
-                            Image(systemName: saved ? "checkmark" : AssetViewerExportAction.download.systemImage)
-                                // Balance the arrow's lower visual weight against Info.
-                                .offset(y: saved ? 0 : -3)
-                                .frame(width: controlHitSize, height: controlHitSize)
-                        }
-                        .accessibilityIdentifier("asset-viewer-download")
-                    }
+                } else {
+                    downloadAction(standalone: true)
+                    Spacer(minLength: 12)
+                    infoAction(standalone: true)
                 }
-                .font(.title2.weight(.semibold))
-                .buttonStyle(.plain)
-                .frame(width: controlHitSize * (media.canDownloadAssets ? 2 : 1), height: controlVisualSize)
-                .glassEffect(.regular, in: Capsule())
-
-                Spacer(minLength: 12)
-
-                glassActionButton(
-                    systemImage: "square.grid.2x2",
-                    label: "Locate in Timeline",
-                    identifier: "asset-viewer-locate",
-                    enabled: false
-                ) {}
             }
         }
+    }
+
+    private func infoAction(standalone: Bool) -> some View {
+        Button {
+            setInfoVisible(!showsInfo)
+        } label: {
+            bottomActionIcon(showsInfo ? "info.circle.fill" : "info.circle", standalone: standalone)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(showsInfo ? "Hide Info" : "Show Info")
+        .accessibilityValue(showsInfo ? "Shown" : "Hidden")
+        .accessibilityIdentifier("asset-viewer-info")
+    }
+
+    @ViewBuilder
+    private func downloadAction(standalone: Bool) -> some View {
+        if media.canDownloadAssets, let asset = session.selectedAsset {
+            MediaDownloadButton(asset: asset, media: media) { saved in
+                bottomActionIcon(saved ? "checkmark" : AssetViewerExportAction.download.systemImage,
+                                 offsetY: saved ? 0 : -3, standalone: standalone)
+            }
+            .accessibilityIdentifier("asset-viewer-download")
+        }
+    }
+
+    private func bottomActionIcon(_ name: String, offsetY: CGFloat = 0, standalone: Bool) -> some View {
+        let icon = Image(systemName: name).font(.title2.weight(.semibold)).offset(y: offsetY)
+        return Group {
+            if standalone {
+                icon.frame(width: controlVisualSize, height: controlVisualSize)
+                    .glassEffect(.regular, in: Circle())
+            } else {
+                icon
+            }
+        }
+        .frame(width: controlHitSize, height: controlHitSize)
+        .contentShape(.rect)
     }
 
     private var shareSelection: MediaShareSelection? {
@@ -1838,25 +1896,6 @@ struct AssetViewerView: View {
             return .init(namespace: namespace, asset: asset, tier: .thumbnail, image: sourceImage, detail: selectedAssetDetail)
         }
         return nil
-    }
-
-    private func glassActionButton(
-        systemImage: String,
-        label: String,
-        identifier: String,
-        symbolOffsetY: CGFloat = 0,
-        enabled: Bool = true,
-        action: @escaping () -> Void
-    ) -> some View {
-        glassCircleButton(
-            systemImage: systemImage,
-            label: label,
-            identifier: identifier,
-            symbolOffsetY: symbolOffsetY,
-            action: action
-        )
-        .disabled(!enabled)
-        .accessibilityHint(enabled ? "" : "Coming in a later update")
     }
 
     private func glassCircleButton(
@@ -2196,9 +2235,12 @@ struct AssetViewerView: View {
         .accessibilityHidden(true)
     }
 
-    private func beginReturningTimelineTransition(for asset: TimelineAssetSummary) {
+    private func beginReturningTimelineTransition(for asset: TimelineAssetSummary, sourceAssetID: String? = nil) {
+        if !isRevealingLocatedTimeline {
+            timelineLocationTask?.cancel()
+        }
         dismissalThumbnailRevealTask?.cancel()
-        let id = returnSourceAssetID(for: asset.id)
+        let id = sourceAssetID ?? returnSourceAssetID(for: asset.id)
         returningTimelineThumbnailChanged(id)
         if TimelineAssetOverlay.isVisible(for: asset, savedToPhotos: media.exports.saved(asset), isDownloading: media.exports.isDownloading(asset)) {
             returningLivePhotoBadgeChanged(id)
@@ -2392,7 +2434,8 @@ struct AssetViewerView: View {
     private func completeDragDismissal(
         viewportSize: CGSize,
         viewportOrigin: CGPoint,
-        mediaRect: CGRect
+        mediaRect: CGRect,
+        locatedTarget: (() -> AssetViewerDismissalTarget?)? = nil
     ) {
         guard !isDismissing else { return }
         defer { releaseViewerInputForReturn() }
@@ -2406,15 +2449,16 @@ struct AssetViewerView: View {
             closeWithoutAnimation()
             return
         }
-        let sourceAssetID = returnSourceAssetID(for: asset.id)
-        beginReturningTimelineTransition(for: asset)
+        let sourceAssetID = locatedTarget == nil ? returnSourceAssetID(for: asset.id) : asset.id
+        beginReturningTimelineTransition(for: asset, sourceAssetID: sourceAssetID)
         guard !reduceMotion else {
             closeWithoutAnimation()
             return
         }
-        let destination = dismissalTarget(sourceAssetID)
+        let resolve = locatedTarget ?? { dismissalTarget(sourceAssetID) }
+        let destination = resolve()
         if !isMemoryViewer {
-            beginReturnSourceTracking(assetID: sourceAssetID, target: destination)
+            returnSource?.begin(target: destination, current: resolve)
         }
         let target = destination?.imageFrame.offsetBy(
             dx: -viewportOrigin.x,
@@ -2552,6 +2596,37 @@ struct AssetViewerView: View {
             guard !Task.isCancelled else { return }
             closeWithoutAnimation()
         }
+    }
+
+    private func locateSelectedAsset() {
+        guard !isDismissing, timelineLocationTask == nil,
+              let asset = session.selectedAsset, let timelineLocator
+        else { return }
+        timelineLocationTask = Task {
+            defer {
+                timelineLocationTask = nil
+                isRevealingLocatedTimeline = false
+            }
+            let target = await timelineLocator.prepare(asset) {
+                isRevealingLocatedTimeline = true
+            }
+            guard !Task.isCancelled, !isDismissing, session.selectedAssetID == asset.id else { return }
+            guard let target else {
+                timelineLocationFailed = true
+                return
+            }
+            locatedTimelineTarget = target
+        }
+    }
+
+    private var canLocateSelectedAsset: Bool {
+        guard media.savedPhotosLibrary == nil, let asset = session.selectedAsset else { return false }
+        return timelineLocator?.canLocate(asset, session.origin) == true
+    }
+
+    private var videoLocateAction: (() -> Void)? {
+        guard !showsInfo, canLocateSelectedAsset || timelineLocationTask != nil else { return nil }
+        return { locateSelectedAsset() }
     }
 
     private func beginReturnSourceTracking(assetID: String, target: AssetViewerDismissalTarget?) {

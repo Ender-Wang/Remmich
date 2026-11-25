@@ -8,6 +8,7 @@ import UIKit
 /// never published through SwiftUI for each pinch/scroll frame.
 @MainActor
 final class TimelineSemanticRuntime {
+    let viewerPresentationOwnerID = UUID()
     weak var controller: TimelineSemanticCollectionController?
     var preparedOpeningCatalog: TimelineSemanticCatalog?
     var lastVisitedAssetID: String?
@@ -15,6 +16,10 @@ final class TimelineSemanticRuntime {
 
     func dismissalTarget(assetID: String, aspectRatio: Double) -> AssetViewerDismissalTarget? {
         controller?.dismissalTarget(assetID: assetID, aspectRatio: aspectRatio)
+    }
+
+    func revealForViewerReturn(_ asset: TimelineAssetSummary) -> Bool {
+        controller?.revealForViewerReturn(asset) == true
     }
 
     func openingSource(for asset: TimelineAssetSummary) -> (target: AssetViewerDismissalTarget, image: UIImage?)? {
@@ -2527,6 +2532,22 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         // A valid frame is useful even when its thumbnail has not finished loading.
         let image = cell.coverImageAssetID == asset.id ? cell.coverImage : nil
         return (target, image ?? cachedImage(asset: asset, frame: projection.items[index].frame))
+    }
+
+    func revealForViewerReturn(_ asset: TimelineAssetSummary) -> Bool {
+        guard scale.isAssets, viewIfLoaded?.window != nil,
+              collection.bounds.height > 0, let catalog, let index = catalog.assetIndexes[asset.id]
+        else { return false }
+        cancelLatestScroll()
+        let visible = collection.bounds.inset(by: UIEdgeInsets(
+            top: layout.pinnedHeaderTopInset, left: 0,
+            bottom: collection.contentInset.bottom, right: 0
+        ))
+        if projection?.items.first(where: { $0.id == asset.id }).map({ visible.contains($0.frame) }) != true {
+            install(makeProjection(scale: scale, focus: index), focusing: index,
+                    viewportY: collection.bounds.height / 2, latest: false)
+        }
+        return dismissalTarget(assetID: asset.id, aspectRatio: asset.aspectRatio) != nil
     }
 
     func dismissalTarget(assetID: String, aspectRatio: Double) -> AssetViewerDismissalTarget? {

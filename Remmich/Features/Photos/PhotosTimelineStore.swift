@@ -608,6 +608,21 @@ final class PhotosTimelineStore {
         )
     }
 
+    func prepareViewerReturn(to asset: TimelineAssetSummary) async -> Bool {
+        if residencyAssetsByID[asset.id] != nil {
+            return true
+        }
+        await load(resumingDeferred: true)
+        guard !Task.isCancelled else { return false }
+        if residencyAssetsByID[asset.id] != nil {
+            return true
+        }
+        let day = TimelineCaptureDay(capturedAt: asset.captureLocalDate)
+        let month = TimelineBucketID(rawValue: String(format: "%04d-%02d-01", day.year, day.month))
+        await loadBucket(month)
+        return !Task.isCancelled && semanticAssetsByBucket[month]?.contains(where: { $0.id == asset.id }) == true
+    }
+
     func prepareJump(to bucketID: TimelineBucketID) async -> Bool {
         if sectionsByID[bucketID] == nil,
            let summary = bucketSummaries.first(where: { $0.id == bucketID })

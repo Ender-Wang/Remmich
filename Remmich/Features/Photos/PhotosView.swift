@@ -397,7 +397,10 @@ struct PhotosView: View {
     @State private var libraryRange: TimelineLibraryRange = .all
     @State private var viewerRoute: AssetViewerRoute?
     @State private var viewerPresentationID: UUID?
-    @State private var viewerPresentationOwnerID = UUID()
+    private var viewerPresentationOwnerID: UUID {
+        semanticRuntime.viewerPresentationOwnerID
+    }
+
     @State private var assetPreview: TimelineAssetPreviewSession?
     @State private var viewerSourceImage: UIImage?
     @State private var viewerSourceTarget: AssetViewerDismissalTarget?

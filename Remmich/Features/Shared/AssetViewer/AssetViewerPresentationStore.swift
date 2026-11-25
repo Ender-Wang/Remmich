@@ -1,6 +1,16 @@
 import Observation
 import SwiftUI
 
+@MainActor
+struct AssetViewerTimelineLocator {
+    let canLocate: (TimelineAssetSummary, AssetViewerOrigin) -> Bool
+    let prepare: (TimelineAssetSummary, () -> Void) async -> (() -> AssetViewerDismissalTarget?)?
+}
+
+extension EnvironmentValues {
+    @Entry var assetViewerTimelineLocator: AssetViewerTimelineLocator? = nil
+}
+
 /// Scroll displacement is independent of the return spring. Only the media
 /// surface observes it, so following the cell cannot restart the hero's motion.
 @MainActor
@@ -48,7 +58,7 @@ final class AssetViewerPresentationStore {
     @Observable
     final class Entry: Identifiable {
         let id: UUID
-        let ownerID: UUID
+        var ownerID: UUID
         let content: AnyView
         let returnSource: AssetViewerReturnSource
         var hiddenSourceID: String?
@@ -98,6 +108,10 @@ final class AssetViewerPresentationStore {
 
     func setHiddenBadge(_ assetID: String?, for id: UUID) {
         entries.first { $0.id == id }?.hiddenBadgeID = assetID
+    }
+
+    func moveReturnSource(for id: UUID, to ownerID: UUID) {
+        entries.first { $0.id == id }?.ownerID = ownerID
     }
 
     func hiddenSourceIDs(ownerID: UUID) -> Set<String> {

@@ -10,6 +10,8 @@ struct ViewerVideoControls: View {
     let showsCloseButton: Bool
     let compactLandscape: Bool
     let safeAreaInsets: EdgeInsets
+    let locate: (() -> Void)?
+    let isLocating: Bool
     let close: () -> Void
     let visibilityChanged: (Bool) -> Void
     let routePresentationChanged: (Bool) -> Void
@@ -55,6 +57,24 @@ struct ViewerVideoControls: View {
                         }
 
                         Spacer()
+                        if let locate {
+                            Button(action: locate) {
+                                Group {
+                                    if isLocating {
+                                        ProgressView().tint(.white)
+                                    } else {
+                                        Image(systemName: "square.grid.2x2").font(.title3.weight(.semibold))
+                                    }
+                                }
+                                .frame(width: 44, height: 44)
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.white)
+                            .glassEffect(.regular.interactive(), in: Circle())
+                            .disabled(isLocating)
+                            .accessibilityLabel(isLocating ? "Finding in Photos" : "Show in Photos")
+                            .accessibilityIdentifier("asset-viewer-locate")
+                        }
                         ViewerVideoRoutePicker(
                             presentationChanged: routePresentationDidChange
                         )
@@ -95,6 +115,7 @@ struct ViewerVideoControls: View {
                 cancelAutoHide()
             }
         }
+        .onChange(of: isLocating) { scheduleAutoHideIfNeeded() }
         .onDisappear {
             cancelAutoHide()
             routePresentationChanged(false)
@@ -248,7 +269,7 @@ struct ViewerVideoControls: View {
 
     private func scheduleAutoHideIfNeeded() {
         cancelAutoHide()
-        guard isVisible, session.isPlaybackIntended, !routePickerPresented else { return }
+        guard isVisible, session.isPlaybackIntended, !routePickerPresented, !isLocating else { return }
         autoHideTask = Task { @MainActor in
             try? await Task.sleep(for: .seconds(3))
             guard !Task.isCancelled, session.isPlaybackIntended else { return }

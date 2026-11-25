@@ -432,7 +432,12 @@ struct AppShellView: View {
         }
         .animation(.smooth(duration: 0.35), value: showsAccount)
         .accessibilityHidden(viewerPresentations.activeID != nil)
-        .overlay { AssetViewerPresentationOverlay(presentations: viewerPresentations) }
+        .overlay {
+            AssetViewerPresentationOverlay(presentations: viewerPresentations)
+                .environment(\.assetViewerTimelineLocator, AssetViewerTimelineLocator(
+                    canLocate: canLocateInPhotos, prepare: prepareViewerReturnToPhotos
+                ))
+        }
         .onChange(of: viewerPresented || !viewerPresentations.entries.isEmpty) { _, presented in
             libraryIndex.setTimelinePublicationDeferred(presented)
         }
@@ -774,6 +779,66 @@ struct AppShellView: View {
 
     private var viewerPresented: Bool {
         legacyViewerPresented || viewerPresentations.activeID != nil
+    }
+
+    private func canLocateInPhotos(_ asset: TimelineAssetSummary, origin: AssetViewerOrigin) -> Bool {
+        guard media.savedPhotosLibrary == nil, asset.visibility == .timeline, !origin.isTrash,
+              asset.mediaKind == .image || asset.mediaKind == .video,
+              !photos.hiddenStackMemberIDs.contains(asset.id),
+              asset.stack?.primaryAssetID.map({ $0 == asset.id }) ?? true
+        else { return false }
+        if case .timeline = origin {
+            if tabSelectionState.selection == .photos, photosPath.isEmpty {
+                return false
+            }
+            if tabSelectionState.selection == .videos, videosPath.isEmpty {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func prepareViewerReturnToPhotos(
+        _ asset: TimelineAssetSummary, willReveal: () -> Void
+    ) async -> (() -> AssetViewerDismissalTarget?)? {
+        guard let viewerID = viewerPresentations.activeID else { return nil }
+        let scope = media.scope
+        guard await photos.prepareViewerReturn(to: asset), !Task.isCancelled,
+              media.scope == scope, viewerPresentations.activeID == viewerID
+        else { return nil }
+
+        let priorTab = tabSelectionState.selection
+        let priorPath = photosPath
+        let priorCompact = compactPhotosTabs
+        willReveal()
+        rangeRequestGeneration &+= 1
+        photosRangeRequest = .init(range: .all, generation: rangeRequestGeneration)
+        compactPhotosTabs = false
+        tabSelectionState.selection = .photos
+
+        // Wait for the root collection to install the prepared asset and its
+        // cell geometry before handing the viewer's thumbnail ownership over.
+        let clock = ContinuousClock()
+        let deadline = clock.now + .seconds(2)
+        while clock.now < deadline, !Task.isCancelled,
+              media.scope == scope, viewerPresentations.activeID == viewerID,
+              tabSelectionState.selection == .photos
+        {
+            if photosRangeRequest == nil, photosPath.isEmpty, photosTimelineRuntime.revealForViewerReturn(asset) {
+                viewerPresentations.moveReturnSource(for: viewerID, to: photosTimelineRuntime.viewerPresentationOwnerID)
+                return { photosTimelineRuntime.dismissalTarget(assetID: asset.id, aspectRatio: asset.aspectRatio) }
+            }
+            try? await Task.sleep(for: .milliseconds(16))
+        }
+        if media.scope == scope, viewerPresentations.activeID == viewerID,
+           tabSelectionState.selection == .photos
+        {
+            photosRangeRequest = nil
+            photosPath = priorPath
+            compactPhotosTabs = priorCompact
+            tabSelectionState.selection = priorTab
+        }
+        return nil
     }
 
     private func pinchGroupedRange(_ kind: PhotosGroupedTabKind, _ gesture: PhotosPinchGesture) {
