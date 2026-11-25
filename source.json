@@ -80,6 +80,15 @@
       ],
       "versions": [
         {
+          "version": "0.8.0",
+          "buildVersion": "5",
+          "date": "2026-11-25T04:23:58Z",
+          "localizedDescription": "### 🚀 Remmich 0.8.0\n\n**Your read-only Immich library, native on iPhone and iPad.**\n\nSearch your Immich photos and videos from Remmich. Describe a scene, find a filename or folder, or look for text indexed in an image.\n\n### 🎯 What this release focuses on\n\nVersion 0.8.0 completes M8, Search and Filters. The Search tab brings together server-backed queries, native filters, and shortcuts into your library. Results use the same media grid, thumbnail cache, and viewer as the main timelines.\n\n### 🧭 Current status\n\nRemmich’s core library features are complete. Photos, Videos, Albums, Library, and Search all work with your Immich account and keep your server library read-only.\n\n> **1.0 is coming soon.** Polish is underway, with a focus on iPad layouts, accessibility, and reliability.\n\n### ✨ Highlights\n\n#### 🔎 Search and filters\n\n- 🔍 **Search modes** include Context, Filename, Description, Full path or folder, and OCR text. Use **Scan Text** on a supported device to insert editable text from the camera.\n- 🎛️ **Native filters** narrow results by People, Location, Date range, Media type, Camera make, model or lens, and Display options such as Favorites, Archive, or Not in album. Apply filters with an empty search field to browse their matches.\n- 🕘 **Recent searches** are stored on your device for each account. Tap a recent query to run it again, or delete it from your history.\n\n#### 🖼️ Browse and results\n\n- 👥 **Browse** opens with People, Places, Recently taken, and Recently added. Place labels follow the same Photon preferences as Library when cached names are available.\n- 🧭 **Search opens with the keyboard closed.** Tap the search field or tap the active Search tab again to type.\n- 👆 **More results load as you scroll.** Pinch between square and natural-aspect grids, then open a result in the shared viewer. Returning brings you back to your results and scroll position.\n- ⚡ **Opening layouts appear while content loads.** Search can show recent queries and available local Browse previews during startup, including when offline.\n\n#### 📱 Library and landscape\n\n- ✨ **Library** shows the selected animated Remmich logo alongside its header.\n- ↔️ **Landscape layouts** keep Search controls, Albums, and the main Photos and Videos grids inside the side safe areas.\n\n### 🚧 Known limitations\n\n- 🔎 **Search requires a reachable Immich server in the 3.x series, version 3.2 or later.** Context, OCR, and People depend on server capabilities. Context can load up to 1,000 ranked results.\n- 💾 **Offline media** uses cached thumbnails and accessible Apple Photos resources. Originals and playback depend on accessible saved media or a reachable server.\n- 📤 **Sharing** handles one asset at a time and retains available GPS metadata. Live Photo sharing uses the displayed still, and Save to Photos preserves the pair.\n- 🔄 **Upgrading from 0.5.0** leaves the old shared database on the device. Reindexing restores server-derived indexes. Older save history, Photos receipts, and place results stay in the old database.\n\n### 📦 Installation\n\n- 📱 **Requires iOS or iPadOS 26.6 or later.** Connect to your Immich server or use the built-in demo sign-in to try the official Immich demo server.\n- 📦 **Install the optimized unsigned IPA** by signing it with your own Apple ID using SideStore, AltStore Classic, or another compatible sideloading tool.\n",
+          "downloadURL": "https://github.com/Ender-Wang/Remmich/releases/download/v0.8.0/Remmich-v0.8.0-unsigned.ipa",
+          "size": 25826350,
+          "minOSVersion": "26.6"
+        },
+        {
           "version": "0.7.0",
           "buildVersion": "4",
           "date": "2026-11-23T16:22:52Z",
@@ -119,6 +128,7 @@
       "appPermissions": {
         "entitlements": [],
         "privacy": {
+          "NSCameraUsageDescription": "Remmich uses the camera to scan text into Search.",
           "NSLocalNetworkUsageDescription": "Remmich connects to your Immich server on your local network.",
           "NSPhotoLibraryUsageDescription": "Remmich needs access to create and reuse the Remmich album, save selected media, and browse and verify your saved photos and videos."
         }
