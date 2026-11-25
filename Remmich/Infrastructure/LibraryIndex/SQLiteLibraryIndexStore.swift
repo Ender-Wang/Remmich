@@ -1137,6 +1137,7 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
         kind: MediaDerivative,
         scope: MediaAccountScope
     ) async throws {
+        try Task.checkCancellation()
         let database = try preparedDatabase(scope: scope)
         try database.transaction {
             try database.execute(

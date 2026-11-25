@@ -259,12 +259,23 @@ actor LibraryThumbnailCache {
 
     func cachedProgress(
         assets: [LibraryIndexAssetRecord],
-        scope: MediaAccountScope
+        scope: MediaAccountScope,
+        rebuildID: UUID? = nil
     ) async throws -> WarmProgress {
-        let existing = try await store.derivativeRecords(scope: scope)
         let metadataIDs = assetDetails == nil
             ? nil
             : try await store.cachedAssetDetailIDs(scope: scope)
+        if let rebuildID {
+            let relativeDirectory = Self.rebuildDirectory(rebuildID)
+            let journal = rootURL.appending(path: scope.cacheNamespace).appending(path: relativeDirectory).appending(path: ".checkpoint")
+            if FileManager.default.fileExists(atPath: journal.path),
+               let records = try? Self.rebuiltRecords(from: journal, assets: assets, metadataIDs: metadataIDs, relativeDirectory: relativeDirectory)
+            {
+                return .init(processedCount: 0, pendingCount: assets.count - records.count, cachedCount: records.count,
+                             cachedBytes: records.reduce(0) { $0 + $1.byteCount }, eligibleCount: assets.count)
+            }
+        }
+        let existing = try await store.derivativeRecords(scope: scope)
         return Self.cachedProgress(
             assets: assets,
             derivatives: existing,
@@ -302,37 +313,42 @@ actor LibraryThumbnailCache {
         scope: MediaAccountScope,
         endpoint: URL,
         accessToken: String,
+        rebuildID: UUID = UUID(),
         progress: (@Sendable (WarmProgress) async -> Void)? = nil
     ) async throws -> WarmProgress {
+        try Task.checkCancellation()
         let scopeDirectory = rootURL
             .appending(path: scope.cacheNamespace, directoryHint: .isDirectory)
-        try FileManager.default.createDirectory(at: scopeDirectory, withIntermediateDirectories: true)
-        let stagingDirectory = scopeDirectory.appending(
-            path: ".thumbnail-rebuild-\(UUID().uuidString)",
-            directoryHint: .isDirectory
-        )
+        let thumbnailDirectory = scopeDirectory.appending(path: MediaDerivative.thumbnail.rawValue, directoryHint: .isDirectory)
+        let relativeDirectory = Self.rebuildDirectory(rebuildID)
+        let stagingDirectory = scopeDirectory.appending(path: relativeDirectory, directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: stagingDirectory, withIntermediateDirectories: true)
-        defer {
-            if FileManager.default.fileExists(atPath: stagingDirectory.path) {
-                try? FileManager.default.removeItem(at: stagingDirectory)
-            }
+        let installed = try await store.derivativeRecords(scope: scope)
+        let cachedMetadata = assetDetails == nil ? nil : try await store.cachedAssetDetailIDs(scope: scope)
+        try Task.checkCancellation()
+        Self.removeUnusedRebuildDirectories(in: thumbnailDirectory, preserving: installed, current: stagingDirectory)
+        let journal = stagingDirectory.appending(path: ".checkpoint")
+        let encoder = JSONEncoder()
+        var records = try Self.rebuiltRecords(from: journal, assets: assets, metadataIDs: cachedMetadata, relativeDirectory: relativeDirectory)
+        if !FileManager.default.fileExists(atPath: journal.path) {
+            try Data().write(to: journal, options: .atomic)
         }
-
-        var records: [LibraryIndexDerivativeRecord] = []
-        records.reserveCapacity(assets.count)
-        var thumbnailIDs: Set<String> = []
-        var metadataIDs: Set<String> = []
+        let checkpoint = try FileHandle(forWritingTo: journal)
+        defer { try? checkpoint.close() }
+        var thumbnailIDs = Set(records.map(\.assetID))
+        var metadataIDs = thumbnailIDs
+        let pending = assets.filter { !thumbnailIDs.contains($0.id) }
         var processedCount = 0
-        var cachedBytes: Int64 = 0
+        var cachedBytes = records.reduce(Int64(0)) { $0 + $1.byteCount }
         var failures: [ThumbnailFailure] = []
         var lastProgressAt = Date.distantPast
         var currentProgress = WarmProgress(
             processedCount: 0,
-            pendingCount: assets.count,
-            cachedCount: 0,
-            thumbnailCachedCount: 0,
-            metadataCachedCount: 0,
-            cachedBytes: 0,
+            pendingCount: pending.count,
+            cachedCount: records.count,
+            thumbnailCachedCount: records.count,
+            metadataCachedCount: records.count,
+            cachedBytes: cachedBytes,
             eligibleCount: assets.count,
             failures: []
         )
@@ -341,10 +357,10 @@ actor LibraryThumbnailCache {
 
         let detailSource = assetDetails
         let transfer = transfers.map { TransferContext(queue: $0, scope: scope, endpoint: endpoint, accessToken: accessToken) }
-        await transfers?.prefetchCache(Array(assets.prefix(LibraryTransferQueue.cacheLookAheadAssets)), scope: scope, endpoint: endpoint,
+        await transfers?.prefetchCache(Array(pending.prefix(LibraryTransferQueue.cacheLookAheadAssets)), scope: scope, endpoint: endpoint,
                                        thumbnailIDs: thumbnailIDs, metadataIDs: metadataIDs)
         try await withThrowingTaskGroup(of: AssetCacheResult.self) { group in
-            var iterator = assets.makeIterator()
+            var iterator = pending.makeIterator()
             for _ in 0 ..< 2 {
                 if let asset = iterator.next() {
                     group.addTask {
@@ -355,6 +371,7 @@ actor LibraryThumbnailCache {
                             endpoint: endpoint,
                             accessToken: accessToken,
                             directory: stagingDirectory,
+                            relativeDirectory: relativeDirectory,
                             assetDetails: detailSource,
                             transfer: transfer
                         )
@@ -373,18 +390,25 @@ actor LibraryThumbnailCache {
                     try Task.checkCancellation()
                     metadataIDs.insert(detail.id)
                 }
+                if let record = result.thumbnailRecord, detailSource == nil || metadataIDs.contains(record.assetID) {
+                    // A leading newline keeps the next entry readable after an interrupted append.
+                    var entry = Data([0x0A])
+                    try entry.append(encoder.encode(record))
+                    try checkpoint.seekToEnd()
+                    try checkpoint.write(contentsOf: entry)
+                }
                 failures.append(contentsOf: result.failures)
                 processedCount += 1
                 let pairedCount = detailSource == nil
                     ? records.count
                     : thumbnailIDs.intersection(metadataIDs).count
                 if processedCount.isMultiple(of: 16) {
-                    await transfers?.prefetchCache(Array(assets.dropFirst(processedCount).prefix(LibraryTransferQueue.cacheLookAheadAssets)), scope: scope, endpoint: endpoint,
+                    await transfers?.prefetchCache(Array(pending.dropFirst(processedCount).prefix(LibraryTransferQueue.cacheLookAheadAssets)), scope: scope, endpoint: endpoint,
                                                    thumbnailIDs: thumbnailIDs, metadataIDs: metadataIDs)
                 }
                 currentProgress = .init(
                     processedCount: processedCount,
-                    pendingCount: assets.count,
+                    pendingCount: pending.count,
                     cachedCount: pairedCount,
                     thumbnailCachedCount: records.count,
                     metadataCachedCount: detailSource == nil ? records.count : metadataIDs.count,
@@ -393,7 +417,7 @@ actor LibraryThumbnailCache {
                     failures: failures
                 )
                 let now = Date()
-                if processedCount == assets.count || now.timeIntervalSince(lastProgressAt) >= 1 {
+                if processedCount == pending.count || now.timeIntervalSince(lastProgressAt) >= 1 {
                     await progress?(currentProgress)
                     lastProgressAt = now
                 }
@@ -406,6 +430,7 @@ actor LibraryThumbnailCache {
                             endpoint: endpoint,
                             accessToken: accessToken,
                             directory: stagingDirectory,
+                            relativeDirectory: relativeDirectory,
                             assetDetails: detailSource,
                             transfer: transfer
                         )
@@ -421,14 +446,54 @@ actor LibraryThumbnailCache {
                 eligible: assets.count
             )
         }
-        try await promoteRebuiltThumbnails(
-            records,
-            scope: scope,
-            stagingDirectory: stagingDirectory,
-            scopeDirectory: scopeDirectory
-        )
-        await transfers?.finishCachePass(namespace: scope.cacheNamespace)
+        // The manifest is the publication boundary. Until it commits, readers
+        // still use the previously installed thumbnail files.
+        try await store.replace(derivatives: records, kind: .thumbnail, scope: scope)
+        try Task.checkCancellation()
+        let retainedKeys = Set(records.map(\.relativeFileKey))
+        for record in installed where record.derivative == .thumbnail && !retainedKeys.contains(record.relativeFileKey) {
+            try? FileManager.default.removeItem(at: scopeDirectory.appending(path: record.relativeFileKey))
+        }
         return currentProgress
+    }
+
+    private nonisolated static func rebuildDirectory(_ id: UUID) -> String {
+        "\(MediaDerivative.thumbnail.rawValue)/rebuild-\(id.uuidString)"
+    }
+
+    private nonisolated static func rebuiltRecords(
+        from journal: URL,
+        assets: [LibraryIndexAssetRecord],
+        metadataIDs: Set<String>?,
+        relativeDirectory: String
+    ) throws -> [LibraryIndexDerivativeRecord] {
+        guard FileManager.default.fileExists(atPath: journal.path) else { return [] }
+        let assetsByID = Dictionary(uniqueKeysWithValues: assets.map { ($0.id, $0) })
+        let decoder = JSONDecoder()
+        var records: [String: LibraryIndexDerivativeRecord] = [:]
+        for entry in try Data(contentsOf: journal).split(separator: 0x0A) {
+            try Task.checkCancellation()
+            guard let record = try? decoder.decode(LibraryIndexDerivativeRecord.self, from: Data(entry)),
+                  let asset = assetsByID[record.assetID],
+                  metadataIDs?.contains(asset.id) != false,
+                  record.relativeFileKey == "\(relativeDirectory)/\(thumbnailFilename(asset))",
+                  record.sourceRevision == asset.updatedAt.ISO8601Format(), record.isVerified else { continue }
+            let file = journal.deletingLastPathComponent().appending(path: thumbnailFilename(asset))
+            guard let size = try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize, Int64(size) == record.byteCount else { continue }
+            records[asset.id] = record
+        }
+        return Array(records.values)
+    }
+
+    private nonisolated static func removeUnusedRebuildDirectories(in directory: URL, preserving records: [LibraryIndexDerivativeRecord], current: URL) {
+        let children = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
+        let retainedFolders = Set(records.map { URL(filePath: $0.relativeFileKey).deletingLastPathComponent().lastPathComponent })
+        for child in children where child.lastPathComponent != current.lastPathComponent && !retainedFolders.contains(child.lastPathComponent) {
+            let name = child.lastPathComponent
+            if name.hasPrefix("rebuild-"), UUID(uuidString: String(name.dropFirst("rebuild-".count))) != nil {
+                try? FileManager.default.removeItem(at: child)
+            }
+        }
     }
 
     func reconcile(scope: MediaAccountScope) async throws {
@@ -510,31 +575,23 @@ actor LibraryThumbnailCache {
 
     private func availableThumbnails(records: [LibraryIndexDerivativeRecord], scope: MediaAccountScope) -> [AvailableThumbnail] {
         let startedAt = ContinuousClock.now
-        let thumbnailDirectory = rootURL
-            .appending(path: scope.cacheNamespace, directoryHint: .isDirectory)
-            .appending(path: MediaDerivative.thumbnail.rawValue, directoryHint: .isDirectory)
-        let availableFilenames = Set(
-            (try? FileManager.default.contentsOfDirectory(
-                at: thumbnailDirectory,
-                includingPropertiesForKeys: nil,
-                options: [.skipsHiddenFiles]
-            ))?.map(\.lastPathComponent) ?? []
-        )
-        let thumbnails: [AvailableThumbnail] = records.compactMap { record in
-            guard record.derivative == .thumbnail, record.isVerified else { return nil }
-            let filename = URL(filePath: record.relativeFileKey).lastPathComponent
-            guard availableFilenames.contains(filename) else { return nil }
-            return .init(
-                assetID: record.assetID,
-                sourceRevision: record.sourceRevision,
-                fileURL: thumbnailDirectory.appending(path: filename)
-            )
+        let indexed = Self.projectIndexedThumbnails(records: records, scope: scope, rootURL: rootURL)
+        var availableFilenames: [URL: Set<String>] = [:]
+        let thumbnails = indexed.filter { thumbnail in
+            let directory = thumbnail.fileURL.deletingLastPathComponent()
+            if availableFilenames[directory] == nil {
+                availableFilenames[directory] = Set((try? FileManager.default.contentsOfDirectory(
+                    at: directory, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
+                ))?.map(\.lastPathComponent) ?? [])
+            }
+            return availableFilenames[directory]?.contains(thumbnail.fileURL.lastPathComponent) == true
         }
+        let availableCount = availableFilenames.values.reduce(0) { $0 + $1.count }
         let components = startedAt.duration(to: .now).components
         let elapsedMilliseconds = Int(components.seconds) * 1000
             + Int(components.attoseconds / 1_000_000_000_000_000)
         Self.logger.info(
-            "Available thumbnail manifest scanned records=\(records.count) files=\(availableFilenames.count) available=\(thumbnails.count) elapsedMs=\(elapsedMilliseconds)"
+            "Available thumbnail manifest scanned records=\(records.count) files=\(availableCount) available=\(thumbnails.count) elapsedMs=\(elapsedMilliseconds)"
         )
         return thumbnails
     }
@@ -575,43 +632,6 @@ actor LibraryThumbnailCache {
         }
     }
 
-    private func promoteRebuiltThumbnails(
-        _ records: [LibraryIndexDerivativeRecord],
-        scope: MediaAccountScope,
-        stagingDirectory: URL,
-        scopeDirectory: URL
-    ) async throws {
-        let activeDirectory = scopeDirectory.appending(
-            path: MediaDerivative.thumbnail.rawValue,
-            directoryHint: .isDirectory
-        )
-        let backupDirectory = scopeDirectory.appending(
-            path: ".thumbnail-backup-\(UUID().uuidString)",
-            directoryHint: .isDirectory
-        )
-        let hadActiveDirectory = FileManager.default.fileExists(atPath: activeDirectory.path)
-        if hadActiveDirectory {
-            try FileManager.default.moveItem(at: activeDirectory, to: backupDirectory)
-        }
-        do {
-            try FileManager.default.moveItem(at: stagingDirectory, to: activeDirectory)
-            try await store.replace(derivatives: records, kind: .thumbnail, scope: scope)
-        } catch {
-            if FileManager.default.fileExists(atPath: activeDirectory.path) {
-                try? FileManager.default.removeItem(at: activeDirectory)
-            }
-            if hadActiveDirectory,
-               FileManager.default.fileExists(atPath: backupDirectory.path)
-            {
-                try? FileManager.default.moveItem(at: backupDirectory, to: activeDirectory)
-            }
-            throw error
-        }
-        if FileManager.default.fileExists(atPath: backupDirectory.path) {
-            try? FileManager.default.removeItem(at: backupDirectory)
-        }
-    }
-
     private nonisolated enum DownloadResult: Sendable {
         case success(LibraryIndexDerivativeRecord)
         case failure(ThumbnailFailure)
@@ -636,6 +656,7 @@ actor LibraryThumbnailCache {
         endpoint: URL,
         accessToken: String,
         directory: URL,
+        relativeDirectory: String = MediaDerivative.thumbnail.rawValue,
         assetDetails: (any AssetDetailReading)?,
         transfer: TransferContext? = nil
     ) async throws -> AssetCacheResult {
@@ -645,6 +666,7 @@ actor LibraryThumbnailCache {
             endpoint: endpoint,
             accessToken: accessToken,
             directory: directory,
+            relativeDirectory: relativeDirectory,
             transfer: transfer
         )
         async let metadataResult = cacheMetadata(
@@ -686,11 +708,12 @@ actor LibraryThumbnailCache {
         endpoint: URL,
         accessToken: String,
         directory: URL,
+        relativeDirectory: String,
         transfer: TransferContext? = nil
     ) async throws -> DownloadResult? {
         guard needed else { return nil }
         do {
-            return try await download(asset, endpoint, accessToken, directory, transfer: transfer)
+            return try await download(asset, endpoint, accessToken, directory, relativeDirectory: relativeDirectory, transfer: transfer)
         } catch is CancellationError {
             throw CancellationError()
         } catch {
@@ -730,6 +753,7 @@ actor LibraryThumbnailCache {
         _ endpoint: URL,
         _ accessToken: String,
         _ directory: URL,
+        relativeDirectory: String,
         transfer: TransferContext? = nil
     ) async throws -> DownloadResult {
         try Task.checkCancellation()
@@ -781,7 +805,7 @@ actor LibraryThumbnailCache {
             return .failure(thumbnailFailure(asset: asset, requestURL: url, reason: "empty-response"))
         }
         try Task.checkCancellation()
-        let filename = "\(asset.id)-\(stableRevision(asset.updatedAt)).bin"
+        let filename = thumbnailFilename(asset)
         let fileURL = directory.appending(path: filename)
         try data.write(to: fileURL, options: .atomic)
         let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
@@ -791,7 +815,7 @@ actor LibraryThumbnailCache {
             derivative: .thumbnail,
             pixelSize: nil,
             sourceRevision: asset.updatedAt.ISO8601Format(),
-            relativeFileKey: "\(MediaDerivative.thumbnail.rawValue)/\(filename)",
+            relativeFileKey: "\(relativeDirectory)/\(filename)",
             byteCount: Int64(data.count),
             digest: digest,
             isVerified: true,
@@ -819,7 +843,7 @@ actor LibraryThumbnailCache {
         )
     }
 
-    private nonisolated static func stableRevision(_ date: Date) -> String {
-        String(Int64(date.timeIntervalSince1970 * 1000))
+    private nonisolated static func thumbnailFilename(_ asset: LibraryIndexAssetRecord) -> String {
+        "\(asset.id)-\(Int64(asset.updatedAt.timeIntervalSince1970 * 1000)).bin"
     }
 }

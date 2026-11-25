@@ -24,12 +24,15 @@ struct AccountLibraryIsolationTests {
         #expect(bootstrap == nil)
         #expect(controller.status == .paused)
         #expect(controller.thumbnailWarmingStatus == .paused)
+        let savedIntent = try #require(preferences.string(forKey: intentKey))
+        #expect(savedIntent.hasPrefix("rebuild:"))
         controller.clearSession()
-        #expect(preferences.string(forKey: intentKey) == "rebuild")
+        #expect(preferences.string(forKey: intentKey) == savedIntent)
         try await controller.restoreBackgroundState(session: second)
         #expect(controller.status == .idle && controller.thumbnailWarmingStatus == .off)
         try await controller.restoreBackgroundState(session: first)
         #expect(controller.status == .paused && controller.thumbnailWarmingStatus == .paused)
+        #expect(preferences.string(forKey: intentKey) == savedIntent)
         controller.clearSession()
     }
 

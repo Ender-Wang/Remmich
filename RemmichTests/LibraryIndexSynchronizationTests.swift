@@ -914,6 +914,68 @@ struct LibraryIndexSynchronizationTests {
         #expect(thumbnail.byteCount == existingRecord.byteCount)
     }
 
+    @Test(arguments: [true, false]) func thumbnailRebuildRestoresStagedPairs(complete: Bool) async throws {
+        let fixture = try IndexFixture()
+        defer { fixture.cleanup() }
+        let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        let asset = Self.record(id: "ready", bucket: "2026-10-01")
+        let pending = Self.record(id: "pending", bucket: "2026-10-01")
+        let assets = complete ? [asset] : [asset, pending]
+        let generation = try await store.beginGeneration(scope: Self.scope)
+        try await store.upsert(assets: assets, generation: generation, scope: Self.scope)
+        _ = try await store.acceptGeneration(generation, watermark: nil, historicalCursor: nil, expectedAssetCount: assets.count, scope: Self.scope)
+        try await store.upsert(assetDetail: AssetDetailFixtureSource().assetDetail(id: asset.id), scope: Self.scope)
+
+        let id = UUID()
+        let root = fixture.cacheURL.appending(path: Self.scope.cacheNamespace)
+        let staged = "thumbnail/rebuild-\(id.uuidString)"
+        let directory = root.appending(path: staged)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let fileName = "\(asset.id)-\(Int64(asset.updatedAt.timeIntervalSince1970 * 1000)).bin"
+        let original = root.appending(path: "thumbnail/installed.bin")
+        try Data([1]).write(to: original)
+        try Data([2]).write(to: directory.appending(path: fileName))
+        let prior = LibraryIndexDerivativeRecord(assetID: asset.id, derivative: .thumbnail, pixelSize: nil,
+                                                 sourceRevision: asset.updatedAt.ISO8601Format(), relativeFileKey: "thumbnail/installed.bin",
+                                                 byteCount: 1, digest: "original", isVerified: true, lastAccessedAt: .now, completedAt: .now)
+        let replacement = LibraryIndexDerivativeRecord(
+            assetID: asset.id, derivative: .thumbnail, pixelSize: nil,
+            sourceRevision: asset.updatedAt.ISO8601Format(), relativeFileKey: "\(staged)/\(fileName)",
+            byteCount: 1, digest: "replacement", isVerified: true, lastAccessedAt: .now, completedAt: .now
+        )
+        try await store.upsert(derivatives: [prior], scope: Self.scope)
+        var checkpoint = try JSONEncoder().encode(replacement)
+        checkpoint.append(contentsOf: "\n{\"interrupted\":".utf8)
+        try checkpoint.write(to: directory.appending(path: ".checkpoint"))
+
+        let metadata = AssetDetailFixtureSource()
+        let reopened = LibraryThumbnailCache(store: store, rootURL: fixture.cacheURL, assetDetails: metadata)
+        let initial = try await reopened.cachedProgress(assets: assets, scope: Self.scope, rebuildID: id)
+        #expect(initial.cachedCount == 1 && initial.pendingCount == assets.count - 1)
+        #expect(try await reopened.availableThumbnails(scope: Self.scope).map(\.fileURL.lastPathComponent) == ["installed.bin"])
+
+        let endpoint = try #require(URL(string: "remmich-test://server/api"))
+        let progress = ThumbnailWarmProgressRecorder()
+        if complete {
+            let result = try await reopened.rebuild(assets: assets, scope: Self.scope, endpoint: endpoint, accessToken: "token", rebuildID: id) {
+                await progress.append($0)
+            }
+            #expect(result == initial)
+            #expect(try await reopened.availableThumbnails(scope: Self.scope).map(\.fileURL.lastPathComponent) == [fileName])
+            #expect(!FileManager.default.fileExists(atPath: original.path))
+            #expect(await metadata.requestedIDs.isEmpty)
+        } else {
+            await #expect(throws: (any Error).self) {
+                _ = try await reopened.rebuild(assets: assets, scope: Self.scope, endpoint: endpoint, accessToken: "token", rebuildID: id) {
+                    await progress.append($0)
+                }
+            }
+            #expect(try await reopened.availableThumbnails(scope: Self.scope).map(\.fileURL.lastPathComponent) == ["installed.bin"])
+            #expect(await metadata.requestedIDs == [pending.id])
+        }
+        #expect(await progress.values.first == initial)
+    }
+
     @Test func removingAccountCacheDeletesOnlyItsNamespace() async throws {
         let fixture = try IndexFixture()
         defer { fixture.cleanup() }

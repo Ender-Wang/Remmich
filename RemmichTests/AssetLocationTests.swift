@@ -363,7 +363,7 @@ struct AssetLocationTests {
                                                 resourceConditions: { conditions }, preferences: defaults)
         defer { controller.suspend(); locations.reset() }
         try await controller.restoreBackgroundState(session: session)
-        #expect(controller.thumbnailWarmingStatus == (assetsComplete ? .upToDate : .waiting))
+        #expect(controller.thumbnailWarmingStatus == (assetsComplete && intent == "sync" ? .upToDate : .waiting))
         // GPS metadata is present even when the thumbnail is missing.
         try #require(controller.placeCacheMetadataReady)
         let retainsAssetIntent = intent == "rebuild" || !assetsComplete
