@@ -89,7 +89,6 @@ struct SearchFiltersView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ScaledMetric(relativeTo: .body) private var rowHeight: CGFloat = 48
     @ScaledMetric(relativeTo: .body) private var headerHeight: CGFloat = 62
-    @ScaledMetric(relativeTo: .body) private var footerHeight: CGFloat = 58
     @ScaledMetric(relativeTo: .body) private var filterFieldHeight: CGFloat = 52
     let root: SearchFilterCategory
     let store: SearchStore
@@ -97,44 +96,36 @@ struct SearchFiltersView: View {
     let media: MediaLibraryController
     @Binding var draft: SearchFilters
     let maximumHeight: CGFloat
+    let windowBottomInset: CGFloat
     let isSheet: Bool
-    let cancel: () -> Void
     let apply: () -> Void
     let dismissOutside: () -> Void
     @State private var path: [Route] = []
     @State private var contentHeights: [Route: CGFloat] = [:]
     @State private var measuredHeaderHeight: CGFloat?
-    @State private var measuredFooterHeight: CGFloat?
+    private let edgePadding: CGFloat = 12
     private let datePresets: [SearchDate] = [.lastWeek, .recentMonths(1), .recentMonths(3), .recentMonths(6)]
 
     private var currentPage: Route {
         path.last ?? .category(root)
     }
 
-    private var actionTitle: String? {
-        switch currentPage {
-        case .option: nil
-        default: "Done"
-        }
-    }
-
-    private var fittedHeight: CGFloat {
+    private func fittedHeight(bottomPadding: CGFloat) -> CGFloat {
         let bodyHeight = contentHeights[currentPage] ?? estimatedContentHeight(for: currentPage)
-        let actionHeight = actionTitle == nil ? 0 : measuredFooterHeight ?? footerHeight
         let limit = if isSheet {
             currentPage == .category(.people) ? maximumHeight / 2 : maximumHeight - 24
         } else {
             maximumHeight
         }
-        return min(max(1, limit), ceil(bodyHeight + (measuredHeaderHeight ?? headerHeight) + actionHeight))
+        return min(max(1, limit), ceil(bodyHeight + (measuredHeaderHeight ?? headerHeight) + bottomPadding))
     }
 
     private func estimatedContentHeight(for page: Route) -> CGFloat {
         switch page {
         case .category(.people): CGFloat(max(2, store.people.count)) * rowHeight + filterFieldHeight
         case .option: 4 * rowHeight + filterFieldHeight
-        case .category(.date): CGFloat(datePresets.count + 2) * rowHeight + 8
-        case .category: 3 * rowHeight + 8
+        case .category(.date): CGFloat(datePresets.count + 2) * rowHeight + 4
+        case .category: 3 * rowHeight + 4
         case .customDate: 320
         case .year: 218
         }
@@ -142,15 +133,25 @@ struct SearchFiltersView: View {
 
     var body: some View {
         if isSheet {
-            panel
-                .background(SheetOutsideTap(dismiss: dismissOutside, fittedHeight: fittedHeight,
-                                            animatesHeight: !reduceMotion))
-                .presentationContentInteraction(.scrolls)
-                .presentationDragIndicator(.visible)
-                .presentationCompactAdaptation(.none)
+            GeometryReader { geometry in
+                let bottomInset = min(windowBottomInset, geometry.safeAreaInsets.bottom)
+                let bottomPadding = bottomInset > 0 ? 16 : edgePadding
+                // UIKit adds the safe area back to the detent height.
+                let detentHeight = max(1, fittedHeight(bottomPadding: bottomPadding) - bottomInset)
+                panel
+                    .padding(.bottom, bottomPadding)
+                    .ignoresSafeArea(.container, edges: .bottom)
+                    .background(SheetOutsideTap(dismiss: dismissOutside, fittedHeight: detentHeight,
+                                                animatesHeight: !reduceMotion))
+            }
+            .presentationContentInteraction(.scrolls)
+            .presentationDragIndicator(.visible)
+            .presentationCompactAdaptation(.none)
         } else {
-            panel.frame(height: fittedHeight)
-                .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: fittedHeight)
+            let height = fittedHeight(bottomPadding: edgePadding)
+            panel.padding(.bottom, edgePadding)
+                .frame(height: height)
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: height)
         }
     }
 
@@ -166,31 +167,16 @@ struct SearchFiltersView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .clipped()
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.16), value: currentPage)
-            if let actionTitle {
-                Button(action: performAction) {
-                    Text(actionTitle)
-                        .padding(.horizontal, 4)
-                        .contentTransition(.opacity)
-                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: actionTitle)
-                }
-                .buttonStyle(.glassProminent)
-                .controlSize(.large)
-                .frame(minHeight: 44)
-                .frame(maxWidth: .infinity, alignment: .trailing)
-                .padding(.horizontal, 16)
-                .padding(.top, 12)
-                .padding(.bottom, 2)
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { measuredFooterHeight = $0 }
-            }
         }
         .nativeEdgeBackAction(active: !path.isEmpty, animatesContent: false, action: goBack)
     }
 
     private var header: some View {
         HStack(spacing: 8) {
-            if path.isEmpty {
-                Button("Cancel", action: cancel)
+            if case let .category(category) = currentPage {
+                Button("Clear") { category.clear(from: &draft) }
                     .buttonBorderShape(.capsule)
+                    .disabled(category.summary(draft) == nil)
             } else {
                 Button("Back", systemImage: "chevron.backward", action: goBack)
                     .labelStyle(.iconOnly)
@@ -202,20 +188,18 @@ struct SearchFiltersView: View {
                 .accessibilityLabel(currentPage.title)
                 .frame(maxWidth: .infinity)
                 .accessibilityAddTraits(.isHeader)
-            switch currentPage {
-            case let .category(category):
-                Button("Clear") { category.clear(from: &draft) }
-                    .buttonBorderShape(.capsule)
-                    .disabled(category.summary(draft) == nil)
-            default:
+            if case .option = currentPage {
                 Color.clear.frame(width: 44, height: 1).accessibilityHidden(true)
+            } else {
+                Button("Done", action: performAction)
+                    .buttonBorderShape(.capsule)
             }
         }
         .buttonStyle(.glass)
         .controlSize(.regular)
         .frame(minHeight: 44)
         .padding(.horizontal, 16)
-        .padding(.top, 12)
+        .padding(.top, edgePadding)
         .padding(.bottom, 6)
     }
 
@@ -673,7 +657,7 @@ private struct SearchFilterRows<Rows: View>: View {
                 }
             }
             .padding(.horizontal, 16)
-            .padding(.vertical, 4)
+            .padding(.top, 4)
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { measured($0) }
         }
         .scrollBounceBehavior(.basedOnSize)
@@ -703,7 +687,7 @@ private struct SearchPickerList<Rows: View>: View {
                 .scrollDismissesKeyboard(.immediately)
         }
         .onChange(of: fieldHeight + rowsHeight, initial: true) { _, height in
-            if term.isEmpty, fieldHeight > 0, rowsHeight > 0 {
+            if fieldHeight > 0, rowsHeight > 0 {
                 measured(height)
             }
         }

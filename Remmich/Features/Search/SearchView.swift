@@ -207,7 +207,9 @@ struct SearchView: View {
                                  maximumControlsHeight: geometry.size.height * 0.32, liveResults: liveResults)
                 }
                 .sheet(item: compactPanel) { panel in
-                    filters(panel, maximumHeight: maximumPanelHeight(in: geometry), isSheet: true)
+                    let bottomInset = focus.field?.window?.safeAreaInsets.bottom ?? geometry.safeAreaInsets.bottom
+                    filters(panel, maximumHeight: maximumPanelHeight(in: geometry),
+                            isSheet: true, windowBottomInset: bottomInset)
                 }
                 .popover(item: regularPanel, arrowEdge: .top) { panel in
                     filters(panel, maximumHeight: maximumPanelHeight(in: geometry), isSheet: false)
@@ -311,16 +313,11 @@ struct SearchView: View {
         return max(1, geometry.size.height)
     }
 
-    private func filters(_ panel: FilterPanel, maximumHeight: CGFloat, isSheet: Bool) -> some View {
+    private func filters(_ panel: FilterPanel, maximumHeight: CGFloat, isSheet: Bool, windowBottomInset: CGFloat = 0) -> some View {
         @Bindable var panel = panel
         return SearchFiltersView(
             root: panel.category, store: store, peopleRead: peopleRead, media: media, draft: $panel.draft,
-            maximumHeight: maximumHeight, isSheet: isSheet,
-            cancel: {
-                if filterPanel?.id == panel.id {
-                    filterPanel = nil
-                }
-            },
+            maximumHeight: maximumHeight, windowBottomInset: windowBottomInset, isSheet: isSheet,
             apply: {
                 guard filterPanel?.id == panel.id else { return }
                 filterPanel = nil
