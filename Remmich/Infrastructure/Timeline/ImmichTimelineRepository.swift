@@ -110,6 +110,16 @@ actor ImmichTimelineRepository: TimelineReading, VideoReading, AssetDetailReadin
         _ = try requestContext()
     }
 
+    func indexedRecentlyTaken(scope: MediaAccountScope, refresh: Bool) async throws -> LibraryIndexedCameraTimeline? {
+        guard !refresh || activeEndpoint == nil,
+              let session, MediaAccountScope(session: session) == scope, let collectionStore else { return nil }
+        let owner = generation
+        let catalog = try? await collectionStore.indexedRecentlyTaken(scope: scope)
+        try Task.checkCancellation()
+        try requireCurrent(owner)
+        return catalog
+    }
+
     func collectionSummaries(query: TimelineQuery, refresh: Bool) async throws -> [TimelineBucketSummary] {
         let indexedKey = LibraryIndexCard.timelineKey(for: query)
         guard let key = indexedKey ?? LibraryIndexCard.drillDownKey(for: query) else {

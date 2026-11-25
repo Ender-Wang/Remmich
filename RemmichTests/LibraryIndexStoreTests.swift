@@ -236,6 +236,73 @@ struct LibraryIndexStoreTests {
         #expect(try await store.snapshot(scope: scope)?.assets.map(\.id) == [record.id])
     }
 
+    @MainActor @Test func recentlyTakenPublishesTheFullCachedCameraTimelineOnEntry() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        let session = SavedSessionRegistryTests.session("recently-taken")
+        let scope = MediaAccountScope(session: session)
+        let other = Self.scope(userID: "other")
+        let newest = TimelineBucketID(rawValue: "1970-02-01")
+        let older = TimelineBucketID(rawValue: "1970-01-01")
+        let oldest = TimelineBucketID(rawValue: "1969-12-01")
+        let photo = Self.asset(id: "camera-photo", captureTime: 32 * 86400).timelineAssetSummary
+        let video = Self.asset(id: "camera-video", kind: .video).timelineAssetSummary
+        let noCamera = Self.asset(id: "no-camera").timelineAssetSummary
+        let pending = Self.asset(id: "metadata-pending").timelineAssetSummary
+        let pendingOnly = Self.asset(id: "oldest-metadata-pending", captureTime: -86400).timelineAssetSummary
+        let key = LibraryIndexCard.recentlyTaken.timelineKey
+        let catalog = LibraryTimelineCatalog(summaries: [
+            .init(id: newest, assetCount: 1), .init(id: older, assetCount: 3), .init(id: oldest, assetCount: 1),
+        ], olderCursor: 0)
+        try await store.saveCollectionTimeline(catalog, key: key, scope: scope, replacing: [newest: [photo]], removing: [])
+        #expect(try await store.indexedRecentlyTaken(scope: scope) == nil)
+        try await store.saveCollectionTimeline(catalog, key: key, scope: scope, replacing: [older: [video, noCamera, pending], oldest: [pendingOnly]], removing: [])
+
+        func cacheDetails(_ asset: TimelineAssetSummary, model: String?, scope: MediaAccountScope) async throws {
+            try await store.upsert(assetDetail: .init(
+                id: asset.id, capturedAt: asset.capturedAt, originalFileName: "fixture.jpg", originalMimeType: nil,
+                width: nil, height: nil, description: nil, cameraMake: nil, cameraModel: model, lensModel: nil,
+                fileSizeBytes: nil, iso: nil, focalLength: nil, aperture: nil, exposureTime: nil,
+                latitude: nil, longitude: nil, city: nil, state: nil, country: nil
+            ), scope: scope)
+        }
+        try await cacheDetails(photo, model: "Camera", scope: scope)
+        try await cacheDetails(video, model: "Camera", scope: scope)
+        try await cacheDetails(noCamera, model: " \n", scope: scope)
+        try await cacheDetails(pending, model: "Other account camera", scope: other)
+
+        let repository = ImmichTimelineRepository()
+        await repository.configure(session: session, activeEndpoint: nil, collectionStore: store)
+        let query = LibraryAssetCollection.recentlyTaken.query
+        let reads = LibraryOpeningBuckets(source: repository, query: query)
+        let camera = LibraryCameraMetadata(store: store, scope: scope, details: .init(source: repository, store: store))
+        let photoReader = LibraryScopedTimelineReader(source: reads, query: query, media: .photos, camera: camera)
+        #expect(try await photoReader.indexedRecentlyTaken() == nil)
+        try await cacheDetails(pendingOnly, model: nil, scope: scope)
+
+        let opening = LibraryCollectionOpening(collection: .recentlyTaken, opening: reads, camera: camera)
+        let videos = try #require(opening.videos)
+        await opening.photos.load()
+        await videos.load()
+        #expect(opening.photos.bucketSummaries.map(\.assetCount) == [1, 1])
+        #expect(videos.bucketSummaries.map(\.assetCount) == [1])
+        #expect(opening.photos.semanticAssetsSnapshot().map(\.id) == [photo.id, video.id])
+        #expect(videos.semanticAssetsSnapshot().map(\.id) == [video.id])
+        #expect(opening.photoCameraCoverage?.incompleteBuckets == [older])
+        #expect(opening.videoCameraCoverage?.hasMissingMetadata == false)
+        #expect(!opening.photos.isOpeningWindow && !opening.photos.hasUnloadedSemanticBuckets)
+        #expect(!videos.isOpeningWindow && !videos.hasUnloadedSemanticBuckets)
+
+        let anchor = TimelineVisibleAnchor(bucketID: older, assetID: video.id)
+        opening.photos.updateVisibleAnchor(anchor)
+        try await cacheDetails(pending, model: "Camera", scope: scope)
+        await opening.photos.refresh()
+        #expect(opening.photos.visibleAnchor == anchor)
+        #expect(opening.photos.bucketSummaries.map(\.assetCount) == [1, 2])
+        #expect(opening.photoCameraCoverage?.hasMissingMetadata == false)
+    }
+
     @Test func libraryDeltaChecksRecentAndChangedMonthsAndRotatesEarlierMonths() {
         let summaries = (1 ... 7).reversed().map {
             TimelineBucketSummary(id: .init(rawValue: "2026-0\($0)-01"), assetCount: 2)

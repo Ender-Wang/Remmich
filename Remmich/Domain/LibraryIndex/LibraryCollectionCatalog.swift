@@ -92,3 +92,8 @@ nonisolated struct LibraryIndexedPlaces: Sendable {
     let count: Int
     let covers: [TimelineAssetSummary]
 }
+
+nonisolated struct LibraryIndexedCameraTimeline: Sendable {
+    let assetsByBucket: [TimelineBucketID: [TimelineAssetSummary]]
+    let incompleteBucketsByKind: [TimelineMediaKind: Set<TimelineBucketID>]
+}

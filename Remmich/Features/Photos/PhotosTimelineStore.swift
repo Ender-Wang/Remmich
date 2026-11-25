@@ -48,7 +48,16 @@ nonisolated enum TimelineOpeningWindow {
 
 @MainActor struct TimelineOpeningSource {
     let label: String
+    let readComplete: (() async throws -> TimelineBootstrapSnapshot?)?
     let read: (Int) async throws -> TimelineBootstrapSnapshot?
+
+    init(label: String, readComplete: (() async throws -> TimelineBootstrapSnapshot?)? = nil,
+         read: @escaping (Int) async throws -> TimelineBootstrapSnapshot?)
+    {
+        self.label = label
+        self.readComplete = readComplete
+        self.read = read
+    }
 }
 
 @MainActor
@@ -530,7 +539,6 @@ final class PhotosTimelineStore {
         }
         let requestGeneration = generation
         refreshState = .refreshing
-        Self.logger.info("Refresh started generation=\(requestGeneration)")
         startMemoryLoad(generation: requestGeneration)
         let task = Task { [weak self] in
             guard let self else { return }
@@ -553,14 +561,7 @@ final class PhotosTimelineStore {
             }
             return
         }
-        let previous = visibleAnchor
         visibleAnchor = anchor
-        let previousBucketID = previous?.bucketID.rawValue ?? "none"
-        let anchorAssetID = anchor.assetID.map { String($0.prefix(8)) } ?? "none"
-        let persistentBootstrap = retainsPersistentBootstrap
-        Self.logger.info(
-            "Timeline visible anchor changed from=\(previousBucketID, privacy: .public) to=\(anchor.bucketID.rawValue, privacy: .public) asset=\(anchorAssetID, privacy: .public) persistentBootstrap=\(persistentBootstrap)"
-        )
         applyMetadataWindow(centeredOn: anchor.bucketID)
         Task { [weak self] in
             guard let self else { return }
@@ -875,6 +876,10 @@ final class PhotosTimelineStore {
 
     private func performInitialLoad(generation requestGeneration: UInt64) async {
         do {
+            if try await installIndexedCatalog(generation: requestGeneration) {
+                return
+            }
+            guard requestGeneration == generation, !Task.isCancelled else { return }
             let summaries = try await reader.bucketSummaries(query: query)
             guard requestGeneration == generation else { return }
             if let completeReader = reader as? any CompleteTimelineCatalogReading {
@@ -1003,19 +1008,13 @@ final class PhotosTimelineStore {
             guard requestGeneration == generation,
                   bucketRequestRevisions[bucketID] == requestRevision
             else { return }
-            let publicationStartedAt = Date()
             let assets = Self.deduplicate(response)
-            let deduplicationFinishedAt = Date()
             rawAssetsByID[bucketID] = assets
             semanticAssetsByBucket[bucketID] = assets
             semanticContentRevision &+= 1
             sectionsByID[bucketID]?.loadState = .loaded
             reconcileCrossBucketDuplicates(forceRevisionFor: bucketID)
-            let reconciliationFinishedAt = Date()
             updateGroupedCatalogContributions(loadedBucketID: bucketID)
-            Self.logger.info(
-                "Bucket publication finished generation=\(requestGeneration) bucket=\(bucketID.rawValue, privacy: .public) count=\(assets.count) deduplicateMs=\(Self.elapsedMilliseconds(since: publicationStartedAt, to: deduplicationFinishedAt)) reconcileMs=\(Self.elapsedMilliseconds(since: deduplicationFinishedAt, to: reconciliationFinishedAt)) groupsMs=\(Self.elapsedMilliseconds(since: reconciliationFinishedAt)) totalMs=\(Self.elapsedMilliseconds(since: publicationStartedAt))"
-            )
         } catch {
             guard requestGeneration == generation,
                   bucketRequestRevisions[bucketID] == requestRevision
@@ -1034,6 +1033,10 @@ final class PhotosTimelineStore {
     private func performRefresh(generation requestGeneration: UInt64) async {
         let startedAt = Date()
         do {
+            if try await installIndexedCatalog(generation: requestGeneration) {
+                return
+            }
+            guard requestGeneration == generation, !Task.isCancelled else { return }
             let refreshed = try await reader.bucketSummaries(query: query)
             guard requestGeneration == generation else { return }
             if let completeReader = reader as? any CompleteTimelineCatalogReading {
@@ -1055,14 +1058,14 @@ final class PhotosTimelineStore {
                                              assetsByBucket: assets, groupedCatalogs: catalogs, isComplete: true))
                 return
             }
+            if openingSource?.readComplete != nil {
+                retainsPersistentBootstrap = false
+            }
             let previousCounts = Dictionary(uniqueKeysWithValues: bucketSummaries.map { ($0.id, $0.assetCount) })
             publishSummaries(refreshed)
             if refreshed.isEmpty {
                 loadState = .empty
                 refreshState = .idle
-                Self.logger.info(
-                    "Refresh finished empty generation=\(requestGeneration) elapsedMs=\(Self.elapsedMilliseconds(since: startedAt))"
-                )
                 return
             }
 
@@ -1083,9 +1086,6 @@ final class PhotosTimelineStore {
             guard requestGeneration == generation else { return }
             loadState = .loaded
             refreshState = .idle
-            Self.logger.info(
-                "Refresh finished generation=\(requestGeneration) summaries=\(refreshed.count) reloadedBuckets=\(reloadIDs.count) elapsedMs=\(Self.elapsedMilliseconds(since: startedAt))"
-            )
         } catch {
             guard requestGeneration == generation else { return }
             refreshState = .failed(message: Self.message(for: error))
@@ -1093,6 +1093,19 @@ final class PhotosTimelineStore {
                 "Refresh failed generation=\(requestGeneration) elapsedMs=\(Self.elapsedMilliseconds(since: startedAt)) error=\(Self.errorSummary(error), privacy: .public)"
             )
         }
+    }
+
+    private func installIndexedCatalog(generation requestGeneration: UInt64) async throws -> Bool {
+        guard let snapshot = try await openingSource?.readComplete?() else { return false }
+        if requestGeneration == generation, !Task.isCancelled {
+            for (bucket, task) in bucketTasks {
+                task.cancel()
+                bucketRequestRevisions[bucket, default: 0] &+= 1
+            }
+            bucketTasks.removeAll()
+            installCompleteCatalog(snapshot)
+        }
+        return true
     }
 
     private func publishSummaries(_ summaries: [TimelineBucketSummary]) {
@@ -1418,9 +1431,5 @@ final class PhotosTimelineStore {
 
     private nonisolated static func elapsedMilliseconds(since start: Date) -> Int {
         Int(Date().timeIntervalSince(start) * 1000)
-    }
-
-    private nonisolated static func elapsedMilliseconds(since start: Date, to end: Date) -> Int {
-        Int(end.timeIntervalSince(start) * 1000)
     }
 }

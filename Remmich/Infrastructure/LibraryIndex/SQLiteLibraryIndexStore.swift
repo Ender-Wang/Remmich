@@ -120,6 +120,52 @@ actor SQLiteLibraryIndexStore: LibraryIndexStoring, AlbumCatalogStoring {
         """, arguments, map: Self.decodeCollectionAsset)
     }
 
+    func indexedRecentlyTaken(scope: MediaAccountScope) throws -> LibraryIndexedCameraTimeline? {
+        let key = LibraryIndexCard.recentlyTaken.timelineKey
+        guard let catalog = try collectionTimeline(key, scope: scope) else { return nil }
+        let db = try preparedDatabase(scope: scope)
+        let arguments: [SQLiteValue] = [.text(scope.cacheNamespace), .text(key)]
+        let indexedMonths = try db.query("SELECT bucket FROM library_months WHERE scope=? AND catalog_key=?", arguments) {
+            TimelineBucketID(rawValue: $0.text(0))
+        }
+        let months = Set(indexedMonths)
+        guard catalog.summaries.allSatisfy({ $0.assetCount == 0 || months.contains($0.id) }) else { return nil }
+        let catalogMonths = Set(catalog.summaries.filter { $0.assetCount > 0 }.map(\.id))
+        let rows = try db.query("""
+        SELECT a.payload,m.stack_payload,m.place_payload,m.bucket,
+               CASE WHEN d.asset_id IS NULL THEN json_extract(a.payload,'$.mediaKind') END,make.value,model.value
+        FROM library_assets m
+        JOIN catalog_assets a ON a.scope=m.scope AND a.asset_id=m.asset_id
+        LEFT JOIN cache.asset_details d ON d.scope=m.scope AND d.asset_id=m.asset_id
+        LEFT JOIN cache.asset_detail_strings make ON make.id=d.camera_make_id AND make.scope=d.scope
+        LEFT JOIN cache.asset_detail_strings model ON model.id=d.camera_model_id AND model.scope=d.scope
+        WHERE m.scope=? AND m.catalog_key=?
+          AND (d.asset_id IS NULL OR d.camera_make_id IS NOT NULL OR d.camera_model_id IS NOT NULL)
+        ORDER BY m.bucket DESC,m.position
+        """, arguments) { row -> (TimelineBucketID, TimelineAssetSummary?, TimelineMediaKind?) in
+            try Task.checkCancellation()
+            let bucket = TimelineBucketID(rawValue: row.text(3))
+            let missingKind = try row.optionalText(4).map { try Self.decode(TimelineMediaKind.self, from: $0) }
+            let asset: TimelineAssetSummary? = if AssetDetail.hasCameraMetadata(make: row.optionalText(5), model: row.optionalText(6)) {
+                try Self.decodeCollectionAsset(row)
+            } else {
+                nil
+            }
+            return (bucket, asset, missingKind)
+        }
+        var assetsByBucket: [TimelineBucketID: [TimelineAssetSummary]] = [:]
+        var incompleteBucketsByKind: [TimelineMediaKind: Set<TimelineBucketID>] = [:]
+        for (bucket, asset, missingKind) in rows where catalogMonths.contains(bucket) {
+            if let asset, asset.mediaKind == .image || asset.mediaKind == .video {
+                assetsByBucket[bucket, default: []].append(asset)
+            }
+            if let missingKind, missingKind == .image || missingKind == .video {
+                incompleteBucketsByKind[missingKind, default: []].insert(bucket)
+            }
+        }
+        return LibraryIndexedCameraTimeline(assetsByBucket: assetsByBucket, incompleteBucketsByKind: incompleteBucketsByKind)
+    }
+
     func collectionPlaceCovers(scope: MediaAccountScope, offset: Int, limit: Int) throws -> LibraryIndexedPlaces? {
         guard try canRead(scope) else { return nil }
         let db = try preparedDatabase(scope: scope)

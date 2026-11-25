@@ -98,6 +98,10 @@ final class LibraryCameraCoverage {
             incompleteBuckets.remove(bucket)
         }
     }
+
+    func replaceIncompleteBuckets(_ buckets: Set<TimelineBucketID>) {
+        incompleteBuckets = buckets
+    }
 }
 
 /// Share raw reads between Library consumers of one exact timeline query.
@@ -191,6 +195,11 @@ actor LibraryOpeningBuckets: TimelineReading {
 
     func memories() -> [TimelineMemorySummary] {
         []
+    }
+
+    func indexedRecentlyTaken(scope: MediaAccountScope) async throws -> LibraryIndexedCameraTimeline? {
+        guard readsCatalog, let repository = source as? ImmichTimelineRepository else { return nil }
+        return try await repository.indexedRecentlyTaken(scope: scope, refresh: wantsRefresh)
     }
 
     private var wantsRefresh: Bool {
@@ -293,7 +302,12 @@ final class LibraryCollectionOpening {
                               lane: SavedPhotosMedia?, camera: LibraryCameraMetadata?, coverage: LibraryCameraCoverage?) -> PhotosTimelineStore
     {
         let reader = LibraryScopedTimelineReader(source: opening, query: query, media: lane, camera: camera, coverage: coverage)
-        return PhotosTimelineStore(reader: reader, openingSource: .init(label: "Library") { try await reader.openingWindow(limit: $0) },
+        let readComplete: (() async throws -> TimelineBootstrapSnapshot?)? = if camera == nil {
+            nil
+        } else {
+            { try await reader.indexedRecentlyTaken() }
+        }
+        return PhotosTimelineStore(reader: reader, openingSource: .init(label: "Library", readComplete: readComplete) { try await reader.openingWindow(limit: $0) },
                                    hasUnfilteredBucketCounts: lane != nil,
                                    semanticHistoryBucketLimit: camera == nil ? nil : LibraryOpeningBuckets.monthLimit)
     }
@@ -392,6 +406,38 @@ actor LibraryScopedTimelineReader: TimelineReading {
         }
         try Task.checkCancellation()
         return TimelineOpeningWindow.snapshot(generation: 0, assetsByBucket: window)
+    }
+
+    func indexedRecentlyTaken() async throws -> TimelineBootstrapSnapshot? {
+        guard let camera, let opening = source as? LibraryOpeningBuckets,
+              let indexed = try await opening.indexedRecentlyTaken(scope: camera.scope) else { return nil }
+        var seen = Set<String>()
+        var assetsByBucket: [TimelineBucketID: [TimelineAssetSummary]] = [:]
+        var summaries: [TimelineBucketSummary] = []
+        for bucket in indexed.assetsByBucket.keys.sorted(by: { $0.rawValue > $1.rawValue }) {
+            try Task.checkCancellation()
+            let matches = indexed.assetsByBucket[bucket, default: []].filter {
+                media?.includes(video: $0.mediaKind == .video) != false && seen.insert($0.id).inserted
+            }
+            if !matches.isEmpty {
+                assetsByBucket[bucket] = matches
+                summaries.append(.init(id: bucket, assetCount: matches.count))
+            }
+        }
+        var incompleteBuckets = indexed.incompleteBucketsByKind[.video, default: []]
+        if media != .videos {
+            incompleteBuckets.formUnion(indexed.incompleteBucketsByKind[.image, default: []])
+        }
+        // Browsing a month without a cached match can still discover camera assets on demand.
+        guard incompleteBuckets.isSubset(of: assetsByBucket.keys) else { return nil }
+        var baseCatalogs = TimelineGroupedCatalogCache()
+        baseCatalogs.replaceSummaryCatalogs(with: summaries)
+        let grouped = try TimelineCompleteGroupedCatalogBuilder.build(
+            summaries: summaries, assetsByBucket: assetsByBucket, baseCatalogs: baseCatalogs
+        )
+        try Task.checkCancellation()
+        await coverage?.replaceIncompleteBuckets(incompleteBuckets)
+        return .init(generation: 0, summaries: summaries, assetsByBucket: assetsByBucket, groupedCatalogs: grouped, isComplete: true)
     }
 
     private func matchingAssets(in bucket: TimelineBucketID, canFetch: Bool = false) async throws
@@ -541,10 +587,15 @@ struct LibraryCollectionTimeline: View {
             await opening?.refreshIndexedTimelines(revision: revision)
         }
         .task(id: libraryIndex?.thumbnailWarmingLastUpdatedAt) {
-            guard libraryIndex?.thumbnailWarmingLastUpdatedAt != nil, media.activeAPIURL != nil else { return }
+            guard let libraryIndex, libraryIndex.thumbnailWarmingLastUpdatedAt != nil, media.activeAPIURL != nil else { return }
             let lane = selected == .photos ? photos : videos
             let coverage = selected == .photos ? opening?.photoCameraCoverage : opening?.videoCameraCoverage
-            if let lane, let coverage, !lane.isOpeningWindow {
+            guard let lane, let coverage, !lane.isOpeningWindow else { return }
+            let hasAllMetadata = libraryIndex.indexedAssetCount > 0
+                && libraryIndex.thumbnailWarmingMetadataCount >= libraryIndex.indexedAssetCount
+            if lane.hasUnloadedSemanticBuckets ? hasAllMetadata : coverage.hasMissingMetadata {
+                await lane.refresh()
+            } else if coverage.hasMissingMetadata {
                 let ids = lane.bucketSummaries.map(\.id).filter(coverage.incompleteBuckets.contains)
                 for id in ids.prefix(LibraryOpeningBuckets.monthLimit) {
                     guard !Task.isCancelled else { return }
