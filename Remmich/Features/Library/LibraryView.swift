@@ -41,6 +41,7 @@ struct LibraryView: View {
     private let horizontalPadding: CGFloat = 16
     private let verticalPadding: CGFloat = 8
     private let panelAvatarInset: CGFloat = 12
+    private let headerBottomSpacing: CGFloat = 12
 
     var body: some View {
         let preferences = opening.preferences
@@ -130,30 +131,27 @@ struct LibraryView: View {
                         }
                     }
                     .padding(.horizontal, horizontalPadding)
-                    .padding(.top, geometry.safeAreaInsets.top + avatarTopPadding + avatarSize + 8)
+                    .padding(.top, geometry.safeAreaInsets.top + avatarTopPadding + avatarSize + headerBottomSpacing)
                     .padding(.bottom, geometry.safeAreaInsets.bottom + 16)
                     .frame(width: geometry.size.width)
                     .environment(\.libraryHubNavigation, LibraryHubNavigation(namespace: libraryCardTransition, open: openLibraryCard))
                 }
                 .ignoresSafeArea(.container, edges: [.top, .bottom])
 
-                HStack(spacing: 8) {
-                    RemmichLogoView(
-                        icon: AppIconController.shared.selectedIcon ?? .spiral,
-                        isAnimating: navigationPath.isEmpty && (tabSelectionState?.selection ?? .library) == .library,
-                        preservesAnimationPoseWhenPaused: true
-                    )
-                    .frame(width: headerLogoCanvasSize, height: headerLogoCanvasSize)
-                    .frame(width: avatarSize, height: avatarSize)
-                    .accessibilityHidden(true)
-                    Text("Remmich").font(.largeTitle.bold())
-                        .accessibilityAddTraits(.isHeader)
-                    Spacer(minLength: avatarSize + 16)
-                }
+                RemmichLogoView(
+                    icon: AppIconController.shared.selectedIcon ?? .spiral,
+                    isAnimating: navigationPath.isEmpty && (tabSelectionState?.selection ?? .library) == .library,
+                    preservesAnimationPoseWhenPaused: true
+                )
+                .frame(width: headerLogoCanvasSize, height: headerLogoCanvasSize)
+                .frame(width: avatarSize, height: avatarSize)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Library")
+                .accessibilityAddTraits(.isHeader)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, horizontalPadding)
                 .padding(.top, avatarTopPadding)
-                .padding(.bottom, 8)
+                .padding(.bottom, headerBottomSpacing)
                 .background {
                     LibraryTitleBackdrop()
                         .ignoresSafeArea(.container, edges: [.top, .horizontal])
@@ -199,7 +197,7 @@ struct LibraryView: View {
                 }
             }
         }
-        .navigationTitle("Remmich")
+        .navigationTitle("Library")
         .toolbar(.hidden, for: .navigationBar)
         .background {
             CardNavigationRootAnchor(root: navigationRoot, didAppear: reconcileNavigationRoot)

@@ -747,7 +747,11 @@ struct AccountSettingsView: View {
                 .accessibilityHint(selectedPage == .home ? "Touch and hold to choose an app icon" : "")
                 .accessibilityAction(named: "Change app icon") { navigate(to: .appearance) }
             VStack(spacing: 4) {
-                Text("Remmich").font(stacked ? .title2.bold() : .title.bold()).lineLimit(1).minimumScaleFactor(0.8)
+                Text("Remmich")
+                    .font(.system(stacked ? .title2 : .title, design: .rounded, weight: .semibold))
+                    .tracking(-0.4)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
                 Text("Your \(Text("Re").fontWeight(.heavy))adonly I\(Text("mmich").fontWeight(.heavy)) Library")
                     .fontWeight(.medium)
                     .font(.system(.callout, design: .rounded))
