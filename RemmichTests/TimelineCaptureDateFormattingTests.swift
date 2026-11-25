@@ -162,6 +162,35 @@ struct TimelineCaptureDateFormattingTests {
             #expect(await source.requestedAssetQueries == [taken, added, taken])
         }
 
+        @Test(arguments: [LibraryAssetCollection.recentlyTaken, .recentlyAdded, .favorites])
+        func splitCollectionsShowVideosInPhotosAndKeepVideosVideoOnly(collection: LibraryAssetCollection) async throws {
+            let photo = try Self.asset(instant: "2026-11-20T00:00:00Z", offset: 0, id: "photo")
+            let video = try Self.asset(instant: "2026-11-19T00:00:00Z", offset: 0, id: "video", mediaKind: .video)
+            let audio = try Self.asset(instant: "2026-11-18T00:00:00Z", offset: 0, id: "audio", mediaKind: .audio)
+            let month = TimelineBucketID(rawValue: "2026-11-01")
+            let source = OpeningTimelineTestReader(summaries: [.init(id: month, assetCount: 3)],
+                                                   assets: [month: [audio, photo, video]])
+            let query = collection.query
+            let opening = LibraryOpeningBuckets(source: source, query: query)
+            let photos = LibraryScopedTimelineReader(source: opening, query: query, media: .photos)
+            let videos = LibraryScopedTimelineReader(source: opening, query: query, media: .videos)
+
+            #expect(collection.separatesMedia)
+            let photoWindow = try #require(await photos.openingWindow(limit: 3))
+            let videoWindow = try #require(await videos.openingWindow(limit: 3))
+            #expect(photoWindow.summaries.map(\.assetCount) == [2])
+            #expect(videoWindow.summaries.map(\.assetCount) == [1])
+            #expect(Set(photoWindow.assetsByBucket[month, default: []].map(\.id)) == ["photo", "video"])
+            #expect(videoWindow.assetsByBucket[month]?.map(\.id) == ["video"])
+
+            let photoAssets = try await photos.assets(in: month, query: query)
+            let videoAssets = try await videos.assets(in: month, query: query)
+            #expect(photoAssets.map(\.id) == ["photo", "video"])
+            #expect(videoAssets.map(\.id) == ["video"])
+            #expect(photoAssets.allSatisfy { ($0.usesUploadDate == true) == (collection == .recentlyAdded) })
+            #expect(await source.requestedAssetQueries == [query])
+        }
+
         @Test func trashPreviewUsesNewestCaptureAndReportsAnEmptyTimeline() async throws {
             let newest = try Self.asset(instant: "2026-11-20T00:00:00Z", offset: 0, id: "newest")
             let earlier = try Self.asset(instant: "2026-11-15T00:00:00Z", offset: 0, id: "earlier")
@@ -289,11 +318,13 @@ struct TimelineCaptureDateFormattingTests {
         #expect(!rendered.contains("1:28"))
     }
 
-    private static func asset(instant: String, offset: Double, id: String = "asset", uploaded: String? = nil) throws -> TimelineAssetSummary {
+    private static func asset(instant: String, offset: Double, id: String = "asset", uploaded: String? = nil,
+                              mediaKind: TimelineMediaKind = .image) throws -> TimelineAssetSummary
+    {
         let date = try Date(instant, strategy: .iso8601)
         return try .init(
             id: id, ownerID: "owner", capturedAt: date, uploadedAt: uploaded.map { try Date($0, strategy: .iso8601) } ?? date,
-            localOffsetHours: offset, mediaKind: .image, durationMilliseconds: nil,
+            localOffsetHours: offset, mediaKind: mediaKind, durationMilliseconds: nil,
             aspectRatio: 1, isFavorite: false, visibility: .timeline,
             livePhotoVideoID: nil, stack: nil, projectionType: nil,
             thumbhash: nil, thumbnailRevision: date

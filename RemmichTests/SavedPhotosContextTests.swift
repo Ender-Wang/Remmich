@@ -41,9 +41,9 @@ struct SavedPhotosContextTests {
         // The context supplies only lookup hints; Photos supplies membership/count.
     }
 
-    @Test func photosIncludesLiveStillsAndVideoNavigationUsesOnlyVideos() {
+    @Test func photosIncludesAllSavedMediaAndVideosIncludesOnlyVideo() {
         #expect(SavedPhotosMedia.photos.includes(video: false))
-        #expect(!SavedPhotosMedia.photos.includes(video: true))
+        #expect(SavedPhotosMedia.photos.includes(video: true))
         #expect(SavedPhotosMedia.videos.includes(video: true))
         #expect(!SavedPhotosMedia.videos.includes(video: false))
     }

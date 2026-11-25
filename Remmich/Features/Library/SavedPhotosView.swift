@@ -12,7 +12,7 @@ nonisolated enum SavedPhotosMedia: String, CaseIterable, Identifiable, Sendable 
     }
 
     func includes(video: Bool) -> Bool {
-        video == (self == .videos)
+        self == .photos || video
     }
 }
 
