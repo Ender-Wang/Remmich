@@ -338,6 +338,11 @@ actor LibraryThumbnailCache {
         var thumbnailIDs = Set(records.map(\.assetID))
         var metadataIDs = thumbnailIDs
         let pending = assets.filter { !thumbnailIDs.contains($0.id) }
+        let owner = LibraryTransferOwner(scope: scope, endpoint: endpoint, accessToken: accessToken)
+        await transfers?.finishCheckpointedCacheResponses(Dictionary(uniqueKeysWithValues: records.map { ($0.assetID, $0.sourceRevision) }), owner: owner)
+        try Task.checkCancellation()
+        var checkpointedRevisions: [String: String] = [:]
+        var pairedCount = records.count
         var processedCount = 0
         var cachedBytes = records.reduce(Int64(0)) { $0 + $1.byteCount }
         var failures: [ThumbnailFailure] = []
@@ -396,13 +401,15 @@ actor LibraryThumbnailCache {
                     try entry.append(encoder.encode(record))
                     try checkpoint.seekToEnd()
                     try checkpoint.write(contentsOf: entry)
+                    pairedCount += 1
+                    checkpointedRevisions[record.assetID] = record.sourceRevision
                 }
                 failures.append(contentsOf: result.failures)
                 processedCount += 1
-                let pairedCount = detailSource == nil
-                    ? records.count
-                    : thumbnailIDs.intersection(metadataIDs).count
                 if processedCount.isMultiple(of: 16) {
+                    await transfers?.finishCheckpointedCacheResponses(checkpointedRevisions, owner: owner)
+                    try Task.checkCancellation()
+                    checkpointedRevisions.removeAll(keepingCapacity: true)
                     await transfers?.prefetchCache(Array(pending.dropFirst(processedCount).prefix(LibraryTransferQueue.cacheLookAheadAssets)), scope: scope, endpoint: endpoint,
                                                    thumbnailIDs: thumbnailIDs, metadataIDs: metadataIDs)
                 }
@@ -439,6 +446,7 @@ actor LibraryThumbnailCache {
             }
         }
 
+        await transfers?.finishCheckpointedCacheResponses(checkpointedRevisions, owner: owner)
         try Task.checkCancellation()
         guard currentProgress.cachedCount == assets.count else {
             throw RebuildError.incomplete(

@@ -182,9 +182,6 @@ final class LibraryBackgroundSyncCoordinator {
         if activeIsTransferWork, let activeID {
             armBudget(id: activeID, duration: .seconds(20), reason: "transfer-reconcile-budget-expired")
         }
-        #if DEBUG
-            Task { await LibraryTransferQueue.shared.logStatus() }
-        #endif
         scheduleNextSync()
         scheduleTransferCheck()
     }
@@ -347,9 +344,6 @@ final class LibraryBackgroundSyncCoordinator {
         worker?.cancel()
         worker = nil
         controller.endBackgroundSync(id: id)
-        #if DEBUG
-            Task { await LibraryTransferQueue.shared.logStatus() }
-        #endif
         if waitForCancellation, let cancelledWorker {
             // Keep ownership until cleanup drains, but never wait indefinitely
             // for an operation that does not cooperate with cancellation.

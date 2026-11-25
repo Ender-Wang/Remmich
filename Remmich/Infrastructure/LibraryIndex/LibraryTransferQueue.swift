@@ -75,11 +75,6 @@ actor LibraryTransferQueue {
     private var eventsCompletion: (@Sendable () async -> Void)?
     private var responseHandler: (@Sendable () async -> Void)?
     private var cacheResourcesAllowed = true
-    #if DEBUG
-        private var lastDiagnosticAt = Date.distantPast
-        private var submittedTotal = 0
-        private var receivedTotal = 0
-    #endif
     private var deliveryRevision: UInt64
     private var importRevision: UInt64 = 0
     private var deliveryWaiters: [UUID: CheckedContinuation<Void, Error>] = [:]
@@ -533,6 +528,19 @@ actor LibraryTransferQueue {
         try? persist()
     }
 
+    /// A rebuild checkpoint already owns these thumbnail and metadata pairs.
+    func finishCheckpointedCacheResponses(_ revisions: [String: String], owner: LibraryTransferOwner) {
+        guard !revisions.isEmpty, !Task.isCancelled, journal.owner == owner, !journal.disabledLanes.contains("cache") else { return }
+        let previous = journal
+        let removed = journal.removeCheckpointedCacheResponses(revisions)
+        guard !removed.isEmpty else { return }
+        do { try persist() } catch {
+            journal = previous
+            return
+        }
+        discard(removed, committed: true)
+    }
+
     func finishCachePass(namespace: String) {
         guard journal.owner?.namespace == namespace else { return }
         discard(journal.remove(lane: "cache"), committed: true)
@@ -723,18 +731,12 @@ actor LibraryTransferQueue {
         }
         for (job, task) in created {
             nativeTasks[job.id] = task
-            #if DEBUG
-                submittedTotal += 1
-            #endif
             task.resume()
             if job.kind == .export {
                 Self.logger.info("Export transfer submitted job=\(job.id.uuidString, privacy: .public) transport=background task=\(task.taskIdentifier)")
             }
         }
         scheduleExportRetry()
-        #if DEBUG
-            logStatus(force: false)
-        #endif
     }
 
     func resourceConditionsChanged(allowed: Bool) {
@@ -752,40 +754,9 @@ actor LibraryTransferQueue {
         pump()
     }
 
-    #if DEBUG
-        func logStatus(force: Bool = true) {
-            let now = Date()
-            guard force || now.timeIntervalSince(lastDiagnosticAt) >= 5 else { return }
-            lastDiagnosticAt = now
-            let timestamp = Date().ISO8601Format(.init(includingFractionalSeconds: true))
-            let ready = journal.jobs.count { $0.state == .completed }
-            let queued = journal.jobs.count { $0.state == .queued }
-            let failed = journal.jobs.count { $0.state == .failed }
-            let nativeCount = nativeTasks.count
-            let running = nativeTasks.values.count { $0.state == .running }
-            let suspended = nativeTasks.values.count { $0.state == .suspended }
-            let completed = nativeTasks.values.count { $0.state == .completed }
-            let waiting = waiters.values.reduce(0) { $0 + $1.count }
-            let readyThumbnails = journal.jobs.count { $0.state == .completed && $0.kind == .thumbnail }
-            let readyMetadata = journal.jobs.count { $0.state == .completed && $0.kind == .metadata }
-            let waitingThumbnails = journal.jobs.count { waiters[$0.id]?.isEmpty == false && $0.kind == .thumbnail }
-            let waitingMetadata = journal.jobs.count { waiters[$0.id]?.isEmpty == false && $0.kind == .metadata }
-            let journalCount = journal.jobs.count
-            let submitted = submittedTotal
-            let received = receivedTotal
-            let currentTransport = transport.rawValue
-            Self.logger.info("Library transfer queue timestamp=\(timestamp, privacy: .public) transport=\(currentTransport, privacy: .public) native=\(nativeCount) running=\(running) suspended=\(suspended) completed=\(completed) queued=\(queued) ready=\(ready) failed=\(failed) waiters=\(waiting) readyThumbnails=\(readyThumbnails) readyMetadata=\(readyMetadata) waitingThumbnails=\(waitingThumbnails) waitingMetadata=\(waitingMetadata) journal=\(journalCount) submittedTotal=\(submitted) receivedTotal=\(received)")
-        }
-    #endif
-
     func received(id: UUID, nativeTaskID: Int, attemptID: UUID?, transport: LibraryTransferTransport,
-                  response: HTTPURLResponse?, fileURL: URL?, errorCode: Int?, callbackAt: Date? = nil, resumeData: Data? = nil) async
+                  response: HTTPURLResponse?, fileURL: URL?, errorCode: Int?, resumeData: Data? = nil) async
     {
-        #if DEBUG
-            let context = await Self.diagnosticContext()
-            let processingStarted = Date()
-            let deliveryLagMs = max(0, Int(processingStarted.timeIntervalSince(callbackAt ?? processingStarted) * 1000))
-        #endif
         guard var job = journal.jobs.first(where: { $0.id == id }), job.owner == journal.owner,
               journal.passes[job.kind.lane] == job.pass,
               job.accepts(nativeTaskID: nativeTaskID, attemptID: attemptID, transport: transport)
@@ -820,9 +791,6 @@ actor LibraryTransferQueue {
             job.completedAt = Date()
             journal.update(job)
             try persist()
-            #if DEBUG
-                receivedTotal += 1
-            #endif
             if job.kind == .export {
                 let result = try fileResponse(for: job)
                 fileWaiters.removeValue(forKey: job.id)?.resume(returning: result)
@@ -838,11 +806,6 @@ actor LibraryTransferQueue {
             if let responseHandler {
                 Task { await responseHandler() }
             }
-            #if DEBUG
-                let processingMs = max(0, Int(Date().timeIntervalSince(processingStarted) * 1000))
-                let submittedAt = job.submittedAt?.ISO8601Format(.init(includingFractionalSeconds: true)) ?? "unknown"
-                Self.logger.info("Library transfer received \(context, privacy: .public) transport=\(transport.rawValue, privacy: .public) task=\(nativeTaskID) attempt=\(attemptID?.uuidString ?? "legacy", privacy: .public) submittedAt=\(submittedAt, privacy: .public) kind=\(job.kind.rawValue, privacy: .public) bytes=\(size) deliveryLagMs=\(deliveryLagMs) processingMs=\(processingMs)")
-            #endif
         } catch {
             if let fileURL {
                 try? FileManager.default.removeItem(at: fileURL)
@@ -998,7 +961,6 @@ actor LibraryTransferQueue {
 /// URLSession's temporary file must be moved before returning from its delegate.
 /// The serial delivery chain also drains journal writes before finishing OS events.
 private final nonisolated class LibraryTransferDelegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
-    private static let logger = Logger(subsystem: "io.github.ender-wang.Remmich", category: "LibraryTransfers")
     let rootURL: URL
     let queue: LibraryTransferQueue
     private var delivery: Task<Void, Never>?
@@ -1025,11 +987,6 @@ private final nonisolated class LibraryTransferDelegate: NSObject, URLSessionDow
     }
 
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
-        #if DEBUG
-            let callbackAt: Date? = Date()
-        #else
-            let callbackAt: Date? = nil
-        #endif
         guard let attempt = LibraryTransferAttempt(description: downloadTask.taskDescription) else { return }
         let nativeTaskID = downloadTask.taskIdentifier
         let transport: LibraryTransferTransport = session.configuration.identifier == nil ? .foreground : .background
@@ -1050,36 +1007,9 @@ private final nonisolated class LibraryTransferDelegate: NSObject, URLSessionDow
         delivery = Task { [queue, failure] in
             await previous?.value
             await queue.received(id: attempt.jobID, nativeTaskID: nativeTaskID, attemptID: attempt.attemptID, transport: transport,
-                                 response: response, fileURL: failure == nil ? destination : nil, errorCode: failure, callbackAt: callbackAt)
+                                 response: response, fileURL: failure == nil ? destination : nil, errorCode: failure)
         }
     }
-
-    #if DEBUG
-        func urlSession(_ session: URLSession, task: URLSessionTask, didFinishCollecting metrics: URLSessionTaskMetrics) {
-            let now = Date()
-            let timestamp = now.ISO8601Format(.init(includingFractionalSeconds: true))
-            let nativeTaskID = task.taskIdentifier
-            let transport = session.configuration.identifier == nil ? "foreground" : "background"
-            let attempt = LibraryTransferAttempt(description: task.taskDescription)?.attemptID?.uuidString ?? "legacy"
-            let transaction = metrics.transactionMetrics.last
-            func milliseconds(_ start: Date?, _ end: Date?) -> Int {
-                guard let start, let end else { return -1 }
-                return max(0, Int(end.timeIntervalSince(start) * 1000))
-            }
-            let totalMs = Int(metrics.taskInterval.duration * 1000)
-            let preRequestMs = milliseconds(metrics.taskInterval.start, metrics.transactionMetrics.first?.requestStartDate)
-            let networkMs = milliseconds(transaction?.requestStartDate, transaction?.responseEndDate)
-            let firstByteMs = milliseconds(transaction?.requestStartDate, transaction?.responseStartDate)
-            let dnsMs = milliseconds(transaction?.domainLookupStartDate, transaction?.domainLookupEndDate)
-            let connectMs = milliseconds(transaction?.connectStartDate, transaction?.connectEndDate)
-            let tlsMs = milliseconds(transaction?.secureConnectionStartDate, transaction?.secureConnectionEndDate)
-            let fetchDelayMs = milliseconds(metrics.taskInterval.start, metrics.transactionMetrics.first?.fetchStartDate)
-            let reusedConnection = transaction.map { $0.isReusedConnection ? 1 : 0 } ?? -1
-            let callbackLagMs = milliseconds(metrics.taskInterval.end, now)
-            let networkProtocol = transaction?.networkProtocolName ?? "unknown"
-            Self.logger.info("Library transfer metrics timestamp=\(timestamp, privacy: .public) transport=\(transport, privacy: .public) task=\(nativeTaskID) attempt=\(attempt, privacy: .public) totalMs=\(totalMs) preRequestMs=\(preRequestMs) fetchDelayMs=\(fetchDelayMs) networkMs=\(networkMs) firstByteMs=\(firstByteMs) dnsMs=\(dnsMs) connectMs=\(connectMs) tlsMs=\(tlsMs) reusedConnection=\(reusedConnection) callbackLagMs=\(callbackLagMs) protocol=\(networkProtocol, privacy: .public)")
-        }
-    #endif
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         guard let attempt = LibraryTransferAttempt(description: task.taskDescription) else { return }

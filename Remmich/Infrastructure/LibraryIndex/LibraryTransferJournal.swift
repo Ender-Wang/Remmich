@@ -272,6 +272,17 @@ nonisolated struct LibraryTransferJournal: Codable, Sendable {
         return removed
     }
 
+    mutating func removeCheckpointedCacheResponses(_ revisions: [String: String]) -> [Job] {
+        let removed = jobs.filter { job in
+            guard job.kind.lane == "cache", job.state == .completed, let assetID = job.assetID,
+                  let revision = revisions[assetID] else { return false }
+            return job.sourceRevision == revision
+        }
+        let ids = Set(removed.map(\.id))
+        jobs.removeAll { ids.contains($0.id) }
+        return removed
+    }
+
     mutating func removePlaceLookup(_ key: PlaceCacheKey) -> [Job] {
         let removed = jobs.filter { $0.kind == .place && $0.sourceRevision == key.id }
         let ids = Set(removed.map(\.id))

@@ -167,6 +167,45 @@ struct LibraryTransferJournalTests {
         #expect(journal.jobs.contains { $0.id == other.id })
     }
 
+    @Test func checkpointedRebuildCleanupPreservesNewerAndUnfinishedTransfers() async throws {
+        let root = try directory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let owner = owner()
+        let journalURL = root.appending(path: "journal.json")
+        var journal = LibraryTransferJournal()
+        _ = journal.activate(owner)
+        var thumbnail = try journal.job(url: endpoint.appending(path: "assets/one/thumbnail"), kind: .thumbnail, owner: owner, sourceRevision: "one-revision")
+        var metadata = try journal.job(url: endpoint.appending(path: "assets/two"), kind: .metadata, owner: owner, sourceRevision: "two-revision")
+        var newer = try journal.job(url: endpoint.appending(path: "assets/one"), kind: .metadata, owner: owner, sourceRevision: "newer")
+        var unfinished = try journal.job(url: endpoint.appending(path: "assets/two/thumbnail"), kind: .thumbnail, owner: owner, sourceRevision: "two-revision")
+        var place = try journal.job(url: endpoint.appending(path: "reverse"), kind: .place, owner: owner)
+        thumbnail.state = .completed
+        metadata.state = .completed
+        newer.state = .completed
+        unfinished.state = .running
+        place.state = .completed
+        for job in [thumbnail, metadata, newer, unfinished, place] {
+            journal.update(job)
+            if job.state == .completed {
+                try Data([1]).write(to: root.appending(path: job.responseFilename))
+            }
+        }
+        try journal.save(to: journalURL)
+
+        let queue = LibraryTransferQueue(rootURL: root)
+        let checkpoints = ["one": "one-revision", "two": "two-revision"]
+        await queue.finishCheckpointedCacheResponses(checkpoints, owner: self.owner(user: "other"))
+        #expect(try LibraryTransferJournal.load(from: journalURL).jobs.count == 5)
+        await queue.finishCheckpointedCacheResponses(checkpoints, owner: owner)
+        let restored = try LibraryTransferJournal.load(from: journalURL)
+        #expect(Set(restored.jobs.map(\.id)) == [newer.id, unfinished.id, place.id])
+        #expect(restored.passes["cache"] == journal.passes["cache"])
+        #expect(!FileManager.default.fileExists(atPath: root.appending(path: thumbnail.responseFilename).path))
+        #expect(!FileManager.default.fileExists(atPath: root.appending(path: metadata.responseFilename).path))
+        #expect(FileManager.default.fileExists(atPath: root.appending(path: newer.responseFilename).path))
+        #expect(FileManager.default.fileExists(atPath: root.appending(path: place.responseFilename).path))
+    }
+
     @Test func changedAssetRevisionRejectsOldMetadataAndThumbnailResponses() throws {
         let owner = owner()
         var journal = LibraryTransferJournal()
