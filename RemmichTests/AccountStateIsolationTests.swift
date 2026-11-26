@@ -81,6 +81,52 @@ struct AccountStateIsolationTests {
         #expect(AccountCachePreferences.load(from: defaults, scope: MediaAccountScope(session: alias)).paused)
     }
 
+    @Test @MainActor func relaunchRestoresOnlyTheActiveAccountsBrowsingState() throws {
+        let suite = "BrowsingIsolation-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let firstScope = MediaAccountScope(session: session("first"))
+        let secondScope = MediaAccountScope(session: session("second"))
+        let first = AccountBrowsingState(scope: firstScope, defaults: defaults)
+        let month = TimelineBucketID(rawValue: "2025-07-01")
+        let photo = TimelineBrowsingPosition(assetID: "photo", bucketID: month, viewportFraction: 0.5)
+        let video = TimelineBrowsingPosition(assetID: "video", bucketID: month, viewportFraction: 0.4)
+        let album = AlbumBrowsingPosition(albumID: "album", viewportFraction: 0.7)
+        first.saveTab(.search, groupedMediaOwner: .photos)
+        first.photos.saveBrowsingPosition?(photo)
+        first.videos.saveBrowsingPosition?(video)
+        first.saveAlbumPosition(album)
+
+        let second = AccountBrowsingState(scope: secondScope, defaults: defaults)
+        #expect(second.navigation.selection == .photos)
+        #expect(second.photos.pendingBrowsingPosition == nil)
+        #expect(second.videos.pendingBrowsingPosition == nil)
+        #expect(second.albumPosition == nil)
+        second.saveTab(.weeks, groupedMediaOwner: .videos)
+
+        let restored = AccountBrowsingState(scope: firstScope, defaults: defaults)
+        #expect(restored.navigation.selection == .search)
+        #expect(restored.activation.activeDestination == .search)
+        #expect(restored.navigation.searchFocusRequest == nil)
+        #expect(restored.photos.pendingBrowsingPosition == photo)
+        #expect(restored.videos.pendingBrowsingPosition == video)
+        #expect(restored.albumPosition == album)
+
+        restored.detach(deleteLocalData: true)
+        restored.photos.saveBrowsingPosition?(photo)
+        restored.saveAlbumPosition(album)
+        restored.saveTab(.library, groupedMediaOwner: .photos)
+        let cleared = AccountBrowsingState(scope: firstScope, defaults: defaults)
+        #expect(cleared.navigation.selection == .photos)
+        #expect(cleared.photos.pendingBrowsingPosition == nil)
+        #expect(cleared.videos.pendingBrowsingPosition == nil)
+        #expect(cleared.albumPosition == nil)
+
+        let restoredSecond = AccountBrowsingState(scope: secondScope, defaults: defaults)
+        #expect(restoredSecond.navigation.selection == .videos)
+        #expect(restoredSecond.activation.isHydrated(.videos))
+    }
+
     @Test(arguments: [false, true])
     func lateAssetDetailsCannotPublishAfterSignOut(switchAccount: Bool) async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)

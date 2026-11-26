@@ -122,12 +122,20 @@ nonisolated struct AlbumReflowAnchor: Equatable {
         guard space > 0.5 else { return focus == nil ? unitY : 0.5 }
         // A native ID scroll aligns the same fraction of the item and viewport.
         // Its viewport starts above the header clearance reserved in the content.
-        guard let focus else { return (topClearance + unitY * visibleSpace) / space }
+        guard let focus else {
+            return Self.alignment(unitY: unitY, visibleSpace: visibleSpace, topClearance: topClearance)
+        }
         // Vary that fraction to hold the original point inside the pinched album
         // under its viewport location as the album's height changes.
         // UnitPoint supports positions outside 0...1. Keep those fractions for
         // partially visible albums; the scroll view owns actual range clamping.
         return (topClearance + focus.viewportUnitY * viewportFrame.height - focus.itemUnitY * height) / space
+    }
+
+    static func alignment(unitY: CGFloat, visibleSpace: CGFloat, topClearance: CGFloat) -> CGFloat {
+        let space = visibleSpace + topClearance
+        guard space > 0.5 else { return unitY }
+        return (topClearance + unitY * visibleSpace) / space
     }
 }
 

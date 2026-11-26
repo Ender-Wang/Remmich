@@ -6,10 +6,14 @@ import UIKit
 @MainActor
 @Observable
 final class NativeTabSelectionState {
-    var selection: NativeTabDestination = .photos
+    var selection: NativeTabDestination
     var isAlbumSearchExpanded = false
     var searchFocusRequest: UUID?
     @ObservationIgnored var isPageInteractionActive = false
+
+    init(selection: NativeTabDestination = .photos) {
+        self.selection = selection
+    }
 
     func canActivateContent(in destination: NativeTabDestination) -> Bool {
         selection == destination && !isPageInteractionActive
@@ -19,11 +23,13 @@ final class NativeTabSelectionState {
 @MainActor
 @Observable
 final class NativeTabContentActivationState {
-    private(set) var activeDestination: NativeTabDestination = .photos
-    private(set) var hydratedDestinations: Set<NativeTabDestination> = [.photos]
+    private(set) var activeDestination: NativeTabDestination
+    private(set) var hydratedDestinations: Set<NativeTabDestination>
     private(set) var preparedDestinations: Set<NativeTabDestination>
 
-    init(preparedDestinations: Set<NativeTabDestination> = []) {
+    init(initialDestination: NativeTabDestination = .photos, preparedDestinations: Set<NativeTabDestination> = []) {
+        activeDestination = initialDestination
+        hydratedDestinations = [.photos, initialDestination]
         self.preparedDestinations = preparedDestinations
     }
 
@@ -86,7 +92,7 @@ final class TimelineRotationState {
     }
 }
 
-enum NativeTabDestination: Hashable {
+enum NativeTabDestination: String, Hashable {
     case photos
     case videos
     case albums

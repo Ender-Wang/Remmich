@@ -12,6 +12,8 @@ final class TimelineSemanticRuntime {
     weak var controller: TimelineSemanticCollectionController?
     var preparedOpeningCatalog: TimelineSemanticCatalog?
     var lastVisitedAssetID: String?
+    var pendingBrowsingPosition: TimelineBrowsingPosition?
+    var saveBrowsingPosition: ((TimelineBrowsingPosition?) -> Void)?
     fileprivate var browsingAnchor: TimelineRootReturnAnchor?
 
     func dismissalTarget(assetID: String, aspectRatio: Double) -> AssetViewerDismissalTarget? {
@@ -79,6 +81,7 @@ struct TimelineSemanticCollectionView: UIViewControllerRepresentable {
     let refresh: () async -> Void
     var loadOlder: () async -> Void = {}
     var focusChanged: (TimelineAssetSummary) -> Void = { _ in }
+    var browsingPositionChanged: ((TimelineAssetSummary?, CGFloat) -> Void)?
     var nearingEnd: (() -> Void)?
     var viewerBottomClearance: CGFloat?
 
@@ -708,7 +711,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (controller: TimelineSemanticCollectionController, _: UITraitCollection) in
             controller.rebuildForAppearance()
         }
-        NotificationCenter.default.addObserver(self, selector: #selector(interrupted), name: UIApplication.willResignActiveNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(applicationWillResignActive), name: UIApplication.willResignActiveNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(receivedMemoryWarning), name: UIApplication.didReceiveMemoryWarningNotification, object: nil)
     }
 
@@ -796,6 +799,17 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
                 collection.refreshControl = nil
             } else {
                 pendingRootReturn = value.runtime.browsingAnchor
+            }
+        }
+        if let position = value.runtime.pendingBrowsingPosition, value.isActive, value.scale.isAssets,
+           !value.catalog.assets.isEmpty
+        {
+            if pendingRootReturn == nil, value.catalog.assetIndexes[position.assetID] != nil {
+                pendingRootReturn = .init(assetID: position.assetID, viewportFraction: position.viewportFraction,
+                                          atLatest: false, atTop: false)
+                value.runtime.pendingBrowsingPosition = nil
+            } else if !value.isOpeningWindow {
+                value.runtime.pendingBrowsingPosition = nil
             }
         }
         if pendingRootReturn == nil, let previous, revision == value.revision, scale == value.scale,
@@ -2064,7 +2078,14 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         publishViewport()
     }
 
-    @objc private func interrupted() {
+    @objc private func applicationWillResignActive() {
+        if collection.isDragging || collection.isDecelerating {
+            persistBrowsingPosition()
+        }
+        interrupted()
+    }
+
+    private func interrupted() {
         cancelLatestScroll()
         collection?.setContentOffset(collection.contentOffset, animated: false)
         gesture = nil
@@ -2228,6 +2249,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
 
     func scrollViewDidEndDecelerating(_: UIScrollView) {
         applyOpeningHistoryAfterScroll()
+        persistBrowsingPosition()
         publishScrollGestureBoundary()
         viewportTask?.cancel()
         viewportTask = nil
@@ -2238,11 +2260,20 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
     func scrollViewDidEndDragging(_: UIScrollView, willDecelerate decelerate: Bool) {
         if !decelerate {
             applyOpeningHistoryAfterScroll()
+            persistBrowsingPosition()
             publishScrollGestureBoundary()
             viewportTask?.cancel()
             viewportTask = nil
             publishViewport(); loadOlderIfNeeded()
         }
+    }
+
+    private func persistBrowsingPosition() {
+        guard let input, input.isActive, view.window != nil, input.runtime.pendingBrowsingPosition == nil,
+              let save = input.browsingPositionChanged, let anchor = currentBrowsingAnchor(),
+              let catalog, let index = catalog.assetIndexes[anchor.assetID]
+        else { return }
+        save(anchor.atLatest ? nil : catalog.assets[index], min(1, max(0, anchor.viewportFraction)))
     }
 
     private func applyOpeningHistoryAfterScroll() {

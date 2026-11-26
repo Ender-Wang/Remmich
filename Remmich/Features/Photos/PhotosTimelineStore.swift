@@ -623,6 +623,15 @@ final class PhotosTimelineStore {
         return !Task.isCancelled && semanticAssetsByBucket[month]?.contains(where: { $0.id == asset.id }) == true
     }
 
+    func containsBrowsingAsset(_ assetID: String) -> Bool {
+        residencyAssetsByID[assetID] != nil
+    }
+
+    func loadBrowsingPositionBucket(_ position: TimelineBrowsingPosition) async {
+        guard !retainsPersistentBootstrap, !containsBrowsingAsset(position.assetID) else { return }
+        await loadBucket(position.bucketID)
+    }
+
     func prepareJump(to bucketID: TimelineBucketID) async -> Bool {
         if sectionsByID[bucketID] == nil,
            let summary = bucketSummaries.first(where: { $0.id == bucketID })

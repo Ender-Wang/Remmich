@@ -32,6 +32,7 @@ final class AppSessionController {
     private(set) var routeStatus: ConnectionRouteStatus = .waitingForNetwork
     private(set) var connectionProfile = ConnectionProfile()
     private(set) var savedAccounts: [AccountSession] = []
+    private(set) var browsing: AccountBrowsingState?
     private(set) var accountActionError: String?
     private(set) var isChangingAccount = false
     private var returnAccount: AccountSession?
@@ -509,6 +510,8 @@ final class AppSessionController {
         routeStatus = .waitingForNetwork
         validatedNetworkPathSignature = nil
         connectionProfile = .init()
+        browsing?.detach(deleteLocalData: deleteLocalData)
+        browsing = nil
         libraryIndex.suspend()
         locations.reset()
         media.clearAll()
@@ -907,6 +910,10 @@ final class AppSessionController {
         let generation = preparationGeneration
         let changed = await timeline.configure(session: session, activeEndpoint: endpoint, collectionStore: libraryIndexStore)
         guard preparationIsCurrent(generation) else { return false }
+        if browsing == nil {
+            let isFixture = ProcessInfo.processInfo.arguments.contains("-ui-testing-signed-in")
+            browsing = AccountBrowsingState(scope: isFixture ? nil : MediaAccountScope(session: session))
+        }
         if search == nil {
             search = SearchStore(source: timeline, scope: MediaAccountScope(session: session))
         }
@@ -1087,9 +1094,10 @@ final class AppSessionController {
             let events = media.openingPhotosEvents()
             photos.bootstrap(opening, openingWindow: true)
             foregroundResourcesReady = true
-            // Wait for a displayed tile before asking SQLite for the full catalog.
-            // A timeout also lets startup finish if the scene stops displaying Photos.
-            await TimelineOpeningWindow.waitForDisplay(events)
+            // Prioritize the first visible photo when Photos is the opening tab.
+            if (browsing?.navigation.selection ?? .photos) == .photos {
+                await TimelineOpeningWindow.waitForDisplay(events)
+            }
             guard preparationIsCurrent(generation) else { return }
             media.resumeOpeningPhotosHydration()
             await finishOpeningPhotosHistory(session: session, generation: generation)

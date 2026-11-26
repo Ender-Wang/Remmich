@@ -22,6 +22,14 @@ nonisolated struct AlbumScrollGeometry: Equatable {
     }
 }
 
+extension AlbumScrollGeometry {
+    init(_ geometry: ScrollGeometry) {
+        self.init(offset: max(0, geometry.contentOffset.y + geometry.contentInsets.top),
+                  topInset: geometry.contentInsets.top, viewportHeight: geometry.containerSize.height,
+                  contentHeight: geometry.contentSize.height, bottomInset: geometry.contentInsets.bottom)
+    }
+}
+
 enum AlbumScope: String, CaseIterable, Identifiable {
     case all = "All"
     case shared = "Shared"
@@ -92,6 +100,7 @@ struct AlbumsView: View {
     let assetDetails: any AssetDetailReading
     let activeEndpoint: URL?
     let scrollToLatestRequest: Int
+    private let browsing: AccountBrowsingState?
     let persistence: (any AlbumCatalogStoring)?
     let accountScope: MediaAccountScope?
     let viewerPresentations: AssetViewerPresentationStore
@@ -120,6 +129,7 @@ struct AlbumsView: View {
     @State private var reflowViewport = AlbumReflowViewport()
     @State private var pinchInteraction = AlbumPinchInteraction()
     @State private var listVisible = false
+    @State private var pendingBrowsingPosition: AlbumBrowsingPosition?
     @State private var transitionAlbumID: String?
     @State private var navigationRoot = CardNavigationRoot()
     @Namespace private var albumTransition
@@ -131,6 +141,7 @@ struct AlbumsView: View {
     init(store: AlbumsStore, source: any AlbumReading & TimelineReading, media: MediaLibraryController,
          assetDetails: any AssetDetailReading, activeEndpoint: URL?,
          scrollToLatestRequest: Int = 0,
+         browsing: AccountBrowsingState? = nil,
          persistence: (any AlbumCatalogStoring)? = nil, scope: MediaAccountScope? = nil,
          viewerPresentations: AssetViewerPresentationStore, tabSelectionState: NativeTabSelectionState,
          tabBarTop: Binding<CGFloat>, navigationPath: Binding<NavigationPath>, windowTopInset: CGFloat,
@@ -144,6 +155,8 @@ struct AlbumsView: View {
         self.assetDetails = assetDetails
         self.activeEndpoint = activeEndpoint
         self.scrollToLatestRequest = scrollToLatestRequest
+        self.browsing = browsing
+        _pendingBrowsingPosition = State(initialValue: browsing?.albumPosition)
         self.persistence = persistence
         accountScope = scope
         self.viewerPresentations = viewerPresentations
@@ -170,6 +183,10 @@ struct AlbumsView: View {
 
     private var canDismissSearchBySwipe: Bool {
         isSearchExpanded && listVisible && navigationPath.isEmpty && tabSelectionState.canActivateContent(in: .albums)
+    }
+
+    private var isBrowsingAllAlbums: Bool {
+        contentScope == .all && query.isEmpty && !isSearchExpanded && navigationPath.isEmpty
     }
 
     private var topClearance: CGFloat {
@@ -259,7 +276,12 @@ struct AlbumsView: View {
         let request = reorderGeneration
         let albums = filtered
         let openingHeight = metrics.height(count: albums.count, list: showsList)
-        let openingStart = openingHeight - max(0, viewportHeight) * CGFloat(TimelineGridOrder.openingScreenCount)
+        let openingExtent = max(0, viewportHeight) * CGFloat(TimelineGridOrder.openingScreenCount)
+        let bookmarkIndex = pendingBrowsingPosition.flatMap { saved in albums.firstIndex { $0.id == saved.albumID } }
+        let openingEnd = bookmarkIndex.map {
+            min(openingHeight, metrics.frame(at: $0, count: albums.count, list: showsList).midY + openingExtent / 2)
+        } ?? openingHeight
+        let openingStart = openingEnd - openingExtent
         return ScrollViewReader { proxy in
             ScrollView {
                 VStack(spacing: 16) {
@@ -282,7 +304,7 @@ struct AlbumsView: View {
                                 let frame = metrics.frame(at: index, count: albums.count, list: showsList)
                                 albumLink(album, compact: showsList, progress: albumLayoutProgress,
                                           metrics: metrics, proxy: proxy, generation: request,
-                                          initiallyMounted: frame.maxY > openingStart)
+                                          initiallyMounted: frame.maxY > openingStart && frame.minY < openingEnd)
                             }
                         }
                         .gesture(AlbumPinchGesture(enabled: listVisible && !voiceOverEnabled,
@@ -344,20 +366,24 @@ struct AlbumsView: View {
             }
             .onChange(of: scrollToLatestRequest) {
                 guard listVisible, !albums.isEmpty else { return }
+                pendingBrowsingPosition = nil
+                if isBrowsingAllAlbums {
+                    browsing?.saveAlbumPosition(nil)
+                }
                 cancelAlbumReflow()
                 scopeSlide.cancel(clearCache: true)
                 withAnimation(reduceMotion ? nil : .smooth(duration: 0.35)) { proxy.scrollTo(AlbumDiscoveryScrollTarget.content, anchor: .bottom) }
             }
-            .onScrollPhaseChange { _, phase in
+            .onScrollPhaseChange { previous, phase, context in
                 if phase == .interacting, !pinchInteraction.isActive {
+                    pendingBrowsingPosition = nil
                     reflowViewport.cancelMotion()
                 }
+                if phase == .idle, previous == .interacting || previous == .decelerating {
+                    saveBrowsingPosition(albums: albums, geometry: AlbumScrollGeometry(context.geometry))
+                }
             }
-            .onScrollGeometryChange(for: AlbumScrollGeometry.self) {
-                AlbumScrollGeometry(offset: max(0, $0.contentOffset.y + $0.contentInsets.top),
-                                    topInset: $0.contentInsets.top, viewportHeight: $0.containerSize.height,
-                                    contentHeight: $0.contentSize.height, bottomInset: $0.contentInsets.bottom)
-            } action: { old, new in
+            .onScrollGeometryChange(for: AlbumScrollGeometry.self, of: AlbumScrollGeometry.init) { old, new in
                 guard new.viewportHeight > 0 else { return }
                 scopeSlide.scrollChanged(scope: contentScope.rawValue, geometry: new)
                 if old.viewportHeight != new.viewportHeight || old.topInset != new.topInset || old.bottomInset != new.bottomInset {
@@ -366,6 +392,7 @@ struct AlbumsView: View {
                 // Reflow gestures still use the viewport below the
                 // header, even though the reserved space is now in the content.
                 reflowViewport.visibleHeight = max(0, new.viewportHeight - topClearance)
+                restoreBrowsingPosition(available: bookmarkIndex != nil, viewportHeight: new.viewportHeight, metrics: metrics, proxy: proxy)
             }
             .refreshable { await store.load() }
             .onChange(of: contentScope) {
@@ -377,7 +404,13 @@ struct AlbumsView: View {
                 }
                 scopeSlide.start()
             }
-            .onChange(of: Set(albums.map(\.id))) { _, _ in cancelAlbumReflow() }
+            .onChange(of: Set(albums.map(\.id))) { _, _ in
+                cancelAlbumReflow()
+                restoreBrowsingPosition(available: bookmarkIndex != nil, viewportHeight: viewportHeight, metrics: metrics, proxy: proxy)
+            }
+            .onChange(of: tabSelectionState.selection) {
+                restoreBrowsingPosition(available: bookmarkIndex != nil, viewportHeight: viewportHeight, metrics: metrics, proxy: proxy)
+            }
             .onChange(of: metrics) { _, _ in
                 cancelAlbumReflow()
                 scopeSlide.cancel(clearCache: true)
@@ -516,6 +549,33 @@ struct AlbumsView: View {
         .buttonStyle(.plain)
         .glassEffect(.regular.interactive(), in: .circle)
         .accessibilityLabel("Album Options")
+    }
+
+    private func restoreBrowsingPosition(available: Bool, viewportHeight: CGFloat, metrics: AlbumReflowMetrics,
+                                         proxy: ScrollViewProxy)
+    {
+        guard available, isBrowsingAllAlbums, tabSelectionState.selection == .albums,
+              viewportHeight > 0, let position = pendingBrowsingPosition else { return }
+        let itemHeight = metrics.itemSize(progress: albumLayoutProgress).height
+        let unitY = AlbumReflowAnchor.alignment(unitY: CGFloat(position.viewportFraction),
+                                                visibleSpace: viewportHeight - topClearance - itemHeight,
+                                                topClearance: topClearance)
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            proxy.scrollTo(position.albumID, anchor: UnitPoint(x: 0.5, y: unitY))
+            pendingBrowsingPosition = nil
+        }
+    }
+
+    private func saveBrowsingPosition(albums: [AlbumSummary], geometry: AlbumScrollGeometry) {
+        guard let browsing, listVisible, isBrowsingAllAlbums, tabSelectionState.canActivateContent(in: .albums),
+              !scopeSlide.isActive, !isReordering, !pinchInteraction.isActive else { return }
+        if geometry.bottomGap < 24 {
+            browsing.saveAlbumPosition(nil)
+        } else if let anchor = reflowViewport.anchor(in: albums.map(\.id)) {
+            browsing.saveAlbumPosition(.init(albumID: anchor.albumID, viewportFraction: Double(anchor.unitY)))
+        }
     }
 
     private func expandSearch() {

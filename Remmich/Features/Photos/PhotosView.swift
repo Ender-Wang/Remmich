@@ -464,7 +464,7 @@ struct PhotosView: View {
         _tabBarTop = tabBarTop
         self.rotationState = rotationState
         _semanticRuntime = State(initialValue: timelineRuntime ?? TimelineSemanticRuntime())
-        let preparedOpening = timelineRuntime?.preparedOpeningCatalog
+        let preparedOpening = timelineRuntime?.pendingBrowsingPosition == nil ? timelineRuntime?.preparedOpeningCatalog : nil
         _semanticCatalog = State(initialValue: preparedOpening)
         _semanticCatalogRevision = State(initialValue: preparedOpening == nil ? 0 : store.semanticContentRevision)
         _semanticCatalogIsOpeningWindow = State(initialValue: preparedOpening != nil)
@@ -745,7 +745,18 @@ struct PhotosView: View {
                 if openingWindow, semanticCatalogIsOpeningWindow, semanticCatalogRevision == revision {
                     return
                 }
-                if tabDestination == .videos, loadTimeline != nil, semanticCatalog == nil, !openingWindow {
+                if let position = semanticRuntime.pendingBrowsingPosition {
+                    if openingWindow, !store.containsBrowsingAsset(position.assetID) {
+                        // The newest cached window cannot place this bookmark. Read
+                        // the existing full index before showing the first viewport.
+                        await store.refresh()
+                        guard !Task.isCancelled, revision == store.semanticContentRevision else { return }
+                        semanticRuntime.pendingBrowsingPosition = nil
+                    } else if !openingWindow {
+                        await store.loadBrowsingPositionBucket(position)
+                        guard !Task.isCancelled, revision == store.semanticContentRevision else { return }
+                    }
+                } else if tabDestination == .videos, loadTimeline != nil, semanticCatalog == nil, !openingWindow {
                     await presentPreloadedVideoWindow(revision: revision)
                     guard !Task.isCancelled, revision == store.semanticContentRevision else { return }
                 }
@@ -790,6 +801,8 @@ struct PhotosView: View {
                     memoryViewerDismissalRequest &+= 1
                     return
                 }
+                semanticRuntime.pendingBrowsingPosition = nil
+                semanticRuntime.saveBrowsingPosition?(nil)
                 semanticLatestTask?.cancel()
                 semanticLatestTask = Task { @MainActor in
                     defer { store.completeJump(); semanticLatestTask = nil }
@@ -1085,7 +1098,8 @@ struct PhotosView: View {
                         },
                         focusChanged: { asset in
                             store.updateVisibleAnchor(.init(bucketID: semanticBucketID(for: asset), assetID: asset.id))
-                        }
+                        },
+                        browsingPositionChanged: browsingPositionChanged
                     )
                 } else {
                     Color.clear
@@ -1135,10 +1149,22 @@ struct PhotosView: View {
     }
 
     private var semanticCatalogBuildRevision: UInt64? {
+        if semanticRuntime.pendingBrowsingPosition != nil, !isTabContentActivated || store.loadState != .loaded {
+            return nil
+        }
         if semanticRuntime.preparedOpeningCatalog != nil, waitsForOpeningTile {
             return nil
         }
         return store.semanticContentRevision
+    }
+
+    private var browsingPositionChanged: ((TimelineAssetSummary?, CGFloat) -> Void)? {
+        guard let save = semanticRuntime.saveBrowsingPosition else { return nil }
+        return { asset, viewportFraction in
+            save(asset.map {
+                TimelineBrowsingPosition(assetID: $0.id, bucketID: semanticBucketID(for: $0), viewportFraction: Double(viewportFraction))
+            })
+        }
     }
 
     private var isTimelineContentLoading: Bool {

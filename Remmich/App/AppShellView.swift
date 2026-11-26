@@ -33,12 +33,9 @@ struct AppShellView: View {
     var primaryContentLoadingChanged: ((Bool) -> Void)?
     var sessionController: AppSessionController?
 
-    @State private var tabSelectionState = NativeTabSelectionState()
+    @State private var previewBrowsing = AccountBrowsingState()
     @State private var searchPath: [LibraryAssetCollection] = []
-    @State private var tabContentActivationState = NativeTabContentActivationState(preparedDestinations: [.library, .search])
     @State private var timelineRotationState = TimelineRotationState()
-    @State private var photosTimelineRuntime = TimelineSemanticRuntime()
-    @State private var videosTimelineRuntime = TimelineSemanticRuntime()
     @State private var tabBarTop: CGFloat = 0
     @State private var compactPhotosTabs = false
     @State private var compactVideosTabs = false
@@ -72,6 +69,26 @@ struct AppShellView: View {
     @State private var viewerPresentations = AssetViewerPresentationStore()
     @State private var photosContentLoading = true
     @State private var videosContentLoading = true
+
+    private var browsing: AccountBrowsingState {
+        sessionController?.browsing ?? previewBrowsing
+    }
+
+    private var tabSelectionState: NativeTabSelectionState {
+        browsing.navigation
+    }
+
+    private var tabContentActivationState: NativeTabContentActivationState {
+        browsing.activation
+    }
+
+    private var photosTimelineRuntime: TimelineSemanticRuntime {
+        browsing.photos
+    }
+
+    private var videosTimelineRuntime: TimelineSemanticRuntime {
+        browsing.videos
+    }
 
     var body: some View {
         @Bindable var navigation = tabSelectionState
@@ -212,6 +229,7 @@ struct AppShellView: View {
                             AlbumsView(store: store, source: albumSource, media: media, assetDetails: assetDetails,
                                        activeEndpoint: activeRoute?.endpoint,
                                        scrollToLatestRequest: albumsScrollRequest,
+                                       browsing: browsing,
                                        persistence: sessionController?.libraryIndexStore, scope: MediaAccountScope(session: session),
                                        viewerPresentations: viewerPresentations,
                                        tabSelectionState: tabSelectionState, tabBarTop: $tabBarTop,
@@ -444,8 +462,8 @@ struct AppShellView: View {
         .task(id: sessionController?.search.map(ObjectIdentifier.init), priority: .utility) {
             await sessionController?.search?.preloadLanding()
         }
-        .task(id: media.hasShownStartupPhoto || photos.loadState == .empty) {
-            guard let sessionController, media.hasShownStartupPhoto || photos.loadState == .empty else { return }
+        .task(id: mayPreloadTimelineTabs) {
+            guard let sessionController, mayPreloadTimelineTabs else { return }
             async let videoOpening: Void = prepareVideosOpening(using: sessionController)
             await prepareAlbumsOpening(in: overviewState, preloading: true)
             await videoOpening
@@ -550,6 +568,7 @@ struct AppShellView: View {
             pushLibraryCard(card)
         }
         .onChange(of: tabSelectionState.selection) { previous, current in
+            browsing.saveTab(current, groupedMediaOwner: groupedMediaOwner)
             if current != .search {
                 tabSelectionState.searchFocusRequest = nil
             }
@@ -661,7 +680,8 @@ struct AppShellView: View {
 
     private func prepareVideosOpening(using sessionController: AppSessionController) async {
         await sessionController.prepareVideosOpening()
-        guard !Task.isCancelled, !tabContentActivationState.isHydrated(.videos) else { return }
+        guard !Task.isCancelled, !tabContentActivationState.isHydrated(.videos),
+              videosTimelineRuntime.pendingBrowsingPosition == nil else { return }
         let limit = TimelineGridOrder.openingWindowLimit()
         let assets = videos.newestSemanticAssets(limit: limit)
         guard !assets.isEmpty else { return }
@@ -926,6 +946,10 @@ struct AppShellView: View {
                 || (albumsOverview.store?.isWaitingForInitialContent ?? true))
         default: return false
         }
+    }
+
+    private var mayPreloadTimelineTabs: Bool {
+        media.hasShownStartupPhoto || photos.loadState == .empty || tabSelectionState.selection != .photos
     }
 
     private var groupedMediaStore: PhotosTimelineStore {

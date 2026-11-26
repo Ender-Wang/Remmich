@@ -17,7 +17,7 @@ struct RootView: View {
             case .signingOut:
                 Color.clear
             case .signedIn where !controller.foregroundResourcesReady:
-                RestoringAppShellView()
+                RestoringAppShellView(destination: controller.browsing?.navigation.selection ?? .photos)
             case let .signedIn(session):
                 AppShellView(
                     session: session,
@@ -101,10 +101,14 @@ struct RootView: View {
 }
 
 private struct RestoringAppShellView: View {
-    @State private var selectionState = NativeTabSelectionState()
+    @State private var selectionState: NativeTabSelectionState
     @State private var activationState = NativeTabContentActivationState()
     @State private var rotationState = TimelineRotationState()
     @State private var tabBarTop: CGFloat = 0
+
+    init(destination: NativeTabDestination) {
+        _selectionState = State(initialValue: NativeTabSelectionState(selection: destination))
+    }
 
     var body: some View {
         @Bindable var navigation = selectionState
