@@ -418,6 +418,7 @@ struct PhotosView: View {
     @State private var semanticCatalog: TimelineSemanticCatalog?
     @State private var semanticCatalogRevision: UInt64 = 0
     @State private var semanticCatalogIsOpeningWindow = false
+    @State private var openingSkeletonPresented = false
     @State private var openingLoaderReleased = false
     @State private var semanticRuntime = TimelineSemanticRuntime()
     @State private var scopedAssetTransitions = ScopedAssetTransitionRuntime()
@@ -517,12 +518,20 @@ struct PhotosView: View {
             }
         }
         .overlay {
-            if showsOpeningSkeleton {
-                TimelineOpeningSkeleton(layout: presentation.preferences.assetLayout)
-                    .transition(.opacity)
+            ZStack {
+                if openingSkeletonPresented {
+                    TimelineOpeningSkeleton(layout: presentation.preferences.assetLayout)
+                        .transition(.opacity)
+                        .zIndex(1)
+                }
+            }
+            .allowsHitTesting(false)
+        }
+        .onChange(of: showsOpeningSkeleton, initial: true) { _, loading in
+            withAnimation(RemmichLoadingOverlay.fadeAnimation(presenting: loading, reduceMotion: reduceMotion)) {
+                openingSkeletonPresented = loading
             }
         }
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: showsOpeningSkeleton)
         .overlay {
             if loadingVisibilityChanged == nil, libraryMemories == nil {
                 LoadingStateView(isLoading: isTimelineContentLoading)
@@ -692,7 +701,6 @@ struct PhotosView: View {
     private var showsOpeningSkeleton: Bool {
         (tabDestination == .photos || tabDestination == .videos)
             && navigationPath.isEmpty && libraryMemories == nil && isTimelineContentLoading
-            && semanticCatalog?.assets.isEmpty != false
     }
 
     @ViewBuilder private var timelineWithNavigationBar: some View {

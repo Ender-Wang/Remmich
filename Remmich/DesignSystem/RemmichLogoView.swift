@@ -112,10 +112,13 @@ struct RemmichLoadingOverlay: View {
 
     private func setPresented(_ presented: Bool) {
         guard presented != isPresented else { return }
-        let curve: Animation = presented ? .easeInOut(duration: 0.2) : .easeOut(duration: 0.28)
-        let animation = reduceMotion ? nil : curve
-        withAnimation(animation) {
+        withAnimation(Self.fadeAnimation(presenting: presented, reduceMotion: reduceMotion)) {
             isPresented = presented
         }
+    }
+
+    static func fadeAnimation(presenting: Bool, reduceMotion: Bool) -> Animation? {
+        guard !reduceMotion else { return nil }
+        return presenting ? .easeInOut(duration: 0.2) : .easeOut(duration: 0.28)
     }
 }
