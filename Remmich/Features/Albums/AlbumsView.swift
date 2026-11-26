@@ -461,8 +461,10 @@ struct AlbumsView: View {
             ZStack(alignment: .leading) {
                 AlbumScopeControl(selection: Binding(get: { scope }, set: selectAlbumScope))
                     .frame(height: headerControlSize)
+                    .glassEffect(.regular, in: .capsule)
                     .padding(.horizontal, headerControlSize + spacing)
                     .opacity(isSearchExpanded ? 0 : 1)
+                    .animation(scopeVisibilityAnimation, value: isSearchExpanded)
                     .allowsHitTesting(!isSearchExpanded && !scopeSlide.isActive)
                     .accessibilityHidden(isSearchExpanded)
 
@@ -489,6 +491,12 @@ struct AlbumsView: View {
                     .accessibilityHidden(true)
             }
         }
+    }
+
+    private var scopeVisibilityAnimation: Animation? {
+        guard !reduceMotion, tabSelectionState.selection == .albums else { return nil }
+        // The search field covers the selector until it starts to contract.
+        return isSearchExpanded ? .easeOut(duration: 0.18) : .easeInOut(duration: 0.22).delay(0.12)
     }
 
     private func searchControl(width: CGFloat) -> some View {
