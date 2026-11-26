@@ -105,6 +105,9 @@ final class AlbumsStore {
         } catch {
             await cached
             guard !Task.isCancelled, request == generation, !(error is CancellationError) else { return }
+            if hasLoaded, (error as? TimelineReadError) == .routeUnavailable {
+                return
+            }
             errorMessage = error.localizedDescription
         }
     }

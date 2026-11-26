@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import Testing
 @testable import Remmich
@@ -98,6 +99,23 @@ struct AlbumsTests {
         #expect(tracker.update(offsetDelta: away.scrollDelta(from: bottom) ?? 0,
                                bottomGap: away.bottomGap, userScrolling: true,
                                programmaticJump: false) == true)
+    }
+
+    @Test func savedAlbumOpensAtTheStoredViewportFraction() {
+        let metrics = AlbumReflowMetrics.overview(availableWidth: 402, labelHeight: 57 + 2.0 / 3)
+        let viewportHeight: CGFloat = 791
+        let topClearance: CGFloat = 122
+        let padding: CGFloat = 16
+        let fraction: CGFloat = 0.647
+        let offset = metrics.openingOffset(at: 52, count: 68, list: false, fraction: fraction,
+                                           viewportHeight: viewportHeight, topClearance: topClearance, verticalPadding: padding)
+        let item = metrics.frame(at: 52, count: 68, list: false)
+        let visibleY = item.minY + padding + topClearance - offset
+        let recovered = (visibleY - topClearance) / (viewportHeight - topClearance - item.height)
+        #expect(abs(recovered - fraction) < 0.001)
+        let shortGridOffset = metrics.openingOffset(at: 0, count: 1, list: false, fraction: fraction,
+                                                    viewportHeight: viewportHeight, topClearance: topClearance, verticalPadding: padding)
+        #expect(shortGridOffset == 0)
     }
 
     private func album(_ id: String, name: String, count: Int = 0,

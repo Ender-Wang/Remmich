@@ -58,31 +58,57 @@ private struct AlbumScopeCaptureKey: Equatable {
 }
 
 struct AlbumsOpeningSkeleton: View {
-    var topClearance: CGFloat?
-
     var body: some View {
         GeometryReader { geometry in
             let metrics = AlbumReflowMetrics.overview(availableWidth: geometry.size.width)
-            let top = topClearance ?? (geometry.safeAreaInsets.top + 60)
-            let rows = max(1, min(6, Int(ceil(max(0, geometry.size.height - top) / (metrics.cardHeight + 20)))))
-            AlbumReflowLayout(progress: 0, metrics: metrics) {
-                ForEach(0 ..< rows * metrics.columns, id: \.self) { _ in
-                    VStack(alignment: .leading, spacing: 8) {
-                        RoundedRectangle(cornerRadius: 12).fill(.quaternary)
-                            .frame(width: metrics.coverWidth, height: metrics.coverWidth * 0.75)
-                        Capsule().fill(.quaternary).frame(width: metrics.coverWidth * 0.55, height: 12)
-                        Capsule().fill(.quaternary).frame(width: metrics.coverWidth * 0.33, height: 8)
+            let coverHeight = metrics.coverWidth * 0.75
+            let rows = max(1, Int(ceil(geometry.size.height / (coverHeight + 20))))
+            VStack(alignment: .leading, spacing: 20) {
+                ForEach(0 ..< rows, id: \.self) { _ in
+                    HStack(spacing: 16) {
+                        ForEach(0 ..< metrics.columns, id: \.self) { _ in
+                            VStack(spacing: 8) {
+                                RoundedRectangle(cornerRadius: DesignMetrics.defaultCornerRadius).fill(.quaternary)
+                                    .frame(width: metrics.coverWidth, height: coverHeight)
+                                AlbumOpeningLabels(width: metrics.coverWidth)
+                            }
+                        }
                     }
-                    .frame(maxHeight: .infinity, alignment: .top)
                 }
             }
-            .padding(.top, top + 16)
-            .padding(.bottom, 16)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding([.horizontal, .bottom], 16)
+            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .bottomLeading)
             .clipped()
         }
+        .ignoresSafeArea(.container, edges: .top)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+}
+
+private struct AlbumOpeningScroll<Content: View>: View {
+    let initialOffset: CGFloat?
+    @ViewBuilder let content: Content
+    @State private var position: ScrollPosition
+    @State private var initialAnchor: UnitPoint
+
+    init(initialOffset: CGFloat?, @ViewBuilder content: () -> Content) {
+        self.initialOffset = initialOffset
+        self.content = content()
+        _position = State(initialValue: initialOffset.map { ScrollPosition(y: $0) } ?? ScrollPosition())
+        _initialAnchor = State(initialValue: initialOffset == nil ? .bottom : .top)
+    }
+
+    var body: some View {
+        ScrollView { content }
+            .defaultScrollAnchor(initialAnchor, for: .initialOffset)
+            .defaultScrollAnchor(.bottom, for: .alignment)
+            .scrollPosition($position)
+            .onChange(of: initialOffset) { _, offset in
+                guard let offset else { return }
+                position.scrollTo(y: offset)
+            }
     }
 }
 
@@ -109,7 +135,7 @@ struct AlbumsView: View {
     @Binding private var navigationPath: NavigationPath
     let windowTopInset: CGFloat
     let showsLoadingOverlay: Bool
-    let openingLayoutMeasured: () -> Void
+    let openingContentReady: () -> Void
     let openAlbum: (AlbumSummary, Bool) -> Void
     let showAccount: () -> Void
     private let store: AlbumsStore
@@ -130,6 +156,7 @@ struct AlbumsView: View {
     @State private var pinchInteraction = AlbumPinchInteraction()
     @State private var listVisible = false
     @State private var pendingBrowsingPosition: AlbumBrowsingPosition?
+    @State private var hasOpenedGrid = false
     @State private var transitionAlbumID: String?
     @State private var navigationRoot = CardNavigationRoot()
     @Namespace private var albumTransition
@@ -137,6 +164,7 @@ struct AlbumsView: View {
     @State private var scopeSlide = AlbumScopeSlide()
     @FocusState private var searchFocused: Bool
     private let headerControlSize: CGFloat = 44
+    private static let contentVerticalPadding: CGFloat = 16
 
     init(store: AlbumsStore, source: any AlbumReading & TimelineReading, media: MediaLibraryController,
          assetDetails: any AssetDetailReading, activeEndpoint: URL?,
@@ -146,7 +174,7 @@ struct AlbumsView: View {
          viewerPresentations: AssetViewerPresentationStore, tabSelectionState: NativeTabSelectionState,
          tabBarTop: Binding<CGFloat>, navigationPath: Binding<NavigationPath>, windowTopInset: CGFloat,
          showsLoadingOverlay: Bool = true,
-         openingLayoutMeasured: @escaping () -> Void,
+         openingContentReady: @escaping () -> Void,
          openAlbum: @escaping (AlbumSummary, Bool) -> Void,
          showAccount: @escaping () -> Void)
     {
@@ -165,7 +193,7 @@ struct AlbumsView: View {
         _navigationPath = navigationPath
         self.windowTopInset = windowTopInset
         self.showsLoadingOverlay = showsLoadingOverlay
-        self.openingLayoutMeasured = openingLayoutMeasured
+        self.openingContentReady = openingContentReady
         self.openAlbum = openAlbum
         self.showAccount = showAccount
         self.store = store
@@ -197,26 +225,35 @@ struct AlbumsView: View {
         max(headerControlSize, headerTextHeight + 12)
     }
 
+    private var showsOpeningSkeleton: Bool {
+        albumLabelHeight == nil || store.isWaitingForInitialContent || (!store.albums.isEmpty && !hasOpenedGrid)
+    }
+
     var body: some View {
         GeometryReader { geometry in
             let viewportWidth = geometry.size.width
             let viewportHeight = geometry.size.height
-            Group {
-                // The initial bottom anchor needs the complete padded extent,
-                // including the measured label height, at the first layout.
+            ZStack {
+                if showsOpeningSkeleton {
+                    AlbumsOpeningSkeleton()
+                        .transition(.opacity)
+                }
                 if let albumLabelHeight, !store.isWaitingForInitialContent {
                     albumContent(availableWidth: viewportWidth, viewportHeight: viewportHeight, labelHeight: albumLabelHeight)
-                } else {
-                    AlbumsOpeningSkeleton(topClearance: topClearance)
+                        .opacity(showsOpeningSkeleton ? 0 : 1)
+                        .allowsHitTesting(!showsOpeningSkeleton)
+                        .accessibilityHidden(showsOpeningSkeleton)
                 }
             }
+            .animation(RemmichLoadingOverlay.fadeAnimation(presenting: showsOpeningSkeleton, reduceMotion: reduceMotion),
+                       value: showsOpeningSkeleton)
             .frame(width: viewportWidth)
             .overlay(alignment: .top) {
                 albumHeader(metrics: AlbumReflowMetrics.overview(availableWidth: viewportWidth, labelHeight: albumLabelHeight ?? 58))
+                    .allowsHitTesting(!showsOpeningSkeleton)
             }
             .overlay(alignment: .topLeading) {
-                AlbumLabelMeasurement()
-                    .frame(width: AlbumReflowMetrics.overview(availableWidth: viewportWidth).coverWidth)
+                AlbumOpeningLabels(width: AlbumReflowMetrics.overview(availableWidth: viewportWidth).coverWidth)
                     .hidden()
                     .onGeometryChange(for: CGFloat.self) {
                         viewportWidth > 0 && viewportHeight > 0 ? $0.size.height : 0
@@ -225,11 +262,7 @@ struct AlbumsView: View {
                         if let albumLabelHeight, abs(albumLabelHeight - height) <= 0.01 {
                             return
                         }
-                        let isFirstMeasurement = albumLabelHeight == nil
                         albumLabelHeight = height
-                        if isFirstMeasurement {
-                            openingLayoutMeasured()
-                        }
                     }
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
@@ -241,7 +274,12 @@ struct AlbumsView: View {
         .scrollDismissesKeyboard(.interactively)
         .overlay {
             if showsLoadingOverlay {
-                LoadingStateView(isLoading: store.isWaitingForInitialContent || albumLabelHeight == nil, label: "Loading albums")
+                LoadingStateView(isLoading: showsOpeningSkeleton, label: "Loading albums")
+            }
+        }
+        .onChange(of: showsOpeningSkeleton, initial: true) { _, loading in
+            if !loading {
+                openingContentReady()
             }
         }
         .toolbar(.hidden, for: .navigationBar)
@@ -282,14 +320,15 @@ struct AlbumsView: View {
             min(openingHeight, metrics.frame(at: $0, count: albums.count, list: showsList).midY + openingExtent / 2)
         } ?? openingHeight
         let openingStart = openingEnd - openingExtent
+        let openingOffset = hasOpenedGrid ? nil : bookmarkIndex.flatMap { index in
+            pendingBrowsingPosition.map { position in
+                metrics.openingOffset(at: index, count: albums.count, list: showsList, fraction: CGFloat(position.viewportFraction),
+                                      viewportHeight: viewportHeight, topClearance: topClearance, verticalPadding: Self.contentVerticalPadding)
+            }
+        }
         return ScrollViewReader { proxy in
-            ScrollView {
+            AlbumOpeningScroll(initialOffset: openingOffset) {
                 VStack(spacing: 16) {
-                    if let error = store.errorMessage, !store.albums.isEmpty {
-                        Button { Task { await store.load() } } label: {
-                            Label(error, systemImage: "arrow.clockwise").font(.callout)
-                        }.padding(.horizontal)
-                    }
                     if store.errorMessage != nil, !store.hasLoaded {
                         ErrorStateView(title: "Couldn’t Load Albums") { Task { await store.load() } }
                     } else if albums.isEmpty {
@@ -329,7 +368,7 @@ struct AlbumsView: View {
                         .animation(isReordering && !pinchInteraction.isActive && !reduceMotion ? .smooth(duration: 0.35) : nil, value: request)
                     }
                 }
-                .padding(.vertical)
+                .padding(.vertical, Self.contentVerticalPadding)
                 // Count header clearance in the scroll extent from the first
                 // layout, so attachment cannot rebase the bottom offset.
                 .padding(.top, topClearance)
@@ -343,8 +382,6 @@ struct AlbumsView: View {
             }
             .scrollDisabled(pinchInteraction.isActive)
             .contentMargins(.top, topClearance, for: .scrollIndicators)
-            .defaultScrollAnchor(.bottom, for: .initialOffset)
-            .defaultScrollAnchor(.bottom, for: .alignment)
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
                 reflowViewport.frame = frame
             }
@@ -392,9 +429,24 @@ struct AlbumsView: View {
                 // Reflow gestures still use the viewport below the
                 // header, even though the reserved space is now in the content.
                 reflowViewport.visibleHeight = max(0, new.viewportHeight - topClearance)
-                restoreBrowsingPosition(available: bookmarkIndex != nil, viewportHeight: new.viewportHeight, metrics: metrics, proxy: proxy)
+                if !hasOpenedGrid, !albums.isEmpty, openingOffset.map({ abs($0 - new.offset) <= 1 }) ?? true {
+                    hasOpenedGrid = true
+                }
             }
             .refreshable { await store.load() }
+            .overlay(alignment: .top) {
+                if let error = store.errorMessage, !store.albums.isEmpty {
+                    Button { Task { await store.load() } } label: {
+                        Label(error, systemImage: "arrow.clockwise")
+                            .font(.callout)
+                            .padding(8)
+                            .background(.regularMaterial, in: .capsule)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal)
+                    .padding(.top, topClearance)
+                }
+            }
             .onChange(of: contentScope) {
                 cancelAlbumReflow()
                 // A scope is a new collection. Sort/mode changes continue to
@@ -406,10 +458,6 @@ struct AlbumsView: View {
             }
             .onChange(of: Set(albums.map(\.id))) { _, _ in
                 cancelAlbumReflow()
-                restoreBrowsingPosition(available: bookmarkIndex != nil, viewportHeight: viewportHeight, metrics: metrics, proxy: proxy)
-            }
-            .onChange(of: tabSelectionState.selection) {
-                restoreBrowsingPosition(available: bookmarkIndex != nil, viewportHeight: viewportHeight, metrics: metrics, proxy: proxy)
             }
             .onChange(of: metrics) { _, _ in
                 cancelAlbumReflow()
@@ -452,6 +500,7 @@ struct AlbumsView: View {
             }
             .animation(nil, value: isSearchExpanded)
         }
+        .id(!hasOpenedGrid && albums.isEmpty)
     }
 
     private func albumHeader(metrics: AlbumReflowMetrics) -> some View {
@@ -557,23 +606,6 @@ struct AlbumsView: View {
         .buttonStyle(.plain)
         .glassEffect(.regular.interactive(), in: .circle)
         .accessibilityLabel("Album Options")
-    }
-
-    private func restoreBrowsingPosition(available: Bool, viewportHeight: CGFloat, metrics: AlbumReflowMetrics,
-                                         proxy: ScrollViewProxy)
-    {
-        guard available, isBrowsingAllAlbums, tabSelectionState.selection == .albums,
-              viewportHeight > 0, let position = pendingBrowsingPosition else { return }
-        let itemHeight = metrics.itemSize(progress: albumLayoutProgress).height
-        let unitY = AlbumReflowAnchor.alignment(unitY: CGFloat(position.viewportFraction),
-                                                visibleSpace: viewportHeight - topClearance - itemHeight,
-                                                topClearance: topClearance)
-        var transaction = Transaction(animation: nil)
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            proxy.scrollTo(position.albumID, anchor: UnitPoint(x: 0.5, y: unitY))
-            pendingBrowsingPosition = nil
-        }
     }
 
     private func saveBrowsingPosition(albums: [AlbumSummary], geometry: AlbumScrollGeometry) {
@@ -1142,12 +1174,24 @@ private struct AlbumSearchDismissSwipe: UIGestureRecognizerRepresentable {
     }
 }
 
-private struct AlbumLabelMeasurement: View {
+private struct AlbumOpeningLabels: View {
+    let width: CGFloat
+
     var body: some View {
         VStack(spacing: 4) {
             Text("1 item").font(.caption).lineLimit(1)
+                .hidden()
+                .overlay {
+                    Capsule().fill(.quaternary).frame(width: width * 0.37, height: 6)
+                }
             Text("Album").font(.headline).lineLimit(2, reservesSpace: true)
+                .hidden()
+                .overlay(alignment: .top) {
+                    Capsule().fill(.tertiary).frame(width: width * 0.62, height: 9)
+                        .padding(.top, 4)
+                }
         }
+        .frame(width: width)
     }
 }
 

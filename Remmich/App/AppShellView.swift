@@ -9,7 +9,7 @@ import UIKit
 private final class AlbumsOverviewState {
     var store: AlbumsStore?
     var windowTopInset: CGFloat?
-    var hasMeasuredOpeningLayout = false
+    var hasRevealedOpeningContent = false
 }
 
 struct AppShellView: View {
@@ -236,7 +236,7 @@ struct AppShellView: View {
                                        navigationPath: $albumsPath,
                                        windowTopInset: windowTopInset,
                                        showsLoadingOverlay: primaryContentLoadingChanged == nil,
-                                       openingLayoutMeasured: { overviewState.hasMeasuredOpeningLayout = true },
+                                       openingContentReady: { overviewState.hasRevealedOpeningContent = true },
                                        openAlbum: openAlbum,
                                        showAccount: showAccount)
                         }
@@ -942,7 +942,7 @@ struct AppShellView: View {
         case .videos: return videosPath.isEmpty && videosContentLoading
         case .albums:
             return albumsPath.isEmpty && (!tabContentActivationState.isHydrated(.albums)
-                || !albumsOverview.hasMeasuredOpeningLayout
+                || !albumsOverview.hasRevealedOpeningContent
                 || (albumsOverview.store?.isWaitingForInitialContent ?? true))
         default: return false
         }
