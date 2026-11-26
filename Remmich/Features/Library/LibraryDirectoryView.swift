@@ -107,8 +107,12 @@ final class LibraryDirectoryStore {
     private var nextBucket = 0
     private var places: Set<TimelinePlace> = []
 
+    var hasContent: Bool {
+        indexedPlaceCount.map { $0 > 0 } ?? !entries.isEmpty
+    }
+
     var isConfirmedEmpty: Bool {
-        indexedPlaceCount.map { $0 == 0 } ?? (finished && entries.isEmpty)
+        (indexedPlaceCount != nil || finished) && !hasContent
     }
 
     var placeCovers: [TimelineAssetSummary] {

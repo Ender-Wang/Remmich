@@ -53,7 +53,7 @@ struct LibraryView: View {
                 LibraryHubScrollView {
                     VStack(alignment: .leading, spacing: 16) {
                         LibraryHubCardLayout {
-                            if let exports, !exports.ready || !exports.jobs.isEmpty {
+                            if let exports, !exports.jobs.isEmpty {
                                 let newest = exports.latestCompletedDownload
                                 LibraryHubLink {
                                     DownloadsView(exports: exports)
@@ -81,17 +81,17 @@ struct LibraryView: View {
                                 collectionCard(.recentlyTaken, source: collectionSource, media: media, assetDetails: assetDetails)
                                 collectionCard(.recentlyAdded, source: collectionSource, media: media, assetDetails: assetDetails)
                                 collectionCard(.favorites, source: collectionSource, media: media, assetDetails: assetDetails)
-                                if preferences?.memoriesEnabled == true, !opening.memories.isConfirmedEmpty {
+                                if preferences?.memoriesEnabled == true, opening.memories.hasContent {
                                     LibraryMemoriesCard(source: collectionSource, media: media, assetDetails: assetDetails,
                                                         context: collectionNavigation, catalog: opening.memories,
                                                         rotationEnabled: hubReadyForRotation && !accountContentMounted && navigationPath.isEmpty
                                                             && (tabSelectionState?.canActivateContent(in: .library) ?? true))
                                 }
-                                if preferences?.peopleEnabled == true, !opening.people.isConfirmedEmpty {
+                                if preferences?.peopleEnabled == true, opening.people.hasContent {
                                     LibraryDirectoryCard(directory: .people, source: collectionSource, media: media,
                                                          assetDetails: assetDetails, context: collectionNavigation, store: opening.people)
                                 }
-                                if !opening.places.isConfirmedEmpty || opening.placesCover.hasGeotags != false {
+                                if opening.places.hasContent || opening.placesCover.hasGeotags == true {
                                     LibraryDirectoryCard(directory: .places, source: collectionSource, media: media,
                                                          assetDetails: assetDetails, context: collectionNavigation, store: opening.places,
                                                          heatmap: opening.placesCover.image, placesMapSource: sessionController.map {
@@ -99,15 +99,15 @@ struct LibraryView: View {
                                                                                     scope: MediaAccountScope(session: session), index: libraryIndex)
                                                          })
                                 }
-                                if preferences?.sharedLinksEnabled == true, opening.links.links?.isEmpty != true {
+                                if preferences?.sharedLinksEnabled == true, opening.links.links?.isEmpty == false {
                                     LibrarySharedLinksCard(source: collectionSource, media: media, assetDetails: assetDetails,
                                                            context: collectionNavigation, store: opening.links)
                                 }
-                                if !opening.partners.isConfirmedEmpty {
+                                if opening.partners.hasContent {
                                     LibraryDirectoryCard(directory: .partners, source: collectionSource, media: media,
                                                          assetDetails: assetDetails, context: collectionNavigation, store: opening.partners)
                                 }
-                                if preferences?.foldersEnabled == true, opening.folders.tree?.children(of: nil).isEmpty != true {
+                                if preferences?.foldersEnabled == true, opening.folders.tree?.children(of: nil).isEmpty == false {
                                     LibraryFoldersCard(source: collectionSource, media: media, assetDetails: assetDetails,
                                                        context: collectionNavigation, store: opening.folders)
                                 }
@@ -230,7 +230,7 @@ struct LibraryView: View {
     private var showsOnDeviceCard: Bool {
         switch savedPhotos.state {
         case .missing: false
-        case .ready: savedPhotos.limited || !savedPhotos.items.isEmpty
+        case .loading, .ready: savedPhotos.limited || !savedPhotos.items.isEmpty
         default: true
         }
     }
@@ -269,7 +269,7 @@ struct LibraryView: View {
     @ViewBuilder private func collectionCard(_ collection: LibraryAssetCollection, source: ImmichTimelineRepository,
                                              media: MediaLibraryController, assetDetails: any AssetDetailReading) -> some View
     {
-        if opening.previews[collection]?.isEmpty != true {
+        if opening.previews[collection]?.isEmpty == false {
             LibraryHubLink {
                 let camera = sessionController.map {
                     LibraryCameraMetadata(store: $0.libraryIndexStore, scope: MediaAccountScope(session: session), details: $0.persistentAssetDetails)

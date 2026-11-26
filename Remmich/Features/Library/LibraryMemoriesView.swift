@@ -19,8 +19,12 @@ final class LibraryMemoriesStore {
     private var page = 1
     private var pageSize = 24
 
+    var hasContent: Bool {
+        !previewCovers.isEmpty || !memories.isEmpty
+    }
+
     var isConfirmedEmpty: Bool {
-        coversFinished && previewCovers.isEmpty && memories.isEmpty
+        coversFinished && !hasContent
     }
 
     var covers: [LibraryMemoryCover] {
@@ -42,8 +46,9 @@ final class LibraryMemoriesStore {
     }
 
     func loadCovers(from source: ImmichTimelineRepository) async {
-        guard coverPage == 1, !coversFinished else { return }
-        _ = await loadCoverPage(from: source)
+        while !hasContent, !coversFinished, !Task.isCancelled {
+            guard await loadCoverPage(from: source) else { return }
+        }
     }
 
     func loadRemainingCovers(from source: ImmichTimelineRepository) async {
