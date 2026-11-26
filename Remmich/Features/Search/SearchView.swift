@@ -17,6 +17,7 @@ struct SearchView: View {
     let libraryOpening: LibraryOpeningState
     let libraryCamera: LibraryCameraMetadata?
     let editingChanged: (Bool) -> Void
+    private let browsing: AccountBrowsingState?
     @Binding var tabBarTop: CGFloat
 
     let store: SearchStore
@@ -24,7 +25,7 @@ struct SearchView: View {
     @State private var viewerScope = AssetTransitionScope.search
     @State private var transitions = ScopedAssetTransitionRuntime()
     @State private var focus = SearchInputFocus()
-    @State private var resultScale = TimelineSemanticScale.square
+    @State private var resultScale: TimelineSemanticScale
     @State private var resultTimeline = TimelineSemanticRuntime()
     @State private var departingResults: RankedResultsPresentation?
     @State private var toolbarHeight: CGFloat = 0
@@ -126,6 +127,9 @@ struct SearchView: View {
         self.libraryOpening = libraryOpening
         self.libraryCamera = libraryCamera
         self.editingChanged = editingChanged
+        let browsing = sessionController.browsing
+        self.browsing = browsing
+        _resultScale = State(initialValue: browsing?.searchResultsLayout == .naturalAspect ? .natural : .square)
         _tabBarTop = tabBarTop
     }
 
@@ -980,7 +984,10 @@ struct SearchView: View {
             additionalHiddenBadgeIDs: hiddenBadgeIDs(for: .search),
             selectAsset: { openViewer($0, assets: $1, scope: .search) },
             selectGroup: { _, _ in },
-            scaleChanged: { resultScale = $0 },
+            scaleChanged: { scale in
+                resultScale = scale
+                browsing?.saveSearchResultsLayout(scale == .natural ? .naturalAspect : .square)
+            },
             scrolled: { _, _, _ in
                 if isCurrent, viewerPresentations.hasReturningEntries(ownerID: viewerOwner) {
                     viewerPresentations.updateReturningSources(ownerID: viewerOwner)

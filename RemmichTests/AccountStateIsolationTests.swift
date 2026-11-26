@@ -96,13 +96,18 @@ struct AccountStateIsolationTests {
         first.photos.saveBrowsingPosition?(photo)
         first.videos.saveBrowsingPosition?(video)
         first.saveAlbumPosition(album)
+        first.saveSearchResultsLayout(.naturalAspect)
+        first.detach(deleteLocalData: false)
+        first.saveSearchResultsLayout(.square)
 
         let second = AccountBrowsingState(scope: secondScope, defaults: defaults)
         #expect(second.navigation.selection == .photos)
         #expect(second.photos.pendingBrowsingPosition == nil)
         #expect(second.videos.pendingBrowsingPosition == nil)
         #expect(second.albumPosition == nil)
+        #expect(second.searchResultsLayout == .square)
         second.saveTab(.weeks, groupedMediaOwner: .videos)
+        second.saveSearchResultsLayout(.naturalAspect)
 
         let restored = AccountBrowsingState(scope: firstScope, defaults: defaults)
         #expect(restored.navigation.selection == .search)
@@ -111,20 +116,24 @@ struct AccountStateIsolationTests {
         #expect(restored.photos.pendingBrowsingPosition == photo)
         #expect(restored.videos.pendingBrowsingPosition == video)
         #expect(restored.albumPosition == album)
+        #expect(restored.searchResultsLayout == .naturalAspect)
 
         restored.detach(deleteLocalData: true)
         restored.photos.saveBrowsingPosition?(photo)
         restored.saveAlbumPosition(album)
         restored.saveTab(.library, groupedMediaOwner: .photos)
+        restored.saveSearchResultsLayout(.naturalAspect)
         let cleared = AccountBrowsingState(scope: firstScope, defaults: defaults)
         #expect(cleared.navigation.selection == .photos)
         #expect(cleared.photos.pendingBrowsingPosition == nil)
         #expect(cleared.videos.pendingBrowsingPosition == nil)
         #expect(cleared.albumPosition == nil)
+        #expect(cleared.searchResultsLayout == .square)
 
         let restoredSecond = AccountBrowsingState(scope: secondScope, defaults: defaults)
         #expect(restoredSecond.navigation.selection == .videos)
         #expect(restoredSecond.activation.isHydrated(.videos))
+        #expect(restoredSecond.searchResultsLayout == .naturalAspect)
     }
 
     @Test(arguments: [false, true])

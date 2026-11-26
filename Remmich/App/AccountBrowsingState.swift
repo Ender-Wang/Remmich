@@ -43,6 +43,16 @@ final class AccountBrowsingState {
         defaults.set(destination.rawValue, forKey: keyPrefix + "tab")
     }
 
+    var searchResultsLayout: PhotosAssetLayout {
+        guard let keyPrefix, let stored = defaults.string(forKey: keyPrefix + "search.layout") else { return .square }
+        return PhotosAssetLayout(rawValue: stored) ?? .square
+    }
+
+    func saveSearchResultsLayout(_ layout: PhotosAssetLayout) {
+        guard let keyPrefix else { return }
+        defaults.set(layout.rawValue, forKey: keyPrefix + "search.layout")
+    }
+
     var albumPosition: AlbumBrowsingPosition? {
         guard let keyPrefix, let data = defaults.data(forKey: keyPrefix + "albums.position"),
               let position = try? JSONDecoder().decode(AlbumBrowsingPosition.self, from: data),
@@ -73,6 +83,7 @@ final class AccountBrowsingState {
         guard let keyPrefix else { return }
         if deleteLocalData {
             defaults.removeObject(forKey: keyPrefix + "tab")
+            defaults.removeObject(forKey: keyPrefix + "search.layout")
             savePosition(nil, in: .photos)
             savePosition(nil, in: .videos)
             saveAlbumPosition(nil)
