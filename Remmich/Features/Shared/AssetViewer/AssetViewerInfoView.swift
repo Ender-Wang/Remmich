@@ -113,10 +113,11 @@ nonisolated struct AssetViewerVideoPlaybackMetadata: Equatable, Sendable {
     let videoBitrate: Double?
     let audioCodec: String?
     let dynamicRange: AssetViewerVideoDynamicRange
+    var source: MediaExportTier = .playback
 
     var fileDescription: String {
-        guard let fileSizeBytes, fileSizeBytes > 0 else { return "Playback" }
-        return "Playback · \(ByteCountFormatter.string(fromByteCount: Int64(fileSizeBytes), countStyle: .file))"
+        guard let fileSizeBytes, fileSizeBytes > 0 else { return source.rawValue }
+        return "\(source.rawValue) · \(ByteCountFormatter.string(fromByteCount: Int64(fileSizeBytes), countStyle: .file))"
     }
 
     var displayText: String {

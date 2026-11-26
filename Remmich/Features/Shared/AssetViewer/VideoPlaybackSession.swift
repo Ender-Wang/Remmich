@@ -97,6 +97,8 @@ final class VideoPlaybackSession {
     private(set) var generation = 0
     private(set) var isClosed = false
     private(set) var isPictureInPictureEngaged = false
+    private(set) var quality: MediaExportTier = .playback
+    private(set) var isSwitchingQuality = false
 
     private let audioSession: any ViewerAudioSessionControlling
     private var streamSource: AuthenticatedVideoStreamSource?
@@ -169,48 +171,12 @@ final class VideoPlaybackSession {
         resumesPreparationAfterSuspension = false
 
         do {
-            let local: AVPlayerItem? = if let library = media.savedPhotosLibrary {
-                try await savedVideoItem(in: library)
-            } else if let revision {
-                try await media.exports.localVideoAsset(assetID: assetID, revision: revision, tier: .playback)
-                    .map { AVPlayerItem(asset: $0) }
-            } else {
-                nil
+            let (item, source) = try await makeItem(using: media, tier: quality, generation: preparationGeneration)
+            guard accepts(generation: preparationGeneration), !Task.isCancelled else {
+                source?.invalidate()
+                return
             }
-            guard accepts(generation: preparationGeneration) else { return }
-            let item: AVPlayerItem
-            if let local {
-                item = local
-            } else {
-                let configuration = try media.videoStreamConfiguration(assetID: assetID)
-                let source = try AuthenticatedVideoStreamSource(
-                    configuration: configuration,
-                    contentLengthChanged: { [weak self] length in
-                        Task { @MainActor [weak self] in
-                            self?.updateContentLength(length, generation: preparationGeneration)
-                        }
-                    }
-                )
-                guard accepts(generation: preparationGeneration) else {
-                    source.invalidate()
-                    return
-                }
-
-                item = AVPlayerItem(asset: source.asset)
-                streamSource = source
-            }
-            applyNowPlayingMetadata(to: item)
-            item.preferredForwardBufferDuration = 0
-            playerItem = item
-            installObservers(for: item, generation: preparationGeneration)
-            player.replaceCurrentItem(with: item)
-            installPeriodicTimeObserver(generation: preparationGeneration)
-            metadataTask = Task { @MainActor [weak self] in
-                await self?.loadMetadata(
-                    from: item.asset,
-                    generation: preparationGeneration
-                )
-            }
+            installItem(item, source: source, generation: preparationGeneration)
             if !autoplay {
                 phase = .paused
             }
@@ -219,6 +185,105 @@ final class VideoPlaybackSession {
             return
         } catch {
             fail(error, generation: preparationGeneration)
+        }
+    }
+
+    func switchQuality(to tier: MediaExportTier, using media: MediaLibraryController) async throws {
+        guard tier == .playback || tier == .original,
+              tier != quality, media.savedPhotosLibrary == nil,
+              !isClosed, !isSwitchingQuality, !isPictureInPictureEngaged,
+              phase == .playing || phase == .paused
+        else { return }
+        isSwitchingQuality = true
+        defer { isSwitchingQuality = false }
+        let currentGeneration = generation
+        let nextGeneration = currentGeneration + 1
+        let scope = media.scope
+        let (item, source) = try await makeItem(using: media, tier: tier, generation: nextGeneration)
+        var installed = false
+        defer {
+            if !installed {
+                source?.invalidate()
+            }
+        }
+
+        // An AVPlayerItem is owned by one player. Share the asset with the
+        // readiness check and reserve the new playback item for the viewer.
+        let probeItem = AVPlayerItem(asset: item.asset)
+        let probe = AVPlayer(playerItem: probeItem)
+        defer { probe.replaceCurrentItem(with: nil) }
+        let clock = ContinuousClock()
+        let deadline = clock.now + .seconds(12)
+        while probeItem.status == .unknown, clock.now < deadline,
+              accepts(generation: currentGeneration), media.scope == scope,
+              phase != .suspended, !isPictureInPictureEngaged
+        {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        try Task.checkCancellation()
+        guard accepts(generation: currentGeneration), media.scope == scope,
+              !isPictureInPictureEngaged, phase == .playing || phase == .paused
+        else { return }
+        guard probeItem.status == .readyToPlay else {
+            let error = probeItem.error as NSError?
+            Self.logger.error("Video quality probe failed source=\(tier.rawValue, privacy: .public) status=\(probeItem.status.rawValue) errorDomain=\(error?.domain ?? "none", privacy: .public) errorCode=\(error?.code ?? 0)")
+            throw probeItem.error ?? AuthenticatedVideoStreamError.invalidResponse
+        }
+
+        saveCurrentPosition()
+        let duration = probeItem.duration.seconds
+        let position = duration.isFinite ? min(savedPosition, duration) : savedPosition
+        probe.replaceCurrentItem(with: nil)
+        generation = nextGeneration
+        resetItem()
+        quality = tier
+        metadata = nil
+        installed = true
+        phase = .preparing
+        installItem(item, source: source, generation: nextGeneration)
+        await seek(to: position)
+    }
+
+    private func makeItem(
+        using media: MediaLibraryController, tier: MediaExportTier, generation: Int
+    ) async throws -> (AVPlayerItem, AuthenticatedVideoStreamSource?) {
+        if let library = media.savedPhotosLibrary {
+            return try await (savedVideoItem(in: library), nil)
+        }
+        if let revision,
+           let asset = try await media.exports.localVideoAsset(assetID: assetID, revision: revision, tier: tier)
+        {
+            return (AVPlayerItem(asset: asset), nil)
+        }
+        try Task.checkCancellation()
+        let configuration = try media.videoStreamConfiguration(assetID: assetID, tier: tier)
+        let source = try AuthenticatedVideoStreamSource(
+            configuration: configuration,
+            contentLengthChanged: { [weak self] length in
+                Task { @MainActor [weak self] in
+                    guard let self, quality == tier else { return }
+                    updateContentLength(length, generation: generation)
+                }
+            }
+        )
+        return (AVPlayerItem(asset: source.asset), source)
+    }
+
+    private func installItem(
+        _ item: AVPlayerItem, source: AuthenticatedVideoStreamSource?, generation: Int
+    ) {
+        applyNowPlayingMetadata(to: item)
+        item.preferredForwardBufferDuration = 0
+        streamSource = source
+        if let length = source?.knownContentLength {
+            updateContentLength(length, generation: generation)
+        }
+        playerItem = item
+        installObservers(for: item, generation: generation)
+        player.replaceCurrentItem(with: item)
+        installPeriodicTimeObserver(generation: generation)
+        metadataTask = Task { @MainActor [weak self] in
+            await self?.loadMetadata(from: item.asset, generation: generation)
         }
     }
 
@@ -269,15 +334,19 @@ final class VideoPlaybackSession {
         let resumePlayback = intendedPlayback
         phase = .seeking(resumePlayback: resumePlayback)
         updateTimelineState(currentSeconds: seconds, generation: generation)
-        await player.seek(
+        let completed = await player.seek(
             to: CMTime(seconds: max(0, seconds), preferredTimescale: 600),
             toleranceBefore: .zero,
             toleranceAfter: .zero
         )
-        guard !isClosed, sequence == seekSequence else { return }
+        guard !isClosed, sequence == seekSequence, !phase.isFailed, phase != .suspended else { return }
         updateTimelineState(currentSeconds: player.currentTime().seconds, generation: generation)
-        savedPosition = max(0, seconds)
-        if resumePlayback {
+        if completed {
+            savedPosition = max(0, seconds)
+        } else {
+            saveCurrentPosition()
+        }
+        if intendedPlayback {
             await play()
         } else {
             phase = .paused
@@ -483,10 +552,8 @@ final class VideoPlaybackSession {
             queue: .main
         ) { [weak self] time in
             Task { @MainActor [weak self] in
-                self?.updateTimelineState(
-                    currentSeconds: time.seconds,
-                    generation: generation
-                )
+                guard let self, accepts(generation: generation) else { return }
+                updateTimelineState(currentSeconds: time.seconds, generation: generation)
             }
         }
     }

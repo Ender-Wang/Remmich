@@ -10,6 +10,7 @@ struct ViewerVideoControls: View {
     let showsCloseButton: Bool
     let compactLandscape: Bool
     let safeAreaInsets: EdgeInsets
+    let media: MediaLibraryController
     let locate: (() -> Void)?
     let isLocating: Bool
     let close: () -> Void
@@ -19,6 +20,8 @@ struct ViewerVideoControls: View {
     @State private var autoHideTask: Task<Void, Never>?
     @State private var scrubbedSeconds: Double?
     @State private var routePickerPresented = false
+    @State private var qualityPickerPresented = false
+    @State private var qualitySwitchFailed = false
 
     var body: some View {
         ZStack {
@@ -75,6 +78,9 @@ struct ViewerVideoControls: View {
                             .accessibilityLabel(isLocating ? "Finding in Photos" : "Show in Photos")
                             .accessibilityIdentifier("asset-viewer-locate")
                         }
+                        if media.savedPhotosLibrary == nil {
+                            qualityButton
+                        }
                         ViewerVideoRoutePicker(
                             presentationChanged: routePresentationDidChange
                         )
@@ -102,6 +108,15 @@ struct ViewerVideoControls: View {
             }
         }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: isVisible)
+        .confirmationDialog("Quality", isPresented: $qualityPickerPresented, titleVisibility: .visible) {
+            qualityOption(.playback)
+            qualityOption(.original)
+        }
+        .alert("Couldn’t switch video quality", isPresented: $qualitySwitchFailed) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("The current video source is still selected.")
+        }
         .onAppear {
             scheduleAutoHideIfNeeded()
         }
@@ -115,11 +130,55 @@ struct ViewerVideoControls: View {
                 cancelAutoHide()
             }
         }
+        .onChange(of: qualityPickerPresented) { scheduleAutoHideIfNeeded() }
+        .onChange(of: qualitySwitchFailed) { scheduleAutoHideIfNeeded() }
         .onChange(of: isLocating) { scheduleAutoHideIfNeeded() }
         .onDisappear {
             cancelAutoHide()
             routePresentationChanged(false)
         }
+    }
+
+    private var qualityButton: some View {
+        Button {
+            qualityPickerPresented = true
+            cancelAutoHide()
+        } label: {
+            Group {
+                if session.isSwitchingQuality {
+                    ProgressView().tint(.white)
+                } else {
+                    Image(systemName: "gearshape")
+                        .font(.title3.weight(.semibold))
+                }
+            }
+            .frame(width: 44, height: 44)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.white)
+        .glassEffect(.regular.interactive(), in: Circle())
+        .disabled(session.isSwitchingQuality || session.isPictureInPictureEngaged)
+        .accessibilityLabel("Quality")
+        .accessibilityValue(session.quality.rawValue)
+    }
+
+    private func qualityOption(_ tier: MediaExportTier) -> some View {
+        Button {
+            guard tier != session.quality else { return }
+            Task {
+                do {
+                    try await session.switchQuality(to: tier, using: media)
+                } catch is CancellationError {
+                    return
+                } catch {
+                    qualitySwitchFailed = true
+                }
+                scheduleAutoHideIfNeeded()
+            }
+        } label: {
+            Text(tier == session.quality ? "\(tier.rawValue) (Current)" : tier.rawValue)
+        }
+        .accessibilityAddTraits(tier == session.quality ? .isSelected : [])
     }
 
     private var transportControls: some View {
@@ -269,7 +328,10 @@ struct ViewerVideoControls: View {
 
     private func scheduleAutoHideIfNeeded() {
         cancelAutoHide()
-        guard isVisible, session.isPlaybackIntended, !routePickerPresented, !isLocating else { return }
+        guard isVisible, session.isPlaybackIntended, !routePickerPresented,
+              !qualityPickerPresented, !qualitySwitchFailed,
+              !session.isSwitchingQuality, !isLocating
+        else { return }
         autoHideTask = Task { @MainActor in
             try? await Task.sleep(for: .seconds(3))
             guard !Task.isCancelled, session.isPlaybackIntended else { return }

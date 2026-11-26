@@ -868,10 +868,11 @@ final class MediaLibraryController {
     }
 
     func videoStreamConfiguration(
-        assetID: String
+        assetID: String,
+        tier: MediaExportTier = .playback
     ) throws -> AuthenticatedVideoStreamConfiguration {
         guard let session,
-              let url = downloadURL(assetID: assetID, derivative: .videoPlayback)
+              let url = downloadURL(assetID: assetID, derivative: tier.derivative)
         else {
             throw AuthenticatedVideoStreamError.invalidRequest
         }

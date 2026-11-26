@@ -1227,7 +1227,7 @@ struct RemmichTests {
     }
 
     @Test func viewerVideoPlaybackMetadataDescribesThePreparedFile() {
-        let metadata = AssetViewerVideoPlaybackMetadata(
+        var metadata = AssetViewerVideoPlaybackMetadata(
             fileSizeBytes: 42_800_000,
             pixelSize: .init(width: 1920, height: 1080),
             frameRate: 29.97,
@@ -1238,6 +1238,8 @@ struct RemmichTests {
         )
 
         #expect(metadata.fileDescription == "Playback · 42.8 MB")
+        metadata.source = .original
+        #expect(metadata.fileDescription == "Original · 42.8 MB")
         #expect(metadata.displayText == "1,920 × 1,080 px · 29.97 fps · H.264 · 8.2 Mbps · AAC")
         #expect(metadata.dynamicRange.rawValue == "HDR")
     }

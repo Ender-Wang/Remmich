@@ -858,6 +858,7 @@ struct AssetViewerView: View {
                                     - (pageSize.width - safeAreaInsets.trailing)
                             )
                         ),
+                        media: media,
                         locate: videoLocateAction,
                         isLocating: timelineLocationTask != nil,
                         close: {
@@ -2912,8 +2913,8 @@ struct AssetViewerView: View {
     private func videoPlaybackMetadata(
         for asset: TimelineAssetSummary
     ) -> AssetViewerVideoPlaybackMetadata? {
-        guard asset.id == videoPlaybackSession?.assetID,
-              let metadata = videoPlaybackSession?.metadata
+        guard let playback = videoPlaybackSession, asset.id == playback.assetID,
+              let metadata = playback.metadata
         else { return nil }
         let dynamicRange: AssetViewerVideoDynamicRange = switch metadata.dynamicRange {
         case .sdr: .sdr
@@ -2927,7 +2928,8 @@ struct AssetViewerView: View {
             videoCodec: metadata.videoCodec,
             videoBitrate: metadata.videoBitrate,
             audioCodec: metadata.audioCodec,
-            dynamicRange: dynamicRange
+            dynamicRange: dynamicRange,
+            source: media.savedPhotosLibrary == nil ? playback.quality : .original
         )
     }
 
