@@ -97,6 +97,8 @@ final class VideoPlaybackSession {
     private(set) var generation = 0
     private(set) var isClosed = false
     private(set) var isPictureInPictureEngaged = false
+    // The first AVKit mount waits for audio routing. Keep the host mounted on later pauses and source switches.
+    private(set) var canMountVideoSurface = false
     private(set) var quality: MediaExportTier = .playback
     private(set) var isSwitchingQuality = false
 
@@ -177,10 +179,12 @@ final class VideoPlaybackSession {
                 return
             }
             installItem(item, source: source, generation: preparationGeneration)
-            if !autoplay {
+            if autoplay {
+                try await startPlayback(generation: preparationGeneration)
+            } else {
+                canMountVideoSurface = true
                 phase = .paused
             }
-            try await startPlayback(generation: preparationGeneration)
         } catch is CancellationError {
             return
         } catch {
@@ -307,6 +311,7 @@ final class VideoPlaybackSession {
                 releaseAudioSessionUnlessPictureInPicture()
                 return
             }
+            canMountVideoSurface = true
             player.play()
         } catch {
             intendedPlayback = false
@@ -449,10 +454,11 @@ final class VideoPlaybackSession {
 
     private func startPlayback(generation: Int) async throws {
         try await audioSession.activate()
-        guard accepts(generation: generation), intendedPlayback else {
+        guard accepts(generation: generation), intendedPlayback, !Task.isCancelled else {
             releaseAudioSessionUnlessPictureInPicture()
             return
         }
+        canMountVideoSurface = true
         if savedPosition > 0 {
             await player.seek(
                 to: CMTime(seconds: savedPosition, preferredTimescale: 600),

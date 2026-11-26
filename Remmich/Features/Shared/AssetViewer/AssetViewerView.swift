@@ -682,6 +682,12 @@ struct AssetViewerView: View {
         }
         .onChange(of: verticalDragIsActive) { _, active in
             if !active {
+                if verticalDragRoute == .infoPanel {
+                    verticalDragRoute = nil
+                    if infoDragTranslation != 0 {
+                        settleInfoGesture(visible: showsInfo)
+                    }
+                }
                 viewerDragAxis = nil
                 cancelOpeningDrag()
             }
@@ -810,7 +816,7 @@ struct AssetViewerView: View {
 
             if let videoPlaybackSession,
                videoPlaybackSession.assetID == session.selectedAssetID,
-               !openingIsActive
+               !openingIsActive, videoPlaybackSession.canMountVideoSurface
             {
                 ViewerVideoSurface(
                     session: videoPlaybackSession,
@@ -1978,6 +1984,17 @@ struct AssetViewerView: View {
                 viewerDragAxis = AssetViewerDragAxis.resolve(value.translation, lockedAxis: viewerDragAxis)
                 guard viewerDragAxis == .vertical else { return }
                 if openingIsActive, !isMemoryViewer {
+                    if session.isVideoPlayback, !openingDrag.isActive, value.translation.height < 0 {
+                        // Settle the poster from its current rendered position while Info follows the swipe.
+                        openingTask?.cancel()
+                        verticalDragRoute = .infoPanel
+                        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.12)) {
+                            openingProgress = 1
+                            openingIsActive = false
+                            infoDragTranslation = value.translation.height
+                        }
+                        return
+                    }
                     guard openingDrag.isActive || (value.translation.height > abs(value.translation.width) * 1.2) else { return }
                     if !openingDrag.isActive, let asset = session.selectedAsset {
                         beginReturningTimelineTransition(for: asset)
@@ -2137,7 +2154,7 @@ struct AssetViewerView: View {
                     }
                     return
                 }
-                guard !openingIsActive, !isDismissing, axis == .vertical else {
+                guard !openingIsActive, axis == .vertical else {
                     verticalDragRoute = nil
                     return
                 }
