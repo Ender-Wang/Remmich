@@ -54,11 +54,9 @@ final class MediaLibraryController {
     private var activeResidencyPreloadGeneration: Int?
     private var cumulativePreloadCancellationCount = 0
     private var startupTraceStartedAt: Date?
-    @ObservationIgnored private var openingPhotosSignal: AsyncStream<Void>.Continuation?
-    private(set) var awaitsFirstVisibleStartupPhoto = false
-    var hasShownStartupPhoto: Bool {
-        startupTraceStartedAt != nil && !awaitsFirstVisibleStartupPhoto
-    }
+    @ObservationIgnored private var startupPageSignal: AsyncStream<Void>.Continuation?
+    private(set) var isWaitingForStartupPage = false
+    private(set) var awaitsFirstVisibleStartupThumbnail = false
 
     private var didLogShellPresentation = false
     private var timelinePresentationStartedAt: Date?
@@ -169,30 +167,32 @@ final class MediaLibraryController {
     }
 
     func beginStartupTrace(at date: Date) {
-        resumeOpeningPhotosHydration()
-        awaitsFirstVisibleStartupPhoto = true
+        finishStartupPage()
+        awaitsFirstVisibleStartupThumbnail = true
         startupTraceStartedAt = date
         didLogShellPresentation = false
         timelinePresentationStartedAt = nil
         didLogFirstTimelineThumbnail = false
     }
 
-    func openingPhotosEvents() -> AsyncStream<Void> {
+    func startupPageEvents() -> AsyncStream<Void> {
         let (stream, continuation) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
-        openingPhotosSignal = continuation
+        startupPageSignal = continuation
+        isWaitingForStartupPage = true
         return stream
     }
 
-    func resumeOpeningPhotosHydration() {
-        openingPhotosSignal?.yield(())
-        openingPhotosSignal?.finish()
-        openingPhotosSignal = nil
+    func finishStartupPage() {
+        startupPageSignal?.yield(())
+        startupPageSignal?.finish()
+        startupPageSignal = nil
+        isWaitingForStartupPage = false
     }
 
-    func noteVisibleStartupPhoto() {
-        guard awaitsFirstVisibleStartupPhoto else { return }
-        awaitsFirstVisibleStartupPhoto = false
-        resumeOpeningPhotosHydration()
+    func noteVisibleStartupThumbnail() {
+        guard awaitsFirstVisibleStartupThumbnail else { return }
+        awaitsFirstVisibleStartupThumbnail = false
+        finishStartupPage()
     }
 
     func logShellPresented() {
@@ -1007,7 +1007,7 @@ final class MediaLibraryController {
     }
 
     func clearAll() {
-        resumeOpeningPhotosHydration()
+        finishStartupPage()
         exports.reset()
         exportManifestSave?.cancel()
         exportManifestLoad?.cancel()

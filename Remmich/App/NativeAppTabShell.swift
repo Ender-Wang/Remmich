@@ -551,7 +551,7 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
             let bounds = controller.view.bounds
             guard bounds.width > 0, bounds.height > 0, controller.transitionCoordinator == nil else { return }
             let tabs: [(NativeTabDestination, AnyView)] = [
-                (.videos, parent.videos), (.albums, parent.albums), (.library, parent.library), (.search, parent.search),
+                (.photos, parent.photos), (.videos, parent.videos), (.albums, parent.albums), (.library, parent.library), (.search, parent.search),
             ]
             for (destination, root) in tabs
                 where parent.preparedDestinations.contains(destination)

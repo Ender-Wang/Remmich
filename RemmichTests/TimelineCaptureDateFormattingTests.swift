@@ -121,6 +121,27 @@ struct TimelineCaptureDateFormattingTests {
             #expect(await source.requestedBuckets == [november, october])
         }
 
+        @MainActor @Test func timelineOpeningPreloadWaitsForAnOlderSavedAsset() throws {
+            let month = TimelineBucketID(rawValue: "2026-11-01")
+            let assets = try (1 ... 6).reversed().map { day in
+                try Self.asset(instant: "2026-11-0\(day)T00:00:00Z", offset: 0, id: String(day))
+            }
+            let position = TimelineBrowsingPosition(assetID: "3", bucketID: month, viewportFraction: 0.5)
+            let reader = OpeningTimelineTestReader(summaries: [], assets: [:])
+            let store = PhotosTimelineStore(reader: reader)
+            let opening = try #require(TimelineOpeningWindow.snapshot(generation: 1, assetsByBucket: [month: Array(assets.prefix(2))]))
+            store.bootstrap(opening, openingWindow: true)
+
+            #expect(store.openingSemanticAssets(limit: 3, around: position).isEmpty)
+
+            let full = try #require(TimelineOpeningWindow.snapshot(generation: 1, assetsByBucket: [month: assets]))
+            store.bootstrap(full)
+
+            #expect(store.openingSemanticAssets(limit: 3, around: position).map(\.id) == ["4", "3", "2"])
+            let missing = TimelineBrowsingPosition(assetID: "removed", bucketID: month, viewportFraction: 0.5)
+            #expect(store.openingSemanticAssets(limit: 3, around: missing).map(\.id) == ["6", "5", "4"])
+        }
+
         @MainActor @Test func recentlyTakenAndPlacesShareReadsByFullQuery() async throws {
             let month = TimelineBucketID(rawValue: "2026-10-01")
             let taken = LibraryAssetCollection.recentlyTaken.query

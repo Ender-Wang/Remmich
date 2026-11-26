@@ -462,19 +462,47 @@ struct AppShellView: View {
         .onChange(of: viewerPresented || !viewerPresentations.entries.isEmpty) { _, presented in
             libraryIndex.setTimelinePublicationDeferred(presented)
         }
-        .task(id: sessionController?.search.map(ObjectIdentifier.init), priority: .utility) {
-            await sessionController?.search?.preloadLanding()
+        .task(id: searchOpeningRequest, priority: .utility) {
+            guard searchOpeningRequest != nil, let search = sessionController?.search else { return }
+            await search.preloadLanding()
+            if !Task.isCancelled, tabSelectionState.selection == .search {
+                media.finishStartupPage()
+            }
         }
-        .task(id: mayPreloadTimelineTabs) {
-            guard let sessionController, mayPreloadTimelineTabs else { return }
-            async let videoOpening: Void = prepareVideosOpening(using: sessionController)
-            await prepareAlbumsOpening(in: overviewState, preloading: true)
-            await videoOpening
+        .task(id: mayPreloadOtherTabs, priority: .utility) {
+            guard mayPreloadOtherTabs, sessionController != nil else { return }
+            if tabSelectionState.selection != .photos {
+                tabContentActivationState.prepare(.photos)
+            }
+            if !tabContentActivationState.isHydrated(.albums) {
+                await prepareAlbumsOpening(in: overviewState, preloading: true)
+            }
+        }
+        .task(id: mayPreloadOtherTabs ? videos.semanticContentRevision : nil, priority: .utility) {
+            guard mayPreloadOtherTabs, let sessionController, !tabContentActivationState.isHydrated(.videos) else { return }
+            await prepareVideosOpening(using: sessionController)
+        }
+        .task(id: waitsForStartupWithoutOpeningWindow) {
+            guard waitsForStartupWithoutOpeningWindow else { return }
+            try? await Task.sleep(for: TimelineOpeningWindow.displayDeadline)
+            guard !Task.isCancelled else { return }
+            media.finishStartupPage()
+        }
+        .onChange(of: isPrimaryContentLoading, initial: true) { _, loading in
+            guard !loading, media.isWaitingForStartupPage else { return }
+            switch tabSelectionState.selection {
+            case .photos, .videos, .albums: media.finishStartupPage()
+            default: break
+            }
         }
         .task(id: libraryCoverRequest) {
             guard libraryCoverRequest.isActive, let source = sessionController?.timeline, let window = openingWindow else { return }
             await libraryOpening.prepareCovers(source: source, media: media, viewport: .init(window: window), camera: libraryCameraMetadata)
-            if !Task.isCancelled, libraryCoverRequest.endpoint != nil {
+            guard !Task.isCancelled else { return }
+            if tabSelectionState.selection == .library {
+                media.finishStartupPage()
+            }
+            if libraryCoverRequest.endpoint != nil {
                 libraryIndex.collections.start()
             }
         }
@@ -585,9 +613,7 @@ struct AppShellView: View {
             if current == .library {
                 reconcileLibraryNavigationRoot()
             }
-            if current != .photos, current != .videos {
-                media.resumeOpeningPhotosHydration()
-            }
+            media.finishStartupPage()
             guard current == .years || current == .months || current == .weeks else { return }
             if previous == .photos {
                 photosTimelineRuntime.beginGrouping()
@@ -683,10 +709,10 @@ struct AppShellView: View {
 
     private func prepareVideosOpening(using sessionController: AppSessionController) async {
         await sessionController.prepareVideosOpening()
-        guard !Task.isCancelled, !tabContentActivationState.isHydrated(.videos),
-              videosTimelineRuntime.pendingBrowsingPosition == nil else { return }
+        guard !Task.isCancelled, !tabContentActivationState.isHydrated(.videos) else { return }
         let limit = TimelineGridOrder.openingWindowLimit()
-        let assets = videos.newestSemanticAssets(limit: limit)
+        let position = videosTimelineRuntime.pendingBrowsingPosition
+        let assets = videos.openingSemanticAssets(limit: limit, around: position)
         guard !assets.isEmpty else { return }
         let revision = videos.semanticContentRevision
         let window = openingWindow
@@ -700,7 +726,13 @@ struct AppShellView: View {
             let catalog = TimelineSemanticCatalog(assets: assets)
             guard !Task.isCancelled else { return (catalog, [MediaRequestDescriptor]()) }
             let layout = TimelineSemanticProjection.complete(catalog: catalog, scale: scale, size: viewport, isPhone: isPhone, dark: dark)
-            let requests = layout.items.reversed().filter { !$0.isHeader }.map { item in
+            let tiles = layout.items.reversed().filter { !$0.isHeader }
+            let prioritized = if let position, let focus = catalog.assetIndexes[position.assetID] {
+                tiles.sorted { abs($0.nodeIndex - focus) < abs($1.nodeIndex - focus) }
+            } else {
+                tiles
+            }
+            let requests = prioritized.map { item in
                 TimelineAssetThumbnail.thumbnailDescriptor(for: catalog.assets[item.nodeIndex],
                                                            points: max(item.frame.width, item.frame.height), scale: displayScale)
             }
@@ -709,7 +741,8 @@ struct AppShellView: View {
         let (catalog, requests) = await withTaskCancellationHandler { await build.value } onCancel: { build.cancel() }
         guard !Task.isCancelled, media.scope == MediaAccountScope(session: session),
               !tabContentActivationState.isHydrated(.videos),
-              revision == videos.semanticContentRevision || assets == videos.newestSemanticAssets(limit: limit) else { return }
+              revision == videos.semanticContentRevision,
+              position == videosTimelineRuntime.pendingBrowsingPosition else { return }
         videosTimelineRuntime.preparedOpeningCatalog = catalog
         tabContentActivationState.prepare(.videos)
         await media.prefetchManagedThumbnails(requests)
@@ -764,7 +797,7 @@ struct AppShellView: View {
     }
 
     private var mayWarmLibraryCovers: Bool {
-        exportScenePhase == .active && (media.hasShownStartupPhoto || photos.loadState == .empty || tabSelectionState.selection == .library)
+        exportScenePhase == .active && (mayPreloadOtherTabs || tabSelectionState.selection == .library)
     }
 
     private var libraryCameraMetadata: LibraryCameraMetadata? {
@@ -951,8 +984,22 @@ struct AppShellView: View {
         }
     }
 
-    private var mayPreloadTimelineTabs: Bool {
-        media.hasShownStartupPhoto || photos.loadState == .empty || tabSelectionState.selection != .photos
+    private var mayPreloadOtherTabs: Bool {
+        exportScenePhase == .active && !media.isWaitingForStartupPage
+    }
+
+    private var waitsForStartupWithoutOpeningWindow: Bool {
+        guard media.isWaitingForStartupPage else { return false }
+        return switch tabSelectionState.selection {
+        case .photos: !photos.isOpeningWindow
+        case .videos: !videos.isOpeningWindow
+        default: false
+        }
+    }
+
+    private var searchOpeningRequest: ObjectIdentifier? {
+        guard tabSelectionState.selection == .search || mayPreloadOtherTabs else { return nil }
+        return sessionController?.search.map(ObjectIdentifier.init)
     }
 
     private var groupedMediaStore: PhotosTimelineStore {

@@ -65,7 +65,7 @@ struct TimelineSemanticCollectionView: UIViewControllerRepresentable {
     var canRevealThumbnails: Bool?
     var includesDateCardsInPinch = true
     var isOpeningWindow = false
-    var tracksStartupPhotos = false
+    var tracksStartupThumbnail = false
     var openingStore: PhotosTimelineStore?
     var openingTileDisplayed: (() -> Void)?
     let hiddenThumbnailID: String?
@@ -85,6 +85,10 @@ struct TimelineSemanticCollectionView: UIViewControllerRepresentable {
     var browsingPositionChanged: ((TimelineAssetSummary?, CGFloat) -> Void)?
     var nearingEnd: (() -> Void)?
     var viewerBottomClearance: CGFloat?
+
+    var canApplyBrowsingPosition: Bool {
+        isActive || runtime.pendingBrowsingPosition != nil
+    }
 
     func makeUIViewController(context _: Context) -> TimelineSemanticCollectionController {
         let controller = TimelineSemanticCollectionController()
@@ -751,7 +755,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         lastSize = view.bounds.size
         completeProjections.removeAll()
         guard let catalog else { return }
-        if let anchor = pendingRootReturn, scale.isAssets, input?.isActive == true,
+        if let anchor = pendingRootReturn, scale.isAssets, input?.canApplyBrowsingPosition == true,
            let asset = catalog.assetIndexes[anchor.assetID]
         {
             install(makeProjection(scale: scale, focus: asset), focusing: asset,
@@ -823,14 +827,16 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
                 pendingRootReturn = value.runtime.browsingAnchor
             }
         }
-        if let position = value.runtime.pendingBrowsingPosition, value.isActive, value.scale.isAssets,
+        if let position = value.runtime.pendingBrowsingPosition, value.canApplyBrowsingPosition, value.scale.isAssets,
            !value.catalog.assets.isEmpty
         {
             if pendingRootReturn == nil, value.catalog.assetIndexes[position.assetID] != nil {
                 pendingRootReturn = .init(assetID: position.assetID, viewportFraction: position.viewportFraction,
                                           atLatest: false, atTop: false)
-                value.runtime.pendingBrowsingPosition = nil
-            } else if !value.isOpeningWindow {
+                if value.isActive {
+                    value.runtime.pendingBrowsingPosition = nil
+                }
+            } else if value.isActive, !value.isOpeningWindow {
                 value.runtime.pendingBrowsingPosition = nil
             }
         }
@@ -856,7 +862,8 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         let oldFocusID = oldFocus.flatMap { item in catalog.map { $0.assets[representativeIndex(item)].id } }
         let focusY = oldFocus.map { $0.frame.midY - collection.contentOffset.y }
         let ranked = value.catalog.preservesSearchRanking
-        let latest = !ranked && (projection == nil || isAtLatest)
+        let isLatestWindow = !completesOpeningWindow || previous?.catalog.assets.last?.id == value.catalog.assets.last?.id
+        let latest = !ranked && (projection == nil || (isLatestWindow && isAtLatest))
         let wasAtTop = collection.contentOffset.y <= -collection.contentInset.top + 1
         let needsCatalog = revision != value.revision || completesOpeningWindow
         if needsCatalog {
@@ -917,7 +924,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
                 value.catalog.assetIndexes[$0.assetID] != nil ? $0 : nil
             }
         }
-        if let anchor = pendingRootReturn, scale.isAssets, value.isActive,
+        if let anchor = pendingRootReturn, scale.isAssets, value.canApplyBrowsingPosition,
            let focus = value.catalog.assetIndexes[anchor.assetID], lastSize.width > 0
         {
             install(makeProjection(scale: scale, focus: focus), focusing: focus,
@@ -1354,15 +1361,15 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         startupPhotoDisplayTicks += 1
         guard startupPhotoDisplayTicks >= 2 else { return }
         stopStartupPhotoDisplayCheck()
-        if input.tracksStartupPhotos {
-            input.media.noteVisibleStartupPhoto()
+        if input.tracksStartupThumbnail {
+            input.media.noteVisibleStartupThumbnail()
         }
         input.openingStore?.resumeOpeningHistory()
         input.openingTileDisplayed?()
     }
 
     private func awaitsOpeningDisplay(_ input: TimelineSemanticCollectionView) -> Bool {
-        (input.tracksStartupPhotos && input.media.awaitsFirstVisibleStartupPhoto)
+        (input.tracksStartupThumbnail && input.media.awaitsFirstVisibleStartupThumbnail)
             || input.openingStore?.awaitsOpeningDisplay == true
             || input.openingTileDisplayed != nil
     }
@@ -2314,7 +2321,8 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
               let save = input.browsingPositionChanged, let anchor = currentBrowsingAnchor(),
               let catalog, let index = catalog.assetIndexes[anchor.assetID]
         else { return }
-        save(anchor.atLatest ? nil : catalog.assets[index], min(1, max(0, anchor.viewportFraction)))
+        let atLibraryEnd = anchor.atLatest && !input.isOpeningWindow
+        save(atLibraryEnd ? nil : catalog.assets[index], min(1, max(0, anchor.viewportFraction)))
     }
 
     private func applyOpeningHistoryAfterScroll() {

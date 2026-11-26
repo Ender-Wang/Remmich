@@ -23,6 +23,8 @@ nonisolated enum PersistentTimelineRefreshPolicy: Equatable, Sendable {
 }
 
 nonisolated enum TimelineOpeningWindow {
+    static let displayDeadline: Duration = .milliseconds(1200)
+
     static func snapshot(generation: Int64, assetsByBucket: [TimelineBucketID: [TimelineAssetSummary]]) -> TimelineBootstrapSnapshot? {
         guard !assetsByBucket.isEmpty else { return nil }
         let summaries = assetsByBucket.map { TimelineBucketSummary(id: $0.key, assetCount: $0.value.count) }
@@ -39,7 +41,7 @@ nonisolated enum TimelineOpeningWindow {
                 var iterator = events.makeAsyncIterator()
                 _ = await iterator.next()
             }
-            group.addTask { try? await Task.sleep(for: .milliseconds(1200)) }
+            group.addTask { try? await Task.sleep(for: displayDeadline) }
             _ = await group.next()
             group.cancelAll()
         }
@@ -108,6 +110,17 @@ final class PhotosTimelineStore {
             }
         }
         return assets
+    }
+
+    func openingSemanticAssets(limit: Int, around position: TimelineBrowsingPosition?) -> [TimelineAssetSummary] {
+        guard let position else { return newestSemanticAssets(limit: limit) }
+        guard containsBrowsingAsset(position.assetID) else {
+            return isOpeningWindow ? [] : newestSemanticAssets(limit: limit)
+        }
+        let assets = semanticAssetsSnapshot()
+        guard let anchor = assets.firstIndex(where: { $0.id == position.assetID }) else { return [] }
+        let first = max(0, min(anchor - limit / 2, assets.count - limit))
+        return Array(assets.dropFirst(first).prefix(limit))
     }
 
     var hasUnloadedSemanticBuckets: Bool {

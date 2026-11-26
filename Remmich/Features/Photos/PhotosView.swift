@@ -464,7 +464,7 @@ struct PhotosView: View {
         _tabBarTop = tabBarTop
         self.rotationState = rotationState
         _semanticRuntime = State(initialValue: timelineRuntime ?? TimelineSemanticRuntime())
-        let preparedOpening = timelineRuntime?.pendingBrowsingPosition == nil ? timelineRuntime?.preparedOpeningCatalog : nil
+        let preparedOpening = timelineRuntime?.preparedOpeningCatalog
         _semanticCatalog = State(initialValue: preparedOpening)
         _semanticCatalogRevision = State(initialValue: preparedOpening == nil ? 0 : store.semanticContentRevision)
         _semanticCatalogIsOpeningWindow = State(initialValue: preparedOpening != nil)
@@ -752,7 +752,7 @@ struct PhotosView: View {
                         await store.refresh()
                         guard !Task.isCancelled, revision == store.semanticContentRevision else { return }
                         semanticRuntime.pendingBrowsingPosition = nil
-                    } else if !openingWindow {
+                    } else if !openingWindow, isTabContentActivated {
                         await store.loadBrowsingPositionBucket(position)
                         guard !Task.isCancelled, revision == store.semanticContentRevision else { return }
                     }
@@ -1050,7 +1050,7 @@ struct PhotosView: View {
                         canRevealThumbnails: tabSelectionState?.canRevealThumbnails(in: tabDestination),
                         includesDateCardsInPinch: tabDestination != .albums && tabDestination != .library,
                         isOpeningWindow: semanticCatalogIsOpeningWindow,
-                        tracksStartupPhotos: tabDestination == .photos,
+                        tracksStartupThumbnail: tabDestination == .photos || tabDestination == .videos,
                         openingStore: store,
                         openingTileDisplayed: waitsForOpeningTile ? { openingLoaderReleased = true } : nil,
                         hiddenThumbnailID: hiddenReturningThumbnailAssetID ?? assetPreview?.hiddenSourceAssetID,
@@ -1150,8 +1150,10 @@ struct PhotosView: View {
     }
 
     private var semanticCatalogBuildRevision: UInt64? {
-        if semanticRuntime.pendingBrowsingPosition != nil, !isTabContentActivated || store.loadState != .loaded {
-            return nil
+        if let position = semanticRuntime.pendingBrowsingPosition {
+            guard store.loadState == .loaded,
+                  isTabContentActivated || (!store.isOpeningWindow && store.containsBrowsingAsset(position.assetID))
+            else { return nil }
         }
         if semanticRuntime.preparedOpeningCatalog != nil, waitsForOpeningTile {
             return nil

@@ -1079,7 +1079,7 @@ final class AppSessionController {
         foregroundPreparationTask = nil
         videoOpeningTask?.cancel()
         videoOpeningTask = nil
-        media.resumeOpeningPhotosHydration()
+        media.finishStartupPage()
         didPrepareSession = true
         foregroundResourcesReady = false
     }
@@ -1087,29 +1087,44 @@ final class AppSessionController {
     private func bootstrapLocalLibrary(session: AccountSession, showOpeningWindow: Bool = false) async {
         let generation = preparationGeneration
         guard !ProcessInfo.processInfo.arguments.contains("-ui-testing-signed-in") else { return }
-        if showOpeningWindow,
-           let opening = await libraryIndex.prepareOpeningTimeline(session: session, limit: TimelineGridOrder.openingWindowLimit()),
-           preparationIsCurrent(generation)
-        {
-            let events = media.openingPhotosEvents()
-            photos.bootstrap(opening, openingWindow: true)
-            foregroundResourcesReady = true
-            // Prioritize the first visible photo when Photos is the opening tab.
-            if (browsing?.navigation.selection ?? .photos) == .photos {
-                await TimelineOpeningWindow.waitForDisplay(events)
-            }
+        let selected = browsing?.navigation.selection ?? .photos
+        let startsInVideos = selected == .videos
+        if showOpeningWindow {
+            let startsInTimeline = selected == .photos || startsInVideos
+            let opening = startsInTimeline ? await libraryIndex.prepareOpeningTimeline(
+                session: session, limit: TimelineGridOrder.openingWindowLimit(), mediaScope: startsInVideos ? .videos : .photos
+            ) : nil
             guard preparationIsCurrent(generation) else { return }
-            media.resumeOpeningPhotosHydration()
-            await finishOpeningPhotosHistory(session: session, generation: generation)
-            return
+            let position = (startsInVideos ? browsing?.videos : browsing?.photos)?.pendingBrowsingPosition
+            let includesSavedPosition = position.map { position in
+                opening?.assetsByBucket[position.bucketID]?.contains { $0.id == position.assetID } == true
+            } ?? true
+            if let opening, includesSavedPosition {
+                (startsInVideos ? videos : photos).bootstrap(opening, openingWindow: true)
+            }
+            if !startsInTimeline || (opening != nil && includesSavedPosition) {
+                let events = media.startupPageEvents()
+                foregroundResourcesReady = true
+                await TimelineOpeningWindow.waitForDisplay(events)
+                guard preparationIsCurrent(generation) else { return }
+                media.finishStartupPage()
+                await finishOpeningTimelineHistory(session: session, generation: generation)
+                return
+            }
         }
-        guard preparationIsCurrent(generation),
-              let bootstrap = await libraryIndex.bootstrap(session: session),
-              preparationIsCurrent(generation)
-        else { return }
-        photos.bootstrap(bootstrap.photos)
-        videos.bootstrap(bootstrap.videos)
-        libraryIndex.completeBootstrapGroupedCatalogs(bootstrap)
+        guard preparationIsCurrent(generation) else { return }
+        let bootstrap = await libraryIndex.bootstrap(session: session)
+        guard preparationIsCurrent(generation) else { return }
+        if let bootstrap {
+            photos.bootstrap(bootstrap.photos)
+            videos.bootstrap(bootstrap.videos)
+            libraryIndex.completeBootstrapGroupedCatalogs(bootstrap)
+        }
+        if showOpeningWindow {
+            // Let route activation proceed when the opening viewport needs the server.
+            // The shell releases secondary preloads after the first viewport or its deadline.
+            _ = media.startupPageEvents()
+        }
     }
 
     func prepareVideosOpening() async {
@@ -1139,7 +1154,7 @@ final class AppSessionController {
             await prepareVideosOpening()
             guard preparationIsCurrent(generation) else { return }
             if videos.loadState == .idle {
-                media.resumeOpeningPhotosHydration()
+                media.finishStartupPage()
                 await foregroundPreparationTask.value
             }
         }
@@ -1148,21 +1163,20 @@ final class AppSessionController {
             await TimelineOpeningWindow.waitForDisplay(videos.openingDisplayEvents())
             guard preparationIsCurrent(generation) else { return }
             videos.resumeOpeningHistory()
-            media.resumeOpeningPhotosHydration()
             return
         }
         await videos.load()
     }
 
     private func requestOpeningPhotosHistory() async {
-        media.resumeOpeningPhotosHydration()
+        media.finishStartupPage()
         if let foregroundPreparationTask {
             await foregroundPreparationTask.value
             return
         }
         guard photos.isOpeningWindow || videos.isOpeningWindow, case let .signedIn(session) = state else { return }
         let generation = preparationGeneration
-        let task = Task { await finishOpeningPhotosHistory(session: session, generation: generation) }
+        let task = Task { await finishOpeningTimelineHistory(session: session, generation: generation) }
         foregroundPreparationTask = task
         await task.value
         if generation == preparationGeneration {
@@ -1170,7 +1184,7 @@ final class AppSessionController {
         }
     }
 
-    private func finishOpeningPhotosHistory(session: AccountSession, generation: Int) async {
+    private func finishOpeningTimelineHistory(session: AccountSession, generation: Int) async {
         let bootstrap = await libraryIndex.bootstrap(session: session, completesOpeningWindow: true)
         guard preparationIsCurrent(generation), bootstrap == nil else { return }
         photos.openingHistoryLoadFailed()
