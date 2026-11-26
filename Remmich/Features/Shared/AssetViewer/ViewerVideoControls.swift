@@ -1,4 +1,6 @@
 import AVKit
+import Combine
+import MediaPlayer
 import QuartzCore
 import SwiftUI
 
@@ -20,6 +22,9 @@ struct ViewerVideoControls: View {
     @State private var autoHideTask: Task<Void, Never>?
     @State private var scrubbedSeconds: Double?
     @State private var routePickerPresented = false
+    @State private var volumeSliderExpanded = false
+    @State private var isAdjustingVolume = false
+    @State private var volumeCollapseTask: Task<Void, Never>?
     @State private var qualityPickerPresented = false
     @State private var qualitySwitchFailed = false
 
@@ -42,52 +47,7 @@ struct ViewerVideoControls: View {
 
             if isVisible {
                 VStack(spacing: 0) {
-                    HStack {
-                        if showsCloseButton {
-                            Button(action: close) {
-                                Image(systemName: "xmark")
-                                    .font(.title2.weight(.semibold))
-                                    .frame(width: 44, height: 44)
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(.white)
-                            .glassEffect(.regular.interactive(), in: Circle())
-                            .accessibilityLabel("Close")
-                            .accessibilityIdentifier("asset-viewer-video-close")
-                        } else {
-                            Color.clear
-                                .frame(width: 44, height: 44)
-                        }
-
-                        Spacer()
-                        if let locate {
-                            Button(action: locate) {
-                                Group {
-                                    if isLocating {
-                                        ProgressView().tint(.white)
-                                    } else {
-                                        Image(systemName: "square.grid.2x2").font(.title3.weight(.semibold))
-                                    }
-                                }
-                                .frame(width: 44, height: 44)
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(.white)
-                            .glassEffect(.regular.interactive(), in: Circle())
-                            .disabled(isLocating)
-                            .accessibilityLabel(isLocating ? "Finding in Photos" : "Show in Photos")
-                            .accessibilityIdentifier("asset-viewer-locate")
-                        }
-                        if media.savedPhotosLibrary == nil {
-                            qualityButton
-                        }
-                        ViewerVideoRoutePicker(
-                            presentationChanged: routePresentationDidChange
-                        )
-                        .frame(width: 44, height: 44)
-                        .glassEffect(.regular, in: Circle())
-                    }
-
+                    headerControls
                     Spacer(minLength: 12)
 
                     VStack(spacing: 14) {
@@ -128,6 +88,7 @@ struct ViewerVideoControls: View {
                 scheduleAutoHideIfNeeded()
             } else {
                 cancelAutoHide()
+                setVolumeSliderExpanded(false)
             }
         }
         .onChange(of: qualityPickerPresented) { scheduleAutoHideIfNeeded() }
@@ -135,7 +96,114 @@ struct ViewerVideoControls: View {
         .onChange(of: isLocating) { scheduleAutoHideIfNeeded() }
         .onDisappear {
             cancelAutoHide()
+            setVolumeSliderExpanded(false)
             routePresentationChanged(false)
+        }
+    }
+
+    private var headerControls: some View {
+        GeometryReader { geometry in
+            let buttonSize: CGFloat = 44
+            let buttonCount: CGFloat = 2 + (showsCloseButton ? 1 : 0)
+                + (locate != nil ? 1 : 0) + (media.savedPhotosLibrary == nil ? 1 : 0)
+            let remainingWidth = max(0, geometry.size.width - buttonCount * buttonSize)
+            let spacing = min(8, remainingWidth / (buttonCount * 2))
+            let sliderWidth = min(144, remainingWidth - buttonCount * spacing)
+
+            HStack(spacing: spacing) {
+                volumeControl(sliderWidth: sliderWidth)
+                if showsCloseButton {
+                    Button(action: close) {
+                        Image(systemName: "xmark")
+                            .font(.title2.weight(.semibold))
+                            .frame(width: buttonSize, height: buttonSize)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.white)
+                    .glassEffect(.regular.interactive(), in: Circle())
+                    .accessibilityLabel("Close")
+                    .accessibilityIdentifier("asset-viewer-video-close")
+                }
+
+                Spacer(minLength: 0)
+                if let locate {
+                    Button(action: locate) {
+                        Group {
+                            if isLocating {
+                                ProgressView().tint(.white)
+                            } else {
+                                Image(systemName: "square.grid.2x2").font(.title3.weight(.semibold))
+                            }
+                        }
+                        .frame(width: buttonSize, height: buttonSize)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.white)
+                    .glassEffect(.regular.interactive(), in: Circle())
+                    .disabled(isLocating)
+                    .accessibilityLabel(isLocating ? "Finding in Photos" : "Show in Photos")
+                    .accessibilityIdentifier("asset-viewer-locate")
+                }
+                if media.savedPhotosLibrary == nil {
+                    qualityButton
+                }
+                ViewerVideoRoutePicker(presentationChanged: routePresentationDidChange)
+                    .frame(width: buttonSize, height: buttonSize)
+                    .glassEffect(.regular, in: Circle())
+            }
+        }
+        .frame(height: 44)
+    }
+
+    private func volumeControl(sliderWidth: CGFloat) -> some View {
+        HStack(spacing: 0) {
+            ViewerVideoVolumeButton(isExpanded: volumeSliderExpanded) {
+                setVolumeSliderExpanded(!volumeSliderExpanded)
+                scheduleAutoHideIfNeeded()
+            }
+            ZStack(alignment: .leading) {
+                if volumeSliderExpanded {
+                    ViewerVideoVolumeSlider(interactionChanged: volumeInteractionChanged)
+                        .frame(width: max(0, sliderWidth - 10), height: 44)
+                        .padding(.trailing, min(10, sliderWidth))
+                        .transition(.opacity)
+                }
+            }
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: volumeSliderExpanded)
+            .frame(width: volumeSliderExpanded ? sliderWidth : 0, height: 44, alignment: .leading)
+            .clipped()
+            .contentShape(.rect)
+            .allowsHitTesting(volumeSliderExpanded)
+            .accessibilityHidden(!volumeSliderExpanded)
+        }
+        .glassEffect(.regular.interactive(), in: Capsule())
+    }
+
+    private func setVolumeSliderExpanded(_ expanded: Bool) {
+        withAnimation(reduceMotion ? nil : .smooth(duration: 0.26)) {
+            volumeSliderExpanded = expanded
+        }
+        if !expanded {
+            isAdjustingVolume = false
+        }
+        scheduleVolumeCollapseIfNeeded()
+    }
+
+    private func volumeInteractionChanged(isTracking: Bool) {
+        guard volumeSliderExpanded else { return }
+        isAdjustingVolume = isTracking
+        scheduleVolumeCollapseIfNeeded()
+        scheduleAutoHideIfNeeded()
+    }
+
+    private func scheduleVolumeCollapseIfNeeded() {
+        volumeCollapseTask?.cancel()
+        volumeCollapseTask = nil
+        guard volumeSliderExpanded, !isAdjustingVolume else { return }
+        volumeCollapseTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(1500))
+            guard !Task.isCancelled else { return }
+            setVolumeSliderExpanded(false)
         }
     }
 
@@ -329,7 +397,7 @@ struct ViewerVideoControls: View {
     private func scheduleAutoHideIfNeeded() {
         cancelAutoHide()
         guard isVisible, session.isPlaybackIntended, !routePickerPresented,
-              !qualityPickerPresented, !qualitySwitchFailed,
+              !isAdjustingVolume, !qualityPickerPresented, !qualitySwitchFailed,
               !session.isSwitchingQuality, !isLocating
         else { return }
         autoHideTask = Task { @MainActor in
@@ -540,6 +608,116 @@ private struct ViewerVideoNativeScrubber: UIViewRepresentable {
             guard isEditing else { return }
             isEditing = false
             editingChanged(false)
+        }
+    }
+}
+
+private struct ViewerVideoVolumeButton: View {
+    let isExpanded: Bool
+    let action: () -> Void
+    @State private var outputVolume = AVAudioSession.sharedInstance().outputVolume
+
+    var body: some View {
+        let isMuted = outputVolume == 0
+        Button(action: action) {
+            Image(systemName: "speaker.wave.3", variableValue: Double(outputVolume))
+                .font(.title3.weight(.semibold))
+                .frame(width: 44, height: 44)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.white)
+        .accessibilityLabel("Volume")
+        .accessibilityValue(isMuted ? Text("Muted") : Text(outputVolume, format: .percent.precision(.fractionLength(0))))
+        .accessibilityHint(isExpanded ? "Collapses the volume slider" : "Expands the volume slider")
+        .accessibilityIdentifier("asset-viewer-video-volume")
+        .onReceive(AVAudioSession.sharedInstance().publisher(for: \.outputVolume, options: [.initial, .new])
+            .removeDuplicates()
+            .receive(on: RunLoop.main)) { outputVolume = $0 }
+    }
+}
+
+private struct ViewerVideoVolumeSlider: UIViewRepresentable {
+    let interactionChanged: (Bool) -> Void
+
+    func makeUIView(context _: Context) -> SliderContainer {
+        SliderContainer(interactionChanged: interactionChanged)
+    }
+
+    func updateUIView(_ view: SliderContainer, context _: Context) {
+        view.interactionChanged = interactionChanged
+    }
+
+    final class SliderContainer: UIView {
+        var interactionChanged: (Bool) -> Void
+        private let slider = NativeVolumeView()
+        private weak var volumeControl: UISlider?
+
+        init(interactionChanged: @escaping (Bool) -> Void) {
+            self.interactionChanged = interactionChanged
+            super.init(frame: .zero)
+            slider.showsRouteButton = false
+            slider.didLayout = { [weak self] in self?.alignVolumeControl() }
+            addSubview(slider)
+        }
+
+        @available(*, unavailable)
+        required init?(coder _: NSCoder) {
+            fatalError("init(coder:) has not been implemented")
+        }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            guard !bounds.isEmpty else { return }
+            slider.bounds.size = bounds.size
+            slider.layoutIfNeeded()
+            alignVolumeControl()
+        }
+
+        private func alignVolumeControl() {
+            guard !bounds.isEmpty else { return }
+            // MediaPlayer can lay out its slider after SwiftUI has sized the container.
+            let track = slider.volumeSliderRect(forBounds: slider.bounds)
+            let thumb = slider.volumeThumbRect(forBounds: slider.bounds, volumeSliderRect: track, value: 0.5)
+            let thumbCenterY = thumb.isEmpty ? slider.bounds.midY : thumb.midY
+            let center = CGPoint(x: bounds.midX, y: bounds.midY + slider.bounds.midY - thumbCenterY)
+            if slider.center != center {
+                slider.center = center
+            }
+
+            guard let control = findVolumeControl(in: slider), volumeControl !== control else { return }
+            volumeControl?.removeTarget(self, action: nil, for: .allEvents)
+            volumeControl = control
+            control.addTarget(self, action: #selector(trackingBegan), for: .touchDown)
+            control.addTarget(self, action: #selector(volumeChanged(_:)), for: .valueChanged)
+            control.addTarget(self, action: #selector(trackingEnded), for: [.touchUpInside, .touchUpOutside, .touchCancel])
+        }
+
+        private func findVolumeControl(in view: UIView) -> UISlider? {
+            if let control = view as? UISlider {
+                return control
+            }
+            return view.subviews.lazy.compactMap { self.findVolumeControl(in: $0) }.first
+        }
+
+        @objc private func trackingBegan() {
+            interactionChanged(true)
+        }
+
+        @objc private func volumeChanged(_ control: UISlider) {
+            interactionChanged(control.isTracking)
+        }
+
+        @objc private func trackingEnded() {
+            interactionChanged(false)
+        }
+    }
+
+    private final class NativeVolumeView: MPVolumeView {
+        var didLayout: (() -> Void)?
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            didLayout?()
         }
     }
 }
