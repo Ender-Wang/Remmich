@@ -81,7 +81,7 @@ public actor ImmichClient {
         do {
             async let pingOutput = client.pingServer(.init())
             async let versionOutput = client.getServerVersion(.init())
-            async let configOutput = client.getServerConfig(.init())
+            async let configOutput = Self.readConfig(client)
             async let featuresOutput = Self.readFeatures(client)
 
             let ping = try await Self.ping(from: pingOutput)
@@ -89,7 +89,7 @@ public actor ImmichClient {
                 throw ImmichAPIError.invalidResponse
             }
             let version = try await Self.version(from: versionOutput)
-            let config = try await Self.config(from: configOutput)
+            let config = try await configOutput
             let features = try await featuresOutput
 
             return ImmichServerInfo(
@@ -957,23 +957,21 @@ public actor ImmichClient {
         }
     }
 
-    private static func config(
-        from output: Operations.getServerConfig.Output
-    ) throws -> Components.Schemas.ServerConfigDto {
-        switch output {
+    #if compiler(>=6.4)
+        @diagnose(DeprecatedDeclaration, as: ignored, reason: "Public config lacks pre-login setup and maintenance state.")
+    #endif
+    private static func readConfig(_ client: Client) async throws -> Components.Schemas.ServerConfigDto {
+        switch try await client.getServerConfig(.init()) {
         case let .ok(response): try response.body.json
         case let .undocumented(statusCode, _): throw map(status: statusCode)
         }
     }
 
+    #if compiler(>=6.4)
+        @diagnose(DeprecatedDeclaration, as: ignored, reason: "Public config lacks the feature flags used by Search and Maps.")
+    #endif
     private static func readFeatures(_ client: Client) async throws -> Components.Schemas.ServerFeaturesDto {
-        try await features(from: client.getServerFeatures(.init()))
-    }
-
-    private static func features(
-        from output: Operations.getServerFeatures.Output
-    ) throws -> Components.Schemas.ServerFeaturesDto {
-        switch output {
+        switch try await client.getServerFeatures(.init()) {
         case let .ok(response): try response.body.json
         case let .undocumented(statusCode, _): throw map(status: statusCode)
         }

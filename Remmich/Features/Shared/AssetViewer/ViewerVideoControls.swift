@@ -652,6 +652,9 @@ private struct ViewerVideoVolumeSlider: UIViewRepresentable {
         private let slider = NativeVolumeView()
         private weak var volumeControl: UISlider?
 
+        #if compiler(>=6.4)
+            @diagnose(DeprecatedDeclaration, as: ignored, reason: "Keep the system volume slider without duplicating the separate AirPlay picker.")
+        #endif
         init(interactionChanged: @escaping (Bool) -> Void) {
             self.interactionChanged = interactionChanged
             super.init(frame: .zero)
