@@ -111,7 +111,6 @@ final class VideoPlaybackSession {
     private var contentLengthBytes: Int?
     private var resumesPreparationAfterSuspension = false
     private var seekSequence = 0
-    private var bufferingSeekTarget: Double?
     private var lastLoggedBufferSummary: String?
     @ObservationIgnored private var nowPlayingTitle: String?
     @ObservationIgnored private var nowPlayingArtwork: Data?
@@ -201,7 +200,7 @@ final class VideoPlaybackSession {
                 streamSource = source
             }
             applyNowPlayingMetadata(to: item)
-            item.preferredForwardBufferDuration = 10
+            item.preferredForwardBufferDuration = 0
             playerItem = item
             installObservers(for: item, generation: preparationGeneration)
             player.replaceCurrentItem(with: item)
@@ -269,7 +268,6 @@ final class VideoPlaybackSession {
         let sequence = seekSequence
         let resumePlayback = intendedPlayback
         phase = .seeking(resumePlayback: resumePlayback)
-        bufferingSeekTarget = max(0, seconds)
         updateTimelineState(currentSeconds: seconds, generation: generation)
         await player.seek(
             to: CMTime(seconds: max(0, seconds), preferredTimescale: 600),
@@ -277,7 +275,6 @@ final class VideoPlaybackSession {
             toleranceAfter: .zero
         )
         guard !isClosed, sequence == seekSequence else { return }
-        bufferingSeekTarget = nil
         updateTimelineState(currentSeconds: player.currentTime().seconds, generation: generation)
         savedPosition = max(0, seconds)
         if resumePlayback {
@@ -615,13 +612,9 @@ final class VideoPlaybackSession {
         let position = currentSeconds.isFinite ? max(0, currentSeconds) : 0
         let duration = playerItem.duration.seconds
         let resolvedDuration = duration.isFinite ? max(0, duration) : 0
-        streamSource?.updateBuffering(
-            duration: resolvedDuration,
-            secondsAhead: Self.bufferedSecondsAhead(
-                timeRanges: playerItem.loadedTimeRanges,
-                currentSeconds: bufferingSeekTarget ?? position
-            )
-        )
+        if resolvedDuration != timelineState.durationSeconds {
+            streamSource?.updateMediaDuration(resolvedDuration)
+        }
         timelineState = VideoPlaybackTimelineState(
             positionSeconds: min(position, resolvedDuration > 0 ? resolvedDuration : position),
             durationSeconds: resolvedDuration,
@@ -735,7 +728,6 @@ final class VideoPlaybackSession {
         bufferState = .empty
         timelineState = .empty
         lastLoggedBufferSummary = nil
-        bufferingSeekTarget = nil
         contentLengthBytes = nil
         seekSequence += 1
     }

@@ -65,37 +65,12 @@ struct AuthenticatedVideoStreamSourceTests {
         #expect(progress.requestComplete)
     }
 
-    @Test func bufferPacingUsesTimeWithHysteresis() {
-        var policy = VideoStreamBufferPolicy()
-        policy.update(duration: 300, ahead: 11)
-        #expect(policy.isThrottled)
-        policy.update(duration: 300, ahead: 8)
-        #expect(policy.isThrottled)
-        policy.update(duration: 300, ahead: 5)
-        #expect(!policy.isThrottled)
-        policy.update(duration: 300, ahead: 9)
-        #expect(!policy.isThrottled)
-        policy.update(duration: 300, ahead: 10)
-        #expect(policy.isThrottled)
-    }
-
-    @Test func chunkBudgetScalesWithWholeFileBitrateAndRemainingHeadroom() {
-        var policy = VideoStreamBufferPolicy()
-        policy.update(duration: 100, ahead: 0)
-        #expect(policy.chunkBytes(contentLength: 10_000_000) == 200_000)
-        #expect(policy.chunkBytes(contentLength: 20_000_000) == 400_000)
-        policy.update(duration: 100, ahead: 9)
-        #expect(policy.chunkBytes(contentLength: 20_000_000) == 200_000)
-        policy.update(duration: .nan, ahead: 0)
-        #expect(policy.chunkBytes(contentLength: 20_000_000) == 65536)
-        policy.update(duration: 1, ahead: 0)
-        #expect(policy.chunkBytes(contentLength: Int64.max) == 2_097_152)
-    }
-
-    @Test func lowBitrateStillSizesReadsFromTimeInsteadOfAFixedMinimum() {
-        var policy = VideoStreamBufferPolicy()
-        policy.update(duration: 1000, ahead: 0)
-        #expect(policy.chunkBytes(contentLength: 10000) == 20)
+    @Test func mediaChunkSizesScaleWithBitrateAndStayBounded() {
+        #expect(AuthenticatedVideoStreamSource.mediaChunkBytes(contentLength: 10000, durationSeconds: 1000) == 20)
+        #expect(AuthenticatedVideoStreamSource.mediaChunkBytes(contentLength: 20_000_000, durationSeconds: 100) == 400_000)
+        #expect(AuthenticatedVideoStreamSource.mediaChunkBytes(contentLength: Int64.max, durationSeconds: 1) == 8_388_608)
+        #expect(AuthenticatedVideoStreamSource.mediaChunkBytes(contentLength: nil, durationSeconds: 100) == 65536)
+        #expect(AuthenticatedVideoStreamSource.mediaChunkBytes(contentLength: 20_000_000, durationSeconds: .nan) == 65536)
     }
 
     @Test(arguments: ["video-fast-start", "video-tail-moov"])
@@ -143,6 +118,11 @@ struct AuthenticatedVideoStreamSourceTests {
             responseRange: 1024 ..< 2048,
             expectedByteCount: 512
         ))
+        #expect(!plan.completesWithExpectedBytes)
+        let completeRange = try AuthenticatedVideoStreamSource.responsePlan(
+            response: response, requestedOffset: 1024, requestedLength: 1024, requestsToEnd: false
+        )
+        #expect(completeRange.completesWithExpectedBytes)
 
         #expect(throws: AuthenticatedVideoStreamError.invalidRange) {
             try AuthenticatedVideoStreamSource.responsePlan(
