@@ -643,6 +643,26 @@ struct PhotosTimelineRegressionTests {
         #expect(store.sections.isEmpty)
     }
 
+    @Test(arguments: [true, false]) @MainActor
+    func viewerReturnLoadsAnOlderBucketAndRequiresTheRequestedAsset(assetExists: Bool) async {
+        let newest = TimelineBucketID(rawValue: "2026-11-01")
+        let middle = TimelineBucketID(rawValue: "2026-10-01")
+        let older = TimelineBucketID(rawValue: "2026-09-01")
+        let asset = Self.asset("requested", capturedAt: Self.date("2026-09-14T12:00:00Z"))
+        let reader = ScenarioTimelineReader(
+            buckets: [newest, middle, older].map { .init(id: $0, assetCount: 1) },
+            assets: [newest: [Self.asset("recent")], middle: [Self.asset("middle")],
+                     older: [assetExists ? asset : Self.asset("another-asset")]]
+        )
+        let store = PhotosTimelineStore(reader: reader)
+        await store.load()
+        #expect(await reader.assetRequestCount(for: older) == 0)
+
+        #expect(await store.prepareViewerReturn(to: asset) == assetExists)
+        #expect(await reader.assetRequestCount(for: older) == 1)
+        #expect(store.containsBrowsingAsset(asset.id) == assetExists)
+    }
+
     @Test @MainActor func rangeCoverReturnsAllAssetsWithoutMovingTheBucketWindow() async {
         let bucketID = Self.bucketID(6)
         let reader = ScenarioTimelineReader(

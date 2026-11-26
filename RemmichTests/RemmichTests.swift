@@ -72,6 +72,71 @@ struct RemmichTests {
         #expect(controller.media.pipeline != nil)
     }
 
+    @Test(arguments: ["videos", "search", "library", "albums", "uncached-videos", "videos-timeout"]) @MainActor
+    func restoredLaunchTabGetsItsOpeningPassBeforeTheFullCatalogPublishes(scenario: String) async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "Startup-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let account = SavedSessionRegistryTests.session(UUID().uuidString)
+        let scope = MediaAccountScope(session: account)
+        let destination = NativeTabDestination(rawValue: scenario) ?? .videos
+        let browsing = AccountBrowsingState(scope: scope)
+        browsing.saveTab(destination, groupedMediaOwner: .photos)
+        defer { browsing.detach(deleteLocalData: true) }
+        let store = SQLiteLibraryIndexStore(databaseURL: root.appending(path: "index.sqlite3"))
+        if scenario != "uncached-videos" {
+            let generation = try await store.beginGeneration(scope: scope)
+            let assets = [
+                LibraryIndexStoreTests.asset(id: "video", kind: .video, ownerID: account.userID),
+                LibraryIndexStoreTests.asset(id: "photo", ownerID: account.userID),
+            ]
+            try await store.upsert(assets: assets, generation: generation, scope: scope)
+            _ = try await store.acceptGeneration(generation, watermark: nil, historicalCursor: nil,
+                                                 expectedAssetCount: assets.count, scope: scope)
+        }
+        let suite = "Startup-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let controller = AppSessionController(
+            transfers: nil, service: RouteRestoreService(reachableEndpoints: []),
+            sessionStore: MemorySessionStore(session: account), profileStore: ConnectionProfileStore(suiteName: suite),
+            libraryIndexStore: store, libraryIndexPreferences: defaults, networkMonitoringEnabled: false
+        )
+        let start = Task { await controller.start() }
+        let deadline = ContinuousClock.now + .seconds(5)
+        while !controller.foregroundResourcesReady, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+
+        #expect(controller.browsing?.navigation.selection == destination)
+        #expect(controller.foregroundResourcesReady)
+        #expect(controller.media.isWaitingForStartupPage)
+        #expect(controller.photos.semanticAssetsSnapshot().isEmpty)
+        if destination == .videos, scenario != "uncached-videos" {
+            #expect(controller.videos.isOpeningWindow)
+            #expect(controller.videos.semanticAssetsSnapshot().map(\.id) == ["video"])
+            if scenario == "videos" {
+                controller.media.noteVisibleStartupThumbnail()
+            }
+        } else {
+            #expect(controller.videos.semanticAssetsSnapshot().isEmpty)
+            if scenario == "uncached-videos" {
+                await start.value
+                #expect(controller.media.isWaitingForStartupPage)
+            }
+            controller.media.finishStartupPage()
+        }
+        await start.value
+
+        #expect(!controller.media.isWaitingForStartupPage)
+        #expect(!controller.videos.isOpeningWindow)
+        if scenario != "uncached-videos" {
+            #expect(controller.videos.semanticAssetsSnapshot().map(\.id) == ["video"])
+            #expect(Set(controller.photos.semanticAssetsSnapshot().map(\.id)) == ["photo", "video"])
+        }
+        await controller.signOut()
+    }
+
     @Test(arguments: LibraryBackgroundSyncKind.allCases) @MainActor
     func backgroundExpirationPreventsLateSessionRestorationFromStartingSync(kind: LibraryBackgroundSyncKind) async throws {
         let sessions = SuspendedBackgroundSessionStore()

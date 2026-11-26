@@ -7,6 +7,28 @@ import UIKit
 @Suite("Overlapping viewer returns")
 @MainActor
 struct AssetViewerPresentationTests {
+    @Test func movingTheReturnSourceTransfersOnlyTheSelectedViewersThumbnailAndBadge() throws {
+        let store = AssetViewerPresentationStore()
+        let source = UUID(), destination = UUID()
+        let previous = try #require(store.present(ownerID: source, assetID: "previous") { _, _ in AnyView(Color.clear) })
+        store.beginReturn(id: previous)
+        let viewer = try #require(store.present(ownerID: source, assetID: "selected") { _, _ in AnyView(Color.clear) })
+
+        store.moveReturnSource(for: viewer, to: destination)
+
+        #expect(store.hiddenSourceIDs(ownerID: source) == ["previous"])
+        #expect(store.hiddenBadgeIDs(ownerID: source) == ["previous"])
+        #expect(store.hiddenSourceIDs(ownerID: destination) == ["selected"])
+        #expect(store.hiddenBadgeIDs(ownerID: destination) == ["selected"])
+        #expect(store.activeID == viewer)
+
+        store.finish(id: previous)
+        #expect(store.hiddenSourceIDs(ownerID: destination) == ["selected"])
+        store.finish(id: viewer)
+        #expect(store.hiddenSourceIDs(ownerID: destination).isEmpty)
+        #expect(store.hiddenBadgeIDs(ownerID: destination).isEmpty)
+    }
+
     @Test func nextViewerOpensWhilePreviousReturnRemainsMounted() throws {
         let store = AssetViewerPresentationStore()
         let owner = UUID()

@@ -1017,6 +1017,42 @@ struct LibraryIndexSynchronizationTests {
         #expect(await progress.values.first == initial)
     }
 
+    @MainActor @Test func recentlyTakenDiscoversAnOlderMonthOnlyWhenBrowsed() async throws {
+        let fixture = try IndexFixture()
+        defer { fixture.cleanup() }
+        let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        let account = SavedSessionRegistryTests.session("camera-discovery")
+        let scope = MediaAccountScope(session: account)
+        let newest = TimelineBucketID(rawValue: "1970-01-01")
+        let older = TimelineBucketID(rawValue: "1969-12-01")
+        let first = LibraryIndexStoreTests.asset(id: "first").timelineAssetSummary
+        let hidden = LibraryIndexStoreTests.asset(id: "discovered", captureTime: -86400).timelineAssetSummary
+        let catalog = LibraryTimelineCatalog(summaries: [.init(id: newest, assetCount: 1), .init(id: older, assetCount: 1)], olderCursor: 0)
+        try await store.saveCollectionTimeline(catalog, key: LibraryIndexCard.recentlyTaken.timelineKey, scope: scope,
+                                               replacing: [newest: [first], older: [hidden]], removing: [])
+        let detailSource = AssetDetailFixtureSource()
+        try await store.upsert(assetDetail: detailSource.assetDetail(id: first.id), scope: scope)
+        let cache = CachedAssetDetailReader(source: detailSource, store: store)
+        await cache.configure(session: account)
+        let repository = ImmichTimelineRepository()
+        await repository.configure(session: account, activeEndpoint: nil, collectionStore: store)
+        let query = LibraryAssetCollection.recentlyTaken.query
+        let opening = LibraryOpeningBuckets(source: repository, query: query)
+        let camera = LibraryCameraMetadata(store: store, scope: scope, details: cache)
+        let reader = LibraryScopedTimelineReader(source: opening, query: query, media: .photos, camera: camera)
+
+        #expect(try await reader.indexedRecentlyTaken() == nil)
+        let preview = try #require(await reader.openingWindow(limit: 2))
+        #expect(preview.assetsByBucket[newest]?.map(\.id) == [first.id])
+        #expect(preview.assetsByBucket[older] == nil)
+        #expect(await detailSource.requestedIDs == [first.id])
+
+        #expect(try await reader.assets(in: older, query: query).map(\.id) == [hidden.id])
+        #expect(await detailSource.requestedIDs == [first.id, hidden.id])
+        let complete = try #require(await reader.indexedRecentlyTaken())
+        #expect(complete.assetsByBucket[older]?.map(\.id) == [hidden.id])
+    }
+
     @Test func removingAccountCacheDeletesOnlyItsNamespace() async throws {
         let fixture = try IndexFixture()
         defer { fixture.cleanup() }

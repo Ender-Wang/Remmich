@@ -325,6 +325,29 @@ struct LibraryIndexStoreTests {
         #expect(opening.photoCameraCoverage?.hasMissingMetadata == false)
     }
 
+    @MainActor @Test func memoriesCoverCanComeFromTheSecondCachedPage() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let store = SQLiteLibraryIndexStore(databaseURL: fixture.databaseURL)
+        let account = SavedSessionRegistryTests.session("memories-covers")
+        let scope = MediaAccountScope(session: account)
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let empty = (0 ..< 12).map { TimelineMemorySummary(id: "empty-\($0)", memoryAt: date, sourceYear: 2023, assets: []) }
+        let visible = TimelineMemorySummary(id: "covered", memoryAt: date, sourceYear: 2023,
+                                            assets: [.init(id: "asset", revision: date, mediaKind: .image)])
+        try await store.saveCollectionPayload(empty + [visible], key: "memoryCovers", scope: scope)
+        let source = ImmichTimelineRepository()
+        await source.configure(session: account, activeEndpoint: nil, collectionStore: store)
+        let memories = LibraryMemoriesStore()
+        #expect(!memories.hasContent)
+
+        await memories.loadCovers(from: source)
+
+        #expect(memories.hasContent)
+        #expect(memories.covers.map(\.id) == ["covered"])
+        #expect(memories.coversFinished)
+    }
+
     @Test func libraryDeltaChecksRecentAndChangedMonthsAndRotatesEarlierMonths() {
         let summaries = (1 ... 7).reversed().map {
             TimelineBucketSummary(id: .init(rawValue: "2026-0\($0)-01"), assetCount: 2)
@@ -631,9 +654,9 @@ struct LibraryIndexStoreTests {
         ))
     }
 
-    private static func asset(id: String, checksum: String = "checksum", captureTime: TimeInterval = 100,
-                              visibility: String = "timeline", trashed: Bool = false,
-                              kind: LibraryIndexAssetKind = .image, ownerID: String = "owner") -> LibraryIndexAssetRecord
+    static func asset(id: String, checksum: String = "checksum", captureTime: TimeInterval = 100,
+                      visibility: String = "timeline", trashed: Bool = false,
+                      kind: LibraryIndexAssetKind = .image, ownerID: String = "owner") -> LibraryIndexAssetRecord
     {
         .init(
             id: id,

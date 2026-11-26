@@ -248,14 +248,28 @@ struct TimelineCaptureDateFormattingTests {
             }
 
             #expect(!catalog.isConfirmedEmpty)
+            #expect(!catalog.hasContent)
             catalog.adoptIndexedMemories(entries)
             #expect(catalog.finished && catalog.coversFinished)
             #expect(catalog.memories.map(\.id) == entries.reversed().map(\.id))
             #expect(catalog.covers.count == 30)
+            #expect(catalog.hasContent)
 
             catalog.adoptIndexedMemories([])
             #expect(catalog.isConfirmedEmpty)
+            #expect(!catalog.hasContent)
             #expect(catalog.memories.isEmpty && catalog.covers.isEmpty)
+        }
+
+        @MainActor @Test func libraryPeopleContentDistinguishesUnloadedEmptyAndPopulatedDirectories() {
+            let directory = LibraryDirectoryStore()
+            #expect(!directory.hasContent && !directory.isConfirmedEmpty)
+
+            directory.adoptIndexedPeople([])
+            #expect(!directory.hasContent && directory.isConfirmedEmpty)
+
+            directory.adoptIndexedPeople([.init(id: "person", name: "Person", updatedAt: .distantPast)])
+            #expect(directory.hasContent && !directory.isConfirmedEmpty)
         }
     #endif
 
