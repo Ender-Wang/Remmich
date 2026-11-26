@@ -631,7 +631,7 @@ struct TimelineSemanticZoomTests {
     }
 
     @Test(arguments: [false, true])
-    @MainActor func completingOpeningPhotosKeepsVisibleTilesInPlace(atOpeningTop: Bool) throws {
+    @MainActor func completingOpeningPhotosKeepsVisibleTilesAndImagesInPlace(atOpeningTop: Bool) throws {
         let assets = (0 ..< 300).map {
             asset(String(format: "%03d", $0), String(format: "2027-01-%02dT12:00:00Z", $0 / 10 + 1))
         }
@@ -663,8 +663,28 @@ struct TimelineSemanticZoomTests {
             return (id, cell.frame.offsetBy(dx: 0, dy: -collection.contentOffset.y))
         }
         #expect(!before.isEmpty)
+        let viewport = collection.bounds.inset(by: collection.contentInset)
+        let readyCells = collection.visibleCells.compactMap { $0 as? TimelineSemanticCollectionCell }
+            .filter { cell in cell.coverAssetID != nil && viewport.contains(cell.frame) }
+        let ready = try #require(readyCells.first)
+        let readyID = try #require(ready.coverAssetID)
+        let readyNode = try #require(ready.nodeID)
+        let readyAsset = try #require(assets.first { $0.id == readyID })
+        let image = try #require(UIImage(systemName: "circle.fill"))
+        ready.setCoverImage(image, assetID: readyID, revision: readyAsset.thumbnailRevision)
+        let stale = try #require(readyCells.first { $0 !== ready })
+        let staleNode = try #require(stale.nodeID)
+        let staleID = try #require(stale.coverAssetID)
+        let staleAsset = try #require(assets.first { $0.id == staleID })
+        stale.setCoverImage(image, assetID: staleID, revision: staleAsset.thumbnailRevision.addingTimeInterval(-1))
         controller.update(input(opening: false))
         collection.layoutIfNeeded()
+        let readyPath = try #require(dataSource.indexPath(for: readyNode))
+        let readyAfter = try #require(collection.cellForItem(at: readyPath) as? TimelineSemanticCollectionCell)
+        #expect(readyAfter.coverImage === image)
+        let stalePath = try #require(dataSource.indexPath(for: staleNode))
+        let staleAfter = try #require(collection.cellForItem(at: stalePath) as? TimelineSemanticCollectionCell)
+        #expect(staleAfter.coverImage == nil)
         for (id, oldFrame) in before {
             let path = try #require(dataSource.indexPath(for: id))
             let frame = try #require(collection.collectionViewLayout.layoutAttributesForItem(at: path)).frame

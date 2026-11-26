@@ -305,6 +305,7 @@ final class TimelineSemanticCollectionCell: UICollectionViewCell {
     var coverAssetID: String?
     var coverImage: UIImage?
     var coverImageAssetID: String?
+    private(set) var coverImageRevision: Date?
     var nodeID: String?
     private var hostingController: UIHostingController<AnyView>?
     private let headerTitleMaterialView = TimelineHeaderMaterialView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
@@ -409,6 +410,18 @@ final class TimelineSemanticCollectionCell: UICollectionViewCell {
         hasContent = false
     }
 
+    func setCoverImage(_ image: UIImage, assetID: String, revision: Date) {
+        coverImage = image
+        coverImageAssetID = assetID
+        coverImageRevision = revision
+    }
+
+    func clearCoverImage() {
+        coverImage = nil
+        coverImageAssetID = nil
+        coverImageRevision = nil
+    }
+
     var hostedSafeAreaRegions: SafeAreaRegions? {
         hostingController?.safeAreaRegions
     }
@@ -490,8 +503,7 @@ final class TimelineSemanticCollectionCell: UICollectionViewCell {
         super.prepareForReuse()
         clearContent()
         coverAssetID = nil
-        coverImage = nil
-        coverImageAssetID = nil
+        clearCoverImage()
         nodeID = nil
         isAccessibilityElement = false
         accessibilityLabel = nil
@@ -624,6 +636,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
     private var olderExpansionRearmOffset: CGFloat?
     private var newerExpansionRearmOffset: CGFloat?
     private var handoffImages: [String: UIImage] = [:]
+    private var openingThumbnails: [String: UIImage] = [:]
     private var representativeAssets: [String: Int] = [:]
     private var isInstalling = false
     private(set) var installationCount = 0
@@ -791,7 +804,15 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             return
         }
         if completesOpeningWindow {
+            if scale == value.scale, scale.isAssets, previous?.runtime === value.runtime, previous?.media === value.media {
+                retainOpeningThumbnails(in: value.catalog)
+            }
             deferredInput = nil
+        }
+        defer {
+            if completesOpeningWindow {
+                openingThumbnails.removeAll()
+            }
         }
         input = value
         if previous == nil, pendingRootReturn == nil {
@@ -1139,13 +1160,24 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         return cell
     }
 
+    private func retainOpeningThumbnails(in catalog: TimelineSemanticCatalog) {
+        // Installing the full projection rebases the scroll coordinates and
+        // can recycle visible hosts even though their screen positions match.
+        for case let cell as TimelineSemanticCollectionCell in collection.visibleCells {
+            guard let assetID = cell.coverAssetID, cell.coverImageAssetID == assetID,
+                  let index = catalog.assetIndexes[assetID],
+                  cell.coverImageRevision == catalog.assets[index].thumbnailRevision,
+                  let image = cell.coverImage else { continue }
+            openingThumbnails[assetID] = image
+        }
+    }
+
     private func configure(_ path: IndexPath, cell supplied: TimelineSemanticCollectionCell? = nil) {
         guard let input, let catalog, let projection, projection.items.indices.contains(path.item),
               let cell = supplied ?? collection.cellForItem(at: path) as? TimelineSemanticCollectionCell else { return }
         let item = projection.items[path.item]
         if cell.nodeID != item.id {
-            cell.coverImage = nil
-            cell.coverImageAssetID = nil
+            cell.clearCoverImage()
         }
         cell.contentView.isUserInteractionEnabled = true
         cell.clipsToBounds = true
@@ -1172,6 +1204,12 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
             cell.setHeaderBackgroundOpacity(headerBackgroundOpacity(at: path.item))
         } else if scale.isAssets {
             cell.coverAssetID = asset.id
+            let openingImage = openingThumbnails[asset.id]
+            if let openingImage {
+                cell.setCoverImage(openingImage, assetID: asset.id, revision: asset.thumbnailRevision)
+            } else if cell.coverImageRevision != asset.thumbnailRevision {
+                cell.clearCoverImage()
+            }
             cell.setHostedContent(
                 TimelineAssetThumbnail(asset: asset, media: input.media,
                                        assetLayout: projection.scale == .square ? .square : .naturalAspect,
@@ -1186,13 +1224,14 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
                                                input.selectAsset(selected, Array(catalog.assets[max(0, assetIndex - 80) ..< min(catalog.assets.count, assetIndex + 81)].reversed()))
                                            }
                                        },
-                                       placeholderImage: handoffImages[item.id],
+                                       placeholderImage: openingImage ?? handoffImages[item.id],
                                        revealsImageOnLoad: transitionSurface == nil && gesture == nil,
                                        imageLoaded: { [weak self, weak cell] image in
-                                           guard cell?.nodeID == item.id, cell?.coverAssetID == asset.id else { return }
-                                           cell?.coverImage = image
-                                           cell?.coverImageAssetID = asset.id
-                                           self?.scheduleStartupPhotoDisplayCheck()
+                                           guard let self, let cell, cell.nodeID == item.id, cell.coverAssetID == asset.id,
+                                                 let currentCatalog = self.catalog, let index = currentCatalog.assetIndexes[asset.id],
+                                                 currentCatalog.assets[index].thumbnailRevision == asset.thumbnailRevision else { return }
+                                           cell.setCoverImage(image, assetID: asset.id, revision: asset.thumbnailRevision)
+                                           scheduleStartupPhotoDisplayCheck()
                                        },
                                        hiddenLivePhotoBadgeAssetID: input.hiddenLivePhotoID,
                                        hiddenReturningThumbnailAssetID: input.hiddenThumbnailID)
@@ -1238,8 +1277,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
                                     onCoverChanged: { [weak cell] assetID in
                                         guard cell?.nodeID == item.id else { return }
                                         if cell?.coverAssetID != assetID {
-                                            cell?.coverImage = nil
-                                            cell?.coverImageAssetID = nil
+                                            cell?.clearCoverImage()
                                         }
                                         cell?.coverAssetID = assetID
                                     })
@@ -1260,8 +1298,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         guard let catalog, let assetIndex = catalog.assetIndexes[assetID],
               catalog.assets[assetIndex].thumbnailRevision == thumbnailRevision,
               cell.nodeID == nodeID, cell.coverAssetID == assetID else { return }
-        cell.coverImage = image
-        cell.coverImageAssetID = assetID
+        cell.setCoverImage(image, assetID: assetID, revision: thumbnailRevision)
         // A native card can finish decoding before the transition's local-only
         // request. Share that ready image instead of revealing an empty tile.
         guard let surface = transitionSurface, let target, projection?.scale == target.scale,
