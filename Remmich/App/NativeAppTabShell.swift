@@ -10,6 +10,7 @@ final class NativeTabSelectionState {
     var isAlbumSearchExpanded = false
     var searchFocusRequest: UUID?
     @ObservationIgnored var isPageInteractionActive = false
+    var incomingPage: NativeTabDestination?
 
     init(selection: NativeTabDestination = .photos) {
         self.selection = selection
@@ -17,6 +18,10 @@ final class NativeTabSelectionState {
 
     func canActivateContent(in destination: NativeTabDestination) -> Bool {
         selection == destination && !isPageInteractionActive
+    }
+
+    func canRevealThumbnails(in destination: NativeTabDestination) -> Bool {
+        selection == destination || incomingPage == destination
     }
 }
 
@@ -255,7 +260,7 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
     let isViewerPresented: Bool
     let pageSwipeEnabled: Bool
     var albumSearchExpanded: () -> Bool = { false }
-    var pageInteractionChanged: (Bool) -> Void = { _ in }
+    var pageInteractionChanged: (NativeTabDestination?) -> Void = { _ in }
     var searchTapped: () -> Void = {}
     let photosScrollRequest: Int
     let videosScrollRequest: Int
@@ -719,7 +724,7 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
             pageInteractionDirection = direction
             pageInteractionDestination = destination
             pageInteractionPreviousTab = previousTab
-            parent.pageInteractionChanged(true)
+            parent.pageInteractionChanged(destination)
             pendingPageDirection = direction
             isUpdatingTabs = true
             controller.selectedTab = tab(for: destination)
@@ -840,7 +845,7 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
             pageInteractionController = nil
             pageInteractionDestination = nil
             pageInteractionPreviousTab = nil
-            parent.pageInteractionChanged(false)
+            parent.pageInteractionChanged(nil)
         }
 
         private func pageInteractionProgress(

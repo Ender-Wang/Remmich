@@ -62,6 +62,7 @@ struct TimelineSemanticCollectionView: UIViewControllerRepresentable {
     let runtime: TimelineSemanticRuntime
     let latestRequest: Int
     let isActive: Bool
+    var canRevealThumbnails: Bool?
     var includesDateCardsInPinch = true
     var isOpeningWindow = false
     var tracksStartupPhotos = false
@@ -814,7 +815,8 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         }
         if pendingRootReturn == nil, let previous, revision == value.revision, scale == value.scale,
            previous.isOpeningWindow == value.isOpeningWindow,
-           previous.isActive == value.isActive, previous.latestRequest == value.latestRequest,
+           previous.isActive == value.isActive, previous.canRevealThumbnails == value.canRevealThumbnails,
+           previous.latestRequest == value.latestRequest,
            previous.hiddenThumbnailID == value.hiddenThumbnailID, previous.hiddenLivePhotoID == value.hiddenLivePhotoID,
            previous.additionalHiddenThumbnailIDs == value.additionalHiddenThumbnailIDs,
            previous.additionalHiddenBadgeIDs == value.additionalHiddenBadgeIDs,
@@ -936,11 +938,11 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
                 configure(path)
             }
         }
-        if previous?.isActive != value.isActive {
+        if previous?.isActive != value.isActive || previous?.canRevealThumbnails != value.canRevealThumbnails {
             for path in collection.indexPathsForVisibleItems {
                 configure(path)
             }
-            if value.isActive {
+            if previous?.isActive != value.isActive, value.isActive {
                 publishViewport()
                 scheduleStartupPhotoDisplayCheck()
             }
@@ -1185,6 +1187,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
                                            }
                                        },
                                        placeholderImage: handoffImages[item.id],
+                                       revealsImageOnLoad: transitionSurface == nil && gesture == nil,
                                        imageLoaded: { [weak self, weak cell] image in
                                            guard cell?.nodeID == item.id, cell?.coverAssetID == asset.id else { return }
                                            cell?.coverImage = image
@@ -1195,6 +1198,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
                                        hiddenReturningThumbnailAssetID: input.hiddenThumbnailID)
                     .environment(\.timelineHiddenSourceAssetIDs, input.additionalHiddenThumbnailIDs)
                     .environment(\.timelineHiddenBadgeAssetIDs, input.additionalHiddenBadgeIDs)
+                    .environment(\.thumbnailRevealsActive, input.canRevealThumbnails ?? input.isActive)
                     .environment(\.timelineAssetPreviewAction, TimelineAssetPreviewAction { [weak self] asset, image, _ in
                         guard let self, gesture == nil, animator == nil,
                               let input = self.input, input.isActive else { return }

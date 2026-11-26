@@ -313,6 +313,7 @@ struct SavedPhotoThumbnail: View {
                 Rectangle().fill(.quaternary)
                 if let image = library.cardCover(for: request) {
                     Image(uiImage: image).resizable().scaledToFill()
+                        .modifier(ThumbnailImageReveal())
                 } else if finished {
                     Image(systemName: "icloud").foregroundStyle(.secondary)
                 } else {

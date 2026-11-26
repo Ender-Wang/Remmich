@@ -140,18 +140,11 @@ struct LibraryAssetCover: View {
     var body: some View {
         let pixels = LibraryCollectionCardMetrics.coverPixels(scale: scale)
         let request = savedPhoto.map { SavedPhotosLibrary.CardCoverRequest(item: $0, pixels: pixels) }
-        Group {
-            if let image = preparedImage ?? (savedImage?.request == request ? savedImage?.image : nil) {
-                GeometryReader { geometry in
-                    Image(uiImage: image).resizable().scaledToFill()
-                        .frame(width: geometry.size.width, height: geometry.size.height)
-                        .clipped()
-                }
-            } else {
-                ImmichThumbnail(descriptor: LibraryCollectionCardMetrics.coverDescriptor(.init(id: assetID, revision: revision), scale: scale),
-                                media: media)
-            }
-        }
+        let image = preparedImage ?? (savedImage?.request == request ? savedImage?.image : nil)
+        ImmichThumbnail(
+            descriptor: LibraryCollectionCardMetrics.coverDescriptor(.init(id: assetID, revision: revision), scale: scale),
+            media: media, preparedImage: image, revealsImageOnLoad: true
+        )
         .task(id: request) {
             guard preparedImage == nil, let savedPhoto, let request, savedImage?.request != request,
                   let image = try? await SavedPhotosLibrary.image(savedPhoto, pixels: pixels), !Task.isCancelled else { return }

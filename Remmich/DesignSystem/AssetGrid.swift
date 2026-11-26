@@ -600,6 +600,7 @@ struct TimelineAssetThumbnail: View {
     let assetSelected: (TimelineAssetSummary) -> Void
     var priority: ImageRequest.Priority = .normal
     var placeholderImage: UIImage?
+    var revealsImageOnLoad = true
     var imageLoaded: (UIImage) -> Void = { _ in }
     var hiddenLivePhotoBadgeAssetID: String?
     var hiddenReturningThumbnailAssetID: String?
@@ -629,6 +630,7 @@ struct TimelineAssetThumbnail: View {
                 ),
                 priority: priority,
                 placeholderImage: placeholderImage,
+                revealsImageOnLoad: revealsImageOnLoad,
                 didLoad: {
                     media.retainTimelineThumbnail(
                         $0.container,

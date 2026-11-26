@@ -202,6 +202,7 @@ struct SearchView: View {
             searchPage(liveResults: liveResults, width: geometry.size.width, horizontalInsets: horizontalInsets,
                        safeBottom: geometry.safeAreaInsets.bottom)
                 .frame(width: geometry.size.width)
+                .environment(\.thumbnailRevealsActive, tabSelection.canRevealThumbnails(in: .search))
                 .overlay(alignment: .top) {
                     searchHeader(width: geometry.size.width, topPadding: topPadding,
                                  maximumControlsHeight: geometry.size.height * 0.32, liveResults: liveResults)
@@ -703,7 +704,7 @@ struct SearchView: View {
                                     store.apply(filters)
                                 } label: {
                                     VStack(spacing: 5) {
-                                        SearchPersonPortrait(person: person, media: media, size: 64)
+                                        SearchPersonPortrait(person: person, media: media, size: 64, revealsImageOnLoad: true)
                                         Text(person.displayName).font(.caption).lineLimit(1)
                                     }
                                     .frame(width: 68)
@@ -784,7 +785,8 @@ struct SearchView: View {
                         } label: {
                             ImmichThumbnail(
                                 descriptor: TimelineAssetThumbnail.thumbnailDescriptor(for: asset, points: 160, scale: 2),
-                                media: media
+                                media: media,
+                                revealsImageOnLoad: true
                             )
                             .frame(width: 152, height: 104)
                             .overlay(alignment: .bottomLeading) {

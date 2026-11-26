@@ -297,6 +297,7 @@ struct AlbumsView: View {
                 .cardNavigationDestination(id: album.id, in: albumTransition)
         }
         .accessibilityIdentifier("albums-root")
+        .environment(\.thumbnailRevealsActive, tabSelectionState.canRevealThumbnails(in: .albums))
         .background { CardNavigationRootAnchor(root: navigationRoot).allowsHitTesting(false) }
         .onChange(of: tabSelectionState.selection) { _, current in
             if current != .albums {
@@ -1331,7 +1332,7 @@ private struct AlbumCover: View {
             }
             Group {
                 if let descriptor {
-                    ImmichThumbnail(descriptor: descriptor, media: media, animatesImageLoading: false) { _ in didLoad() }
+                    ImmichThumbnail(descriptor: descriptor, media: media, revealsImageOnLoad: true) { _ in didLoad() }
                 } else {
                     Rectangle().fill(.quaternary)
                         .overlay { Image(systemName: "rectangle.stack").foregroundStyle(.secondary) }

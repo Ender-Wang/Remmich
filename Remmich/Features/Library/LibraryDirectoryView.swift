@@ -314,6 +314,7 @@ struct LibraryDirectoryCard: View {
                         Image(uiImage: heatmap).resizable().scaledToFill()
                             .frame(width: geometry.size.width, height: geometry.size.height)
                             .clipped()
+                            .modifier(ThumbnailImageReveal())
                     }
                     .accessibilityHidden(true)
                 }
@@ -587,6 +588,7 @@ private struct LibraryDirectoryPortrait: View {
         LazyImage(request: request) { state in
             if let image = state.image {
                 image.resizable().scaledToFill()
+                    .modifier(ThumbnailImageReveal())
             } else if case .partner = entry {
                 Text(entry.name.split(whereSeparator: \.isWhitespace).prefix(2).compactMap(\.first).map(String.init).joined().uppercased())
                     .font(.system(size: size * 0.32, weight: .semibold))

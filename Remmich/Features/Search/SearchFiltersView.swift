@@ -526,11 +526,13 @@ struct SearchPersonPortrait: View {
     let person: LibraryPerson
     let media: MediaLibraryController
     let size: CGFloat
+    var revealsImageOnLoad = false
 
     var body: some View {
         LazyImage(request: media.personThumbnailRequest(person, pixels: Int(size * displayScale))) { state in
             if let image = state.image {
                 image.resizable().scaledToFill()
+                    .modifier(ThumbnailImageReveal(enabled: revealsImageOnLoad))
             } else {
                 Image(systemName: "person.crop.circle.fill")
                     .resizable()

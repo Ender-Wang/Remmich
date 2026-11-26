@@ -1047,6 +1047,7 @@ struct PhotosView: View {
                         runtime: semanticRuntime,
                         latestRequest: semanticLatestRequest,
                         isActive: isTabContentActivated && navigationPath.isEmpty && viewerRoute == nil,
+                        canRevealThumbnails: tabSelectionState?.canRevealThumbnails(in: tabDestination),
                         includesDateCardsInPinch: tabDestination != .albums && tabDestination != .library,
                         isOpeningWindow: semanticCatalogIsOpeningWindow,
                         tracksStartupPhotos: tabDestination == .photos,

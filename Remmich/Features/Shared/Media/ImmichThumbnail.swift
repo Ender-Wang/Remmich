@@ -3,7 +3,12 @@ import NukeUI
 import SwiftUI
 import UIKit
 
+extension EnvironmentValues {
+    @Entry var thumbnailRevealsActive = true
+}
+
 struct ImmichThumbnail: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let descriptor: MediaRequestDescriptor
     let media: MediaLibraryController
     var contentMode: ContentMode = .fill
@@ -12,19 +17,21 @@ struct ImmichThumbnail: View {
     var imageCornerRadius: CGFloat = 0
     var imageScale: CGFloat = 1
     var priority: ImageRequest.Priority = .normal
+    var preparedImage: UIImage?
     var placeholderImage: UIImage?
     var logoPlaceholderCaption: RemmichCoverPlaceholder.Caption?
-    var animatesImageLoading = true
+    var revealsImageOnLoad = false
     var didLoad: (ImageResponse) -> Void = { _ in }
 
     @State private var retryID = 0
 
     var body: some View {
-        let request = media.imageRequest(for: descriptor, priority: priority)
+        let request = preparedImage == nil ? media.imageRequest(for: descriptor, priority: priority) : nil
         let isCacheOnly = request?.options.contains(.returnCacheDataDontLoad) == true
+        let animatesTransition = !revealsImageOnLoad && !reduceMotion
         LazyImage(
             request: request,
-            transaction: .init(animation: animatesImageLoading ? .easeOut(duration: 0.18) : nil)
+            transaction: .init(animation: animatesTransition ? ThumbnailImageReveal.animation : nil)
         ) { state in
             ZStack {
                 if showsBackground {
@@ -32,10 +39,10 @@ struct ImmichThumbnail: View {
                         .fill(.quaternary)
                         .opacity(backgroundOpacity)
                 }
-                if let image = state.image {
+                if let image = preparedImage.map({ Image(uiImage: $0) }) ?? state.image ?? placeholderImage.map({ Image(uiImage: $0) }) {
                     rendered(image)
-                } else if let placeholderImage {
-                    rendered(Image(uiImage: placeholderImage))
+                        .modifier(ThumbnailImageReveal(enabled: revealsImageOnLoad && placeholderImage == nil))
+                        .transition(animatesTransition ? .opacity : .identity)
                 } else if state.error != nil, !isCacheOnly {
                     Button {
                         retryID += 1
@@ -87,6 +94,27 @@ struct ImmichThumbnail: View {
                 )
                 .clipped()
         }
-        .transition(animatesImageLoading ? .opacity : .identity)
+    }
+}
+
+/// Reveal the pixels on their first mount, including synchronous memory hits.
+/// Keep placeholder geometry and interaction outside the opacity animation.
+struct ThumbnailImageReveal: ViewModifier {
+    static let animation = Animation.easeOut(duration: 0.28)
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.thumbnailRevealsActive) private var revealsActive
+    var enabled = true
+    @State private var revealed = false
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(enabled && !reduceMotion && !revealed ? 0 : 1)
+            .onChange(of: revealsActive, initial: true) { _, active in
+                guard active, !revealed else { return }
+                withAnimation(enabled && !reduceMotion ? Self.animation : nil) {
+                    revealed = true
+                }
+            }
     }
 }

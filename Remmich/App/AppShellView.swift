@@ -106,7 +106,10 @@ struct AppShellView: View {
             isViewerPresented: viewerPresented,
             pageSwipeEnabled: pageSwipeEnabled,
             albumSearchExpanded: { tabSelectionState.isAlbumSearchExpanded },
-            pageInteractionChanged: { tabSelectionState.isPageInteractionActive = $0 },
+            pageInteractionChanged: { destination in
+                tabSelectionState.isPageInteractionActive = destination != nil
+                tabSelectionState.incomingPage = destination
+            },
             searchTapped: {
                 searchPath.removeAll()
                 tabSelectionState.searchFocusRequest = UUID()

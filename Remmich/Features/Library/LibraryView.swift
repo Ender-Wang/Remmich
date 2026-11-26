@@ -135,6 +135,7 @@ struct LibraryView: View {
                     .padding(.bottom, geometry.safeAreaInsets.bottom + 16)
                     .frame(width: geometry.size.width)
                     .environment(\.libraryHubNavigation, LibraryHubNavigation(namespace: libraryCardTransition, open: openLibraryCard))
+                    .environment(\.thumbnailRevealsActive, tabSelectionState?.canRevealThumbnails(in: .library) ?? true)
                 }
                 .ignoresSafeArea(.container, edges: [.top, .bottom])
 
