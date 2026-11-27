@@ -28,7 +28,6 @@ struct PhotosGroupedTabView: View {
     let timelineRuntime: TimelineSemanticRuntime
     let returnToTimeline: () -> Void
     var viewerVisibilityChanged: (Bool) -> Void = { _ in }
-    let showAccount: () -> Void
 
     @Namespace private var viewerNamespace
     @State private var path: [PhotosRangeRoute] = []
@@ -72,7 +71,6 @@ struct PhotosGroupedTabView: View {
                     ToolbarItem(placement: .topBarLeading) { backButton }
                         .sharedBackgroundVisibility(.hidden)
                 }
-                AccountToolbarButton(action: showAccount)
             }
             .navigationDestination(for: PhotosRangeRoute.self) { route in
                 destination(route)

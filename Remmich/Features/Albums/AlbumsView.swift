@@ -137,7 +137,6 @@ struct AlbumsView: View {
     let showsLoadingOverlay: Bool
     let openingContentReady: () -> Void
     let openAlbum: (AlbumSummary, Bool) -> Void
-    let showAccount: () -> Void
     private let store: AlbumsStore
     @State private var scope: AlbumScope = .all
     @State private var contentScope: AlbumScope = .all
@@ -175,8 +174,7 @@ struct AlbumsView: View {
          tabBarTop: Binding<CGFloat>, navigationPath: Binding<NavigationPath>, windowTopInset: CGFloat,
          showsLoadingOverlay: Bool = true,
          openingContentReady: @escaping () -> Void,
-         openAlbum: @escaping (AlbumSummary, Bool) -> Void,
-         showAccount: @escaping () -> Void)
+         openAlbum: @escaping (AlbumSummary, Bool) -> Void)
     {
         self.source = source
         self.media = media
@@ -195,7 +193,6 @@ struct AlbumsView: View {
         self.showsLoadingOverlay = showsLoadingOverlay
         self.openingContentReady = openingContentReady
         self.openAlbum = openAlbum
-        self.showAccount = showAccount
         self.store = store
     }
 
@@ -289,7 +286,7 @@ struct AlbumsView: View {
                             persistence: persistence, scope: accountScope,
                             timelineRuntime: timelineSessions.runtime(albumID: album.id, namespace: accountScope?.cacheNamespace ?? "unscoped"),
                             viewerPresentations: viewerPresentations,
-                            tabSelectionState: tabSelectionState, tabBarTop: $tabBarTop, showAccount: showAccount)
+                            tabSelectionState: tabSelectionState, tabBarTop: $tabBarTop)
                 .cardNavigationDestination(id: album.id, in: albumTransition)
         }
         .accessibilityIdentifier("albums-root")
@@ -1376,7 +1373,6 @@ private struct AlbumDetailView: View {
     let viewerPresentations: AssetViewerPresentationStore
     let tabSelectionState: NativeTabSelectionState
     @Binding var tabBarTop: CGFloat
-    let showAccount: () -> Void
     @State private var detail: AlbumSummary
     @State private var store: PhotosTimelineStore
     @State private var reader: AlbumTimelineReader
@@ -1394,7 +1390,7 @@ private struct AlbumDetailView: View {
          persistence: (any AlbumCatalogStoring)?, scope: MediaAccountScope?,
          timelineRuntime: TimelineSemanticRuntime,
          viewerPresentations: AssetViewerPresentationStore, tabSelectionState: NativeTabSelectionState,
-         tabBarTop: Binding<CGFloat>, showAccount: @escaping () -> Void)
+         tabBarTop: Binding<CGFloat>)
     {
         self.album = album
         self.source = source
@@ -1406,7 +1402,6 @@ private struct AlbumDetailView: View {
         self.viewerPresentations = viewerPresentations
         self.tabSelectionState = tabSelectionState
         _tabBarTop = tabBarTop
-        self.showAccount = showAccount
         _detail = State(initialValue: album)
         let reader = AlbumTimelineReader(source: source, albumID: album.id, revision: album.catalogRevision,
                                          persistence: persistence, scope: scope)
@@ -1429,7 +1424,7 @@ private struct AlbumDetailView: View {
                    rootAccessibilityID: "album-assets-\(album.id)", collectionTitle: detail.title,
                    collectionSubtitle: detail.countLabel, collectionInfoAction: { showsDetails = true },
                    compactChromeChanged: { _ in }, tabSelectionState: tabSelectionState,
-                   tabDestination: .albums, viewerPresentations: viewerPresentations, showAccount: showAccount)
+                   tabDestination: .albums, viewerPresentations: viewerPresentations)
             .sheet(isPresented: $showsDetails) {
                 NavigationStack {
                     Form {

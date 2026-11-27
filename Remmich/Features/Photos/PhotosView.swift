@@ -382,7 +382,6 @@ struct PhotosView: View {
     var loadTimeline: (() async -> Void)?
     var libraryMemories: [TimelineMemorySummary]?
     var loadOlderMemories: (() async -> Void)?
-    let showAccount: (() -> Void)?
 
     @Namespace private var viewerNamespace
     @State private var viewportRuntime = TimelineViewportRuntime()
@@ -453,8 +452,7 @@ struct PhotosView: View {
         refreshSource: (() async -> Void)? = nil,
         loadTimeline: (() async -> Void)? = nil,
         libraryMemories: [TimelineMemorySummary]? = nil,
-        loadOlderMemories: (() async -> Void)? = nil,
-        showAccount: (() -> Void)? = nil
+        loadOlderMemories: (() async -> Void)? = nil
     ) {
         self.store = store
         self.presentation = presentation
@@ -488,7 +486,6 @@ struct PhotosView: View {
         self.tabDestination = tabDestination
         self.isCollectionPageActive = isCollectionPageActive
         self.libraryTimelineClearance = libraryTimelineClearance
-        self.showAccount = showAccount
     }
 
     private var timelineContent: some View {
@@ -689,12 +686,6 @@ struct PhotosView: View {
                     TimelineRangeNavigationTitle(title: title)
                 }
             }
-            if let showAccount {
-                AccountToolbarButton {
-                    dismissPreview()
-                    showAccount()
-                }
-            }
         }
     }
 
@@ -709,12 +700,13 @@ struct PhotosView: View {
             // the timeline is one of two independently hosted media lanes.
             timelineContent
         } else {
-            let isPhone = UIDevice.current.userInterfaceIdiom == .phone
+            let showsNavigationBar = UIDevice.current.userInterfaceIdiom == .pad
+                && (!navigationPath.isEmpty || (collectionTitle == nil && libraryRange != .all))
             timelineContent
                 .navigationTitle(navigationPath.last?.navigationTitle ?? "")
                 .navigationBarTitleDisplayMode(.inline)
-                .toolbar(isPhone || (collectionTitle != nil && navigationPath.isEmpty) ? .hidden : .visible, for: .navigationBar)
-                .toolbarBackgroundVisibility(isPhone || navigationPath.isEmpty ? .hidden : .visible, for: .navigationBar)
+                .toolbar(showsNavigationBar ? .visible : .hidden, for: .navigationBar)
+                .toolbarBackgroundVisibility(showsNavigationBar && !navigationPath.isEmpty ? .visible : .hidden, for: .navigationBar)
         }
     }
 
@@ -2503,8 +2495,7 @@ private struct TimelineRefreshError: View {
             assetDetails: PreviewTimelineReader(),
             navigationPath: .constant([]),
             tabBarTop: .constant(0),
-            compactChromeChanged: { _ in },
-            showAccount: {}
+            compactChromeChanged: { _ in }
         )
     }
 }
@@ -2519,8 +2510,7 @@ private struct TimelineRefreshError: View {
             assetDetails: PreviewTimelineReader(),
             navigationPath: .constant([]),
             tabBarTop: .constant(0),
-            compactChromeChanged: { _ in },
-            showAccount: {}
+            compactChromeChanged: { _ in }
         )
     }
     .environment(\.dynamicTypeSize, .accessibility3)

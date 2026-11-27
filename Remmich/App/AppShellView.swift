@@ -13,7 +13,6 @@ private final class AlbumsOverviewState {
 }
 
 struct AppShellView: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.scenePhase) private var exportScenePhase
 
@@ -64,7 +63,6 @@ struct AppShellView: View {
     @State private var libraryPushGeneration = 0
     @State private var libraryCardAfterPathRecovery: LibraryHubDestination?
     @State private var searchBlocksPageSwipe = false
-    @State private var showsAccount = false
     @State private var legacyViewerPresented = false
     @State private var viewerPresentations = AssetViewerPresentationStore()
     @State private var photosContentLoading = true
@@ -167,8 +165,7 @@ struct AppShellView: View {
                             loadingVisibilityChanged: primaryContentLoadingChanged == nil ? nil : { photosContentLoading = $0 },
                             tabSelectionState: tabSelectionState,
                             tabDestination: .photos,
-                            viewerPresentations: viewerPresentations,
-                            showAccount: showAccount
+                            viewerPresentations: viewerPresentations
                         )
                     }
                 }
@@ -214,8 +211,7 @@ struct AppShellView: View {
                                 } else {
                                     await videos.load()
                                 }
-                            },
-                            showAccount: showAccount
+                            }
                         )
                     }
                 }
@@ -240,8 +236,7 @@ struct AppShellView: View {
                                        windowTopInset: windowTopInset,
                                        showsLoadingOverlay: primaryContentLoadingChanged == nil,
                                        openingContentReady: { overviewState.hasRevealedOpeningContent = true },
-                                       openAlbum: openAlbum,
-                                       showAccount: showAccount)
+                                       openAlbum: openAlbum)
                         }
                     } else {
                         AlbumsOpeningSkeleton()
@@ -305,8 +300,7 @@ struct AppShellView: View {
                         rangePinched: pinchGroupedRange,
                         timelineRuntime: groupedTimelineRuntime,
                         returnToTimeline: returnGroupedTimelineToRoot,
-                        viewerVisibilityChanged: setViewerPresented,
-                        showAccount: showAccount
+                        viewerVisibilityChanged: setViewerPresented
                     )
                     .id(groupedMediaOwner)
                 }
@@ -330,8 +324,7 @@ struct AppShellView: View {
                         rangePinched: pinchGroupedRange,
                         timelineRuntime: groupedTimelineRuntime,
                         returnToTimeline: returnGroupedTimelineToRoot,
-                        viewerVisibilityChanged: setViewerPresented,
-                        showAccount: showAccount
+                        viewerVisibilityChanged: setViewerPresented
                     )
                     .id(groupedMediaOwner)
                 }
@@ -355,8 +348,7 @@ struct AppShellView: View {
                         rangePinched: pinchGroupedRange,
                         timelineRuntime: groupedTimelineRuntime,
                         returnToTimeline: returnGroupedTimelineToRoot,
-                        viewerVisibilityChanged: setViewerPresented,
-                        showAccount: showAccount
+                        viewerVisibilityChanged: setViewerPresented
                     )
                     .id(groupedMediaOwner)
                 }
@@ -420,38 +412,6 @@ struct AppShellView: View {
                 }
             #endif
         }
-        .overlay {
-            if showsAccount {
-                GeometryReader { geometry in
-                    ZStack {
-                        Color.clear
-                            .contentShape(Rectangle())
-                            .onTapGesture { showsAccount = false }
-                        AccountSettingsView(
-                            session: session,
-                            profile: profile,
-                            activeRoute: activeRoute,
-                            routeStatus: routeStatus,
-                            libraryIndex: libraryIndex,
-                            saveProfile: saveProfile,
-                            signOut: signOut,
-                            sessionController: sessionController,
-                            close: { showsAccount = false }
-                        )
-                        .nativeEdgeBackAction(active: true, priority: 200) { showsAccount = false }
-                        .frame(
-                            width: min(geometry.size.width - 32, 620),
-                            height: UIDevice.current.userInterfaceIdiom == .pad
-                                ? min(geometry.size.height - 40, 680)
-                                : min(geometry.size.height * 0.8, 620)
-                        )
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-                .transition(reduceMotion ? .opacity : .move(edge: .bottom))
-            }
-        }
-        .animation(.smooth(duration: 0.35), value: showsAccount)
         .accessibilityHidden(viewerPresentations.activeID != nil)
         .overlay {
             AssetViewerPresentationOverlay(presentations: viewerPresentations)
@@ -825,10 +785,6 @@ struct AppShellView: View {
         await savedPhotos.loadIfNeeded(priority: .utility)
     }
 
-    private func showAccount() {
-        showsAccount = true
-    }
-
     private func setViewerPresented(_ presented: Bool) {
         legacyViewerPresented = presented
     }
@@ -972,7 +928,7 @@ struct AppShellView: View {
     }
 
     private var isPrimaryContentLoading: Bool {
-        guard !viewerPresented, !showsAccount else { return false }
+        guard !viewerPresented else { return false }
         switch tabSelectionState.selection {
         case .photos: return photosPath.isEmpty && photosContentLoading
         case .videos: return videosPath.isEmpty && videosContentLoading
@@ -1062,27 +1018,6 @@ struct AccountAvatarView: View {
         }
         .frame(width: size, height: size)
         .clipShape(Circle())
-    }
-}
-
-struct AccountToolbarButton: ToolbarContent {
-    let action: () -> Void
-    var showsOnPhone = false
-
-    @ToolbarContentBuilder
-    var body: some ToolbarContent {
-        if showsOnPhone || UIDevice.current.userInterfaceIdiom == .pad {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button(action: action) {
-                    AccountAvatarView(size: 32)
-                        .background(Circle().fill(.regularMaterial))
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Account")
-                .accessibilityIdentifier("account-button")
-            }
-        }
     }
 }
 

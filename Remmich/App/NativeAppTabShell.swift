@@ -251,6 +251,7 @@ nonisolated struct NativeLibraryContentRevision: Equatable {
 }
 
 struct NativeAppTabShell: UIViewControllerRepresentable {
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Binding var selection: NativeTabDestination
     @Binding var tabBarTop: CGFloat
     let rotationState: TimelineRotationState
@@ -295,6 +296,9 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
             coordinator?.setTabBarTop(top)
         }
         controller.mode = .tabBar
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            controller.traitOverrides.horizontalSizeClass = .compact
+        }
         controller.delegate = context.coordinator
         context.coordinator.controller = controller
         context.coordinator.installPrimaryPageSwipeRecognizers(on: controller)
@@ -316,6 +320,7 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
 
         fileprivate weak var controller: MeasuringTabBarController?
         private var parent: NativeAppTabShell
+        private var regularPresentationHosts: [TabContentHostingController] = []
         private var installedTabs: [NativeTabDestination]?
         private var isUpdatingTabs = false
         private var didResolveLibrary = false
@@ -383,6 +388,11 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
             destination: NativeTabDestination
         ) -> TabContentHostingController {
             let controller = TabContentHostingController(rootView: hostedRoot(rootView))
+            if UIDevice.current.userInterfaceIdiom == .pad, destination != .search {
+                // Keep the window's width class for these tabs even though the bar is compact.
+                controller.traitOverrides.horizontalSizeClass = contentWidthClass
+                regularPresentationHosts.append(controller)
+            }
             controller.didAppear = { [weak self] in
                 self?.scheduleContentActivation(destination)
             }
@@ -391,6 +401,10 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
 
         private func hostedRoot(_ view: AnyView) -> AnyView {
             AnyView(view.environment(\.assetLocations, parent.locations))
+        }
+
+        private var contentWidthClass: UIUserInterfaceSizeClass {
+            parent.horizontalSizeClass == .regular ? .regular : .compact
         }
 
         private lazy var photosTab = UITab(
@@ -493,6 +507,11 @@ struct NativeAppTabShell: UIViewControllerRepresentable {
         func update(_ next: NativeAppTabShell, animated: Bool) {
             let previous = parent
             parent = next
+            if previous.horizontalSizeClass != next.horizontalSizeClass {
+                for host in regularPresentationHosts {
+                    host.traitOverrides.horizontalSizeClass = contentWidthClass
+                }
+            }
 
             let mediaLayoutChanged = previous.tabBarTop != next.tabBarTop
             if didResolveAlbums,
