@@ -31,6 +31,7 @@ final nonisolated class TimelineSemanticCatalog: Sendable {
     let standardMosaicBlocks: [TimelineSemanticScale: [TimelineRangeMosaicBlockPlan]]
     let landscapeMosaicBlocks: [TimelineSemanticScale: [TimelineRangeMosaicBlockPlan]]
     let preservesSearchRanking: Bool
+    let usesLargerTiles: Bool
 
     init(searchResults: [TimelineAssetSummary]) {
         var seen = Set<String>()
@@ -40,10 +41,12 @@ final nonisolated class TimelineSemanticCatalog: Sendable {
         standardMosaicBlocks = [:]
         landscapeMosaicBlocks = [:]
         preservesSearchRanking = true
+        usesLargerTiles = false
     }
 
-    init(assets source: [TimelineAssetSummary]) {
+    init(assets source: [TimelineAssetSummary], usesLargerTiles: Bool = false) {
         preservesSearchRanking = false
+        self.usesLargerTiles = usesLargerTiles
         var seen = Set<String>()
         assets = source.filter { seen.insert($0.id).inserted }.sorted {
             $0.isOrdered(before: $1)
@@ -211,7 +214,7 @@ nonisolated struct TimelineSemanticProjection: Sendable {
         } else if scale.isAssets {
             let spacing: CGFloat = scale == .natural ? 8 : 2
             let columns = TimelineGridOrder.timelineColumnCount(
-                availableSize: size, minimumLandscapeColumnWidth: isPhone ? 88 : 120, spacing: spacing
+                availableSize: size, isPhone: isPhone, usesLargerTiles: catalog.usesLargerTiles, spacing: spacing
             )
             let firstDay = catalog.groups[.day]![catalog.index(containing: range.lowerBound, scale: .day)!]
             let lastDay = catalog.groups[.day]![catalog.index(containing: range.upperBound - 1, scale: .day)!]
@@ -261,9 +264,7 @@ nonisolated struct TimelineSemanticProjection: Sendable {
         let assetSpacing: CGFloat = scale == .natural ? 8 : 2
         if scale.isAssets {
             let columns = TimelineGridOrder.timelineColumnCount(
-                availableSize: size,
-                minimumLandscapeColumnWidth: isPhone ? 88 : 120,
-                spacing: assetSpacing
+                availableSize: size, isPhone: isPhone, usesLargerTiles: catalog.usesLargerTiles, spacing: assetSpacing
             )
             let baseSide = (size.width - CGFloat(columns - 1) * assetSpacing) / CGFloat(columns)
             let progress: CGFloat = scale == .natural ? 1 : 0

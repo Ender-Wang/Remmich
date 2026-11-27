@@ -673,7 +673,7 @@ struct AppShellView: View {
     private func prepareVideosOpening(using sessionController: AppSessionController) async {
         await sessionController.prepareVideosOpening()
         guard !Task.isCancelled, !tabContentActivationState.isHydrated(.videos) else { return }
-        let limit = TimelineGridOrder.openingWindowLimit()
+        let limit = TimelineGridOrder.openingWindowLimit(usesLargerTiles: true)
         let position = videosTimelineRuntime.pendingBrowsingPosition
         let assets = videos.openingSemanticAssets(limit: limit, around: position)
         guard !assets.isEmpty else { return }
@@ -686,7 +686,7 @@ struct AppShellView: View {
         let dark = traits?.userInterfaceStyle == .dark
         let scale: TimelineSemanticScale = videoPresentation.preferences.assetLayout == .square ? .square : .natural
         let build = Task.detached(priority: .utility) {
-            let catalog = TimelineSemanticCatalog(assets: assets)
+            let catalog = TimelineSemanticCatalog(assets: assets, usesLargerTiles: true)
             guard !Task.isCancelled else { return (catalog, [MediaRequestDescriptor]()) }
             let layout = TimelineSemanticProjection.complete(catalog: catalog, scale: scale, size: viewport, isPhone: isPhone, dark: dark)
             let tiles = layout.items.reversed().filter { !$0.isHeader }

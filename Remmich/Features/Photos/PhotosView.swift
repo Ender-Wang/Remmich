@@ -677,9 +677,12 @@ struct PhotosView: View {
         }
     }
 
+    private var isMainTimeline: Bool {
+        tabDestination == .photos || tabDestination == .videos
+    }
+
     private var showsOpeningSkeleton: Bool {
-        (tabDestination == .photos || tabDestination == .videos)
-            && navigationPath.isEmpty && libraryMemories == nil && isTimelineContentLoading
+        isMainTimeline && navigationPath.isEmpty && libraryMemories == nil && isTimelineContentLoading
     }
 
     @ViewBuilder private var timelineWithNavigationBar: some View {
@@ -741,8 +744,9 @@ struct PhotosView: View {
                     guard !Task.isCancelled, revision == store.semanticContentRevision else { return }
                 }
                 let assets = store.semanticAssetsSnapshot()
+                let usesLargerTiles = isMainTimeline
                 let build = Task.detached(priority: .userInitiated) {
-                    TimelineSemanticCatalog(assets: assets)
+                    TimelineSemanticCatalog(assets: assets, usesLargerTiles: usesLargerTiles)
                 }
                 let catalog = await withTaskCancellationHandler {
                     await build.value
@@ -794,7 +798,10 @@ struct PhotosView: View {
                     let revision = store.semanticContentRevision
                     let openingWindow = store.isOpeningWindow
                     let assets = store.semanticAssetsSnapshot()
-                    let build = Task.detached(priority: .userInitiated) { TimelineSemanticCatalog(assets: assets) }
+                    let usesLargerTiles = isMainTimeline
+                    let build = Task.detached(priority: .userInitiated) {
+                        TimelineSemanticCatalog(assets: assets, usesLargerTiles: usesLargerTiles)
+                    }
                     let catalog = await withTaskCancellationHandler { await build.value } onCancel: { build.cancel() }
                     guard !Task.isCancelled else { return }
                     var transaction = Transaction(animation: nil)
@@ -977,11 +984,11 @@ struct PhotosView: View {
     }
 
     private func presentPreloadedVideoWindow(revision: UInt64) async {
-        let limit = TimelineGridOrder.openingWindowLimit()
+        let limit = TimelineGridOrder.openingWindowLimit(usesLargerTiles: true)
         let newest = store.newestSemanticAssets(limit: limit + 1)
         guard newest.count > limit else { return }
         let assets = Array(newest.prefix(limit))
-        let build = Task.detached(priority: .userInitiated) { TimelineSemanticCatalog(assets: assets) }
+        let build = Task.detached(priority: .userInitiated) { TimelineSemanticCatalog(assets: assets, usesLargerTiles: true) }
         let window = await withTaskCancellationHandler { await build.value } onCancel: { build.cancel() }
         guard !Task.isCancelled, revision == store.semanticContentRevision else { return }
         let events = store.openingDisplayEvents()
@@ -1031,7 +1038,7 @@ struct PhotosView: View {
                         canRevealThumbnails: tabSelectionState?.canRevealThumbnails(in: tabDestination),
                         includesDateCardsInPinch: tabDestination != .albums && tabDestination != .library,
                         isOpeningWindow: semanticCatalogIsOpeningWindow,
-                        tracksStartupThumbnail: tabDestination == .photos || tabDestination == .videos,
+                        tracksStartupThumbnail: isMainTimeline,
                         openingStore: store,
                         openingTileDisplayed: waitsForOpeningTile ? { openingLoaderReleased = true } : nil,
                         hiddenThumbnailID: hiddenReturningThumbnailAssetID ?? assetPreview?.hiddenSourceAssetID,

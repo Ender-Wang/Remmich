@@ -1092,7 +1092,8 @@ final class AppSessionController {
         if showOpeningWindow {
             let startsInTimeline = selected == .photos || startsInVideos
             let opening = startsInTimeline ? await libraryIndex.prepareOpeningTimeline(
-                session: session, limit: TimelineGridOrder.openingWindowLimit(), mediaScope: startsInVideos ? .videos : .photos
+                session: session, limit: TimelineGridOrder.openingWindowLimit(usesLargerTiles: true),
+                mediaScope: startsInVideos ? .videos : .photos
             ) : nil
             guard preparationIsCurrent(generation) else { return }
             let position = (startsInVideos ? browsing?.videos : browsing?.photos)?.pendingBrowsingPosition
@@ -1136,8 +1137,9 @@ final class AppSessionController {
               case let .signedIn(session) = state else { return }
         let generation = preparationGeneration
         let task = Task(priority: .utility) {
-            let opening = await libraryIndex.prepareOpeningTimeline(session: session, limit: TimelineGridOrder.openingWindowLimit(),
-                                                                    mediaScope: .videos)
+            let opening = await libraryIndex.prepareOpeningTimeline(
+                session: session, limit: TimelineGridOrder.openingWindowLimit(usesLargerTiles: true), mediaScope: .videos
+            )
             guard let opening, preparationIsCurrent(generation), isAppInForeground, videos.loadState == .idle else { return }
             videos.bootstrap(opening, openingWindow: true)
         }

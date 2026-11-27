@@ -37,7 +37,7 @@ struct TimelineOpeningSkeleton: View {
             let natural = layout == .naturalAspect
             let spacing: CGFloat = natural ? 8 : 2
             let columns = TimelineGridOrder.timelineColumnCount(
-                availableSize: size, minimumLandscapeColumnWidth: isPhone ? 88 : 120, spacing: spacing
+                availableSize: size, isPhone: isPhone, usesLargerTiles: true, spacing: spacing
             )
             let inset = TimelineGridMetrics.horizontalInset(
                 naturalAspectProgress: natural ? 1 : 0, isPhone: isPhone, squareInset: 2, isDarkMode: colorScheme == .dark

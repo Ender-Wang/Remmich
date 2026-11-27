@@ -556,8 +556,10 @@ struct TimelineSemanticZoomTests {
         #expect(frames[1].id == "5")
     }
 
-    @Test func growingWindowPreservesCellColumnsAndRelativeFrames() throws {
-        let catalog = TimelineSemanticCatalog(assets: (0 ..< 900).map { asset(String(format: "%04d", $0), "2027-01-01T12:00:00Z") })
+    @Test(arguments: [false, true])
+    func growingWindowPreservesCellColumnsAndRelativeFrames(usesLargerTiles: Bool) throws {
+        let assets = (0 ..< 900).map { asset(String(format: "%04d", $0), "2027-01-01T12:00:00Z") }
+        let catalog = TimelineSemanticCatalog(assets: assets, usesLargerTiles: usesLargerTiles)
         for scale in [TimelineSemanticScale.square, .natural] {
             let initial = TimelineSemanticProjection.build(catalog: catalog, scale: scale, focusAssetIndex: 450,
                                                            size: CGSize(width: 402, height: 874), isPhone: true, dark: true,
@@ -566,8 +568,10 @@ struct TimelineSemanticZoomTests {
                                                             size: CGSize(width: 402, height: 874), isPhone: true, dark: true,
                                                             requestedRange: 155 ..< 740)
             let original = initial.items.filter { !$0.isHeader }
-            let frames = Dictionary(uniqueKeysWithValues: expanded.items.filter { !$0.isHeader }.map { ($0.id, $0.frame) })
             let reference = try #require(original.first)
+            let columns = Set(original.filter { $0.frame.minY == reference.frame.minY }.map(\.frame.minX))
+            #expect(columns.count == (usesLargerTiles ? 3 : 5))
+            let frames = Dictionary(uniqueKeysWithValues: expanded.items.filter { !$0.isHeader }.map { ($0.id, $0.frame) })
             let delta = try #require(frames[reference.id]).minY - reference.frame.minY
             for item in original {
                 let frame = try #require(frames[item.id])

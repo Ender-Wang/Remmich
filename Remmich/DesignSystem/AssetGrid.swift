@@ -233,7 +233,7 @@ private struct TimelineGridDisplaySlot: Identifiable {
 nonisolated enum TimelineGridOrder {
     static let openingScreenCount = 2
 
-    @MainActor static func openingWindowLimit() -> Int {
+    @MainActor static func openingWindowLimit(usesLargerTiles: Bool = false) -> Int {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
         guard let scene = scenes.first(where: { $0.activationState == .foregroundActive })
             ?? scenes.first(where: { $0.activationState == .foregroundInactive })
@@ -241,7 +241,7 @@ nonisolated enum TimelineGridOrder {
         let size = scene.keyWindow?.bounds.size ?? scene.effectiveGeometry.coordinateSpace.bounds.size
         guard size.width > 0, size.height > 0 else { return 120 }
         let columns = timelineColumnCount(
-            availableSize: size, minimumLandscapeColumnWidth: scene.traitCollection.userInterfaceIdiom == .phone ? 88 : 120
+            availableSize: size, isPhone: scene.traitCollection.userInterfaceIdiom == .phone, usesLargerTiles: usesLargerTiles
         )
         let rows = Int(ceil(size.height * CGFloat(columns) / size.width))
         return min(240, max(24, openingScreenCount * rows * columns))
@@ -256,15 +256,24 @@ nonisolated enum TimelineGridOrder {
 
     static func timelineColumnCount(
         availableSize: CGSize,
-        minimumLandscapeColumnWidth: CGFloat,
+        isPhone: Bool,
+        usesLargerTiles: Bool = false,
         spacing: CGFloat = 2
     ) -> Int {
+        if usesLargerTiles {
+            if isPhone, availableSize.width < availableSize.height {
+                return 3
+            }
+            let cards = LibraryCardRows.collection(availableWidth: availableSize.width - 32, isPad: !isPhone)
+            // The timeline uses the full viewport. Match the card scale with the nearest whole column count.
+            return max(1, Int((availableSize.width / cards.itemWidth).rounded()))
+        }
         if availableSize.width < availableSize.height {
             return 5
         }
         return columnCount(
             availableWidth: availableSize.width,
-            minimumColumnWidth: minimumLandscapeColumnWidth,
+            minimumColumnWidth: isPhone ? 88 : 120,
             spacing: spacing
         )
     }

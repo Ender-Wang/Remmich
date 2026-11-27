@@ -406,11 +406,11 @@ struct PhotosTimelineRegressionTests {
         #expect(TimelineGridOrder.columnCount(availableWidth: 1180, minimumColumnWidth: 120, spacing: 24) == 8)
         #expect(TimelineGridOrder.timelineColumnCount(
             availableSize: CGSize(width: 402, height: 874),
-            minimumLandscapeColumnWidth: 88
+            isPhone: true
         ) == 5)
         #expect(TimelineGridOrder.timelineColumnCount(
             availableSize: CGSize(width: 874, height: 402),
-            minimumLandscapeColumnWidth: 88
+            isPhone: true
         ) == 9)
     }
 
