@@ -503,6 +503,7 @@ struct AlbumsView: View {
 
     private func albumHeader(metrics: AlbumReflowMetrics) -> some View {
         let spacing: CGFloat = 12
+        let isPhone = UIDevice.current.userInterfaceIdiom == .phone
         return GeometryReader { geometry in
             let searchWidth = isSearchExpanded ? max(headerControlSize, geometry.size.width - headerControlSize - spacing) : headerControlSize
             let scopeWidth = min(MainTabHeaderMetrics.segmentedControlMaximumWidth,
@@ -510,8 +511,9 @@ struct AlbumsView: View {
             ZStack(alignment: .leading) {
                 NativeSegmentedControl(selection: Binding(get: { scope }, set: selectAlbumScope),
                                        accessibilityIdentifier: "albums-scope")
-                    .frame(width: scopeWidth, height: headerMetrics.rowHeight)
+                    .frame(width: isPhone ? nil : scopeWidth, height: headerMetrics.rowHeight)
                     .glassEffect(.regular, in: .capsule)
+                    .fixedSize(horizontal: isPhone, vertical: false)
                     .frame(maxWidth: .infinity)
                     .opacity(isSearchExpanded ? 0 : 1)
                     .animation(scopeVisibilityAnimation, value: isSearchExpanded)
