@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#fcf7f6" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#191414" media="(prefers-color-scheme: dark)">
+  <meta name="description" content="Browse, search, and revisit your self-hosted Immich library with Remmich, a read-only app for iPhone and iPad.">
+  <title>Remmich · A read-only Immich app for iPhone and iPad</title>
+  <link rel="icon" href="./assets/remmich.png" type="image/png">
+  <link rel="preconnect" href="https://raw.githubusercontent.com">
+  <link rel="stylesheet" href="./styles.css">
+  <script src="./site.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <a class="brand" href="./">
+        <img class="brand-mark" src="./assets/remmich.png" alt="" width="38" height="38">
+        Remmich
+      </a>
+      <nav aria-label="Main navigation">
+        <a href="#features">
+          <svg class="nav-icon nav-icon-outline" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+            <rect x="2" y="2" width="4.5" height="4.5" rx="1"/>
+            <rect x="9.5" y="2" width="4.5" height="4.5" rx="1"/>
+            <rect x="2" y="9.5" width="4.5" height="4.5" rx="1"/>
+            <rect x="9.5" y="9.5" width="4.5" height="4.5" rx="1"/>
+          </svg>
+          Features
+        </a>
+        <a href="#install">
+          <svg class="nav-icon nav-icon-outline" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+            <path d="M8 1.75v8m-3-3 3 3 3-3M2 10.5v2.75c0 .55.45 1 1 1h10c.55 0 1-.45 1-1V10.5"/>
+          </svg>
+          Install
+        </a>
+        <a href="https://github.com/Ender-Wang/Remmich">
+          <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" focusable="false"><path d="M6.766 11.328c-2.063-.25-3.516-1.734-3.516-3.656 0-.781.281-1.625.75-2.188-.203-.515-.172-1.609.063-2.062.625-.078 1.468.25 1.968.703.594-.187 1.219-.281 1.985-.281.765 0 1.39.094 1.953.265.484-.437 1.344-.765 1.969-.687.218.422.25 1.515.046 2.047.5.593.766 1.39.766 2.203 0 1.922-1.453 3.375-3.547 3.64.531.344.89 1.094.89 1.954v1.625c0 .468.391.734.86.547C13.781 14.359 16 11.53 16 8.03 16 3.61 12.406 0 7.984 0 3.563 0 0 3.61 0 8.031a7.88 7.88 0 0 0 5.172 7.422c.422.156.828-.125.828-.547v-1.25c-.219.094-.5.156-.75.156-1.031 0-1.64-.562-2.078-1.609-.172-.422-.36-.672-.719-.719-.187-.015-.25-.093-.25-.187 0-.188.313-.328.625-.328.453 0 .844.281 1.25.86.313.452.64.655 1.031.655s.641-.14 1-.5c.266-.265.47-.5.657-.656"/></svg>
+          GitHub
+        </a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="wrap" id="main">
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <h1 id="hero-title">
+          <span class="hero-title-text">Your <strong>Re</strong>adonly I<strong>mmich</strong> Library</span>
+          <span class="hero-platforms">Native on iOS/iPadOS</span>
+        </h1>
+        <p>Browse, search, and revisit your photos and videos on iPhone and iPad. Remmich connects to your own Immich server and keeps your library read-only.</p>
+        <div class="actions">
+          <a class="button primary" href="sidestore://source?url=https%3A%2F%2Fraw.githubusercontent.com%2FEnder-Wang%2FRemmich%2Fmain%2Fsource.json">
+            <svg class="nav-icon" viewBox="0 0 200 200" fill="currentColor" aria-hidden="true" focusable="false">
+              <path d="M200 100.001c0-6.493-5.272-11.764-11.765-11.764H47.059c-6.493 0-11.765 5.271-11.765 11.764 0 6.494 5.272 11.765 11.765 11.765h141.176c6.493 0 11.765-5.271 11.765-11.765Z"/>
+              <path d="M111.765 35.295v5.882c0 9.36-3.72 18.339-10.337 24.958a35.301 35.301 0 0 1-24.957 10.337H47.059c-6.24 0-12.225 2.479-16.638 6.89a23.536 23.536 0 0 0-6.891 16.639c0 6.24 2.479 12.225 6.89 16.638a23.536 23.536 0 0 0 16.639 6.891h29.412c9.36 0 18.338 3.72 24.957 10.337a35.301 35.301 0 0 1 10.337 24.958V196a4 4 0 0 1-4 4h-15.53a4 4 0 0 1-4-4v-37.176a11.765 11.765 0 0 0-11.764-11.765H47.059a47.052 47.052 0 0 1-33.275-13.784 47.052 47.052 0 0 1 0-66.55 47.052 47.052 0 0 1 33.275-13.784h29.412a11.765 11.765 0 0 0 11.764-11.765v-5.882H76.471L100 .001l23.529 35.294h-11.765ZM147.06 196.001a4 4 0 0 1-4 4h-15.53a4 4 0 0 1-4-4v-68.47a4 4 0 0 1 4-4h15.53a4 4 0 0 1 4 4V196Z"/>
+            </svg>
+            Add to SideStore
+          </a>
+          <a class="button secondary release-button" href="https://github.com/Ender-Wang/Remmich/releases/latest">
+            <span class="release-label">
+              <svg class="nav-icon nav-icon-outline" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                <path d="M2 2h5.75l6.1 6.1a1 1 0 0 1 0 1.4l-4.35 4.35a1 1 0 0 1-1.4 0L2 7.75V2Z"/>
+                <circle cx="5.2" cy="5.2" r="0.85"/>
+              </svg>
+              Latest release
+            </span>
+            <span class="release-version"></span>
+          </a>
+        </div>
+        <p class="requirement">Requires iOS or iPadOS 26.6 or later</p>
+      </div>
+      <figure class="hero-showcase">
+        <div class="hero-art">
+          <img class="hero-phone" data-position="front" data-label="Photo viewer" src="https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/photo-viewer.webp" alt="The photo viewer shows a coastal village above a filmstrip." width="660" height="1348" fetchpriority="high">
+          <img class="hero-phone" data-position="back" data-label="Search" src="https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/search.webp" alt="Search shows recent queries, people, places, and filters." width="660" height="1348" decoding="async" aria-hidden="true">
+          <img class="hero-phone" data-label="Photos" data-src="https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/photos-timeline.webp" alt="The Photos timeline groups thumbnails by date." width="660" height="1348" decoding="async" aria-hidden="true">
+          <img class="hero-phone" data-label="Places" data-src="https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/library-places.webp" alt="Places shows a map above a grid of photo covers." width="660" height="1348" decoding="async" aria-hidden="true">
+          <img class="hero-phone" data-label="Albums" data-src="https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/albums.webp" alt="Albums displays a two-column grid of collection covers." width="660" height="1348" decoding="async" aria-hidden="true">
+          <img class="hero-phone" data-label="Library" data-src="https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/library.webp" alt="Library displays collection cards for Memories, People, and Places." width="660" height="1348" decoding="async" aria-hidden="true">
+          <img class="hero-phone" data-label="Memories" data-src="https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/library-memories.webp" alt="The Memories collection shows photos from previous years." width="660" height="1348" decoding="async" aria-hidden="true">
+          <img class="hero-phone" data-label="Map" data-src="https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/map-view.webp" alt="A map pin shows where the open photo was taken." width="660" height="1348" decoding="async" aria-hidden="true">
+          <img class="hero-phone" data-label="Date cards" data-src="https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/date-cards.webp" alt="Date cards let you browse grouped items in the timeline." width="660" height="1348" decoding="async" aria-hidden="true">
+          <img class="hero-phone" data-label="Photo info" data-src="https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/info-panel.webp" alt="The photo info panel displays metadata below the image." width="660" height="1348" decoding="async" aria-hidden="true">
+          <img class="hero-phone" data-label="Profile" data-src="https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/profile.webp" alt="Profile shows account and app settings." width="660" height="1348" decoding="async" aria-hidden="true">
+          <img class="hero-phone" data-label="Onboarding" data-src="https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/onboarding.webp" alt="The welcome screen lets users connect to their Immich library or explore the demo." width="660" height="1348" decoding="async" aria-hidden="true">
+        </div>
+        <figcaption id="hero-shot-label">Photo viewer</figcaption>
+      </figure>
+    </section>
+
+    <section class="features" id="features" aria-labelledby="features-title">
+      <header class="section-heading">
+        <h2 id="features-title">Explore Remmich</h2>
+      </header>
+      <div class="feature-grid">
+        <article class="feature">
+          <a class="feature-image" data-tone="red" href="https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/photos-timeline.webp" aria-label="View the full-size Photos screenshot">
+            <img src="https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/photos-timeline.webp" alt="Photo thumbnails grouped by date in the Photos timeline." width="660" height="1348" loading="lazy" decoding="async">
+          </a>
+          <h3>Photos</h3>
+          <p>Browse your library by capture date and pinch to change the thumbnail layout.</p>
+        </article>
+        <article class="feature">
+          <a class="feature-image" data-tone="yellow" href="https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/albums.webp" aria-label="View the full-size Albums screenshot">
+            <img src="https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/albums.webp" alt="Album covers in a two-column grid, with All and Shared controls above." width="660" height="1348" loading="lazy" decoding="async">
+          </a>
+          <h3>Albums</h3>
+          <p>Browse your own and shared albums, then return to the album you were viewing.</p>
+        </article>
+        <article class="feature">
+          <a class="feature-image" data-tone="pink" href="https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/library.webp" aria-label="View the full-size Library screenshot">
+            <img src="https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/library.webp" alt="Library cards for collections including Memories, People, and Places." width="660" height="1348" loading="lazy" decoding="async">
+          </a>
+          <h3>Library</h3>
+          <p>Revisit Memories and favorites. Browse indexed collections and cached thumbnails offline.</p>
+        </article>
+        <article class="feature">
+          <a class="feature-image" data-tone="blue" href="https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/search.webp" aria-label="View the full-size Search screenshot">
+            <img src="https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/search.webp" alt="Search with recent queries, people, places, and filters." width="660" height="1348" loading="lazy" decoding="async">
+          </a>
+          <h3>Search</h3>
+          <p>Describe a scene, find a filename, or search for text inside a photo. Narrow results with native filters.</p>
+        </article>
+        <article class="feature">
+          <a class="feature-image" data-tone="green" href="https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/date-cards.webp" aria-label="View the full-size Date cards screenshot">
+            <img src="https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/date-cards.webp" alt="Timeline thumbnails grouped into cards labeled by date." width="660" height="1348" loading="lazy" decoding="async">
+          </a>
+          <h3>Date cards</h3>
+          <p>Scan groups of photos by date, with a cover and item count for every group.</p>
+        </article>
+        <article class="feature">
+          <a class="feature-image" data-tone="red" href="https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/photo-viewer.webp" aria-label="View the full-size Photo viewer screenshot">
+            <img src="https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/photo-viewer.webp" alt="The photo viewer shows a coastal village above a filmstrip." width="660" height="1348" loading="lazy" decoding="async">
+          </a>
+          <h3>Photo viewer</h3>
+          <p>Zoom in for detail, use the filmstrip to browse nearby photos, or share and save the one you’re viewing.</p>
+        </article>
+        <article class="feature">
+          <a class="feature-image" data-tone="yellow" href="https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/info-panel.webp" aria-label="View the full-size Photo info screenshot">
+            <img src="https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/info-panel.webp" alt="The photo info panel displays metadata below the image." width="660" height="1348" loading="lazy" decoding="async">
+          </a>
+          <h3>Photo info</h3>
+          <p>See when a photo was taken, which camera captured it, and details such as file size and dimensions.</p>
+        </article>
+        <article class="feature">
+          <a class="feature-image" data-tone="pink" href="https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/library-memories.webp" aria-label="View the full-size Memories screenshot">
+            <img src="https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/library-memories.webp" alt="The Memories collection shows photos from previous years." width="660" height="1348" loading="lazy" decoding="async">
+          </a>
+          <h3>Memories</h3>
+          <p>Rediscover photos taken on this day in previous years.</p>
+        </article>
+        <article class="feature">
+          <a class="feature-image" data-tone="green" href="https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/library-places.webp" aria-label="View the full-size Places screenshot">
+            <img src="https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/library-places.webp" alt="The Places map above a grid of places with photo covers." width="660" height="1348" loading="lazy" decoding="async">
+          </a>
+          <h3>Places</h3>
+          <p>Explore your photos on a heatmap. Tap a place to open its timeline.</p>
+        </article>
+        <article class="feature">
+          <a class="feature-image" data-tone="blue" href="https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/map-view.webp" aria-label="View the full-size Map screenshot">
+            <img src="https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/map-view.webp" alt="A map pin shows where the open photo was taken." width="660" height="1348" loading="lazy" decoding="async">
+          </a>
+          <h3>Map</h3>
+          <p>See exactly where a geotagged photo was taken on a map below its details.</p>
+        </article>
+        <article class="feature">
+          <a class="feature-image" data-tone="red" href="https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/profile.webp" aria-label="View the full-size Profile screenshot">
+            <img src="https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/profile.webp" alt="Profile shows account, connection, and storage settings." width="660" height="1348" loading="lazy" decoding="async">
+          </a>
+          <h3>Profile</h3>
+          <p>Switch accounts, manage server connections, and check your library indexes and offline storage.</p>
+        </article>
+        <article class="feature">
+          <a class="feature-image" data-tone="pink" href="https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/onboarding.webp" aria-label="View the full-size Onboarding screenshot">
+            <img src="https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/onboarding.webp" alt="The welcome screen offers a connection to Immich or a demo." width="660" height="1348" loading="lazy" decoding="async">
+          </a>
+          <h3>Onboarding</h3>
+          <p>Connect to your Immich server or leave the address blank to explore the demo.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="install" id="install" aria-labelledby="install-title">
+      <div class="install-intro">
+        <img src="./assets/remmich.png" alt="" width="64" height="64" loading="lazy" decoding="async">
+        <h2 id="install-title">Install Remmich</h2>
+        <p>Connect to your Immich server after installing. To explore the demo, leave the server address empty at sign-in.</p>
+      </div>
+      <div class="install-options">
+        <div class="install-option">
+          <h3>SideStore</h3>
+          <p>With SideStore installed, add Remmich’s source on your device. You can also copy the source URL and paste it in SideStore under <strong>Sources → +</strong>.</p>
+          <div class="source">
+            <label for="source-url">Source URL</label>
+            <div class="source-field">
+              <input id="source-url" type="url" readonly spellcheck="false" value="https://raw.githubusercontent.com/Ender-Wang/Remmich/main/source.json">
+              <button type="button" id="copy-source" hidden>Copy</button>
+            </div>
+            <span class="copy-status" id="copy-status" role="status"></span>
+          </div>
+        </div>
+        <div class="install-option">
+          <h3>Install from an IPA</h3>
+          <p>Download the unsigned IPA from the latest release and sign it with SideStore, AltStore Classic, or another compatible sideloading tool.</p>
+          <a class="text-link" href="https://github.com/Ender-Wang/Remmich/releases/latest">View the latest release</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="wrap site-footer">
+    <div class="footer-brand">
+      <a class="brand" href="./">
+        <img src="./assets/remmich.png" alt="" width="28" height="28" loading="lazy" decoding="async">
+        Remmich
+      </a>
+      <p class="footer-copyright">© 2026 Remmich contributors</p>
+    </div>
+    <nav aria-label="Project links">
+      <a href="https://github.com/Ender-Wang/Remmich/blob/main/LICENSE">
+        <svg class="nav-icon nav-icon-outline" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+          <path d="M4 1.5h5.5L13 5v8.5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-11a1 1 0 0 1 1-1Z"/>
+          <path d="M9.5 1.5V5H13M5.5 8h5m-5 3h4"/>
+        </svg>
+        GPLv3
+      </a>
+      <a href="https://github.com/Ender-Wang/Remmich/issues">
+        <svg class="nav-icon nav-icon-outline" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+          <circle cx="8" cy="8" r="6.25"/>
+          <path d="M8 4.75v3.5M8 11.25h.01"/>
+        </svg>
+        Report an issue
+      </a>
+    </nav>
+  </footer>
+</body>
+</html>
