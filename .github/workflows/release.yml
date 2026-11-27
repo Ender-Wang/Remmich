@@ -136,7 +136,7 @@ jobs:
             fi
           fi
           python3 - <<'PY'
-          import os, pathlib, re
+          import os, pathlib, plistlib, re
           project = pathlib.Path("Remmich.xcodeproj/project.pbxproj").read_text()
           versions = set(re.findall(r"MARKETING_VERSION = ([^;]+);", project))
           builds = set(re.findall(r"CURRENT_PROJECT_VERSION = ([^;]+);", project))
@@ -145,11 +145,18 @@ jobs:
           version, build = versions.pop().strip(), builds.pop().strip()
           if not re.fullmatch(r"\d+\.\d+\.\d+", version) or not build.isdecimal():
               raise SystemExit("Expected a numeric major.minor.patch version and build.")
+          with pathlib.Path("Remmich/Info.plist").open("rb") as info:
+              rc_identifier = plistlib.load(info).get("RemmichPrereleaseIdentifier", "")
+          if not isinstance(rc_identifier, str) or (rc_identifier and not re.fullmatch(r"rc\.[1-9][0-9]*", rc_identifier)):
+              raise SystemExit("Expected an RC identifier such as rc.1.")
           with open(os.environ["GITHUB_OUTPUT"], "a") as output:
               output.write(f"version={version}\nbuild={build}\n")
-          pathlib.Path(os.environ["RUNNER_TEMP"], "release-version").write_text(version)
+          temp = pathlib.Path(os.environ["RUNNER_TEMP"])
+          (temp / "release-version").write_text(version)
+          (temp / "release-rc").write_text(rc_identifier)
           PY
           version="$(<"$RUNNER_TEMP/release-version")"
+          rc_identifier="$(<"$RUNNER_TEMP/release-rc")"
           prerelease=false
           tag="v$version"
           if [[ "$SOURCE_BRANCH" == "develop" ]]; then
@@ -159,6 +166,8 @@ jobs:
               beta=$((beta + 1))
             done
             tag="v${version}-beta.${beta}"
+          elif [[ -n "$rc_identifier" ]]; then
+            tag="v${version}-${rc_identifier}"
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
@@ -216,6 +225,9 @@ jobs:
           test -d "$app"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Info.plist")" = "$RELEASE_VERSION"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Info.plist")" = "$RELEASE_BUILD"
+          if [[ "$RELEASE_TAG" == "v$RELEASE_VERSION-rc."* ]]; then
+            test "$(/usr/libexec/PlistBuddy -c 'Print :RemmichPrereleaseIdentifier' "$app/Info.plist")" = "${RELEASE_TAG#v"$RELEASE_VERSION"-}"
+          fi
           test "$(/usr/libexec/PlistBuddy -c 'Print :DTPlatformName' "$app/Info.plist")" = "iphoneos"
           xcrun lipo -archs "$app/Remmich" | grep -w arm64
           mkdir -p "$RUNNER_TEMP/RemmichIPA/Payload" "$RUNNER_TEMP/RemmichRelease"

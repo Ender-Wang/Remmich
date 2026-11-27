@@ -2338,7 +2338,10 @@ struct AccountSettingsView: View {
     }
 
     private var appVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown"
+        let bundle = Bundle.main
+        guard let version = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String else { return "Unknown" }
+        guard let prerelease = bundle.object(forInfoDictionaryKey: "RemmichPrereleaseIdentifier") as? String, !prerelease.isEmpty else { return version }
+        return "\(version).\(prerelease)"
     }
 
     private var appBuild: String {

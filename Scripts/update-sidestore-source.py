@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
-"""Update the source from one published stable release and its actual unsigned IPA."""
+"""Update the source from one published release and its actual unsigned IPA."""
 
 import argparse
 import json
 import plistlib
+import re
 from pathlib import Path
 import zipfile
 
 
 def update_source(source, release, ipa):
     if release["draft"] or release["prerelease"]:
-        raise ValueError("Only published stable releases belong in this source.")
+        raise ValueError("Only published releases in the regular channel belong in this source.")
     assets = [asset for asset in release["assets"] if asset["name"].endswith("-unsigned.ipa")]
     if len(assets) != 1:
         raise ValueError("Expected exactly one unsigned IPA asset.")
@@ -28,8 +29,12 @@ def update_source(source, release, ipa):
     if info["CFBundleIdentifier"] != app["bundleIdentifier"]:
         raise ValueError("IPA bundle identifier does not match the source.")
     version = info["CFBundleShortVersionString"]
-    if release["tag_name"] != f"v{version}":
-        raise ValueError("Stable release tag does not match the IPA version.")
+    rc_identifier = info.get("RemmichPrereleaseIdentifier", "")
+    if not isinstance(rc_identifier, str) or (rc_identifier and not re.fullmatch(r"rc\.[1-9][0-9]*", rc_identifier)):
+        raise ValueError("Expected an RC identifier such as rc.1.")
+    expected_tag = f"v{version}-{rc_identifier}" if rc_identifier else f"v{version}"
+    if release["tag_name"] != expected_tag:
+        raise ValueError("Release tag does not match the IPA version and RC identifier.")
     entry = {
         "version": version,
         "buildVersion": str(info["CFBundleVersion"]),
