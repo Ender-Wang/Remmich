@@ -86,9 +86,10 @@ private struct LibraryPlaceLabelRequest: Hashable {
     let revision: Int
 }
 
-private struct LibraryPlaceLabelLoad: Equatable {
+private struct LibraryPlaceLabelLoad: Hashable {
     let request: LibraryPlaceLabelRequest
     let cacheSyncDate: Date?
+    let resolvedCount: Int?
 }
 
 @MainActor @Observable
@@ -100,7 +101,7 @@ final class LibraryDirectoryStore {
     private(set) var indexedPlaceCount: Int?
     fileprivate var selectedPlace: LibraryDirectoryEntry?
     fileprivate private(set) var placeLabels: [LibraryPlaceLabelRequest: TimelinePlace] = [:]
-    @ObservationIgnored private var loadingPlaceLabels: Set<LibraryPlaceLabelRequest> = []
+    @ObservationIgnored private var loadingPlaceLabels: Set<LibraryPlaceLabelLoad> = []
     @ObservationIgnored private var loadTask: Task<Void, Never>?
     @ObservationIgnored private var placeOpening: LibraryOpeningBuckets?
     private var buckets: [TimelineBucketSummary]?
@@ -172,11 +173,12 @@ final class LibraryDirectoryStore {
         return true
     }
 
-    fileprivate func loadPlaceLabel(_ request: LibraryPlaceLabelRequest, assetID: String, locations: AssetLocationStore,
+    fileprivate func loadPlaceLabel(_ load: LibraryPlaceLabelLoad, assetID: String, locations: AssetLocationStore,
                                     mapSource: LibraryPlacesMapSource?) async
     {
-        guard placeLabels[request] == nil, loadingPlaceLabels.insert(request).inserted else { return }
-        defer { loadingPlaceLabels.remove(request) }
+        let request = load.request
+        guard placeLabels[request] == nil, loadingPlaceLabels.insert(load).inserted else { return }
+        defer { loadingPlaceLabels.remove(load) }
         do {
             let label = try await locations.directoryPlaceLabel(assetID: assetID, place: request.place,
                                                                 includeLocalFallback: mapSource != nil)
@@ -465,7 +467,10 @@ private struct LibraryDirectoryView: View {
     @ViewBuilder private func directoryLink(_ entry: LibraryDirectoryEntry, width: CGFloat) -> some View {
         if case let .place(place, cover) = entry {
             let load = locations.map {
-                LibraryPlaceLabelLoad(request: .init(place: place, revision: $0.revision), cacheSyncDate: $0.cacheRun.lastSyncedAt)
+                let request = LibraryPlaceLabelRequest(place: place, revision: $0.revision)
+                // Retry cache misses as translations arrive during a sync.
+                return LibraryPlaceLabelLoad(request: request, cacheSyncDate: $0.cacheRun.lastSyncedAt,
+                                             resolvedCount: store.placeLabels[request] == nil ? $0.progress.resolved : nil)
             }
             Button {
                 store.selectedPlace = entry
@@ -475,7 +480,7 @@ private struct LibraryDirectoryView: View {
             .buttonStyle(.plain)
             .task(id: load) {
                 guard let load, let locations else { return }
-                await store.loadPlaceLabel(load.request, assetID: cover.id, locations: locations, mapSource: placesMapSource)
+                await store.loadPlaceLabel(load, assetID: cover.id, locations: locations, mapSource: placesMapSource)
             }
         } else {
             LibraryCardLink(id: entry.id, namespace: cardTransition) {

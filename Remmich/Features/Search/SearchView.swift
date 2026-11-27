@@ -89,6 +89,7 @@ struct SearchView: View {
         let assetID: String
         let revision: Int
         let cacheSync: Date?
+        let resolvedCount: Int?
     }
 
     private enum AppliedFilter: Hashable {
@@ -145,9 +146,10 @@ struct SearchView: View {
         }
     }
 
-    private func placeLabelTask(for assetID: String) -> PlaceLabelTask {
+    private func placeLabelTask(for assetID: String, place: TimelinePlace) -> PlaceLabelTask {
         let locations = sessionController.locations
-        return .init(selected: isSelected, assetID: assetID, revision: locations.revision, cacheSync: locations.cacheRun.lastSyncedAt)
+        return .init(selected: isSelected, assetID: assetID, revision: locations.revision, cacheSync: locations.cacheRun.lastSyncedAt,
+                     resolvedCount: placeLabels[place]?.revision == locations.revision ? nil : locations.progress.resolved)
     }
 
     private var peopleRead: SearchStore.PeopleRead {
@@ -786,6 +788,7 @@ struct SearchView: View {
                 ForEach(covers) { asset in
                     if let place = asset.place {
                         let name = placeName(place)
+                        let request = placeLabelTask(for: asset.id, place: place)
                         Button {
                             focus.dismiss()
                             var filters = store.filters
@@ -813,8 +816,8 @@ struct SearchView: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel(name)
-                        .task(id: placeLabelTask(for: asset.id)) {
-                            await loadPlaceLabel(place, request: placeLabelTask(for: asset.id))
+                        .task(id: request) {
+                            await loadPlaceLabel(place, request: request)
                         }
                     }
                 }
@@ -852,7 +855,7 @@ struct SearchView: View {
     }
 
     private func loadPlaceLabel(_ place: TimelinePlace, request: PlaceLabelTask) async {
-        guard request.selected else { return }
+        guard request.selected, placeLabels[place]?.revision != request.revision else { return }
         let locations = sessionController.locations
         guard let label = try? await locations.directoryPlaceLabel(assetID: request.assetID, place: place), !Task.isCancelled, request.revision == locations.revision else { return }
         let name = (place.city == nil ? label.country : label.city) ?? place.name
