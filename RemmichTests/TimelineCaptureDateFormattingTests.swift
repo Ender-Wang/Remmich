@@ -35,6 +35,23 @@ struct TimelineCaptureDateFormattingTests {
             #expect(layout.rows([6, 5, 4, 3, 2, 1]).map(Array.init) == [[2, 1], [6, 5, 4, 3]])
         }
 
+        @Test(arguments: [(712.0, 1101.0), (802.0, 1162.0), (992.0, 1334.0)])
+        func libraryHubKeepsPadCardsAtLeastAsWideInLandscape(portraitWidth: Double, landscapeWidth: Double) {
+            let portrait = LibraryCardRows.collection(availableWidth: CGFloat(portraitWidth), isPad: true)
+            let landscape = LibraryCardRows.collection(availableWidth: CGFloat(landscapeWidth), isPad: true)
+            #expect(landscape.columns == 4)
+            #expect(landscape.itemWidth >= portrait.itemWidth)
+        }
+
+        @Test func libraryHubKeepsItsCompactGridOnPhoneAndInNarrowPadWindows() {
+            let existing = LibraryCardRows(availableWidth: 370)
+            for isPad in [false, true] {
+                let hub = LibraryCardRows.collection(availableWidth: 370, isPad: isPad)
+                #expect(hub.columns == existing.columns)
+                #expect(hub.itemWidth == existing.itemWidth)
+            }
+        }
+
         @Test func libraryRowTargetsStayStableWhenOlderCardsArrive() {
             let layout = LibraryCardRows(width: 400, preferredColumns: 2)
             let cards = (1 ... 5).map { TimelineMemoryAssetSummary(id: String($0), revision: .distantPast, mediaKind: .image) }

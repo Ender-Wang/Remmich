@@ -55,7 +55,7 @@ struct LibraryView: View {
             ZStack(alignment: .topTrailing) {
                 LibraryHubScrollView {
                     VStack(alignment: .leading, spacing: 16) {
-                        LibraryHubCardLayout {
+                        LibraryHubCardLayout(isPad: isPad) {
                             if let exports, !exports.jobs.isEmpty {
                                 let newest = exports.latestCompletedDownload
                                 LibraryHubLink {
@@ -134,7 +134,7 @@ struct LibraryView: View {
                         }
                     }
                     .padding(.horizontal, horizontalPadding)
-                    .padding(.top, geometry.safeAreaInsets.top + headerMetrics.height)
+                    .padding(.top, geometry.safeAreaInsets.top + headerMetrics.height + (isPad ? 12 : 0))
                     .padding(.bottom, geometry.safeAreaInsets.bottom + 16)
                     .frame(width: geometry.size.width)
                     .environment(\.libraryHubNavigation, LibraryHubNavigation(namespace: libraryCardTransition, open: openLibraryCard))

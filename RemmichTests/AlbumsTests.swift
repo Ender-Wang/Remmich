@@ -102,7 +102,7 @@ struct AlbumsTests {
     }
 
     @Test func savedAlbumOpensAtTheStoredViewportFraction() {
-        let metrics = AlbumReflowMetrics.overview(availableWidth: 402, labelHeight: 57 + 2.0 / 3)
+        let metrics = AlbumReflowMetrics.overview(availableWidth: 402, isPad: false, labelHeight: 57 + 2.0 / 3)
         let viewportHeight: CGFloat = 791
         let topClearance: CGFloat = 122
         let bottomPadding: CGFloat = 16

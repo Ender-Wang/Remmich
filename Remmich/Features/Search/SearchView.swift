@@ -6,6 +6,7 @@ struct SearchView: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.displayScale) private var displayScale
     private var headerMetrics = MainTabHeaderMetrics()
     @Namespace private var viewerNamespace
 
@@ -533,7 +534,7 @@ struct SearchView: View {
                     }
                     switch store.state {
                     case .landing:
-                        landing(horizontalInsets: horizontalInsets).transition(contentTransition)
+                        landing(width: width, horizontalInsets: horizontalInsets).transition(contentTransition)
                     case .loading:
                         ProgressView("Searching…").frame(maxWidth: .infinity).padding(36)
                             .transition(reduceMotion ? .identity : .opacity)
@@ -636,15 +637,20 @@ struct SearchView: View {
         return items
     }
 
-    private func landing(horizontalInsets: EdgeInsets) -> some View {
+    private func landing(width: CGFloat, horizontalInsets: EdgeInsets) -> some View {
         let padding = MainTabHeaderMetrics.horizontalPadding
         let insets = EdgeInsets(top: 0, leading: horizontalInsets.leading + padding,
                                 bottom: 0, trailing: horizontalInsets.trailing + padding)
+        let scale: CGFloat = if UIDevice.current.userInterfaceIdiom == .pad {
+            max(1, LibraryCardRows.collection(availableWidth: width - 2 * padding, isPad: true).itemWidth * 0.9 / 152)
+        } else {
+            1
+        }
         return VStack(alignment: .leading, spacing: 16) {
-            browsePeople(insets: insets)
-            browsePlaces(insets: insets)
-            browseRecent(.recentlyTaken, insets: insets)
-            browseRecent(.recentlyAdded, insets: insets)
+            browsePeople(insets: insets, scale: scale)
+            browsePlaces(insets: insets, scale: scale)
+            browseRecent(.recentlyTaken, insets: insets, scale: scale)
+            browseRecent(.recentlyAdded, insets: insets, scale: scale)
         }
         .padding(.bottom, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -683,8 +689,11 @@ struct SearchView: View {
         .scrollBounceBehavior(.always, axes: .horizontal)
     }
 
-    private func browsePeople(insets: EdgeInsets) -> some View {
+    private func browsePeople(insets: EdgeInsets, scale: CGFloat) -> some View {
         let people = store.capabilities?.people == false ? [] : store.people
+        let portraitSize = (64 * scale).rounded()
+        let tileWidth = portraitSize + 4
+        let tileHeight = portraitSize + 19
         return VStack(alignment: .leading, spacing: 6) {
             labeledRow("People", symbol: "person.2", isHeader: true) { showFilters(.people) }
                 .disabled(store.capabilities?.people == false)
@@ -692,9 +701,9 @@ struct SearchView: View {
             Group {
                 if people.isEmpty {
                     if store.capabilities?.people == false {
-                        browseEmpty("People search is unavailable", height: 83, insets: insets)
+                        browseEmpty("People search is unavailable", height: tileHeight, insets: insets)
                     } else {
-                        browsePlaceholder(width: 68, height: 83, isPeople: true, insets: insets)
+                        browsePlaceholder(width: tileWidth, height: tileHeight, portraitSize: portraitSize, insets: insets)
                     }
                 } else {
                     browseRail(insets: insets) {
@@ -707,10 +716,10 @@ struct SearchView: View {
                                     store.apply(filters)
                                 } label: {
                                     VStack(spacing: 5) {
-                                        SearchPersonPortrait(person: person, media: media, size: 64, revealsImageOnLoad: true)
+                                        SearchPersonPortrait(person: person, media: media, size: portraitSize, revealsImageOnLoad: true)
                                         Text(person.displayName).font(.caption).lineLimit(1)
                                     }
-                                    .frame(width: 68)
+                                    .frame(width: tileWidth)
                                     .contentShape(.rect)
                                 }
                                 .buttonStyle(.plain)
@@ -724,16 +733,16 @@ struct SearchView: View {
     }
 
     @ViewBuilder
-    private func browsePlaceholder(width: CGFloat, height: CGFloat, isPeople: Bool = false, insets: EdgeInsets) -> some View {
+    private func browsePlaceholder(width: CGFloat, height: CGFloat, portraitSize: CGFloat? = nil, insets: EdgeInsets) -> some View {
         if completedBrowseRead == peopleRead {
             browseEmpty(endpoint == nil ? "No cached items" : "No items to show", height: height, insets: insets)
         } else {
             browseRail(insets: insets) {
-                HStack(alignment: .top, spacing: isPeople ? 12 : 8) {
-                    ForEach(0 ..< (isPeople ? 6 : 4), id: \.self) { _ in
-                        if isPeople {
+                HStack(alignment: .top, spacing: portraitSize == nil ? 8 : 12) {
+                    ForEach(0 ..< (portraitSize == nil ? 4 : 6), id: \.self) { _ in
+                        if let portraitSize {
                             VStack(spacing: 8) {
-                                Circle().fill(.quaternary).frame(width: 64, height: 64)
+                                Circle().fill(.quaternary).frame(width: portraitSize, height: portraitSize)
                                 Capsule().fill(.quaternary).frame(width: 42, height: 8)
                             }
                             .frame(width: width, height: height, alignment: .top)
@@ -758,22 +767,24 @@ struct SearchView: View {
             .padding(insets)
     }
 
-    private func browsePlaces(insets: EdgeInsets) -> some View {
+    private func browsePlaces(insets: EdgeInsets, scale: CGFloat) -> some View {
         let covers = browsePlaceAssets
+        let size = CGSize(width: (152 * scale).rounded(), height: (104 * scale).rounded())
         return VStack(alignment: .leading, spacing: 6) {
             labeledRow("Places", symbol: "map", isHeader: true) { showFilters(.location) }
                 .padding(insets)
             if covers.isEmpty, !(canLoadMorePlaces && completedBrowseRead == peopleRead) {
-                browsePlaceholder(width: 152, height: 104, insets: insets)
+                browsePlaceholder(width: size.width, height: size.height, insets: insets)
             } else {
-                placeRail(covers, insets: insets)
+                placeRail(covers, size: size, insets: insets)
             }
         }
         .animation(searchAnimation, value: covers.isEmpty)
     }
 
-    private func placeRail(_ covers: [TimelineAssetSummary], insets: EdgeInsets) -> some View {
-        browseRail(insets: insets) {
+    private func placeRail(_ covers: [TimelineAssetSummary], size: CGSize, insets: EdgeInsets) -> some View {
+        let imageScale = UIDevice.current.userInterfaceIdiom == .pad ? displayScale : 2
+        return browseRail(insets: insets) {
             LazyHStack(spacing: 8) {
                 ForEach(covers) { asset in
                     if let place = asset.place {
@@ -787,11 +798,11 @@ struct SearchView: View {
                             store.apply(filters)
                         } label: {
                             ImmichThumbnail(
-                                descriptor: TimelineAssetThumbnail.thumbnailDescriptor(for: asset, points: 160, scale: 2),
+                                descriptor: TimelineAssetThumbnail.thumbnailDescriptor(for: asset, points: max(160, size.width), scale: imageScale),
                                 media: media,
                                 revealsImageOnLoad: true
                             )
-                            .frame(width: 152, height: 104)
+                            .frame(width: size.width, height: size.height)
                             .overlay(alignment: .bottomLeading) {
                                 Text(name).font(.caption.bold()).lineLimit(1)
                                     .foregroundStyle(.white)
@@ -815,7 +826,7 @@ struct SearchView: View {
                         Task { await loadMorePlaces() }
                     }
                     .labelStyle(.iconOnly)
-                    .frame(width: 44, height: 104)
+                    .frame(width: 44, height: size.height)
                     .onScrollVisibilityChange(threshold: 0.5) { visible in
                         if visible, !covers.isEmpty, libraryOpening.places.error == nil {
                             Task { await loadMorePlaces() }
@@ -860,9 +871,10 @@ struct SearchView: View {
         recentAssets[collection] = assets
     }
 
-    private func browseRecent(_ collection: LibraryAssetCollection, insets: EdgeInsets) -> some View {
+    private func browseRecent(_ collection: LibraryAssetCollection, insets: EdgeInsets, scale: CGFloat) -> some View {
         let assets = recentAssets[collection] ?? []
         let scope = AssetTransitionScope.searchRecent(collection)
+        let side = (104 * scale).rounded()
         return VStack(alignment: .leading, spacing: 6) {
             NavigationLink(value: collection) {
                 HStack {
@@ -881,7 +893,7 @@ struct SearchView: View {
             .accessibilityAddTraits(.isHeader)
             .padding(insets)
             if assets.isEmpty {
-                browsePlaceholder(width: 104, height: 104, insets: insets)
+                browsePlaceholder(width: side, height: side, insets: insets)
             } else {
                 browseRail(insets: insets) {
                     LazyHStack(spacing: 8) {
@@ -891,7 +903,7 @@ struct SearchView: View {
                                 visibilityChanged: { _, _ in }, viewportChanged: { _, _ in },
                                 transitionNamespace: nil, assetSelected: { openViewer($0, assets: assets, scope: scope) }
                             )
-                            .frame(width: 104, height: 104)
+                            .frame(width: side, height: side)
                             .clipShape(.rect(cornerRadius: 12))
                         }
                     }

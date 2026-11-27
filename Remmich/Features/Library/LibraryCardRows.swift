@@ -4,16 +4,30 @@ import UIKit
 nonisolated struct LibraryCardRows {
     let columns: Int
     let itemWidth: CGFloat
+    let spacing: CGFloat
 
     init(width: CGFloat, preferredColumns: Int?) {
         self.init(availableWidth: width - 32, preferredColumns: preferredColumns)
     }
 
-    init(availableWidth: CGFloat, preferredColumns: Int? = nil) {
-        let spacing = LibraryCollectionCardMetrics.spacing
+    init(availableWidth: CGFloat, preferredColumns: Int? = nil, spacing: CGFloat = LibraryCollectionCardMetrics.spacing) {
         let available = max(1, availableWidth)
+        self.spacing = spacing
         columns = preferredColumns ?? max(1, Int((available + spacing) / (LibraryCollectionCardMetrics.minimumWidth + spacing)))
         itemWidth = min(LibraryCollectionCardMetrics.maximumWidth, max(1, (available - spacing * CGFloat(columns - 1)) / CGFloat(columns)))
+    }
+
+    static func collection(availableWidth: CGFloat, isPad: Bool, spacing: CGFloat = LibraryCollectionCardMetrics.spacing) -> Self {
+        let minimumPadCardWidth: CGFloat = 220
+        guard isPad, availableWidth >= 2 * minimumPadCardWidth + spacing else {
+            return Self(availableWidth: availableWidth, spacing: spacing)
+        }
+        let columns = min(4, Int((availableWidth + spacing) / (minimumPadCardWidth + spacing)))
+        return Self(availableWidth: availableWidth, preferredColumns: columns, spacing: spacing)
+    }
+
+    var gridWidth: CGFloat {
+        CGFloat(columns) * itemWidth + CGFloat(columns - 1) * spacing
     }
 
     func rows<Item>(_ newestFirst: [Item]) -> [ArraySlice<Item>] {
@@ -23,7 +37,7 @@ nonisolated struct LibraryCardRows {
     }
 
     func openingCount(viewportHeight: CGFloat, rowHeight: CGFloat) -> Int {
-        let rowStride = max(1, rowHeight + LibraryCollectionCardMetrics.spacing)
+        let rowStride = max(1, rowHeight + spacing)
         let rows = Int(ceil(max(1, viewportHeight) / rowStride))
         return max(1, rows * TimelineGridOrder.openingScreenCount * columns)
     }
@@ -37,10 +51,12 @@ nonisolated struct LibraryCardRows {
 
 /// Keep the hub's fixed set of cards mounted during scroll view rubber-banding.
 struct LibraryHubCardLayout: Layout {
+    let isPad: Bool
+
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache _: inout ()) -> CGSize {
         let proposedWidth = proposal.width ?? LibraryCollectionCardMetrics.minimumWidth
         let width = proposedWidth.isFinite ? proposedWidth : LibraryCollectionCardMetrics.minimumWidth
-        let layout = LibraryCardRows(availableWidth: width)
+        let layout = LibraryCardRows.collection(availableWidth: width, isPad: isPad)
         let rowCount = (subviews.count + layout.columns - 1) / layout.columns
         let rowHeight = layout.itemWidth / LibraryCollectionCardMetrics.aspectRatio
         return CGSize(width: width, height: CGFloat(rowCount) * rowHeight
@@ -48,15 +64,16 @@ struct LibraryHubCardLayout: Layout {
     }
 
     func placeSubviews(in bounds: CGRect, proposal _: ProposedViewSize, subviews: Subviews, cache _: inout ()) {
-        let layout = LibraryCardRows(availableWidth: bounds.width)
+        let layout = LibraryCardRows.collection(availableWidth: bounds.width, isPad: isPad)
         let rowHeight = layout.itemWidth / LibraryCollectionCardMetrics.aspectRatio
         let spacing = LibraryCollectionCardMetrics.spacing
         let cardSize = ProposedViewSize(width: layout.itemWidth, height: rowHeight)
+        let leading = bounds.minX + (isPad ? max(0, (bounds.width - layout.gridWidth) / 2) : 0)
 
         for (index, card) in subviews.enumerated() {
             let column = index % layout.columns
             let row = index / layout.columns
-            let origin = CGPoint(x: bounds.minX + CGFloat(column) * (layout.itemWidth + spacing),
+            let origin = CGPoint(x: leading + CGFloat(column) * (layout.itemWidth + spacing),
                                  y: bounds.minY + CGFloat(row) * (rowHeight + spacing))
             card.place(at: origin, anchor: .topLeading, proposal: cardSize)
         }

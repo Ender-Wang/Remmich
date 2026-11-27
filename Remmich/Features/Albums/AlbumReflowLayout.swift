@@ -3,15 +3,22 @@ import SwiftUI
 /// Both modes use exact rectangles in one stable album identity tree.
 /// The scroll extent follows the same progress as the item rectangles.
 nonisolated struct AlbumReflowMetrics: Equatable {
+    static let columnSpacing: CGFloat = 16
+
     let width: CGFloat
     let columns: Int
     let coverWidth: CGFloat
     let labelHeight: CGFloat
 
-    static func overview(availableWidth: CGFloat, labelHeight: CGFloat = 58) -> Self {
-        let columns = max(1, Int((availableWidth - 32 + 16) / (155 + 16)))
-        let coverWidth = min(260, max(1, (availableWidth - 32 - CGFloat(columns - 1) * 16) / CGFloat(columns)))
-        return .init(width: max(1, availableWidth - 32), columns: columns, coverWidth: coverWidth, labelHeight: labelHeight)
+    static func overview(availableWidth: CGFloat, isPad: Bool, labelHeight: CGFloat = 58) -> Self {
+        let width = max(1, availableWidth - 32)
+        let cards = LibraryCardRows.collection(availableWidth: width, isPad: isPad, spacing: columnSpacing)
+        return .init(width: width, columns: cards.columns, coverWidth: cards.itemWidth, labelHeight: labelHeight)
+    }
+
+    var gridLeadingInset: CGFloat {
+        let gridWidth = CGFloat(columns) * coverWidth + CGFloat(columns - 1) * Self.columnSpacing
+        return max(0, (width - gridWidth) / 2)
     }
 
     static func coverDescriptor(assetID: String, revision: Date, width: CGFloat, scale: CGFloat) -> MediaRequestDescriptor {
@@ -57,7 +64,7 @@ nonisolated struct AlbumReflowMetrics: Equatable {
         let offsetFromBottom = count - 1 - index
         let row = (count - 1) / columns - offsetFromBottom / columns
         let column = offsetFromBottom % columns
-        return CGRect(x: CGFloat(column) * (coverWidth + 16), y: CGFloat(row) * (cardHeight + 20),
+        return CGRect(x: gridLeadingInset + CGFloat(column) * (coverWidth + Self.columnSpacing), y: CGFloat(row) * (cardHeight + 20),
                       width: coverWidth, height: cardHeight)
     }
 

@@ -1200,7 +1200,8 @@ struct PhotosView: View {
 
     private func libraryMemoryCards(_ memories: [TimelineMemorySummary]) -> some View {
         GeometryReader { geometry in
-            let layout = LibraryCardRows(width: geometry.size.width, preferredColumns: nil)
+            let isPad = UIDevice.current.userInterfaceIdiom == .pad
+            let layout = LibraryCardRows.collection(availableWidth: geometry.size.width - 32, isPad: isPad)
             let rows = layout.identifiedRows(memories)
             LibraryCardScroll(initialRowID: memories.first?.id ?? "", viewportHeight: geometry.size.height, oldestRowID: rows.first?.id,
                               oldestItemID: memories.last?.id, loadOlder: loadOlderMemories)
@@ -1223,6 +1224,8 @@ struct PhotosView: View {
                     }
                 }
                 .scrollTargetLayout()
+                .frame(width: isPad ? layout.gridWidth : nil)
+                .frame(maxWidth: .infinity)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 16)
                 .background {

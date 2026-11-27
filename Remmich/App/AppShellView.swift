@@ -723,7 +723,8 @@ struct AppShellView: View {
         await overview.prepareOpening()
         guard !Task.isCancelled, preloading || tabSelectionState.selection == .albums,
               let window = openingWindow else { return }
-        await overview.warmOpeningCovers(media: media, viewport: window.bounds.size, scale: window.traitCollection.displayScale)
+        let viewport = LibraryOpeningViewport(window: window)
+        await overview.warmOpeningCovers(media: media, viewport: viewport.listSize, scale: viewport.scale, isPad: viewport.isPad)
     }
 
     private var openingWindow: UIWindow? {

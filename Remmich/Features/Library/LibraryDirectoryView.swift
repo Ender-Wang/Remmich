@@ -362,7 +362,8 @@ private struct LibraryDirectoryView: View {
     private var placesPage: some View {
         let selection = store.selectedPlace
         return GeometryReader { geometry in
-            let layout = LibraryCardRows(availableWidth: geometry.size.width - 32)
+            let layout = LibraryCardRows.collection(availableWidth: geometry.size.width - 32,
+                                                    isPad: UIDevice.current.userInterfaceIdiom == .pad)
             let twoRows = 2 * layout.itemWidth / LibraryCollectionCardMetrics.aspectRatio
             let mapHeight = min(twoRows, geometry.size.height * (geometry.size.width > geometry.size.height ? 0.46 : 0.55))
             VStack(spacing: 0) {
@@ -416,30 +417,35 @@ private struct LibraryDirectoryView: View {
     @ViewBuilder private var directoryContent: some View {
         if !store.entries.isEmpty {
             GeometryReader { geometry in
-                let peopleColumns = directory != .places ? max(4, Int(geometry.size.width / 98)) : nil
-                let layout = LibraryCardRows(width: geometry.size.width, preferredColumns: peopleColumns)
+                let isPad = UIDevice.current.userInterfaceIdiom == .pad
+                let layout = directory == .places
+                    ? LibraryCardRows.collection(availableWidth: geometry.size.width - 32, isPad: isPad)
+                    : LibraryCardRows(width: geometry.size.width, preferredColumns: max(4, Int(geometry.size.width / 98)))
                 let rows = layout.identifiedRows(store.entries)
+                let opensAtTop = directory == .partners || (directory == .people && isPad)
                 let canPage = directory == .places && !store.finished
                 LibraryCardScroll(initialRowID: store.entries.first?.id ?? "", viewportHeight: geometry.size.height,
-                                  alignment: directory == .partners ? .top : .bottom,
+                                  alignment: opensAtTop ? .top : .bottom,
                                   oldestRowID: canPage ? rows.first?.id : nil,
                                   oldestItemID: canPage ? store.entries.last?.id : nil,
                                   loadOlder: canPage ? { await store.loadNext(directory, source: source) } : nil)
                 {
                     LazyVStack(spacing: LibraryCollectionCardMetrics.spacing) {
-                        ForEach(directory == .partners ? Array(rows.reversed()) : rows) { row in
+                        ForEach(opensAtTop ? Array(rows.reversed()) : rows) { row in
                             HStack(alignment: .top, spacing: LibraryCollectionCardMetrics.spacing) {
                                 ForEach(row.items) { entry in
                                     directoryLink(entry, width: layout.itemWidth)
                                 }
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.top, directory == .partners && row.id == store.entries.first?.id ? 16 : 0)
+                            .padding(.top, opensAtTop && row.id == store.entries.first?.id ? 16 : 0)
                         }
                     }
                     .scrollTargetLayout()
+                    .frame(width: directory == .places && isPad ? layout.gridWidth : nil)
+                    .frame(maxWidth: .infinity)
                     .padding(.horizontal, 16)
-                    .padding(.top, directory == .partners ? 0 : 16)
+                    .padding(.top, opensAtTop ? 0 : 16)
                     .padding(.bottom, 16)
                 }
             }

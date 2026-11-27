@@ -60,12 +60,13 @@ private struct AlbumScopeCaptureKey: Equatable {
 struct AlbumsOpeningSkeleton: View {
     var body: some View {
         GeometryReader { geometry in
-            let metrics = AlbumReflowMetrics.overview(availableWidth: geometry.size.width)
+            let isPad = UIDevice.current.userInterfaceIdiom == .pad
+            let metrics = AlbumReflowMetrics.overview(availableWidth: geometry.size.width, isPad: isPad)
             let coverHeight = metrics.coverWidth * 0.75
             let rows = max(1, Int(ceil(geometry.size.height / (coverHeight + 20))))
             VStack(alignment: .leading, spacing: 20) {
                 ForEach(0 ..< rows, id: \.self) { _ in
-                    HStack(spacing: 16) {
+                    HStack(spacing: AlbumReflowMetrics.columnSpacing) {
                         ForEach(0 ..< metrics.columns, id: \.self) { _ in
                             VStack(spacing: 8) {
                                 RoundedRectangle(cornerRadius: DesignMetrics.defaultCornerRadius).fill(.quaternary)
@@ -77,6 +78,7 @@ struct AlbumsOpeningSkeleton: View {
                 }
             }
             .fixedSize(horizontal: false, vertical: true)
+            .padding(.leading, metrics.gridLeadingInset)
             .padding([.horizontal, .bottom], 16)
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .bottomLeading)
             .clipped()
@@ -226,13 +228,15 @@ struct AlbumsView: View {
         GeometryReader { geometry in
             let viewportWidth = geometry.size.width
             let viewportHeight = geometry.size.height
+            let isPad = UIDevice.current.userInterfaceIdiom == .pad
+            let metrics = AlbumReflowMetrics.overview(availableWidth: viewportWidth, isPad: isPad, labelHeight: albumLabelHeight ?? 58)
             ZStack {
                 if showsOpeningSkeleton {
                     AlbumsOpeningSkeleton()
                         .transition(.opacity)
                 }
-                if let albumLabelHeight, !store.isWaitingForInitialContent {
-                    albumContent(availableWidth: viewportWidth, viewportHeight: viewportHeight, labelHeight: albumLabelHeight)
+                if albumLabelHeight != nil, !store.isWaitingForInitialContent {
+                    albumContent(metrics: metrics, viewportHeight: viewportHeight)
                         .opacity(showsOpeningSkeleton ? 0 : 1)
                         .allowsHitTesting(!showsOpeningSkeleton)
                         .accessibilityHidden(showsOpeningSkeleton)
@@ -242,11 +246,11 @@ struct AlbumsView: View {
                        value: showsOpeningSkeleton)
             .frame(width: viewportWidth)
             .overlay(alignment: .top) {
-                albumHeader(metrics: AlbumReflowMetrics.overview(availableWidth: viewportWidth, labelHeight: albumLabelHeight ?? 58))
+                albumHeader(metrics: metrics)
                     .allowsHitTesting(!showsOpeningSkeleton)
             }
             .overlay(alignment: .topLeading) {
-                AlbumOpeningLabels(width: AlbumReflowMetrics.overview(availableWidth: viewportWidth).coverWidth)
+                AlbumOpeningLabels(width: metrics.coverWidth)
                     .hidden()
                     .onGeometryChange(for: CGFloat.self) {
                         viewportWidth > 0 && viewportHeight > 0 ? $0.size.height : 0
@@ -304,8 +308,7 @@ struct AlbumsView: View {
         .nativeEdgeBackAction(active: canDismissSearchBySwipe, animatesContent: false, action: dismissSearchBySwipe)
     }
 
-    private func albumContent(availableWidth: CGFloat, viewportHeight: CGFloat, labelHeight: CGFloat) -> some View {
-        let metrics = AlbumReflowMetrics.overview(availableWidth: availableWidth, labelHeight: labelHeight)
+    private func albumContent(metrics: AlbumReflowMetrics, viewportHeight: CGFloat) -> some View {
         let request = reorderGeneration
         let albums = filtered
         let openingHeight = metrics.height(count: albums.count, list: showsList)

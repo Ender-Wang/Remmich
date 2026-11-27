@@ -7,6 +7,7 @@ nonisolated struct LibraryOpeningViewport: Sendable {
     let listSize: CGSize
     let scale: CGFloat
     let isPhone: Bool
+    let isPad: Bool
     let isDark: Bool
     let cardFooterHeight: CGFloat
 
@@ -17,12 +18,13 @@ nonisolated struct LibraryOpeningViewport: Sendable {
                           height: max(1, size.height - insets.top - insets.bottom - 44))
         scale = window.traitCollection.displayScale
         isPhone = window.traitCollection.userInterfaceIdiom == .phone
+        isPad = window.traitCollection.userInterfaceIdiom == .pad
         isDark = window.traitCollection.userInterfaceStyle == .dark
         cardFooterHeight = UIFontMetrics(forTextStyle: .caption1).scaledValue(for: 52, compatibleWith: window.traitCollection)
     }
 
     var cards: LibraryCardRows {
-        LibraryCardRows(width: listSize.width, preferredColumns: nil)
+        LibraryCardRows.collection(availableWidth: listSize.width - 32, isPad: isPad)
     }
 
     var cardLimit: Int {
@@ -315,8 +317,8 @@ final class LibraryOpeningState {
                                   media: MediaLibraryController, viewport: LibraryOpeningViewport) async
     {
         let isPlace = directory == .places
-        let columns = isPlace ? nil : max(4, Int(viewport.listSize.width / 98))
-        let cards = LibraryCardRows(width: viewport.listSize.width, preferredColumns: columns)
+        let cards = isPlace ? viewport.cards : LibraryCardRows(width: viewport.listSize.width,
+                                                               preferredColumns: max(4, Int(viewport.listSize.width / 98)))
         let rowHeight = isPlace ? cards.itemWidth / LibraryCollectionCardMetrics.aspectRatio : cards.itemWidth + 34
         let limit = cards.openingCount(viewportHeight: viewport.listSize.height, rowHeight: rowHeight)
         await store.loadNext(directory, source: source, openingLimit: limit)

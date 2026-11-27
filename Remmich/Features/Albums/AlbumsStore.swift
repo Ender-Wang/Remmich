@@ -45,10 +45,10 @@ final class AlbumsStore {
         await read.value
     }
 
-    func warmOpeningCovers(media: MediaLibraryController, viewport: CGSize, scale: CGFloat) async {
+    func warmOpeningCovers(media: MediaLibraryController, viewport: CGSize, scale: CGFloat, isPad: Bool) async {
         guard !didShowCover, let scope, media.scope == scope, hasLoaded, !albums.isEmpty,
               viewport.width > 0, viewport.height > 0, scale > 0 else { return }
-        let metrics = AlbumReflowMetrics.overview(availableWidth: viewport.width)
+        let metrics = AlbumReflowMetrics.overview(availableWidth: viewport.width, isPad: isPad)
         let rows = Int(ceil(viewport.height * CGFloat(TimelineGridOrder.openingScreenCount) / (metrics.cardHeight + 20)))
         let count = rows * metrics.columns
         let newest = AlbumSort.mostRecentPhoto.sorted(albums, direction: .ascending).suffix(count).reversed()
