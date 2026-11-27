@@ -288,6 +288,7 @@ struct AlbumsView: View {
                             viewerPresentations: viewerPresentations,
                             tabSelectionState: tabSelectionState, tabBarTop: $tabBarTop)
                 .cardNavigationDestination(id: album.id, in: albumTransition)
+                .cardNavigationBack(path: $navigationPath)
         }
         .accessibilityIdentifier("albums-root")
         .environment(\.thumbnailRevealsActive, tabSelectionState.canRevealThumbnails(in: .albums))

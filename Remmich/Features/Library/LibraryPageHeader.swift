@@ -3,6 +3,7 @@ import SwiftUI
 /// This header travels with the detail page during the native card zoom.
 struct LibraryPageHeader<Trailing: View>: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.cardBackAction) private var cardBackAction
     let title: String
     let backLabel: String
     let trailing: Trailing
@@ -20,13 +21,16 @@ struct LibraryPageHeader<Trailing: View>: View {
             Button {
                 if let backAction {
                     backAction()
+                } else if let cardBackAction {
+                    cardBackAction()
                 } else {
                     dismiss()
                 }
             } label: {
                 Image(systemName: "chevron.backward")
                     .font(.title3.weight(.semibold))
-                    .frame(width: 44, height: 44)
+                    .frame(width: MainTabHeaderMetrics.controlSize, height: MainTabHeaderMetrics.controlSize)
+                    .contentShape(.circle)
             }
             .buttonStyle(.plain)
             .glassEffect(.regular.interactive(), in: .circle)

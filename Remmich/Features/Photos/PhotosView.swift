@@ -354,6 +354,7 @@ struct PhotosView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dismiss) private var dismissCollection
+    @Environment(\.cardBackAction) private var cardBackAction
 
     let store: PhotosTimelineStore
     let presentation: PhotosPresentationState
@@ -605,26 +606,13 @@ struct PhotosView: View {
             }
             if navigationPath.isEmpty, let collectionTitle {
                 HStack(alignment: .top, spacing: 12) {
-                    Button(action: collectionBack) {
-                        Image(systemName: "chevron.backward")
-                            .font(.title3.weight(.semibold)).frame(width: 44, height: 44)
+                    TimelineBackButton(identifier: "collection-timeline-back", back: collectionBack) {
+                        if libraryRange != .all {
+                            returnToRootTimeline()
+                        } else {
+                            collectionBack()
+                        }
                     }
-                    .buttonStyle(.plain)
-                    .glassEffect(.regular.interactive(), in: .circle)
-                    .accessibilityLabel("Back")
-                    .highPriorityGesture(LongPressGesture(minimumDuration: 0.35)
-                        .exclusively(before: TapGesture())
-                        .onEnded { result in
-                            switch result {
-                            case .first:
-                                if libraryRange != .all {
-                                    returnToRootTimeline()
-                                } else {
-                                    collectionBack()
-                                }
-                            case .second: collectionBack()
-                            }
-                        })
                     VStack(spacing: 4) {
                         Text(collectionTitle)
                             .font(.headline)
@@ -1537,6 +1525,8 @@ struct PhotosView: View {
     private func collectionBack() {
         if libraryRange != .all || !navigationPath.isEmpty {
             navigateBack()
+        } else if let cardBackAction {
+            cardBackAction()
         } else {
             dismissCollection()
         }

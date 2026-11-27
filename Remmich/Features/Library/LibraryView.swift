@@ -210,10 +210,12 @@ struct LibraryView: View {
                 }
                 .nativeEdgeBack(canBegin: false, priority: 25) { _ in }
                 .cardNavigationDestination(id: card.id, in: libraryCardTransition)
+                .cardNavigationBack(path: $navigationPath)
         }
         .navigationDestination(for: LibraryNestedCardDestination.self) { destination in
             destination.makeView()
                 .nativeEdgeBack(canBegin: false, priority: 25) { _ in }
+                .cardNavigationBack(path: $navigationPath)
         }
         .navigationDestination(for: FixtureAsset.self) { asset in
             FixtureAssetDetailView(asset: asset)

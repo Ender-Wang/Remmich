@@ -13,6 +13,23 @@ extension View {
         background(CardPinchBoundary())
             .navigationTransition(.zoom(sourceID: id, in: namespace))
     }
+
+    func cardNavigationBack(path: Binding<NavigationPath>) -> some View {
+        environment(\.cardBackAction, CardNavigationBackAction(path: path))
+    }
+}
+
+struct CardNavigationBackAction {
+    let path: Binding<NavigationPath>
+
+    func callAsFunction() {
+        guard !path.wrappedValue.isEmpty else { return }
+        withAnimation { path.wrappedValue.removeLast() }
+    }
+}
+
+extension EnvironmentValues {
+    @Entry var cardBackAction: CardNavigationBackAction?
 }
 
 private struct CardPinchBoundary: UIViewRepresentable {
