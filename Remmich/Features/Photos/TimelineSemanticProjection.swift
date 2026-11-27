@@ -151,7 +151,7 @@ final nonisolated class TimelineSemanticCatalog: Sendable {
 }
 
 nonisolated struct TimelineSemanticProjection: Sendable {
-    static let topPadding: CGFloat = 12
+    static let searchTopPadding: CGFloat = 12
     static let bottomPadding: CGFloat = 21
 
     struct Item: Sendable {
@@ -247,17 +247,17 @@ nonisolated struct TimelineSemanticProjection: Sendable {
             let items = range.map { index in
                 Item(id: catalog.assets[index].id, nodeIndex: index, assetRange: index ..< index + 1,
                      frame: CGRect(x: CGFloat(index % grid.columns) * stride,
-                                   y: topPadding + CGFloat(index / grid.columns) * stride,
+                                   y: searchTopPadding + CGFloat(index / grid.columns) * stride,
                                    width: grid.side, height: grid.side),
                      isHeader: false, isFeatured: false)
             }
             let rows = (count + grid.columns - 1) / grid.columns
             return Self(scale: scale, nodeRange: range, items: items,
-                        height: topPadding + CGFloat(rows) * stride - grid.spacing + bottomPadding)
+                        height: searchTopPadding + CGFloat(rows) * stride - grid.spacing + bottomPadding)
         }
         var items: [Item] = []
         items.reserveCapacity(count + (scale.isAssets ? catalog.count(at: .day) : 0))
-        var y = topPadding
+        var y: CGFloat = 0
         let assetSpacing: CGFloat = scale == .natural ? 8 : 2
         if scale.isAssets {
             let columns = TimelineGridOrder.timelineColumnCount(

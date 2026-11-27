@@ -852,7 +852,7 @@ struct TimelineSemanticZoomTests {
         #expect(!collection.automaticallyAdjustsScrollIndicatorInsets)
         #expect(collection.contentInset.top == 180)
         #expect(collection.contentInset.bottom == 96)
-        #expect(collection.verticalScrollIndicatorInsets.top == 180 + TimelineSemanticProjection.topPadding)
+        #expect(collection.verticalScrollIndicatorInsets.top == 180)
         #expect(collection.verticalScrollIndicatorInsets.bottom == 96 + TimelineSemanticProjection.bottomPadding)
 
         let last = try #require(collection.collectionViewLayout.layoutAttributesForItem(

@@ -120,7 +120,7 @@ struct AlbumsView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
     @Environment(\.scenePhase) private var scenePhase
-    @ScaledMetric(relativeTo: .body) private var headerTextHeight: CGFloat = 24
+    private var headerMetrics = MainTabHeaderMetrics()
     let source: any AlbumReading & TimelineReading
     let media: MediaLibraryController
     let assetDetails: any AssetDetailReading
@@ -163,8 +163,8 @@ struct AlbumsView: View {
     @State private var timelineSessions = AlbumTimelineSessions()
     @State private var scopeSlide = AlbumScopeSlide()
     @FocusState private var searchFocused: Bool
-    private let headerControlSize: CGFloat = 44
-    private static let contentVerticalPadding: CGFloat = 16
+    private let headerControlSize = MainTabHeaderMetrics.controlSize
+    private static let contentBottomPadding: CGFloat = 16
 
     init(store: AlbumsStore, source: any AlbumReading & TimelineReading, media: MediaLibraryController,
          assetDetails: any AssetDetailReading, activeEndpoint: URL?,
@@ -218,11 +218,7 @@ struct AlbumsView: View {
     }
 
     private var topClearance: CGFloat {
-        windowTopInset + headerRowHeight + 16
-    }
-
-    private var headerRowHeight: CGFloat {
-        max(headerControlSize, headerTextHeight + 12)
+        windowTopInset + headerMetrics.height
     }
 
     private var showsOpeningSkeleton: Bool {
@@ -324,7 +320,7 @@ struct AlbumsView: View {
         let openingOffset = hasOpenedGrid ? nil : bookmarkIndex.flatMap { index in
             pendingBrowsingPosition.map { position in
                 metrics.openingOffset(at: index, count: albums.count, list: showsList, fraction: CGFloat(position.viewportFraction),
-                                      viewportHeight: viewportHeight, topClearance: topClearance, verticalPadding: Self.contentVerticalPadding)
+                                      viewportHeight: viewportHeight, topClearance: topClearance, bottomPadding: Self.contentBottomPadding)
             }
         }
         return ScrollViewReader { proxy in
@@ -369,7 +365,7 @@ struct AlbumsView: View {
                         .animation(isReordering && !pinchInteraction.isActive && !reduceMotion ? .smooth(duration: 0.35) : nil, value: request)
                     }
                 }
-                .padding(.vertical, Self.contentVerticalPadding)
+                .padding(.bottom, Self.contentBottomPadding)
                 // Count header clearance in the scroll extent from the first
                 // layout, so attachment cannot rebase the bottom offset.
                 .padding(.top, topClearance)
@@ -510,7 +506,7 @@ struct AlbumsView: View {
             let searchWidth = isSearchExpanded ? max(headerControlSize, geometry.size.width - headerControlSize - spacing) : headerControlSize
             ZStack(alignment: .leading) {
                 AlbumScopeControl(selection: Binding(get: { scope }, set: selectAlbumScope))
-                    .frame(height: headerControlSize)
+                    .frame(height: headerMetrics.rowHeight)
                     .glassEffect(.regular, in: .capsule)
                     .padding(.horizontal, headerControlSize + spacing)
                     .opacity(isSearchExpanded ? 0 : 1)
@@ -526,10 +522,10 @@ struct AlbumsView: View {
                 .allowsHitTesting(!scopeSlide.isActive)
             }
         }
-        .frame(height: headerRowHeight)
-        .padding(.horizontal)
-        .padding(.vertical, 8)
-        .padding(.top, windowTopInset)
+        .frame(height: headerMetrics.rowHeight)
+        .padding(.horizontal, MainTabHeaderMetrics.horizontalPadding)
+        .padding(.top, windowTopInset + MainTabHeaderMetrics.topPadding)
+        .padding(.bottom, MainTabHeaderMetrics.bottomPadding)
         .background {
             ZStack {
                 TimelineMemoryGradientBackdrop(visible: true, extended: true, reduceMotion: reduceMotion)
@@ -584,7 +580,7 @@ struct AlbumsView: View {
                     }
             }
         }
-        .frame(width: width, height: isSearchExpanded ? headerRowHeight : headerControlSize, alignment: .leading)
+        .frame(width: width, height: isSearchExpanded ? headerMetrics.rowHeight : headerControlSize, alignment: .leading)
         .clipped()
         .glassEffect(.regular.interactive(), in: .capsule)
     }

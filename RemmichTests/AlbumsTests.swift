@@ -105,16 +105,16 @@ struct AlbumsTests {
         let metrics = AlbumReflowMetrics.overview(availableWidth: 402, labelHeight: 57 + 2.0 / 3)
         let viewportHeight: CGFloat = 791
         let topClearance: CGFloat = 122
-        let padding: CGFloat = 16
+        let bottomPadding: CGFloat = 16
         let fraction: CGFloat = 0.647
         let offset = metrics.openingOffset(at: 52, count: 68, list: false, fraction: fraction,
-                                           viewportHeight: viewportHeight, topClearance: topClearance, verticalPadding: padding)
+                                           viewportHeight: viewportHeight, topClearance: topClearance, bottomPadding: bottomPadding)
         let item = metrics.frame(at: 52, count: 68, list: false)
-        let visibleY = item.minY + padding + topClearance - offset
+        let visibleY = item.minY + topClearance - offset
         let recovered = (visibleY - topClearance) / (viewportHeight - topClearance - item.height)
         #expect(abs(recovered - fraction) < 0.001)
         let shortGridOffset = metrics.openingOffset(at: 0, count: 1, list: false, fraction: fraction,
-                                                    viewportHeight: viewportHeight, topClearance: topClearance, verticalPadding: padding)
+                                                    viewportHeight: viewportHeight, topClearance: topClearance, bottomPadding: bottomPadding)
         #expect(shortGridOffset == 0)
     }
 

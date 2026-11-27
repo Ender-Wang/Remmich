@@ -6,7 +6,7 @@ struct SearchView: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @ScaledMetric(relativeTo: .body) private var searchFieldHeight: CGFloat = 44
+    private var headerMetrics = MainTabHeaderMetrics()
     @Namespace private var viewerNamespace
 
     let media: MediaLibraryController
@@ -346,8 +346,7 @@ struct SearchView: View {
             GlassEffectContainer(spacing: 4) {
                 searchControls(text: $store.text)
             }
-            .padding(.horizontal, 12)
-            .padding(.top, 6)
+            .padding(.horizontal, MainTabHeaderMetrics.horizontalPadding)
             ScrollView(.horizontal) {
                 GlassEffectContainer(spacing: 4) {
                     HStack(spacing: 6) {
@@ -361,7 +360,7 @@ struct SearchView: View {
                         pickerButton(.display)
                     }
                 }
-                .padding(.horizontal, 12)
+                .padding(.horizontal, MainTabHeaderMetrics.horizontalPadding)
                 .padding(.vertical, 4)
                 .frame(minWidth: width)
             }
@@ -373,15 +372,16 @@ struct SearchView: View {
 
             if !store.filters.isEmpty {
                 appliedFilters(width: width)
-                    .padding(.bottom, 6)
                     .transition(contentTransition)
             }
         }
+        .padding(.bottom, MainTabHeaderMetrics.bottomPadding)
         .animation(searchAnimation, value: store.filters.isEmpty)
     }
 
     private func searchControls(text: Binding<String>) -> some View {
-        HStack(spacing: 8) {
+        let controlSize = MainTabHeaderMetrics.controlSize
+        return HStack(spacing: 8) {
             HStack(spacing: 4) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
@@ -394,12 +394,12 @@ struct SearchView: View {
                     editingChanged: { isEditing = $0 },
                     submit: submit
                 )
-                .frame(height: searchFieldHeight)
+                .frame(height: headerMetrics.rowHeight)
                 if !store.text.isEmpty {
                     Button(action: clearSearchText) {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundStyle(.secondary)
-                            .frame(width: 44, height: 44)
+                            .frame(width: controlSize, height: controlSize)
                             .contentShape(.rect)
                     }
                     .buttonStyle(.plain)
@@ -409,10 +409,10 @@ struct SearchView: View {
                     SearchScanButton(focus: focus) {
                         showsScanUnavailable = true
                     }
-                    .frame(width: 44, height: 44)
+                    .frame(width: controlSize, height: controlSize)
                 #endif
             }
-            .frame(height: searchFieldHeight)
+            .frame(height: headerMetrics.rowHeight)
             .glassEffect(.regular.interactive(), in: .capsule)
             Menu {
                 Picker("Search mode", selection: Binding(
@@ -429,7 +429,7 @@ struct SearchView: View {
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.body.weight(.semibold))
-                    .frame(width: 44, height: 44)
+                    .frame(width: controlSize, height: controlSize)
                     .contentShape(.circle)
             }
             .buttonStyle(.plain)
@@ -445,7 +445,7 @@ struct SearchView: View {
     ) -> some View {
         VStack(spacing: 0) {
             toolbar(width: width)
-                .padding(.top, topPadding)
+                .padding(.top, topPadding + MainTabHeaderMetrics.topPadding)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { toolbarHeight = $0 }
             if let page = liveResults {
                 resultControls(page, maximumControlsHeight: maximumControlsHeight)
@@ -500,7 +500,7 @@ struct SearchView: View {
         } label: {
             Image(systemName: category.symbol)
                 .font(.body.weight(.semibold))
-                .frame(width: 44, height: 44)
+                .frame(width: MainTabHeaderMetrics.controlSize, height: MainTabHeaderMetrics.controlSize)
                 .contentShape(.circle)
         }
         .buttonStyle(.plain)
@@ -599,7 +599,7 @@ struct SearchView: View {
                     .transition(contentTransition)
                 }
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, MainTabHeaderMetrics.horizontalPadding)
             .frame(minWidth: width)
             .animation(searchAnimation, value: store.filters)
         }
@@ -637,15 +637,15 @@ struct SearchView: View {
     }
 
     private func landing(horizontalInsets: EdgeInsets) -> some View {
-        let insets = EdgeInsets(top: 0, leading: horizontalInsets.leading + 16,
-                                bottom: 0, trailing: horizontalInsets.trailing + 16)
+        let padding = MainTabHeaderMetrics.horizontalPadding
+        let insets = EdgeInsets(top: 0, leading: horizontalInsets.leading + padding,
+                                bottom: 0, trailing: horizontalInsets.trailing + padding)
         return VStack(alignment: .leading, spacing: 16) {
             browsePeople(insets: insets)
             browsePlaces(insets: insets)
             browseRecent(.recentlyTaken, insets: insets)
             browseRecent(.recentlyAdded, insets: insets)
         }
-        .padding(.top, 2)
         .padding(.bottom, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .animation(searchAnimation, value: completedBrowseRead)
@@ -662,8 +662,7 @@ struct SearchView: View {
             }
             recentChips(visibleRecents)
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 8)
+        .padding(.horizontal, MainTabHeaderMetrics.horizontalPadding)
     }
 
     private func recentChips(_ recents: [SearchStore.Recent]) -> some View {

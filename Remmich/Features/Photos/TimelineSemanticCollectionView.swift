@@ -490,9 +490,11 @@ final class TimelineSemanticCollectionCell: UICollectionViewCell {
         label.font = .preferredFont(forTextStyle: trailing ? .subheadline : .headline)
         let fittingSize = label.sizeThatFits(CGSize(width: .greatestFiniteMagnitude, height: contentView.bounds.height))
         let labelSize = CGSize(width: ceil(fittingSize.width), height: ceil(fittingSize.height))
+        // Align the capsule to the row's top, while keeping taller labels centered to avoid extra clipping.
+        let labelTop = min(Self.headerBackgroundVerticalPadding, (contentView.bounds.height - labelSize.height) / 2)
         label.frame = CGRect(
             x: trailing ? contentView.bounds.width - Self.headerHorizontalInset - labelSize.width : Self.headerHorizontalInset,
-            y: (contentView.bounds.height - labelSize.height) / 2,
+            y: labelTop,
             width: labelSize.width,
             height: labelSize.height
         )
@@ -892,7 +894,7 @@ final class TimelineSemanticCollectionController: UIViewController, UICollection
         collection.contentInset = UIEdgeInsets(top: value.topClearance, left: 0, bottom: value.bottomClearance, right: 0)
         layout.pinnedHeaderTopInset = pinnedInset
         collection.verticalScrollIndicatorInsets = UIEdgeInsets(
-            top: value.topClearance + TimelineSemanticProjection.topPadding,
+            top: value.topClearance + (ranked ? TimelineSemanticProjection.searchTopPadding : 0),
             left: 0,
             bottom: value.bottomClearance + TimelineSemanticProjection.bottomPadding,
             right: 0

@@ -69,14 +69,14 @@ nonisolated struct AlbumReflowMetrics: Equatable {
     }
 
     func openingOffset(at index: Int, count: Int, list: Bool, fraction: CGFloat,
-                       viewportHeight: CGFloat, topClearance: CGFloat, verticalPadding: CGFloat) -> CGFloat
+                       viewportHeight: CGFloat, topClearance: CGFloat, bottomPadding: CGFloat) -> CGFloat
     {
         let item = frame(at: index, count: count, list: list)
         // Store a position in the visible viewport below the header. A native
         // content point keeps that same placement as the tab's insets settle.
         let room = max(0, viewportHeight - topClearance - item.height)
-        let offset = item.minY + verticalPadding - fraction * room
-        let limit = height(count: count, list: list) + topClearance + 2 * verticalPadding - viewportHeight
+        let offset = item.minY - fraction * room
+        let limit = height(count: count, list: list) + topClearance + bottomPadding - viewportHeight
         return min(max(0, limit), max(0, offset))
     }
 

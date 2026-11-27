@@ -1027,6 +1027,7 @@ struct PhotosView: View {
             let topInset = libraryTimelineClearance?.top ?? (media.canDownloadAssets
                 ? TimelineMemoryLaneSafeArea.topInset(proposed: geometry.safeAreaInsets.top, window: windowTopInset)
                 : geometry.safeAreaInsets.top)
+            let headerTop = topInset + MainTabHeaderMetrics.topPadding
             // Keep the row's scroll clearance while compact chrome hides it,
             // so showing the row does not move the timeline underneath it.
             let bottomClearance = max(libraryTimelineClearance?.bottom ?? 0, isPhone ? barHeight : 0)
@@ -1035,8 +1036,8 @@ struct PhotosView: View {
                 && store.memoryLaneState == .loaded
                 && !store.memories.isEmpty
             let albumHeaderClearance = collectionTitle != nil && navigationPath.isEmpty ? collectionHeaderHeight : 0
-            let topClearance = topInset + albumHeaderClearance + (reservesMemoryLane ? TimelineMemoryLaneSafeArea.laneHeight : 0)
-            let pinnedHeaderTopClearance = topInset + albumHeaderClearance + (memoryLaneVisible ? TimelineMemoryLaneSafeArea.laneHeight : 0)
+            let topClearance = headerTop + albumHeaderClearance + (reservesMemoryLane ? TimelineMemoryLaneSafeArea.laneHeight : 0)
+            let pinnedHeaderTopClearance = headerTop + albumHeaderClearance + (memoryLaneVisible ? TimelineMemoryLaneSafeArea.laneHeight : 0)
             Group {
                 if let semanticCatalog {
                     TimelineSemanticCollectionView(
@@ -1123,7 +1124,7 @@ struct PhotosView: View {
                 }
             }
             .overlay(alignment: .top) {
-                semanticMemoryLane(topInset: topInset)
+                semanticMemoryLane(topInset: headerTop)
             }
             .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: compactChrome)
         }
