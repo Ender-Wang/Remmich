@@ -263,21 +263,23 @@ struct TimelineSemanticZoomTests {
         #expect(controller.animator == nil)
     }
 
-    @Test @MainActor func headerMaterialsKeepOpaqueAncestorsAndMaskTheirCoverage() throws {
+    @Test @MainActor func headerGlassKeepsOpaqueAncestorsAndMasksItsCoverage() throws {
         let cell = TimelineSemanticCollectionCell(frame: CGRect(x: 0, y: 0, width: 402, height: 36))
         cell.setHeaderContent(title: "October 31, 2026", count: "426 items", naturalY: 0, pinned: true)
         cell.layoutIfNeeded()
-        let materials = cell.contentView.subviews.compactMap { $0 as? UIVisualEffectView }
-        #expect(materials.count == 2)
+        let glassViews = cell.contentView.subviews.compactMap { $0 as? UIVisualEffectView }
+        #expect(glassViews.count == 2)
         for opacity in [CGFloat(0), 0.5, 1] {
             cell.setHeaderBackgroundOpacity(opacity)
-            for material in materials {
-                #expect(material.alpha == 1)
-                let mask = try #require(material.mask)
-                #expect(mask.frame == material.bounds)
+            for glassView in glassViews {
+                #expect(glassView.effect is UIGlassEffect)
+                #expect(glassView.alpha == 1)
+                #expect(glassView.isHidden == (opacity == 0))
+                let mask = try #require(glassView.mask)
+                #expect(mask.frame == glassView.bounds)
                 let color = try #require(mask.backgroundColor)
-                #expect(abs(color.cgColor.alpha - opacity * 0.72) < 0.001)
-                var ancestor = material.superview
+                #expect(abs(color.cgColor.alpha - opacity) < 0.001)
+                var ancestor = glassView.superview
                 while let view = ancestor {
                     #expect(view.alpha == 1)
                     ancestor = view.superview
@@ -293,20 +295,23 @@ struct TimelineSemanticZoomTests {
         cell.frame.size.width = 874
         cell.setNeedsLayout()
         cell.layoutIfNeeded()
-        for material in materials {
-            material.layoutIfNeeded()
-            #expect(material.mask?.frame == material.bounds)
+        for glassView in glassViews {
+            glassView.layoutIfNeeded()
+            #expect(glassView.mask?.frame == glassView.bounds)
         }
         cell.setPresentationVisible(false)
         let parent = UIViewController()
         cell.setHostedContent(Text("Asset"), parent: parent)
         cell.setPresentationVisible(true)
         #expect(!cell.contentView.isHidden)
+        for glassView in glassViews {
+            #expect(glassView.isHidden)
+        }
         cell.setHeaderContent(title: "October 31, 2026", count: "426 items", naturalY: 0, pinned: true)
         cell.setHeaderBackgroundOpacity(1)
         cell.setPresentationVisible(true)
         #expect(cell.alpha == 1 && !cell.contentView.isHidden)
-        #expect(materials.allSatisfy { $0.alpha == 1 })
+        #expect(glassViews.allSatisfy { $0.alpha == 1 && !$0.isHidden })
     }
 
     @Test @MainActor func dayHeaderPinsAtReadableTopAndNextDayPushesItAway() throws {

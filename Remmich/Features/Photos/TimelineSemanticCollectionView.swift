@@ -263,12 +263,14 @@ final class TimelineSemanticTransitionImageView: UIImageView {
 
 /// Visual effects must retain alpha 1 throughout their ancestor chain. Apply
 /// coverage to a mask on the effect itself, which UIKit forwards to its layers.
-private final class TimelineHeaderMaterialView: UIVisualEffectView {
+private final class TimelineHeaderGlassView: UIVisualEffectView {
     private let coverageMask = UIView()
     private(set) var coverage: CGFloat = 0
 
     override init(effect: UIVisualEffect?) {
         super.init(effect: effect)
+        cornerConfiguration = .capsule()
+        isHidden = true
         updateCoverageMask()
     }
 
@@ -282,6 +284,7 @@ private final class TimelineHeaderMaterialView: UIVisualEffectView {
         guard coverage != next else { return }
         coverage = next
         updateCoverageMask()
+        isHidden = next == 0
     }
 
     override func layoutSubviews() {
@@ -303,7 +306,6 @@ final class TimelineSemanticCollectionCell: UICollectionViewCell {
     private static let headerHorizontalInset: CGFloat = 16
     private static let headerBackgroundHorizontalPadding: CGFloat = 7
     private static let headerBackgroundVerticalPadding: CGFloat = 3
-    private static let headerBackgroundMaximumOpacity: CGFloat = 0.72
 
     private(set) var coverVisibility: TimelineSemanticCoverVisibility?
     var coverAssetID: String?
@@ -312,8 +314,8 @@ final class TimelineSemanticCollectionCell: UICollectionViewCell {
     private(set) var coverImageRevision: Date?
     var nodeID: String?
     private var hostingController: UIHostingController<AnyView>?
-    private let headerTitleMaterialView = TimelineHeaderMaterialView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
-    private let headerCountMaterialView = TimelineHeaderMaterialView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
+    private let headerTitleGlassView = TimelineHeaderGlassView(effect: UIGlassEffect(style: .regular))
+    private let headerCountGlassView = TimelineHeaderGlassView(effect: UIGlassEffect(style: .regular))
     private let headerTitleLabel = UILabel()
     private let headerCountLabel = UILabel()
     private var headerNaturalY: CGFloat?
@@ -322,10 +324,10 @@ final class TimelineSemanticCollectionCell: UICollectionViewCell {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        for materialView in [headerTitleMaterialView, headerCountMaterialView] {
-            materialView.isUserInteractionEnabled = false
-            materialView.clipsToBounds = true
-            contentView.insertSubview(materialView, at: 0)
+        for glassView in [headerTitleGlassView, headerCountGlassView] {
+            glassView.isUserInteractionEnabled = false
+            glassView.clipsToBounds = true
+            contentView.insertSubview(glassView, at: 0)
         }
         headerTitleLabel.font = .preferredFont(forTextStyle: .headline)
         headerTitleLabel.textColor = .label
@@ -355,8 +357,8 @@ final class TimelineSemanticCollectionCell: UICollectionViewCell {
         headerNaturalY = nil
         headerTitleLabel.isHidden = true
         headerCountLabel.isHidden = true
-        headerTitleMaterialView.setCoverage(0)
-        headerCountMaterialView.setCoverage(0)
+        headerTitleGlassView.setCoverage(0)
+        headerCountGlassView.setCoverage(0)
         isPinnedHeader = false
         clipsToBounds = true
         contentView.clipsToBounds = true
@@ -408,8 +410,8 @@ final class TimelineSemanticCollectionCell: UICollectionViewCell {
         headerCountLabel.text = nil
         headerCountLabel.isHidden = true
         headerCountLabel.alpha = 1
-        headerTitleMaterialView.setCoverage(0)
-        headerCountMaterialView.setCoverage(0)
+        headerTitleGlassView.setCoverage(0)
+        headerCountGlassView.setCoverage(0)
         isPinnedHeader = false
         hasContent = false
     }
@@ -447,9 +449,8 @@ final class TimelineSemanticCollectionCell: UICollectionViewCell {
 
     func setHeaderBackgroundOpacity(_ opacity: CGFloat) {
         guard headerNaturalY != nil else { return }
-        let subtleOpacity = opacity * Self.headerBackgroundMaximumOpacity
-        headerTitleMaterialView.setCoverage(subtleOpacity)
-        headerCountMaterialView.setCoverage(subtleOpacity)
+        headerTitleGlassView.setCoverage(opacity)
+        headerCountGlassView.setCoverage(opacity)
     }
 
     func setPresentationVisible(_ visible: Bool) {
@@ -480,13 +481,13 @@ final class TimelineSemanticCollectionCell: UICollectionViewCell {
     override func layoutSubviews() {
         super.layoutSubviews()
         if headerNaturalY != nil {
-            layoutHeaderLabel(headerTitleLabel, materialView: headerTitleMaterialView, trailing: false)
-            layoutHeaderLabel(headerCountLabel, materialView: headerCountMaterialView, trailing: true)
+            layoutHeaderLabel(headerTitleLabel, glassView: headerTitleGlassView, trailing: false)
+            layoutHeaderLabel(headerCountLabel, glassView: headerCountGlassView, trailing: true)
         }
         hostingController?.view.frame = contentView.bounds
     }
 
-    private func layoutHeaderLabel(_ label: UILabel, materialView: UIVisualEffectView, trailing: Bool) {
+    private func layoutHeaderLabel(_ label: UILabel, glassView: UIVisualEffectView, trailing: Bool) {
         label.font = .preferredFont(forTextStyle: trailing ? .subheadline : .headline)
         let fittingSize = label.sizeThatFits(CGSize(width: .greatestFiniteMagnitude, height: contentView.bounds.height))
         let labelSize = CGSize(width: ceil(fittingSize.width), height: ceil(fittingSize.height))
@@ -498,11 +499,10 @@ final class TimelineSemanticCollectionCell: UICollectionViewCell {
             width: labelSize.width,
             height: labelSize.height
         )
-        materialView.frame = label.frame.insetBy(
+        glassView.frame = label.frame.insetBy(
             dx: -Self.headerBackgroundHorizontalPadding,
             dy: -Self.headerBackgroundVerticalPadding
         )
-        materialView.layer.cornerRadius = materialView.bounds.height / 2
     }
 
     override func prepareForReuse() {
