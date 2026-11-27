@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct LibraryTimelineViewport<Header: View, Timeline: View>: View {
     @Environment(\.layoutDirection) private var layoutDirection
@@ -31,5 +32,18 @@ struct LibraryTimelineViewport<Header: View, Timeline: View>: View {
                     }
             }
         }
+    }
+}
+
+struct LibraryTimelineMediaSelector: View {
+    @Binding var selection: SavedPhotosMedia
+    let accessibilityIdentifier: String
+
+    var body: some View {
+        NativeSegmentedControl(selection: $selection, accessibilityIdentifier: accessibilityIdentifier)
+            .frame(height: MainTabHeaderMetrics.controlSize)
+            .fixedSize(horizontal: UIDevice.current.userInterfaceIdiom == .phone, vertical: false)
+            .frame(maxWidth: MainTabHeaderMetrics.segmentedControlMaximumWidth)
+            .glassEffect(.regular, in: .capsule)
     }
 }

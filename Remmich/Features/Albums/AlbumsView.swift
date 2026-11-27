@@ -505,11 +505,14 @@ struct AlbumsView: View {
         let spacing: CGFloat = 12
         return GeometryReader { geometry in
             let searchWidth = isSearchExpanded ? max(headerControlSize, geometry.size.width - headerControlSize - spacing) : headerControlSize
+            let scopeWidth = min(MainTabHeaderMetrics.segmentedControlMaximumWidth,
+                                 max(0, geometry.size.width - 2 * (headerControlSize + spacing)))
             ZStack(alignment: .leading) {
-                AlbumScopeControl(selection: Binding(get: { scope }, set: selectAlbumScope))
-                    .frame(height: headerMetrics.rowHeight)
+                NativeSegmentedControl(selection: Binding(get: { scope }, set: selectAlbumScope),
+                                       accessibilityIdentifier: "albums-scope")
+                    .frame(width: scopeWidth, height: headerMetrics.rowHeight)
                     .glassEffect(.regular, in: .capsule)
-                    .padding(.horizontal, headerControlSize + spacing)
+                    .frame(maxWidth: .infinity)
                     .opacity(isSearchExpanded ? 0 : 1)
                     .animation(scopeVisibilityAnimation, value: isSearchExpanded)
                     .allowsHitTesting(!isSearchExpanded && !scopeSlide.isActive)
@@ -1081,47 +1084,6 @@ private struct AlbumScopeSlideAnchor: UIViewRepresentable {
 
     func updateUIView(_ view: UIView, context _: Context) {
         slide.anchor = view
-    }
-}
-
-private struct AlbumScopeControl: UIViewRepresentable {
-    @Binding var selection: AlbumScope
-
-    func makeUIView(context: Context) -> UISegmentedControl {
-        let control = UISegmentedControl(items: AlbumScope.allCases.map(\.rawValue))
-        control.accessibilityIdentifier = "albums-scope"
-        control.addTarget(context.coordinator, action: #selector(Coordinator.selectionChanged(_:)), for: .valueChanged)
-        return control
-    }
-
-    func updateUIView(_ control: UISegmentedControl, context: Context) {
-        context.coordinator.selection = $selection
-        control.selectedSegmentIndex = AlbumScope.allCases.firstIndex(of: selection) ?? 0
-    }
-
-    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UISegmentedControl, context _: Context) -> CGSize? {
-        let intrinsic = uiView.intrinsicContentSize
-        return CGSize(width: proposal.width ?? intrinsic.width, height: proposal.height ?? intrinsic.height)
-    }
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(selection: $selection)
-    }
-
-    final class Coordinator: NSObject {
-        var selection: Binding<AlbumScope>
-
-        init(selection: Binding<AlbumScope>) {
-            self.selection = selection
-        }
-
-        @objc func selectionChanged(_ control: UISegmentedControl) {
-            let scopes = AlbumScope.allCases
-            guard scopes.indices.contains(control.selectedSegmentIndex) else { return }
-            selection.wrappedValue = scopes[control.selectedSegmentIndex]
-            // The scope can reject another selection while its slide is in flight.
-            control.selectedSegmentIndex = scopes.firstIndex(of: selection.wrappedValue) ?? 0
-        }
     }
 }
 

@@ -237,7 +237,8 @@ struct SearchView: View {
         .navigationDestination(for: LibraryAssetCollection.self) { collection in
             LibraryCollectionTimeline(
                 title: collection.rawValue, source: sessionController.timeline, query: collection.query,
-                separatesMedia: collection.separatesMedia, media: media, assetDetails: assetDetails,
+                separatesMedia: collection.separatesMedia, usesCompactMediaSelector: collection.isRecent,
+                media: media, assetDetails: assetDetails,
                 tabSelectionState: tabSelection, viewerPresentations: viewerPresentations, tabBarTop: $tabBarTop,
                 opening: recentOpenings[collection],
                 libraryIndex: collection == .recentlyTaken ? sessionController.libraryIndex : nil, tabDestination: .search

@@ -55,11 +55,7 @@ struct SavedPhotosView: View {
         VStack(spacing: 0) {
             LibraryPageHeader(title: "On Device") { EmptyView() }
             VStack(spacing: 8) {
-                Picker("Saved media", selection: $media) {
-                    ForEach(SavedPhotosMedia.allCases) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .accessibilityIdentifier("downloads-media-tabs")
+                LibraryTimelineMediaSelector(selection: $media, accessibilityIdentifier: "downloads-media-tabs")
                 HStack {
                     Text("Photos → \(library.albumTitle)")
                     Spacer()

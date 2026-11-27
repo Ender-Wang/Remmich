@@ -285,7 +285,8 @@ struct LibraryView: View {
                 }
                 let prepared = opening.collection(collection, source: source, camera: camera)
                 LibraryCollectionTimeline(title: collection.rawValue, source: source, query: collection.query,
-                                          separatesMedia: collection.separatesMedia, media: media, assetDetails: assetDetails,
+                                          separatesMedia: collection.separatesMedia, usesCompactMediaSelector: collection.isRecent,
+                                          media: media, assetDetails: assetDetails,
                                           tabSelectionState: tabSelectionState, viewerPresentations: viewerPresentations,
                                           tabBarTop: tabBarTop, opening: prepared, libraryIndex: collection == .recentlyTaken ? libraryIndex : nil)
             } label: {

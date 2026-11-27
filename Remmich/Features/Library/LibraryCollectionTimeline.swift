@@ -12,12 +12,16 @@ nonisolated enum LibraryAssetCollection: String, CaseIterable, Identifiable, Sen
         self
     }
 
+    var isRecent: Bool {
+        self == .recentlyTaken || self == .recentlyAdded
+    }
+
     var showsCardCount: Bool {
-        self != .recentlyTaken && self != .recentlyAdded
+        !isRecent
     }
 
     var separatesMedia: Bool {
-        self == .recentlyTaken || self == .recentlyAdded || self == .favorites
+        isRecent || self == .favorites
     }
 
     var symbol: String {
@@ -512,12 +516,13 @@ struct LibraryCollectionTimeline: View {
     let opening: LibraryCollectionOpening?
     let libraryIndex: LibraryIndexController?
     let shareURL: URL?
+    let usesCompactMediaSelector: Bool
     @Binding var tabBarTop: CGFloat
     @State private var selected = SavedPhotosMedia.photos
     @State private var photos: PhotosTimelineStore
     @State private var videos: PhotosTimelineStore?
 
-    init(title: String, source: any TimelineReading, query: TimelineQuery, separatesMedia: Bool = false,
+    init(title: String, source: any TimelineReading, query: TimelineQuery, separatesMedia: Bool = false, usesCompactMediaSelector: Bool = false,
          media: MediaLibraryController, assetDetails: any AssetDetailReading,
          tabSelectionState: NativeTabSelectionState?, viewerPresentations: AssetViewerPresentationStore?, tabBarTop: Binding<CGFloat>,
          opening: LibraryCollectionOpening? = nil, libraryIndex: LibraryIndexController? = nil, shareURL: URL? = nil,
@@ -532,6 +537,7 @@ struct LibraryCollectionTimeline: View {
         self.opening = opening
         self.libraryIndex = libraryIndex
         self.shareURL = shareURL
+        self.usesCompactMediaSelector = usesCompactMediaSelector
         _tabBarTop = tabBarTop
         _photos = State(initialValue: opening?.photos ?? PhotosTimelineStore(reader: LibraryScopedTimelineReader(
             source: source, query: query, media: separatesMedia ? .photos : nil
@@ -565,12 +571,9 @@ struct LibraryCollectionTimeline: View {
                     }
                 }
                 if videos != nil {
-                    Picker("Media", selection: $selected) {
-                        ForEach(SavedPhotosMedia.allCases) { Text($0.rawValue).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
+                    mediaSelector
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
                     if (selected == .photos ? opening?.photoCameraCoverage : opening?.videoCameraCoverage)?.hasMissingMetadata == true {
                         Text("More items may appear after Asset Cache sync")
                             .font(.caption)
@@ -602,6 +605,17 @@ struct LibraryCollectionTimeline: View {
                     await lane.retryBucket(id)
                 }
             }
+        }
+    }
+
+    @ViewBuilder private var mediaSelector: some View {
+        if usesCompactMediaSelector || UIDevice.current.userInterfaceIdiom == .pad {
+            LibraryTimelineMediaSelector(selection: $selected, accessibilityIdentifier: "library-collection-media-tabs")
+        } else {
+            Picker("Media", selection: $selected) {
+                ForEach(SavedPhotosMedia.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
         }
     }
 

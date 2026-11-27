@@ -11,6 +11,7 @@ nonisolated enum DesignMetrics {
 
 struct MainTabHeaderMetrics: DynamicProperty {
     static let controlSize: CGFloat = 44
+    static let segmentedControlMaximumWidth: CGFloat = 360
     static let horizontalPadding: CGFloat = 16
     static let topPadding: CGFloat = 3
     static let bottomPadding: CGFloat = 8
