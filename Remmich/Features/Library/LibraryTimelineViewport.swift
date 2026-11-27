@@ -42,8 +42,8 @@ struct LibraryTimelineMediaSelector: View {
     var body: some View {
         NativeSegmentedControl(selection: $selection, accessibilityIdentifier: accessibilityIdentifier)
             .frame(height: MainTabHeaderMetrics.controlSize)
-            .fixedSize(horizontal: UIDevice.current.userInterfaceIdiom == .phone, vertical: false)
             .frame(maxWidth: MainTabHeaderMetrics.segmentedControlMaximumWidth)
             .glassEffect(.regular, in: .capsule)
+            .fixedSize(horizontal: UIDevice.current.userInterfaceIdiom == .phone, vertical: false)
     }
 }
