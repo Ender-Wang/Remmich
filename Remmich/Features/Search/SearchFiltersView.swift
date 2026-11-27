@@ -96,8 +96,7 @@ struct SearchFiltersView: View {
     let media: MediaLibraryController
     @Binding var draft: SearchFilters
     let maximumHeight: CGFloat
-    let windowBottomInset: CGFloat
-    let isSheet: Bool
+    let presentation: Presentation
     let apply: () -> Void
     let dismissOutside: () -> Void
     @State private var path: [Route] = []
@@ -106,23 +105,24 @@ struct SearchFiltersView: View {
     private let edgePadding: CGFloat = 12
     private let datePresets: [SearchDate] = [.lastWeek, .recentMonths(1), .recentMonths(3), .recentMonths(6)]
 
+    enum Presentation {
+        case sheet(windowBottomInset: CGFloat)
+        case popover(availableHeight: CGFloat)
+    }
+
     private var currentPage: Route {
         path.last ?? .category(root)
     }
 
     private func fittedHeight(bottomPadding: CGFloat) -> CGFloat {
         let bodyHeight = contentHeights[currentPage] ?? estimatedContentHeight(for: currentPage)
-        let limit = if isSheet {
-            currentPage == .category(.people) ? maximumHeight / 2 : maximumHeight - 24
-        } else {
-            maximumHeight
-        }
+        let limit = currentPage == .category(.people) ? maximumHeight / 2 : maximumHeight - 24
         return min(max(1, limit), ceil(bodyHeight + (measuredHeaderHeight ?? headerHeight) + bottomPadding))
     }
 
     private func estimatedContentHeight(for page: Route) -> CGFloat {
         switch page {
-        case .category(.people): CGFloat(max(2, store.people.count)) * rowHeight + filterFieldHeight
+        case .category(.people): CGFloat(max(2, store.people.count)) * rowHeight + filterFieldHeight + SearchPeoplePicker.bottomClearance
         case .option: 4 * rowHeight + filterFieldHeight
         case .category(.date): CGFloat(datePresets.count + 2) * rowHeight + 4
         case .category: 3 * rowHeight + 4
@@ -132,27 +132,32 @@ struct SearchFiltersView: View {
     }
 
     var body: some View {
-        if isSheet {
-            GeometryReader { geometry in
-                let bottomInset = min(windowBottomInset, geometry.safeAreaInsets.bottom)
-                let bottomPadding = bottomInset > 0 ? 16 : edgePadding
-                // UIKit adds the safe area back to the detent height.
-                let detentHeight = max(1, fittedHeight(bottomPadding: bottomPadding) - bottomInset)
+        Group {
+            switch presentation {
+            case let .sheet(windowBottomInset):
+                GeometryReader { geometry in
+                    let bottomInset = min(windowBottomInset, geometry.safeAreaInsets.bottom)
+                    let bottomPadding = currentPage == .category(.people) ? 0 : (bottomInset > 0 ? 16 : edgePadding)
+                    // UIKit adds the safe area back to the detent height.
+                    let detentHeight = max(1, fittedHeight(bottomPadding: bottomPadding) - bottomInset)
+                    panel
+                        .padding(.bottom, bottomPadding)
+                        .ignoresSafeArea(.container, edges: .bottom)
+                        .background(SheetOutsideTap(dismiss: dismissOutside, fittedHeight: detentHeight,
+                                                    animatesHeight: !reduceMotion))
+                }
+                .presentationContentInteraction(.scrolls)
+                .presentationDragIndicator(.visible)
+            case let .popover(availableHeight):
+                let bottomPadding = currentPage == .category(.people) ? 0 : edgePadding
+                let height = min(availableHeight, fittedHeight(bottomPadding: bottomPadding))
                 panel
                     .padding(.bottom, bottomPadding)
-                    .ignoresSafeArea(.container, edges: .bottom)
-                    .background(SheetOutsideTap(dismiss: dismissOutside, fittedHeight: detentHeight,
-                                                animatesHeight: !reduceMotion))
+                    .frame(height: height)
+                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: height)
             }
-            .presentationContentInteraction(.scrolls)
-            .presentationDragIndicator(.visible)
-            .presentationCompactAdaptation(.none)
-        } else {
-            let height = fittedHeight(bottomPadding: edgePadding)
-            panel.padding(.bottom, edgePadding)
-                .frame(height: height)
-                .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: height)
         }
+        .presentationCompactAdaptation(.none)
     }
 
     private var panel: some View {
@@ -445,6 +450,8 @@ private struct SearchOptionPicker: View {
 }
 
 private struct SearchPeoplePicker: View {
+    static let bottomClearance: CGFloat = 28
+
     let store: SearchStore
     let read: SearchStore.PeopleRead
     let media: MediaLibraryController
@@ -466,7 +473,7 @@ private struct SearchPeoplePicker: View {
 
     var body: some View {
         let load = Load(read: read, retry: retry)
-        SearchPickerList(prompt: "Filter people", term: $term, measured: measured) {
+        SearchPickerList(prompt: "Filter people", term: $term, bottomClearance: Self.bottomClearance, measured: measured) {
             Group {
                 ForEach(matches) { person in
                     let selected = selection.contains(person.id)
@@ -645,6 +652,7 @@ private extension View {
 private struct SearchFilterRows<Rows: View>: View {
     var usesLazyLayout = false
     var containsWheel = false
+    var bottomClearance: CGFloat = 0
     let measured: (CGFloat) -> Void
     @ViewBuilder let rows: () -> Rows
     @State private var overflows = false
@@ -660,6 +668,7 @@ private struct SearchFilterRows<Rows: View>: View {
             }
             .padding(.horizontal, 16)
             .padding(.top, 4)
+            .padding(.bottom, bottomClearance)
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { measured($0) }
         }
         .scrollBounceBehavior(.basedOnSize)
@@ -676,6 +685,7 @@ private struct SearchFilterRows<Rows: View>: View {
 private struct SearchPickerList<Rows: View>: View {
     let prompt: String
     @Binding var term: String
+    var bottomClearance: CGFloat = 0
     let measured: (CGFloat) -> Void
     @ViewBuilder let rows: () -> Rows
     @State private var fieldHeight: CGFloat = 0
@@ -685,7 +695,7 @@ private struct SearchPickerList<Rows: View>: View {
         VStack(spacing: 0) {
             SearchPickerField(prompt: prompt, text: $term)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { fieldHeight = $0 }
-            SearchFilterRows(usesLazyLayout: true, measured: { rowsHeight = $0 }, rows: rows)
+            SearchFilterRows(usesLazyLayout: true, bottomClearance: bottomClearance, measured: { rowsHeight = $0 }, rows: rows)
                 .scrollDismissesKeyboard(.immediately)
         }
         .onChange(of: fieldHeight + rowsHeight, initial: true) { _, height in

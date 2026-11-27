@@ -80,6 +80,7 @@ final class SheetOutsideTapView: UIView, UIGestureRecognizerDelegate {
         if sizedSheet !== presentation || presentation.detents.first?.identifier != Self.fittedDetent {
             sizedSheet = presentation
             resolvedHeight = height
+            presentation.prefersEdgeAttachedInCompactHeight = true
             presentation.detents = [.custom(identifier: Self.fittedDetent) { [weak self] context in
                 min(self?.resolvedHeight ?? height, context.maximumDetentValue)
             }]

@@ -3,7 +3,6 @@ import SwiftUI
 import UIKit
 
 struct SearchView: View {
-    @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.displayScale) private var displayScale
@@ -30,6 +29,7 @@ struct SearchView: View {
     @State private var resultTimeline = TimelineSemanticRuntime()
     @State private var departingResults: RankedResultsPresentation?
     @State private var toolbarHeight: CGFloat = 0
+    @State private var pickerRowBottom: CGFloat = 0
     @State private var headerHeight: CGFloat = 0
     @State private var windowTopInset: CGFloat = 0
     @State private var isEditing = false
@@ -204,22 +204,20 @@ struct SearchView: View {
                                               bottom: 0, trailing: geometry.safeAreaInsets.trailing)
             let liveResults = currentResults
             let topPadding = TimelineMemoryLaneSafeArea.topInset(proposed: geometry.safeAreaInsets.top, window: windowTopInset)
+            let maximumPickerHeight = maximumPanelHeight(in: geometry)
+            let popoverSpace = max(1, geometry.frame(in: .global).maxY - pickerRowBottom - 24)
             searchPage(liveResults: liveResults, width: geometry.size.width, horizontalInsets: horizontalInsets,
                        safeBottom: geometry.safeAreaInsets.bottom)
                 .frame(width: geometry.size.width)
                 .environment(\.thumbnailRevealsActive, tabSelection.canRevealThumbnails(in: .search))
                 .overlay(alignment: .top) {
                     searchHeader(width: geometry.size.width, topPadding: topPadding,
-                                 maximumControlsHeight: geometry.size.height * 0.32, liveResults: liveResults)
+                                 maximumControlsHeight: geometry.size.height * 0.32, liveResults: liveResults,
+                                 maximumPickerHeight: maximumPickerHeight, popoverSpace: popoverSpace)
                 }
-                .sheet(item: compactPanel) { panel in
+                .sheet(item: filterPanelBinding(visible: UIDevice.current.userInterfaceIdiom != .pad)) { panel in
                     let bottomInset = focus.field?.window?.safeAreaInsets.bottom ?? geometry.safeAreaInsets.bottom
-                    filters(panel, maximumHeight: maximumPanelHeight(in: geometry),
-                            isSheet: true, windowBottomInset: bottomInset)
-                }
-                .popover(item: regularPanel, arrowEdge: .top) { panel in
-                    filters(panel, maximumHeight: maximumPanelHeight(in: geometry), isSheet: false)
-                        .frame(width: 400)
+                    filters(panel, maximumHeight: maximumPickerHeight, presentation: .sheet(windowBottomInset: bottomInset))
                 }
         }
         .ignoresSafeArea(.container, edges: .top)
@@ -295,15 +293,7 @@ struct SearchView: View {
         .accessibilityIdentifier("search-root")
     }
 
-    private var compactPanel: Binding<FilterPanel?> {
-        panelBinding(visible: sizeClass != .regular)
-    }
-
-    private var regularPanel: Binding<FilterPanel?> {
-        panelBinding(visible: sizeClass == .regular)
-    }
-
-    private func panelBinding(visible: Bool) -> Binding<FilterPanel?> {
+    private func filterPanelBinding(visible: Bool) -> Binding<FilterPanel?> {
         .init(get: { visible ? filterPanel : nil }, set: { value in
             if let value {
                 filterPanel = value
@@ -320,11 +310,11 @@ struct SearchView: View {
         return max(1, geometry.size.height)
     }
 
-    private func filters(_ panel: FilterPanel, maximumHeight: CGFloat, isSheet: Bool, windowBottomInset: CGFloat = 0) -> some View {
+    private func filters(_ panel: FilterPanel, maximumHeight: CGFloat, presentation: SearchFiltersView.Presentation) -> some View {
         @Bindable var panel = panel
         return SearchFiltersView(
             root: panel.category, store: store, peopleRead: peopleRead, media: media, draft: $panel.draft,
-            maximumHeight: maximumHeight, windowBottomInset: windowBottomInset, isSheet: isSheet,
+            maximumHeight: maximumHeight, presentation: presentation,
             apply: {
                 guard filterPanel?.id == panel.id else { return }
                 filterPanel = nil
@@ -342,7 +332,7 @@ struct SearchView: View {
         }
     }
 
-    private func toolbar(width: CGFloat) -> some View {
+    private func toolbar(width: CGFloat, maximumPickerHeight: CGFloat, popoverSpace: CGFloat) -> some View {
         @Bindable var store = store
         return VStack(spacing: 6) {
             GlassEffectContainer(spacing: 4) {
@@ -371,6 +361,11 @@ struct SearchView: View {
             .scrollDismissesKeyboard(.never)
             .scrollBounceBehavior(.always, axes: .horizontal)
             .accessibilityElement(children: .contain)
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: { pickerRowBottom = $0 }
+            .popover(item: filterPanelBinding(visible: UIDevice.current.userInterfaceIdiom == .pad), arrowEdge: .top) { panel in
+                filters(panel, maximumHeight: maximumPickerHeight, presentation: .popover(availableHeight: popoverSpace))
+                    .frame(width: min(400, max(1, width - 2 * MainTabHeaderMetrics.horizontalPadding)))
+            }
 
             if !store.filters.isEmpty {
                 appliedFilters(width: width)
@@ -443,10 +438,11 @@ struct SearchView: View {
     }
 
     private func searchHeader(
-        width: CGFloat, topPadding: CGFloat, maximumControlsHeight: CGFloat, liveResults: RankedResultsPresentation?
+        width: CGFloat, topPadding: CGFloat, maximumControlsHeight: CGFloat, liveResults: RankedResultsPresentation?,
+        maximumPickerHeight: CGFloat, popoverSpace: CGFloat
     ) -> some View {
         VStack(spacing: 0) {
-            toolbar(width: width)
+            toolbar(width: width, maximumPickerHeight: maximumPickerHeight, popoverSpace: popoverSpace)
                 .padding(.top, topPadding + MainTabHeaderMetrics.topPadding)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { toolbarHeight = $0 }
             if let page = liveResults {
