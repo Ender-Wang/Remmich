@@ -120,6 +120,8 @@ struct AccountSettingsView: View {
     let close: (() -> Void)?
     let showsCloseControl: Bool
     let drawsGlassBackground: Bool
+    let fitsHomeContent: Bool
+    let preferredHeightChanged: (CGFloat) -> Void
 
     @State private var profile: ConnectionProfile
     @State private var primaryAddress: String
@@ -154,6 +156,17 @@ struct AccountSettingsView: View {
     @State private var pageTransition: Task<Void, Never>?
     @State private var brandFrame = CGRect.zero
     @State private var brandFrames: [SettingsPage: CGRect] = [:]
+    @State private var homeHeight: CGFloat?
+    @State private var headerHeight: CGFloat?
+
+    private let landscapeHeaderOverlap: CGFloat = 68
+    private let profileContentInset: CGFloat = 24
+    private let landscapeGridInset: CGFloat = 12
+
+    private var preferredPanelHeight: CGFloat? {
+        guard fitsHomeContent, let homeHeight, let headerHeight else { return nil }
+        return ceil(homeHeight + headerHeight)
+    }
 
     private var appIcons: AppIconController {
         .shared
@@ -181,7 +194,9 @@ struct AccountSettingsView: View {
         sessionController: AppSessionController? = nil,
         close: (() -> Void)? = nil,
         showsCloseControl: Bool = true,
-        drawsGlassBackground: Bool = true
+        drawsGlassBackground: Bool = true,
+        fitsHomeContent: Bool = false,
+        preferredHeightChanged: @escaping (CGFloat) -> Void = { _ in }
     ) {
         self.session = session
         self.activeRoute = activeRoute
@@ -193,6 +208,8 @@ struct AccountSettingsView: View {
         self.close = close
         self.showsCloseControl = showsCloseControl
         self.drawsGlassBackground = drawsGlassBackground
+        self.fitsHomeContent = fitsHomeContent
+        self.preferredHeightChanged = preferredHeightChanged
         _profile = State(initialValue: profile)
         let primary = profile.primaryEndpoint ?? (profile.endpoints.isEmpty ? activeRoute?.endpoint ?? session.apiURL : nil)
         _primaryAddress = State(initialValue: primary.map(ConnectionAddressFormatting.serverAddress) ?? "")
@@ -203,6 +220,9 @@ struct AccountSettingsView: View {
     var body: some View {
         GeometryReader { geometry in
             let landscapeHome = isLandscape(geometry.size) && (selectedPage == .home || expandedCard != nil)
+            let contentWidth = max(0, geometry.size.width - profileContentInset - landscapeGridInset)
+            let landscapeHeaderWidth = ProfileHomeLayout.landscapeCardLeading(contentWidth: contentWidth) - profileContentInset
+            let topInset = landscapeHome ? headerHeight ?? landscapeHeaderOverlap : 0
             VStack(spacing: 0) {
                 HStack {
                     Text(accountDisplayName.isEmpty ? session.userEmail : accountDisplayName)
@@ -213,25 +233,38 @@ struct AccountSettingsView: View {
                     if showsCloseControl {
                         settingsActionButton("Close", systemImage: "xmark", action: closePanel)
                     } else {
-                        Color.clear.frame(width: 44, height: 44)
+                        Color.clear
+                            .frame(width: MainTabHeaderMetrics.controlSize, height: MainTabHeaderMetrics.controlSize)
+                            .anchorPreference(key: ProfileLandscapeAvatarSlot.self, value: .bounds) { landscapeHome ? $0 : nil }
                     }
                 }
                 .frame(minHeight: 44)
-                .frame(maxWidth: landscapeHome ? geometry.size.width * 0.43 : nil)
+                .frame(maxWidth: landscapeHome ? landscapeHeaderWidth : nil)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 24)
+                .padding(.horizontal, profileContentInset)
                 .padding(.vertical, 12)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                    if fitsHomeContent || landscapeHome, height > 0 {
+                        headerHeight = height
+                    }
+                }
 
                 GeometryReader { contentGeometry in
-                    let topInset: CGFloat = landscapeHome ? 68 : 0
+                    let landscape = isLandscape(contentGeometry.size)
                     let destination = CGRect(x: 0, y: topInset, width: max(1, contentGeometry.size.width),
                                              height: max(1, contentGeometry.size.height - topInset))
                     ZStack(alignment: .topLeading) {
                         ScrollView {
-                            profileHome(size: contentGeometry.size)
-                                .padding(.horizontal, 24)
-                                .padding(.vertical, isLandscape(contentGeometry.size) ? 12 : 0)
-                                .padding(.bottom, isLandscape(contentGeometry.size) ? 0 : 24)
+                            profileHome(size: contentGeometry.size, landscape: landscape)
+                                .padding(.leading, profileContentInset)
+                                .padding(.trailing, landscape ? landscapeGridInset : profileContentInset)
+                                .padding(.top, landscape ? landscapeGridInset : 0)
+                                .padding(.bottom, landscape ? landscapeGridInset : profileContentInset)
+                                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                                    if fitsHomeContent, height > 0 {
+                                        homeHeight = height
+                                    }
+                                }
                         }
                         .scrollPosition($homeScrollPosition)
                         .onScrollGeometryChange(for: CGPoint.self) { geometry in
@@ -270,9 +303,14 @@ struct AccountSettingsView: View {
                     .coordinateSpace(name: "profile-content")
                     .clipped()
                 }
-                .padding(.top, landscapeHome ? -68 : 0)
+                .padding(.top, -topInset)
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
+        }
+        .onChange(of: preferredPanelHeight) { _, height in
+            if let height, height > 0 {
+                preferredHeightChanged(height)
+            }
         }
         .nativeEdgeBack(active: selectedPage != .home, canBegin: !isPageTransitioning, priority: 300, event: profileEdgeBack)
         .modifier(AccountSettingsGlassBackground(enabled: drawsGlassBackground))
@@ -408,19 +446,22 @@ struct AccountSettingsView: View {
     }
 
     private func isLandscape(_ size: CGSize) -> Bool {
-        size.width > 540 && size.height < 430 && !dynamicTypeSize.isAccessibilitySize
+        !fitsHomeContent && size.width > 540 && size.height < 430 && !dynamicTypeSize.isAccessibilitySize
     }
 
-    private func profileHome(size: CGSize) -> some View {
-        let landscape = isLandscape(size)
-        return ProfileHomeLayout(availableSize: CGSize(width: max(0, size.width - 48), height: max(0, size.height - 24)),
-                                 landscape: landscape, minimumBrandHeight: max(132, brandHeight))
+    private func profileHome(size: CGSize, landscape: Bool) -> some View {
+        let trailingInset = landscape ? landscapeGridInset : profileContentInset
+        let verticalInsets = landscape ? 2 * landscapeGridInset : profileContentInset
+        let availableSize = CGSize(width: max(0, size.width - profileContentInset - trailingInset),
+                                   height: max(0, size.height - verticalInsets))
+        return ProfileHomeLayout(availableSize: availableSize,
+                                 landscape: landscape, minimumBrandHeight: max(132, brandHeight), fitsContent: fitsHomeContent)
         {
             brandSlot(for: .home)
-            profileCards(compact: landscape, height: max(140, size.height - 24))
+            profileCards(compact: landscape, height: max(140, availableSize.height))
             versionFooter
         }
-        .animation(reduceMotion ? nil : .smooth(duration: 0.4), value: size)
+        .animation(reduceMotion || fitsHomeContent ? nil : .smooth(duration: 0.4), value: size)
     }
 
     private static let cardPages: [SettingsPage] = [.account, .connection, .index, .cache]
@@ -478,7 +519,6 @@ struct AccountSettingsView: View {
                     .padding(.horizontal, 2)
             }
             .font(compact ? .subheadline.bold() : .headline)
-            .padding(.trailing, compact && page == .connection ? 32 : 0)
             .frame(maxWidth: .infinity, alignment: .leading)
             VStack(alignment: .leading, spacing: 0) {
                 if page == .index {
@@ -2367,10 +2407,25 @@ private extension CGRect {
     }
 }
 
+struct ProfileLandscapeAvatarSlot: PreferenceKey {
+    static let defaultValue: Anchor<CGRect>? = nil
+
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = nextValue() ?? value
+    }
+}
+
 private struct ProfileHomeLayout: Layout {
+    private static let landscapeColumnSpacing: CGFloat = 22
+
     let availableSize: CGSize
     let landscape: Bool
     let minimumBrandHeight: CGFloat
+    let fitsContent: Bool
+
+    static func landscapeCardLeading(contentWidth: CGFloat) -> CGFloat {
+        (contentWidth - landscapeColumnSpacing) * 0.43 + landscapeColumnSpacing
+    }
 
     func sizeThatFits(proposal _: ProposedViewSize, subviews: Subviews, cache _: inout ()) -> CGSize {
         let frames = frames(subviews)
@@ -2389,17 +2444,18 @@ private struct ProfileHomeLayout: Layout {
         let width = availableSize.width
         let height = availableSize.height
         if landscape {
-            let leftWidth = (width - 22) * 0.43
-            let rightWidth = width - leftWidth - 22
+            let cardLeading = Self.landscapeCardLeading(contentWidth: width)
+            let leftWidth = cardLeading - Self.landscapeColumnSpacing
+            let rightWidth = width - cardLeading
             let footer = subviews[2].sizeThatFits(.init(width: leftWidth, height: nil))
             let brandHeight = max(90, height - 52 - footer.height - 4)
             return [CGRect(x: 0, y: 52, width: leftWidth, height: brandHeight),
-                    CGRect(x: leftWidth + 22, y: 0, width: rightWidth, height: height),
+                    CGRect(x: cardLeading, y: 0, width: rightWidth, height: height),
                     CGRect(x: 0, y: 52 + brandHeight + 4, width: leftWidth, height: footer.height)]
         }
         let cards = subviews[1].sizeThatFits(.init(width: width, height: nil))
         let footer = subviews[2].sizeThatFits(.init(width: width, height: nil))
-        let brandHeight = max(minimumBrandHeight, height - cards.height - footer.height - 48)
+        let brandHeight = fitsContent ? minimumBrandHeight : max(minimumBrandHeight, height - cards.height - footer.height - 48)
         return [CGRect(x: 0, y: 0, width: width, height: brandHeight),
                 CGRect(x: 0, y: brandHeight + 24, width: width, height: cards.height),
                 CGRect(x: 0, y: brandHeight + 24 + cards.height + 24, width: width, height: footer.height)]

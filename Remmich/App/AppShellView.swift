@@ -569,6 +569,9 @@ struct AppShellView: View {
             }
             if previous == .library, current != .library {
                 libraryCardAfterPathRecovery = nil
+                if libraryAccountPresented {
+                    libraryDismissAccountRequest &+= 1
+                }
             }
             if current == .library {
                 reconcileLibraryNavigationRoot()

@@ -3,6 +3,7 @@ import SwiftUI
 struct LibraryView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.displayScale) private var displayScale
+    @Environment(\.layoutDirection) private var layoutDirection
 
     let collections: [FixtureCollection]
     var exports: MediaExportController?
@@ -34,6 +35,7 @@ struct LibraryView: View {
     @State private var accountPresented = false
     @State private var accountContentMounted = false
     @State private var accountExpansion: CGFloat = 0
+    @State private var accountContentHeight: CGFloat?
     @Namespace private var libraryCardTransition
 
     private var headerMetrics = MainTabHeaderMetrics()
@@ -42,6 +44,10 @@ struct LibraryView: View {
     private let horizontalPadding = MainTabHeaderMetrics.horizontalPadding
     private let accountPanelVerticalPadding: CGFloat = 8
     private let panelAvatarInset: CGFloat = 12
+
+    private var isPad: Bool {
+        UIDevice.current.userInterfaceIdiom == .pad
+    }
 
     var body: some View {
         let preferences = opening.preferences
@@ -162,6 +168,8 @@ struct LibraryView: View {
                     Color.clear
                         .contentShape(Rectangle())
                         .onTapGesture { setAccountPresented(false) }
+                        .ignoresSafeArea(.container)
+                        .accessibilityHidden(true)
                 }
 
                 GlassEffectContainer(spacing: 40) {
@@ -172,12 +180,13 @@ struct LibraryView: View {
 
                 if accountContentMounted {
                     accountPanelContent(in: geometry)
-                        .contentShape(Rectangle())
                         .zIndex(2)
                 }
-
-                accountButton()
-                    .zIndex(3)
+            }
+            .overlayPreferenceValue(ProfileLandscapeAvatarSlot.self) { slot in
+                GeometryReader { proxy in
+                    accountButton(landscapeSlot: slot.map { proxy[$0] }, width: proxy.size.width)
+                }
             }
         }
         .nativeEdgeBack(active: accountContentMounted, canBegin: accountPresented && accountExpansion == 1, priority: 200) { event in
@@ -286,8 +295,14 @@ struct LibraryView: View {
         }
     }
 
-    private func accountButton() -> some View {
-        Button {
+    private func accountButton(landscapeSlot: CGRect?, width: CGFloat) -> some View {
+        let expandedTop = landscapeSlot?.minY ?? accountPanelVerticalPadding + panelAvatarInset
+        let expandedTrailing = landscapeSlot.map {
+            let slotTrailing = layoutDirection == .leftToRight ? width - $0.maxX : $0.minX
+            return slotTrailing - (avatarSize - avatarImageSize) / 2
+        } ?? horizontalPadding + panelAvatarInset
+
+        return Button {
             setAccountPresented(!accountPresented)
         } label: {
             AccountAvatarView(size: avatarImageSize)
@@ -295,11 +310,12 @@ struct LibraryView: View {
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .padding(.top, interpolated(from: headerMetrics.controlTopPadding, to: accountPanelVerticalPadding + panelAvatarInset))
-        .padding(.trailing, horizontalPadding + panelAvatarInset * accountExpansion)
+        .padding(.top, interpolated(from: headerMetrics.controlTopPadding, to: expandedTop))
+        .padding(.trailing, interpolated(from: horizontalPadding, to: expandedTrailing))
         .accessibilityLabel(accountPresented ? "Close Account Settings" : "Account")
         .accessibilityIdentifier(accountPresented ? "account-collapse-button" : "account-button")
         .accessibilityValue(accountPresented ? "Expanded" : "Collapsed")
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
     }
 
     private func accountGlassBackground(in geometry: GeometryProxy) -> some View {
@@ -336,9 +352,17 @@ struct LibraryView: View {
             sessionController: sessionController,
             close: { setAccountPresented(false) },
             showsCloseControl: false,
-            drawsGlassBackground: false
+            drawsGlassBackground: false,
+            fitsHomeContent: isPad,
+            preferredHeightChanged: { height in
+                guard accountContentHeight != height else { return }
+                withAnimation(reduceMotion ? nil : .smooth(duration: 0.22)) {
+                    accountContentHeight = height
+                }
+            }
         )
         .frame(width: width, height: height)
+        .contentShape(.rect(cornerRadius: 32))
         .modifier(AccountPanelReveal(
             progress: accountExpansion,
             collapsedSize: avatarSize,
@@ -348,16 +372,19 @@ struct LibraryView: View {
         ))
         .padding(.top, accountPanelVerticalPadding)
         .padding(.trailing, horizontalPadding)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
     }
 
     private func panelWidth(in geometry: GeometryProxy) -> CGFloat {
         let available = max(avatarSize, geometry.size.width - horizontalPadding * 2)
+        if isPad {
+            return min(available, 520)
+        }
         return geometry.size.width > geometry.size.height && geometry.size.height < 440 ? available : min(available, 620)
     }
 
     private func panelHeight(in geometry: GeometryProxy) -> CGFloat {
-        max(avatarSize, geometry.size.height - accountPanelVerticalPadding * 2)
+        let available = max(avatarSize, geometry.size.height - accountPanelVerticalPadding * 2)
+        return isPad ? min(available, accountContentHeight ?? 600) : available
     }
 
     private var headerLogoCanvasSize: CGFloat {
