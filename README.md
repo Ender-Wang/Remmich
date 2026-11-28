@@ -70,13 +70,48 @@ Explore the screenshot gallery on the **[project website](https://ender-wang.git
 
 ### iPad
 
-| | |
-| :---: | :---: |
-| [![Remmich sign-in on iPad](.github/assets/screenshots/ipad/onboarding.webp)](.github/assets/screenshots/ipad/onboarding.webp)<br>Onboarding | [![Photos timeline on iPad](.github/assets/screenshots/ipad/photos-timeline.webp)](.github/assets/screenshots/ipad/photos-timeline.webp)<br>Photos |
-| [![Photo viewer and filmstrip on iPad](.github/assets/screenshots/ipad/photo-viewer.webp)](.github/assets/screenshots/ipad/photo-viewer.webp)<br>Photo viewer | [![Photo Info and map on iPad](.github/assets/screenshots/ipad/info-panel.webp)](.github/assets/screenshots/ipad/info-panel.webp)<br>Photo info and map |
-| [![Date cards on iPad](.github/assets/screenshots/ipad/date-cards.webp)](.github/assets/screenshots/ipad/date-cards.webp)<br>Date cards | [![Profile panel in Library on iPad](.github/assets/screenshots/ipad/profile.webp)](.github/assets/screenshots/ipad/profile.webp)<br>Profile |
-| [![Albums grid on iPad](.github/assets/screenshots/ipad/albums.webp)](.github/assets/screenshots/ipad/albums.webp)<br>Albums | [![Memories grid on iPad](.github/assets/screenshots/ipad/library-memories.webp)](.github/assets/screenshots/ipad/library-memories.webp)<br>Library · Memories |
-| [![Places heatmap and grid on iPad](.github/assets/screenshots/ipad/library-places.webp)](.github/assets/screenshots/ipad/library-places.webp)<br>Library · Places | [![Search Browse on iPad](.github/assets/screenshots/ipad/search.webp)](.github/assets/screenshots/ipad/search.webp)<br>Search |
+<table>
+  <tr>
+    <td width="50%" align="center" valign="top">
+      <a href=".github/assets/screenshots/ipad/onboarding.webp"><img src=".github/assets/screenshots/ipad/onboarding.webp" alt="Remmich sign-in on iPad"></a><br>Onboarding
+    </td>
+    <td width="50%" align="center" valign="top">
+      <a href=".github/assets/screenshots/ipad/photos-timeline.webp"><img src=".github/assets/screenshots/ipad/photos-timeline.webp" alt="Photos timeline on iPad"></a><br>Photos
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="top">
+      <a href=".github/assets/screenshots/ipad/photo-viewer.webp"><img src=".github/assets/screenshots/ipad/photo-viewer.webp" alt="Photo viewer and filmstrip on iPad"></a><br>Photo viewer
+    </td>
+    <td align="center" valign="top">
+      <a href=".github/assets/screenshots/ipad/info-panel.webp"><img src=".github/assets/screenshots/ipad/info-panel.webp" alt="Photo Info and map on iPad"></a><br>Photo info and map
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="top">
+      <a href=".github/assets/screenshots/ipad/date-cards.webp"><img src=".github/assets/screenshots/ipad/date-cards.webp" alt="Date cards on iPad"></a><br>Date cards
+    </td>
+    <td align="center" valign="top">
+      <a href=".github/assets/screenshots/ipad/profile.webp"><img src=".github/assets/screenshots/ipad/profile.webp" alt="Profile panel in Library on iPad"></a><br>Profile
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="top">
+      <a href=".github/assets/screenshots/ipad/albums.webp"><img src=".github/assets/screenshots/ipad/albums.webp" alt="Albums grid on iPad"></a><br>Albums
+    </td>
+    <td align="center" valign="top">
+      <a href=".github/assets/screenshots/ipad/library-memories.webp"><img src=".github/assets/screenshots/ipad/library-memories.webp" alt="Memories grid on iPad"></a><br>Library · Memories
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="top">
+      <a href=".github/assets/screenshots/ipad/library-places.webp"><img src=".github/assets/screenshots/ipad/library-places.webp" alt="Places heatmap and grid on iPad"></a><br>Library · Places
+    </td>
+    <td align="center" valign="top">
+      <a href=".github/assets/screenshots/ipad/search.webp"><img src=".github/assets/screenshots/ipad/search.webp" alt="Search Browse on iPad"></a><br>Search
+    </td>
+  </tr>
+</table>
 
 ## Install
 
