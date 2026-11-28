@@ -17,9 +17,9 @@
 
 Remmich is a SwiftUI, UIKit, and AVKit client for your self-hosted Immich library. Browse photos, watch videos, revisit memories, and keep thumbnails and asset information available offline without changing your server library.
 
-Browse Photos, Videos, Albums, and Library collections from your Immich account, with offline indexing, interactive album layouts, Sharing and Save to Photos. The current development build also includes server-backed Search.
+Browse Photos, Videos, Albums, and Library collections from your Immich account, with server-backed Search, offline indexing, interactive album layouts, Sharing and Save to Photos.
 
-See the **[Roadmap](#roadmap)** for current and planned work.
+Explore the screenshot gallery on the **[project website](https://ender-wang.github.io/Remmich/)** or see the **[Roadmap](#roadmap)** for current and planned work.
 
 <p align="center">
   <img src=".github/assets/screenshots/gallery-desktop.svg" alt="Remmich onboarding, timeline, asset viewer, Info, map, date cards, Profile, Albums, Library, Memories, Places, and Search" width="100%" />
@@ -37,7 +37,7 @@ Download an optimized, unsigned IPA from the [latest GitHub release](https://git
 https://raw.githubusercontent.com/Ender-Wang/Remmich/main/source.json
 ```
 
-The source follows stable releases automatically. SideStore signs installations using your Apple ID.
+The source follows releases published from `main`, including release candidates. SideStore signs installations using your Apple ID.
 
 You can also follow [Build and run](CONTRIBUTING.md#build-and-run) to build from source. After installing, sign in with your Immich server address and credentials. Add a Primary address and optional Fallback addresses in **Profile → Connection** if needed.
 
@@ -46,7 +46,7 @@ You can also follow [Build and run](CONTRIBUTING.md#build-and-run) to build from
 - **🔍 Timelines:** Separate Photos and Videos timelines with pinch-to-zoom, date cards and saved browsing positions. Cached timelines show about two screenfuls first, then load older items without moving the viewport. Videos, Albums, and Search prepare their first views while Photos loads its history.
 - **📸 Photos and memories:** Zoomable photos, Live Photo playback, filmstrip navigation and rotating memories.
 - **👆 Quick preview:** Long-press to preview, tap to open, and swipe down to dismiss with interruptible transitions.
-- **🗺️ Places and maps:** Pan and zoom a live heatmap above the Places grid. Tap a locality to zoom to its captures and browse its timeline, then go back to restore the map and grid position. Place cards and titles follow per-country Photon language preferences when cached labels are available. Individual asset maps appear below Info.
+- **🗺️ Places and maps:** Pan and zoom a live heatmap above the Places grid. Tap a locality to zoom to its captures and browse its timeline, then go back to restore the map and grid position. Library cards and Search Browse follow per-country Photon language preferences as cached labels become available. Individual asset maps appear below Info.
 - **🎬 Video:** Native playback, Picture in Picture and iOS Now Playing with titles and artwork.
 - **💾 Offline browsing:** Cached timelines, thumbnails, asset information and place names, with background sync. Asset Cache and Place Cache have separate progress, Sync/Pause/Resume and automatic-cache settings; Rebuild and Clear maintain both caches together.
 - **📥 Downloads:** Save a quality tier to Photos → Remmich, with background transfers, pause/resume, automatic recovery, and cancel/retry. Browse saved photos and videos in Library → On Device. Save History shows the latest completed download when its cover is available.
@@ -56,7 +56,7 @@ You can also follow [Build and run](CONTRIBUTING.md#build-and-run) to build from
 - **🔎 Search:** Find assets by context, filename, description, path or folder, and indexed OCR text. Combine People, Location, Date range, Media type, Camera, and Display options filters. Browse familiar people and places, revisit recent searches, or use iOS Scan Text to enter a query. Results load as you scroll and reuse the timeline’s pinch layouts, thumbnail cache, and asset viewer.
 - **📊 Index controls.** Switch between **Timelines**, **Albums**, and **Library** by tapping or swiping. Each section places sync, pause, resume, and rebuild controls beneath its statistics. The Library Index reuses unchanged months and lets you reopen indexed cards offline. The profile Index card shows the status of all three indexes. Cache & Storage uses the same section layout, and available per-10K storage estimates update during sync.
 - **🔐 Accounts and connections:** Saved-account switching, separate account caches and Primary/Fallback server addresses.
-- **✨ Native appearance:** Adaptive iPhone/iPad layouts, Liquid Glass, swipe navigation and alternate app icons.
+- **✨ Native appearance:** Bottom tab navigation on iPhone and iPad, responsive card and thumbnail sizes, Liquid Glass, swipe navigation, and alternate app icons. Profile opens from Library. On iPad, Search filters open below the filter icons.
 
 ## Current limitations
 
@@ -69,7 +69,7 @@ You can also follow [Build and run](CONTRIBUTING.md#build-and-run) to build from
 
 ## Milestones
 
-**M8 Search and Filters is implemented. M9 Native polish and resilience is in progress.** The [Roadmap](#roadmap) shows planned work and dated achievements.
+**M8 Search and Filters is implemented. M9 Native polish and resilience is in release-candidate verification.** The [Roadmap](#roadmap) shows planned work and dated achievements.
 
 | Milestone | Status | Scope and expectations |
 | --- | --- | --- |

@@ -399,17 +399,17 @@ The Actions sidebar separates **Build → Tests → Release**. After successful 
 
 - A tested commit changing `Remmich.xcodeproj/project.pbxproj` checks for a release automatically. To check an unchanged project version, run the **Build** workflow manually on the intended branch.
 - To retry only packaging/publication, choose **Actions → Release → Run workflow**, select the branch matching the successful Tests run, and enter its `tests_run_id` (the number in its Actions URL). This bypasses the project-file change check, but still requires successful Build/Tests and an unused tag. The 30-day release-context artifact must exist; runs from before this split or expired artifacts require a fresh Build/Tests run.
-- `main` creates `v<version>`; an existing stable tag is left unchanged. `develop` creates the next unused `v<version>-beta.N` prerelease. Version and build are read from the project, and app/test targets must agree.
+- `main` creates `v<version>` for a stable release or `v<version>-rc.N` when `RemmichPrereleaseIdentifier` is `rc.N` in `Remmich/Info.plist`. Both publish through the regular release flow. `develop` creates the next unused `v<version>-beta.N` prerelease. CI leaves existing tags unchanged. App and test targets share the numeric version and build from the Xcode project.
 - Release notes use the body of the exact tested commit, excluding its subject, for both automatic and manual Build runs; no GitHub-generated changelog or fixed introductory text is added.
 - Archive uses `Release`, a generic iOS device destination, Swift `-O` and whole-module compilation. Code signing is disabled; no signing certificate or provisioning-profile secrets are required.
-- Package only the archived `Remmich.app` under `Payload/`, preserving its frameworks/resources. Publish `Remmich-v<version>-unsigned.ipa`, a separate dSYMs ZIP, and SHA-256 files. Verify the archived version/build, iOS platform and arm64 executable before upload.
+- Package only the archived `Remmich.app` under `Payload/`, preserving its frameworks and resources. Publish `Remmich-<tag>-unsigned.ipa`, a separate dSYMs ZIP, and SHA-256 files. Verify the archived version and build, iOS platform, and arm64 executable before upload.
 - The publishing job verifies checksums, creates the GitHub release/tag at the tested SHA, and attaches the generated assets. An eligible successful run publishes automatically. Publishing and the subsequent SideStore source update have `contents: write`; build, tests and archive remain read-only.
 
 ### SideStore source
 
 The repository's [source.json](source.json) uses the [AltStore source format](https://faq.altstore.io/developers/make-a-source), compatible with SideStore. Its permanent subscription URL is `https://raw.githubusercontent.com/Ender-Wang/Remmich/main/source.json`.
 
-After publishing a stable release, Release downloads and checksum-verifies its IPA, then runs `Scripts/update-sidestore-source.py`. Version/build, minimum OS, privacy descriptions and byte size come from the actual IPA/release asset. Older versions remain available, ordered newest first; beta releases are excluded. Source branding and descriptions remain editable in the repository.
+After publishing from `main`, Release downloads and checksum-verifies the IPA, then runs `Scripts/update-sidestore-source.py`. Version, build, minimum OS, privacy descriptions, and byte size come from the actual IPA and release asset. The feed keeps older releases ordered newest first and includes candidates published from `main`. Source branding and descriptions remain editable in the repository.
 
 The source job updates only `source.json` on the default branch through GitHub's Contents API, creating a GitHub Actions bot commit. It uses the existing blob SHA to reject concurrent edits and does not alter the release commit or notes. If this step fails (for example, branch protection denies the bot), the published release remains available; resolve the failure and rerun the failed source job. No new IPA build is required. Token-authored source updates do not trigger another Build run.
 
