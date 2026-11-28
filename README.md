@@ -21,9 +21,62 @@ Browse Photos, Videos, Albums, and Library collections from your Immich account,
 
 Explore the screenshot gallery on the **[project website](https://ender-wang.github.io/Remmich/)** or see the **[Roadmap](#roadmap)** for current and planned work.
 
-<p align="center">
-  <img src=".github/assets/screenshots/gallery-desktop.svg" alt="Remmich onboarding, timeline, asset viewer, Info, map, date cards, Profile, Albums, Library, Memories, Places, and Search" width="100%" />
-</p>
+## Screenshots
+
+### iPhone
+
+<table>
+  <tr>
+    <td width="16.66%" align="center" valign="top">
+      <a href=".github/assets/screenshots/iphone/onboarding.webp"><img src=".github/assets/screenshots/iphone/onboarding.webp" alt="Remmich sign-in on iPhone" width="120"></a><br>Onboarding
+    </td>
+    <td width="16.66%" align="center" valign="top">
+      <a href=".github/assets/screenshots/iphone/photos-timeline.webp"><img src=".github/assets/screenshots/iphone/photos-timeline.webp" alt="Photos timeline on iPhone" width="120"></a><br>Photos
+    </td>
+    <td width="16.66%" align="center" valign="top">
+      <a href=".github/assets/screenshots/iphone/photo-viewer.webp"><img src=".github/assets/screenshots/iphone/photo-viewer.webp" alt="Photo viewer and filmstrip on iPhone" width="120"></a><br>Photo viewer
+    </td>
+    <td width="16.66%" align="center" valign="top">
+      <a href=".github/assets/screenshots/iphone/info-panel.webp"><img src=".github/assets/screenshots/iphone/info-panel.webp" alt="Photo info on iPhone" width="120"></a><br>Photo info
+    </td>
+    <td width="16.66%" align="center" valign="top">
+      <a href=".github/assets/screenshots/iphone/map-view.webp"><img src=".github/assets/screenshots/iphone/map-view.webp" alt="Photo location map on iPhone" width="120"></a><br>Map
+    </td>
+    <td width="16.66%" align="center" valign="top">
+      <a href=".github/assets/screenshots/iphone/date-cards.webp"><img src=".github/assets/screenshots/iphone/date-cards.webp" alt="Date cards on iPhone" width="120"></a><br>Date cards
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="top">
+      <a href=".github/assets/screenshots/iphone/profile.webp"><img src=".github/assets/screenshots/iphone/profile.webp" alt="Profile panel on iPhone" width="120"></a><br>Profile
+    </td>
+    <td align="center" valign="top">
+      <a href=".github/assets/screenshots/iphone/albums.webp"><img src=".github/assets/screenshots/iphone/albums.webp" alt="Albums grid on iPhone" width="120"></a><br>Albums
+    </td>
+    <td align="center" valign="top">
+      <a href=".github/assets/screenshots/iphone/library.webp"><img src=".github/assets/screenshots/iphone/library.webp" alt="Library grid on iPhone" width="120"></a><br>Library
+    </td>
+    <td align="center" valign="top">
+      <a href=".github/assets/screenshots/iphone/library-memories.webp"><img src=".github/assets/screenshots/iphone/library-memories.webp" alt="Memories grid on iPhone" width="120"></a><br>Library · Memories
+    </td>
+    <td align="center" valign="top">
+      <a href=".github/assets/screenshots/iphone/library-places.webp"><img src=".github/assets/screenshots/iphone/library-places.webp" alt="Places map and grid on iPhone" width="120"></a><br>Library · Places
+    </td>
+    <td align="center" valign="top">
+      <a href=".github/assets/screenshots/iphone/search.webp"><img src=".github/assets/screenshots/iphone/search.webp" alt="Search Browse on iPhone" width="120"></a><br>Search
+    </td>
+  </tr>
+</table>
+
+### iPad
+
+| | |
+| :---: | :---: |
+| [![Remmich sign-in on iPad](.github/assets/screenshots/ipad/onboarding.webp)](.github/assets/screenshots/ipad/onboarding.webp)<br>Onboarding | [![Photos timeline on iPad](.github/assets/screenshots/ipad/photos-timeline.webp)](.github/assets/screenshots/ipad/photos-timeline.webp)<br>Photos |
+| [![Photo viewer and filmstrip on iPad](.github/assets/screenshots/ipad/photo-viewer.webp)](.github/assets/screenshots/ipad/photo-viewer.webp)<br>Photo viewer | [![Photo Info and map on iPad](.github/assets/screenshots/ipad/info-panel.webp)](.github/assets/screenshots/ipad/info-panel.webp)<br>Photo info and map |
+| [![Date cards on iPad](.github/assets/screenshots/ipad/date-cards.webp)](.github/assets/screenshots/ipad/date-cards.webp)<br>Date cards | [![Profile panel in Library on iPad](.github/assets/screenshots/ipad/profile.webp)](.github/assets/screenshots/ipad/profile.webp)<br>Profile |
+| [![Albums grid on iPad](.github/assets/screenshots/ipad/albums.webp)](.github/assets/screenshots/ipad/albums.webp)<br>Albums | [![Memories grid on iPad](.github/assets/screenshots/ipad/library-memories.webp)](.github/assets/screenshots/ipad/library-memories.webp)<br>Library · Memories |
+| [![Places heatmap and grid on iPad](.github/assets/screenshots/ipad/library-places.webp)](.github/assets/screenshots/ipad/library-places.webp)<br>Library · Places | [![Search Browse on iPad](.github/assets/screenshots/ipad/search.webp)](.github/assets/screenshots/ipad/search.webp)<br>Search |
 
 ## Install
 

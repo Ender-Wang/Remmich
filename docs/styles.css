@@ -498,6 +498,14 @@ h3 {
   .feature-image img { width: 42%; }
 }
 
+.ipad-feature-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.ipad-feature-grid .feature-image { aspect-ratio: 1.4; }
+.ipad-feature-grid .feature-image img { width: 88%; }
+
+@media (max-width: 35rem) {
+  .ipad-feature-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
 @media (max-width: 30rem) {
   .header-inner { gap: 0.65rem; min-height: 4rem; }
   .header-inner .brand { font-size: 1.1rem; gap: 0.4rem; }
