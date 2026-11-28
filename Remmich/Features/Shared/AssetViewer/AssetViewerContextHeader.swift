@@ -39,34 +39,30 @@ struct AssetViewerContextHeader: View, Equatable {
         let hasLocation = location != nil
 
         ZStack {
-            Color.clear
-                .glassEffect(.regular, in: Capsule())
-                .accessibilityHidden(true)
+            Text(date)
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                .opacity(hasLocation ? 0 : 1)
+                .accessibilityHidden(hasLocation)
 
-            ZStack {
-                Text(date)
+            VStack(spacing: 0) {
+                Text(location ?? " ")
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
-                    .opacity(hasLocation ? 0 : 1)
-                    .accessibilityHidden(hasLocation)
+                    .minimumScaleFactor(0.8)
 
-                VStack(spacing: 0) {
-                    Text(location ?? " ")
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-
-                    Text(date)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-                .opacity(hasLocation ? 1 : 0)
-                .accessibilityHidden(!hasLocation)
+                Text(date)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
-            .padding(.horizontal, 14)
+            .opacity(hasLocation ? 1 : 0)
+            .accessibilityHidden(!hasLocation)
         }
+        .padding(.horizontal, 14)
+        .frame(maxWidth: .infinity)
         .frame(height: height)
+        .glassEffect(.regular, in: Capsule())
         .transaction { transaction in
             transaction.animation = nil
         }
