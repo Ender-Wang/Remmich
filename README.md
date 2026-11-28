@@ -15,11 +15,17 @@
   <a href="https://github.com/Ender-Wang/Remmich/actions/workflows/test.yml"><img src="https://github.com/Ender-Wang/Remmich/actions/workflows/test.yml/badge.svg" alt="Tests" /></a>
 </p>
 
-Remmich is a SwiftUI, UIKit, and AVKit client for your self-hosted Immich library. Browse photos, watch videos, revisit memories, and keep thumbnails and asset information available offline without changing your server library.
+Remmich connects to your self-hosted Immich library on iPhone and iPad. Browse, search, share, and save local copies while keeping your server library read-only.
 
-Browse Photos, Videos, Albums, and Library collections from your Immich account, with server-backed Search, offline indexing, interactive album layouts, Sharing and Save to Photos.
+## Highlights
 
-Explore the screenshot gallery on the **[project website](https://ender-wang.github.io/Remmich/)** or see the **[Roadmap](#roadmap)** for current and planned work.
+- **Pinch through time.** Move between individual photos and Day, Week, Month, and Year cards while keeping your place in the timeline.
+- **Browse offline.** On-device indexes and caching make synced timelines, thumbnails, photo details, and place names available without a connection.
+- **See places in their local language.** Explore a Places heatmap and choose English or Local names per country. Optional Photon enrichment adds landmarks and can use your own instance.
+- **Find it, then see it in context.** Search Immich by scene, text in an image, or file details. Results reuse cached thumbnails, and **Show in Photos** takes you to the asset in the timeline.
+- **Choose the quality you play or save.** Save stills as Thumbnail, Preview, Full, or Original. For videos, choose Playback or Original for streaming and downloads.
+
+**Try the [interactive feature demos on the Remmich website](https://ender-wang.github.io/Remmich/#features).**
 
 ## Screenshots
 

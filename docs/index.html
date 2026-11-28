@@ -51,7 +51,7 @@
           <span class="hero-title-text">Your <strong>Re</strong>adonly I<strong>mmich</strong> Library</span>
           <span class="hero-platforms">Native on iOS/iPadOS</span>
         </h1>
-        <p>Browse, search, and revisit your photos and videos on iPhone and iPad. Remmich connects to your own Immich server and keeps your library read-only.</p>
+        <p>Pinch through years of photos, browse cached thumbnails offline, and choose the quality you play or save. Remmich keeps your Immich library read-only.</p>
         <div class="actions">
           <a class="button primary" href="sidestore://source?url=https%3A%2F%2Fraw.githubusercontent.com%2FEnder-Wang%2FRemmich%2Fmain%2Fsource.json">
             <svg class="nav-icon" viewBox="0 0 200 200" fill="currentColor" aria-hidden="true" focusable="false">
@@ -92,9 +92,112 @@
       </figure>
     </section>
 
-    <section class="features" id="features" aria-labelledby="features-title">
+    <section class="features" id="features" aria-labelledby="semantic-zoom-title">
+      <article class="timeline-demo">
+        <div class="timeline-demo-copy">
+          <h2 id="semantic-zoom-title">Semantic zoom</h2>
+          <p>Pinch between photos and date cards while keeping your place. Choose a zoom level to try it.</p>
+        </div>
+        <div class="timeline-demo-interactive" hidden>
+          <div class="timeline-demo-preview" aria-hidden="true"></div>
+          <div class="demo-levels" role="group" aria-label="Sample timeline zoom">
+            <button type="button" aria-pressed="true">Photos</button>
+            <button type="button" aria-pressed="false">Days</button>
+            <button type="button" aria-pressed="false">Weeks</button>
+            <button type="button" aria-pressed="false">Months</button>
+            <button type="button" aria-pressed="false">Years</button>
+          </div>
+        </div>
+      </article>
+      <div class="workflow-grid">
+        <article class="workflow" data-workflow="offline" data-step="online" aria-labelledby="offline-title">
+          <h3 id="offline-title">Browse offline</h3>
+          <p>Sync thumbnails and metadata in Cache &amp; Storage so you can browse when your server is out of reach.</p>
+          <div class="workflow-stage" aria-hidden="true">
+            <div class="cache-grid">
+              <span data-tone="red"></span><span data-tone="yellow"></span><span data-tone="green"></span>
+              <span data-tone="blue"></span><span data-tone="pink"></span><span data-tone="red"></span>
+            </div>
+          </div>
+          <div class="workflow-note">6 thumbnails from the server</div>
+          <div class="demo-levels" role="group" aria-label="Sample cache and connection" hidden>
+            <button type="button" data-step="online" data-note="6 thumbnails from the server" aria-pressed="true">Online</button>
+            <button type="button" data-step="cached" data-note="6 thumbnails and their details cached" aria-pressed="false">Cache ready</button>
+            <button type="button" data-step="offline" data-note="Server offline · the same 6 thumbnails stay visible" aria-pressed="false">Offline</button>
+          </div>
+        </article>
+        <article class="workflow" data-workflow="places" data-step="english" aria-labelledby="places-title">
+          <h3 id="places-title">Explore places by local name</h3>
+          <p>Choose map labels by country. Optional Photon enrichment adds landmarks and supports your own instance.</p>
+          <div class="workflow-stage places-map" aria-hidden="true">
+            <div class="map-place" data-tone="pink">
+              <span>People’s Square</span><span lang="zh-Hans">人民广场</span>
+            </div>
+            <div class="map-place" data-tone="yellow">
+              <span>The Bund</span><span lang="zh-Hans">外滩</span>
+            </div>
+            <div class="map-place" data-tone="green">
+              <span>Century Park</span><span lang="zh-Hans">世纪公园</span>
+            </div>
+          </div>
+          <div class="workflow-note">China · Century Park</div>
+          <div class="demo-levels" role="group" aria-label="Sample place names in China" hidden>
+            <button type="button" data-step="english" data-note="China · Century Park" aria-pressed="true">English</button>
+            <button type="button" data-step="local" data-note="China · 世纪公园" aria-pressed="false">Local</button>
+          </div>
+        </article>
+        <article class="workflow" data-workflow="search" data-step="results" aria-labelledby="search-title">
+          <h3 id="search-title">Find a photo and see what’s nearby</h3>
+          <p>Search on Immich and reuse cached thumbnails. Open a result and use Show in Photos to see nearby captures.</p>
+          <div class="workflow-stage search-demo" aria-hidden="true">
+            <div class="search-tiles">
+              <span class="search-match" data-tone="blue" data-cached></span>
+              <span class="search-match" data-tone="green" data-cached></span>
+              <span class="search-match" data-tone="pink"></span>
+              <span class="search-neighbor" data-tone="yellow"></span>
+              <span class="search-neighbor" data-tone="red"></span>
+              <span class="search-neighbor" data-tone="blue"></span>
+            </div>
+          </div>
+          <div class="workflow-note">“Birds” · 3 matches · 2 cached thumbnails</div>
+          <div class="demo-levels" role="group" aria-label="Sample search and timeline" hidden>
+            <button type="button" data-step="results" data-note="“Birds” · 3 matches · 2 cached thumbnails" aria-pressed="true">Results</button>
+            <button type="button" data-step="viewer" data-note="Photo viewer · Jan 31, 2025" aria-pressed="false">Open result</button>
+            <button type="button" data-step="timeline" data-note="Photos · Jan 31, 2025 · the same photo in its timeline" aria-pressed="false">Show in Photos</button>
+          </div>
+        </article>
+        <article class="workflow" data-workflow="quality" data-step="playback" aria-labelledby="quality-title">
+          <h3 id="quality-title">Choose what you play and save</h3>
+          <p>Switch video quality at the same playhead. Choose a download quality and find saved files in On Device.</p>
+          <div class="workflow-stage quality-demo">
+            <div class="quality-video" aria-hidden="true">
+              <div class="video-frame" data-tone="blue"><span class="video-play"></span></div>
+              <div class="video-progress"><span>0:18</span><span></span><span>0:45</span></div>
+            </div>
+            <form class="quality-save" inert>
+              <div class="save-tile" aria-hidden="true" data-tone="pink"></div>
+              <label>
+                <span>Download quality</span>
+                <select name="quality"></select>
+              </label>
+              <button type="submit">Save sample</button>
+              <output class="save-announcement"></output>
+            </form>
+          </div>
+          <div class="workflow-note">Playback · transcoded video · 0:18</div>
+          <div class="demo-levels" role="group" aria-label="Sample playback and download quality" hidden>
+            <button type="button" data-step="playback" data-note="Playback · transcoded video · 0:18" aria-pressed="true">Playback</button>
+            <button type="button" data-step="original" data-note="Original · source video · 0:18" aria-pressed="false">Original</button>
+            <button type="button" data-step="photo" data-note="Photo download · choose a quality" aria-pressed="false">Save photo</button>
+            <button type="button" data-step="video" data-note="Video download · choose a quality" aria-pressed="false">Save video</button>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="features" id="screenshots" aria-labelledby="screenshots-title">
       <header class="section-heading">
-        <h2 id="features-title">Explore Remmich</h2>
+        <h2 id="screenshots-title">Explore Remmich on iPhone</h2>
       </header>
       <div class="feature-grid">
         <article class="feature">
@@ -102,7 +205,7 @@
             <img src="https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/iphone/photos-timeline.webp" alt="Photo thumbnails grouped by date in the Photos timeline." width="660" height="1348" loading="lazy" decoding="async">
           </a>
           <h3>Photos</h3>
-          <p>Browse your library by capture date and pinch to change the thumbnail layout.</p>
+          <p>Browse by capture date and reopen the timeline where you left off.</p>
         </article>
         <article class="feature">
           <a class="feature-image" data-tone="yellow" href="https://raw.githubusercontent.com/Ender-Wang/Remmich/main/.github/assets/screenshots/iphone/albums.webp" aria-label="View the full-size Albums screenshot">
