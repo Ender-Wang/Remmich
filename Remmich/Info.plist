@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>RemmichPrereleaseIdentifier</key>
-	<string>rc.1</string>
+	<string>rc.2</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Remmich needs access to create and reuse the Remmich album, save selected media, and browse and verify your saved photos and videos.</string>
 	<key>MLNIdeographicFontFamilyName</key>
