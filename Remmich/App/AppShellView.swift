@@ -1,5 +1,4 @@
 import Nuke
-import NukeUI
 import Observation
 import SwiftUI
 import UIKit
@@ -997,23 +996,23 @@ private struct NativeTabContentGate<Content: View>: View {
 struct AccountAvatarView: View {
     @Environment(\.accountAvatarMedia) private var media
     @Environment(\.displayScale) private var displayScale
+    @State private var displayedImage: (scope: MediaAccountScope?, image: UIImage)?
 
     let size: CGFloat
 
     var body: some View {
+        let scope = media?.scope
+        let targetPixels = Int(size * displayScale)
+        let request = media?.profileImageRequest(targetPixels: targetPixels)
+        let pipeline = media?.pipeline ?? .shared
+        let cachedImage = request.flatMap { pipeline.cache[$0]?.image }
+        let retainedImage = displayedImage?.scope == scope ? displayedImage?.image : nil
+
         Group {
-            if let media {
-                LazyImage(request: media.profileImageRequest(targetPixels: Int(size * displayScale))) { state in
-                    if let image = state.image {
-                        image.resizable().scaledToFill()
-                    } else {
-                        Image(systemName: "person.crop.circle")
-                            .resizable()
-                            .scaledToFit()
-                    }
-                }
-                .pipeline(media.pipeline ?? .shared)
-                .onDisappear(.cancel)
+            if request != nil, let image = cachedImage ?? retainedImage {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
             } else {
                 Image(systemName: "person.crop.circle")
                     .resizable()
@@ -1022,6 +1021,17 @@ struct AccountAvatarView: View {
         }
         .frame(width: size, height: size)
         .clipShape(Circle())
+        .task(id: request.map { "\($0.imageID ?? ""):\(targetPixels)" }) {
+            guard !Task.isCancelled else { return }
+            guard let request else {
+                displayedImage = nil
+                return
+            }
+            // Keep the current account's decoded avatar during a same-account refresh.
+            guard let image = try? await pipeline.image(for: request),
+                  !Task.isCancelled, media?.scope == scope else { return }
+            displayedImage = (scope, image)
+        }
     }
 }
 

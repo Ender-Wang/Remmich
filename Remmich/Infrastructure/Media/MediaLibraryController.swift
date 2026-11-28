@@ -1080,7 +1080,8 @@ final class MediaLibraryController {
             )
             guard !Task.isCancelled, self.scope == scope else { return }
             switch result {
-            case let .stored(url):
+            case let .available(url, didChange):
+                guard didChange || cachedProfileImageURL != url else { break }
                 cachedProfileImageURL = url
                 profileImageCacheRevision &+= 1
                 Self.logger.info("Profile image account cache refreshed")
@@ -1414,7 +1415,7 @@ final nonisolated class MediaRedirectAuthorizationDelegate: NSObject,
 
 private actor ProfileImageCache {
     enum RefreshResult: Sendable {
-        case stored(URL)
+        case available(URL, didChange: Bool)
         case missing
         case failed(String)
     }
@@ -1444,6 +1445,7 @@ private actor ProfileImageCache {
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
+            try Task.checkCancellation()
             guard let response = response as? HTTPURLResponse else {
                 return .failed("The server returned an invalid response.")
             }
@@ -1455,12 +1457,15 @@ private actor ProfileImageCache {
                 return .failed("The server returned status \(response.statusCode).")
             }
             let fileURL = Self.fileURL(namespace: namespace)
+            if (try? Data(contentsOf: fileURL)) == data {
+                return .available(fileURL, didChange: false)
+            }
             try FileManager.default.createDirectory(
                 at: fileURL.deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
             try data.write(to: fileURL, options: .atomic)
-            return .stored(fileURL)
+            return .available(fileURL, didChange: true)
         } catch is CancellationError {
             return .failed("The request was cancelled.")
         } catch {
